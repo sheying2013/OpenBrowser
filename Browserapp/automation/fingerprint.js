@@ -488,13 +488,13 @@ function buildFingerprint(profile = {}) {
 
   const canvasMode = mode('canvas', ['real', 'noise', 'blocked'], privacy.canvas === 'blocked' ? 'blocked' : 'noise');
   const webglMode = mode('webgl', ['real', 'noise', 'blocked'], privacy.webgl === 'blocked' ? 'blocked' : 'noise');
+  // Metadata (UNMASKED vendor/renderer) can stay real while image noise still runs.
+  const webglMetaMode = mode('webglMeta', ['real', 'noise', 'blocked', 'custom'], privacy.webglMeta === 'real' ? 'real' : (privacy.webglMeta === 'blocked' ? 'blocked' : (privacy.webglMeta === 'custom' ? 'custom' : 'noise')));
   const audioMode = mode('audio', ['real', 'noise', 'muted'], privacy.audio === 'muted' ? 'muted' : 'noise');
   const clientRectsMode = mode('clientRects', ['real', 'noise'], 'noise');
   const webrtcMode = mode('webrtc', ['real', 'proxy', 'disabled'], privacy.webrtc || 'proxy');
-  const webrtcPolicyRaw = Number(fpIn.webrtcPolicy ?? privacy.webrtcPolicy);
-  const webrtcPolicy = Number.isFinite(webrtcPolicyRaw)
-    ? Math.min(3, Math.max(0, Math.round(webrtcPolicyRaw)))
-    : (webrtcMode === 'disabled' ? 0 : (webrtcMode === 'proxy' ? 3 : 1));
+  // Numeric shadow of webrtc mode only (not an independent control).
+  const webrtcPolicy = webrtcMode === 'disabled' ? 0 : (webrtcMode === 'proxy' ? 3 : 1);
   const mediaDevicesMode = mode('mediaDevices', ['real', 'noise', 'empty'], privacy.mediaDevices === 'real' ? 'real' : (privacy.mediaDevices === 'empty' ? 'empty' : (privacy.media === 'noise' ? 'noise' : (privacy.media === 'blocked' ? 'empty' : 'noise'))));
   const speechMode = mode('speech', ['real', 'noise', 'blocked'], privacy.speech === 'blocked' ? 'blocked' : (privacy.speech === 'noise' ? 'noise' : 'real'));
   const batteryMode = mode('battery', ['real', 'noise', 'blocked'], privacy.battery === 'blocked' ? 'blocked' : (privacy.battery === 'real' ? 'real' : 'noise'));
@@ -628,12 +628,19 @@ function buildFingerprint(profile = {}) {
     }
   }
 
+  const webglVendor = (webglMetaMode === 'real')
+    ? null
+    : (webglMetaMode === 'blocked' ? '' : (fpIn.webglVendor || webglPreset.vendor));
+  const webglRenderer = (webglMetaMode === 'real')
+    ? null
+    : (webglMetaMode === 'blocked' ? '' : (fpIn.webglRenderer || webglPreset.renderer));
   const webgl = {
     mode: webglMode,
-    vendor: fpIn.webglVendor || webglPreset.vendor,
-    renderer: fpIn.webglRenderer || webglPreset.renderer,
+    metaMode: webglMetaMode,
+    vendor: webglVendor,
+    renderer: webglRenderer,
     mark: Number.isFinite(Number(fpIn.webglId)) ? Number(fpIn.webglId) : webglId,
-    gpu: webglGpu,
+    gpu: webglMetaMode === 'real' ? null : webglGpu,
     stability,
   };
   webgl.fpPayload = buildWebglFpPayload(webgl);
@@ -799,6 +806,7 @@ function buildInjectionScript(fp) {
     screen: fp.screen,
     webgl: {
       mode: fp.webgl?.mode,
+      metaMode: fp.webgl?.metaMode || 'noise',
       vendor: fp.webgl?.vendor,
       renderer: fp.webgl?.renderer,
       mark: fp.webgl?.mark,
@@ -1118,11 +1126,13 @@ function buildInjectionScript(fp) {
       const mark = Number(CFG.webgl.mark) || 1;
       const patchGetParameter = (proto) => {
         if (!proto || !proto.getParameter) return;
+        const metaMode = String(CFG.webgl.metaMode || 'noise');
+        if (metaMode === 'real') return;
         replaceMethod(proto, 'getParameter', (original) => function(param) {
           const UNMASKED_VENDOR_WEBGL = 0x9245;
           const UNMASKED_RENDERER_WEBGL = 0x9246;
-          if (param === UNMASKED_VENDOR_WEBGL) return CFG.webgl.vendor;
-          if (param === UNMASKED_RENDERER_WEBGL) return CFG.webgl.renderer;
+          if (param === UNMASKED_VENDOR_WEBGL) return metaMode === 'blocked' ? '' : CFG.webgl.vendor;
+          if (param === UNMASKED_RENDERER_WEBGL) return metaMode === 'blocked' ? '' : CFG.webgl.renderer;
           return original.apply(this, arguments);
         });
       };
@@ -1402,6 +1412,7 @@ function buildWorkerInjectionScript(fp) {
     deviceMemory: fp.deviceMemory,
     webgl: {
       mode: fp.webgl?.mode,
+      metaMode: fp.webgl?.metaMode || 'noise',
       vendor: fp.webgl?.vendor,
       renderer: fp.webgl?.renderer,
       mark: fp.webgl?.mark,
@@ -1424,6 +1435,8 @@ function buildWorkerInjectionScript(fp) {
   const noise = (n) => { const x = Math.sin((n + 1) * seedNum) * 10000; return x - Math.floor(x); };
   const amp = Number(CFG.stability?.noiseAmplitude) || 3;
   const square = Math.max(2, Number(CFG.stability?.square) || 8);
+  const workerLocks = new Map();
+  const stableWorker = Boolean(CFG.stability?.active);
   const applyNoise = (imageData, mark) => {
     try {
       const data = imageData.data;
@@ -1434,6 +1447,27 @@ function buildWorkerInjectionScript(fp) {
       const limitW = width > 0 ? Math.min(width, maxW) : width;
       const limitH = height > 0 ? Math.min(height, maxH) : height;
       if (width > 0 && height > 0) {
+        if (stableWorker) {
+          const key = width + 'x' + height + ':' + mark + ':' + square + ':' + amp;
+          let locked = workerLocks.get(key);
+          if (!locked) {
+            locked = [];
+            for (let y = 0; y < limitH; y += square) {
+              for (let x = 0; x < limitW; x += square) {
+                const px = ((y * width) + x) * 4;
+                if (px + 3 >= data.length) continue;
+                locked.push({ px: px, delta: Math.floor(noise(px + mark) * amp) - Math.floor(amp / 2) });
+              }
+            }
+            workerLocks.set(key, locked);
+          }
+          for (let i = 0; i < locked.length; i += 1) {
+            const item = locked[i];
+            if (item.px + 3 >= data.length) continue;
+            data[item.px] = Math.max(0, Math.min(255, data[item.px] + item.delta));
+          }
+          return imageData;
+        }
         for (let y = 0; y < limitH; y += square) {
           for (let x = 0; x < limitW; x += square) {
             const px = ((y * width) + x) * 4;
@@ -1554,11 +1588,14 @@ function buildWorkerInjectionScript(fp) {
   } else if (CFG.webgl?.mode === 'noise') {
     const mark = Number(CFG.webgl?.mark) || 1;
     const patch = (proto) => {
-      replace(proto, 'getParameter', (original) => function(param) {
-        if (param === 0x9245) return CFG.webgl.vendor;
-        if (param === 0x9246) return CFG.webgl.renderer;
-        return original.apply(this, arguments);
-      });
+      const metaMode = String(CFG.webgl?.metaMode || 'noise');
+      if (metaMode !== 'real') {
+        replace(proto, 'getParameter', (original) => function(param) {
+          if (param === 0x9245) return metaMode === 'blocked' ? '' : CFG.webgl.vendor;
+          if (param === 0x9246) return metaMode === 'blocked' ? '' : CFG.webgl.renderer;
+          return original.apply(this, arguments);
+        });
+      }
       replace(proto, 'readPixels', (original) => function(...args) {
         const result = original.apply(this, args);
         try {

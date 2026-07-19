@@ -315,11 +315,8 @@ class BrowserEngine {
           chargingTime: Number.isFinite(Number(privacyValue.batterySnapshot.chargingTime)) ? Number(privacyValue.batterySnapshot.chargingTime) : null,
           dischargingTime: Number.isFinite(Number(privacyValue.batterySnapshot.dischargingTime)) ? Number(privacyValue.batterySnapshot.dischargingTime) : null,
         } : null,
-        webrtcPolicy: (() => {
-          const n = Number(privacyValue.webrtcPolicy);
-          if (!Number.isFinite(n)) return privacyValue.webrtc === 'disabled' ? 0 : (privacyValue.webrtc === 'real' ? 1 : 3);
-          return Math.min(3, Math.max(0, Math.round(n)));
-        })(),
+        // Derived from webrtc mode only; independent numeric override removed to avoid dual controls.
+        webrtcPolicy: privacyValue.webrtc === 'disabled' ? 0 : (privacyValue.webrtc === 'real' ? 1 : 3),
         stabilityMode: allowed(privacyValue.stabilityMode, ['off', 'auto', 'force'], 'auto'),
         stabilityHamming: Math.min(64, Math.max(1, Number(privacyValue.stabilityHamming) || 12)),
         stabilityMaxWidth: Math.min(4096, Math.max(64, Number(privacyValue.stabilityMaxWidth) || 600)),
@@ -1185,10 +1182,21 @@ class BrowserEngine {
       : null;
     const startUrl = customStartUrls[0] || infoStartUrl;
     const proxyConfig = this.proxyConfig(profile.proxy); let proxyForwarder = null;
+    // Site-stability keeps static marks; refresh-on-start only when stability is off.
+    const allowSeedRefresh = profile.privacy.refreshFingerprintOnStart && profile.privacy.stabilityMode === 'off';
+    const fingerprint = buildFingerprint({
+      ...profile,
+      fingerprintLaunchSeed: allowSeedRefresh ? crypto.randomBytes(16).toString('hex') : '',
+      kernelVersion: browser.version,
+      exitTimezone: profile.exitTimezone || pageNetwork.timezone || '',
+      exitLatitude: profile.exitLatitude ?? pageNetwork.latitude,
+      exitLongitude: profile.exitLongitude ?? pageNetwork.longitude,
+    });
     if (proxyConfig) {
       const meta = profile.proxyMeta || {};
       const major = Number(meta.tlsChromeMajor)
-        || Number(String(profile.userAgent || '').match(/Chrome\/(\d+)/)?.[1])
+        || Number(fingerprint?.uaProfile?.chromeMajor)
+        || Number(String(profile.userAgent || fingerprint?.userAgent || '').match(/Chrome\/(\d+)/)?.[1])
         || 0;
       proxyConfig.tlsProfile = {
         id: meta.tlsProfile || 'auto',
@@ -1198,14 +1206,6 @@ class BrowserEngine {
     if (proxyConfig?.authenticated) {
       proxyForwarder = await startAuthenticatedProxy(proxyConfig, (value) => this.emit({ type: 'proxy-error', id: profile.id, code: value.code, message: value.message }));
     }
-    const fingerprint = buildFingerprint({
-      ...profile,
-      fingerprintLaunchSeed: profile.privacy.refreshFingerprintOnStart ? crypto.randomBytes(16).toString('hex') : '',
-      kernelVersion: browser.version,
-      exitTimezone: profile.exitTimezone || pageNetwork.timezone || '',
-      exitLatitude: profile.exitLatitude ?? pageNetwork.latitude,
-      exitLongitude: profile.exitLongitude ?? pageNetwork.longitude,
-    });
     const args = [
       `--user-data-dir=${root}`,
       `--disk-cache-dir=${path.join(root, 'OpenBrowserCache')}`,
@@ -1227,9 +1227,6 @@ class BrowserEngine {
       if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) args.push(flag);
     }
     if (!profile.advanced.allowSignin) args.push('--disable-sync');
-    if (profile.privacy.webgpu === 'blocked' || profile.privacy.webgpu === 'webgl') {
-      // webgl mode still allows WebGPU unless blocked; only hard-block when disabled
-    }
     if (profile.privacy.webgpu === 'blocked') args.push('--disable-features=WebGPU');
     if (profile.advanced.blockImages) args.push('--blink-settings=imagesEnabled=false');
     if (profile.advanced.blockVideo || profile.advanced.blockSound) args.push('--autoplay-policy=user-gesture-required');

@@ -394,7 +394,7 @@ function forwardedHeader(header, config) {
 
 function connectHttpUpstream(config, onConnect) {
   if (config.protocol === 'https') {
-    const tlsProfile = resolveTlsProfile(config.tlsProfile || 'chrome');
+    const tlsProfile = resolveTlsProfile(config.tlsProfile || 'auto');
     const opts = tlsConnectOptionsFromProfile(tlsProfile, { servername: config.host, rejectUnauthorized: true });
     opts.host = config.host;
     opts.port = config.port;
@@ -733,7 +733,7 @@ async function probeProxyHttps(config, hostname = 'www.google.com', pathname = '
   const bridge = await startAuthenticatedProxy(config); let socket; let secure;
   try {
     socket = await connectBridge(bridge, hostname, 443);
-    const tlsProfile = resolveTlsProfile(options.tlsProfile || config.tlsProfile || 'chrome');
+    const tlsProfile = resolveTlsProfile(options.tlsProfile || config.tlsProfile || 'auto');
     secure = tls.connect(tlsConnectOptionsFromProfile(tlsProfile, { socket, servername: hostname, rejectUnauthorized: true }));
     await new Promise((resolve, reject) => { const timer = setTimeout(() => { secure.destroy(); reject(new Error('Google HTTPS handshake timed out')); }, 15000); secure.once('secureConnect', () => { clearTimeout(timer); resolve(); }); secure.once('error', (error) => { clearTimeout(timer); reject(error); }); });
     const reader = new BufferedReader(secure);

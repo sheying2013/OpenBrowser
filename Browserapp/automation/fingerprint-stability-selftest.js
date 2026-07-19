@@ -202,7 +202,7 @@ function main() {
     privacy: {
       battery: 'noise',
       webgpu: 'webgl',
-      webrtcPolicy: 2,
+      webrtc: 'real',
       stabilityMode: 'force',
       stabilityHosts: ['risk.example'],
       mediaLabels: { input: 'A', video: 'B', output: 'C' },
@@ -218,7 +218,7 @@ function main() {
   });
   assert.strictEqual(sanitized.privacy.battery, 'noise');
   assert.strictEqual(sanitized.privacy.webgpu, 'webgl');
-  assert.strictEqual(sanitized.privacy.webrtcPolicy, 2);
+  assert.strictEqual(sanitized.privacy.webrtcPolicy, 1); // derived from webrtc=real
   assert.strictEqual(sanitized.privacy.stabilityMode, 'force');
   assert.deepStrictEqual(sanitized.privacy.stabilityHosts, ['risk.example']);
   assert.strictEqual(sanitized.privacy.mediaLabels.audioinput, 'A');
@@ -324,6 +324,19 @@ async function runProxyPolicies(engineBlock, BrowserEngine) {
   assert.ok(proxySrc.includes('resolveTlsProfile'));
   assert.ok(fpSrc.includes('hammingDistance'));
   assert.ok(fpSrc.includes('applyStableCanvasNoise'));
+  assert.ok(fpSrc.includes('metaMode'));
+  assert.ok(engSrc.includes("stabilityMode === 'off'"), 'refresh seed must yield to stability');
+  assert.ok(engSrc.includes('fingerprint?.uaProfile?.chromeMajor'), 'tls major should follow built fingerprint');
+  // webglMeta real skips vendor spoof
+  const metaReal = buildFingerprint({
+    id: 'prof_webgl_meta_real',
+    name: 'meta-real',
+    privacy: { webgl: 'noise', webglMeta: 'real' },
+  });
+  assert.strictEqual(metaReal.webgl.metaMode, 'real');
+  assert.strictEqual(metaReal.webgl.vendor, null);
+  const metaScript = buildInjectionScript(metaReal);
+  assert.ok(metaScript.includes('metaMode') && metaScript.includes('"real"'));
   assert.ok(engSrc.includes('notReadyPolicy'));
   assert.ok(engSrc.includes('requireReady'));
   assert.ok(engSrc.includes('stabilityMode'));
