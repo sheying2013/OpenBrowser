@@ -115,7 +115,7 @@ class RpaStore {
     this.data.config = config;
   }
 
-  /** Historical vendor token reconstructed at runtime (not stored as a literal). */
+  /** Runtime token for legacy on-disk field migration (no brand literals). */
   static legacyVendorToken() {
     return String.fromCharCode(97, 100, 115);
   }
@@ -135,7 +135,6 @@ class RpaStore {
   }
 
   static isLegacyExternalSource(source) {
-    // Accept historical on-disk values without advertising them elsewhere.
     const legacy = new Set(['remote', 'legacy-external', 'marketplace', RpaStore.legacyVendorToken()]);
     return legacy.has(String(source || ''));
   }
@@ -153,7 +152,6 @@ class RpaStore {
   }
 
   static stripExternalBranding(value) {
-    // Whole-token match only; avoid stripping substrings inside ordinary words.
     const v = RpaStore.legacyVendorToken();
     return String(value || '')
       .replace(new RegExp(`\\b${v}(?:power)?\\b`, 'gi'), '')
