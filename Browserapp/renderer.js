@@ -17,6 +17,75 @@ function tx(s) {
 
 const appUpdateState = { status: 'idle', result: null, message: '', progress: null };
 
+function applyVersionTrafficLight(payload) {
+  const lightEl = document.getElementById('version-traffic-light');
+  const wrap = document.getElementById('app-version-wrap');
+  const versionEl = document.getElementById('app-version');
+  if (!lightEl || !wrap) return;
+  // Product: green = latest, red = update available. Never paint "latest" as yellow.
+  let light = payload?.light;
+  if (!light) {
+    if (payload?.status === 'checking') light = 'checking';
+    else if (payload?.upToDate === true) light = 'green';
+    else if (payload?.upToDate === false && payload?.remoteVersion) light = 'red';
+    else if (payload?.error) light = 'unknown';
+    else light = 'checking';
+  }
+  // Legacy / mistaken amber states → gray unknown (not "update available")
+  if (light === 'yellow' || light === 'amber' || light === 'orange') light = 'unknown';
+  // If backend already compared versions, force green/red even if light string is wrong
+  if (payload?.upToDate === true) light = 'green';
+  else if (payload?.upToDate === false && payload?.remoteVersion) light = 'red';
+  lightEl.dataset.state = light;
+  if (payload?.currentVersion && versionEl) versionEl.textContent = `v${payload.currentVersion}`;
+  let title = t('footer.versionChecking') || '正在检查版本…';
+  if (light === 'green') {
+    title = t('footer.versionLatest', { version: payload.currentVersion || '' })
+      || `已是最新版本 v${payload.currentVersion || ''}`;
+  } else if (light === 'red') {
+    title = t('footer.versionUpdateAvailable', {
+      current: payload.currentVersion || '',
+      version: payload.remoteVersion || '',
+    }) || `有新版本 v${payload.remoteVersion}（当前 v${payload.currentVersion}），点击查看更新`;
+  } else if (light === 'unknown') {
+    title = payload?.error
+      ? (t('footer.versionCheckFailed', { message: payload.error }) || `版本检查失败：${payload.error}`)
+      : (t('footer.versionUnknown') || '无法判断是否为最新版本');
+  }
+  wrap.title = title;
+  wrap.setAttribute('aria-label', title);
+  wrap.classList.toggle('is-clickable', light === 'red');
+  wrap.dataset.light = light;
+  if (payload && (payload.upToDate != null || payload.remoteVersion || payload.supported != null)) {
+    appUpdateState.result = {
+      ...(appUpdateState.result || {}),
+      ...payload,
+      supported: payload.supported !== false,
+      upToDate: payload.upToDate,
+      currentVersion: payload.currentVersion,
+      remoteVersion: payload.remoteVersion,
+    };
+    if (appUpdateState.status === 'idle' || appUpdateState.status === 'checking' || appUpdateState.status === 'ready') {
+      if (payload.error && light === 'unknown') {
+        /* keep settings card free unless user opened it */
+      } else {
+        appUpdateState.status = 'ready';
+        appUpdateState.message = '';
+      }
+      renderAppUpdateState();
+    }
+  }
+}
+
+function openAppUpdatePanel() {
+  try {
+    switchView('system');
+    const card = document.getElementById('app-update-card');
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (_) {}
+}
+
+
 function renderAppUpdateState() {
   const status = document.getElementById('app-update-status');
   const version = document.getElementById('app-update-version');
@@ -26,7 +95,7 @@ function renderAppUpdateState() {
   const result = appUpdateState.result;
   version.textContent = result?.remoteVersion ? `v${result.remoteVersion}` : '—';
   check.disabled = appUpdateState.status === 'checking' || appUpdateState.status === 'downloading';
-  download.hidden = !(result?.supported && !result.upToDate && appUpdateState.status !== 'downloading');
+  download.hidden = !(result && !result.upToDate && (result.canDownload !== false) && result.asset?.name && appUpdateState.status !== 'downloading');
   download.disabled = appUpdateState.status === 'checking' || appUpdateState.status === 'downloading';
   if (appUpdateState.message) {
     status.textContent = appUpdateState.message;
@@ -46,13 +115,23 @@ function renderAppUpdateState() {
 }
 
 async function checkAppUpdate() {
-  appUpdateState.status = 'checking'; appUpdateState.result = null; appUpdateState.message = ''; appUpdateState.progress = null; renderAppUpdateState();
+  appUpdateState.status = 'checking'; appUpdateState.result = null; appUpdateState.message = ''; appUpdateState.progress = null;
+  applyVersionTrafficLight({ light: 'checking', currentVersion: document.getElementById('app-version')?.textContent?.replace(/^v/i, '') });
+  renderAppUpdateState();
   try {
     appUpdateState.result = await window.ops.checkAppUpdate();
     appUpdateState.status = 'ready';
+    const result = appUpdateState.result || {};
+    let light = result.light;
+    if (result.upToDate === true) light = 'green';
+    else if (result.upToDate === false && result.remoteVersion) light = 'red';
+    else if (result.supported === false) light = 'unknown';
+    else if (!light) light = result.remoteVersion ? (result.upToDate ? 'green' : 'red') : 'unknown';
+    applyVersionTrafficLight({ ...result, light });
   } catch (error) {
     appUpdateState.status = 'error';
     appUpdateState.message = t('system.update.error', { message: error.message });
+    applyVersionTrafficLight({ light: 'unknown', error: error.message });
   }
   renderAppUpdateState();
 }
@@ -81,6 +160,11 @@ function formatBytes(value) {
 document.getElementById('github-link')?.addEventListener('click', async (event) => {
   event.preventDefault();
   try { await window.ops.openGithub(); } catch (error) { toast(error.message); }
+});
+document.getElementById('app-version-wrap')?.addEventListener('click', () => {
+  const light = document.getElementById('app-version-wrap')?.dataset?.light;
+  if (light === 'red') openAppUpdatePanel();
+  else checkAppUpdate();
 });
 document.getElementById('app-check-update')?.addEventListener('click', () => checkAppUpdate());
 document.getElementById('app-download-update')?.addEventListener('click', () => downloadAppUpdate());
@@ -406,7 +490,13 @@ const loadedUi = loadUi();
 const migratedUi = migrateProfileNumbers(loadedUi.profiles, loadedUi.nextProfileNumber);
 const migratedGroups = migrateGroups(loadedUi.groups, migratedUi.profiles);
 let ui = { ...loadedUi, ...migratedUi, groups: migratedGroups };
-try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (_) {}
+// Immediate migration: purge secrets from any older localStorage dumps.
+try {
+  localStorage.setItem(UI_KEY, JSON.stringify({
+    ...ui,
+    profiles: (ui.profiles || []).map((item) => redactProfileForStorage(item)),
+  }));
+} catch (_) {}
 
 let activeGroupFilter = 'all'; // 'all' | 'ungrouped' | groupId
 
@@ -690,9 +780,48 @@ let specifiedTextGroups = loadSpecifiedTextGroups();
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const element = (tag, className, text) => { const value = document.createElement(tag); if (className) value.className = className; if (text !== undefined) value.textContent = text; return value; };
+function redactProxyForStorage(proxy) {
+  const raw = String(proxy || '').trim();
+  if (!raw || /^(direct|offline|none)$/i.test(raw)) return raw || 'Direct';
+  try {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+      const parsed = new URL(raw);
+      parsed.username = '';
+      parsed.password = '';
+      return parsed.toString();
+    }
+  } catch (_) {}
+  const parts = raw.split(':');
+  // host:port:user:pass → host:port only
+  if (parts.length >= 4) return `${parts[0]}:${parts[1]}`;
+  return raw;
+}
+
+function redactProfileForStorage(profile) {
+  const value = normalizeProfileSettings(profile);
+  return {
+    ...value,
+    cookies: '',
+    proxy: redactProxyForStorage(value.proxy),
+    platform: {
+      ...(value.platform || {}),
+      password: '',
+      totpSecret: '',
+    },
+  };
+}
+
 const save = () => {
   if (!Array.isArray(ui.groups)) ui.groups = defaultGroups();
-  try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (_) {}
+  try {
+    // Never persist cookies / platform secrets / proxy passwords in renderer localStorage.
+    // Secrets stay in main-process engine state (openbrowser-engine.json).
+    const safe = {
+      ...ui,
+      profiles: (ui.profiles || []).map((item) => redactProfileForStorage(item)),
+    };
+    localStorage.setItem(UI_KEY, JSON.stringify(safe));
+  } catch (_) {}
 };
 function textDelayRange() { return syncSettings.delayInput ? [syncSettings.inputMinMs / 1000, syncSettings.inputMaxMs / 1000] : [0, 0]; }
 function fillSyncSettingsForm() {
@@ -3661,6 +3790,9 @@ window.ops.onEvent(async (value) => {
     appUpdateState.progress = value;
     renderAppUpdateState();
   }
+  if (value?.type === 'app-update-status') {
+    applyVersionTrafficLight(value);
+  }
   if (value.type === 'status') {
     await refreshStatus();
     await refreshSessions();
@@ -3779,11 +3911,41 @@ async function initialize() {
   const info = await window.ops.getInfo();
   const appVersion = document.getElementById('app-version');
   if (appVersion && info?.appVersion) appVersion.textContent = `v${info.appVersion}`;
+  applyVersionTrafficLight({ light: 'checking', currentVersion: info?.appVersion });
+  // Backend also pushes app-update-status after startup delay; this primes the light immediately.
   updateEngineBadge(info);
   renderRuntimeInfo(info);
   syncState = await window.ops.getSyncState(); preferredMasterId = syncState.master || null; if (syncState.active) selectedSessions = new Set(syncState.selected || []);
   await applySyncSettings(syncSettings); fillSyncSettingsForm();
-  ui.profiles = ui.profiles.map((item) => ({ ...item, browser: 'Google Chrome' })); save();
+  ui.profiles = ui.profiles.map((item) => ({ ...item, browser: 'Google Chrome' }));
+  // Merge secrets already loaded in main process (not stored in localStorage).
+  try {
+    const engineStatus = await window.ops.profileStatus();
+    if (Array.isArray(engineStatus) && engineStatus.length) {
+      const byId = new Map(engineStatus.map((item) => [item.id, item]));
+      ui.profiles = ui.profiles.map((local) => {
+        const remote = byId.get(local.id);
+        if (!remote) return local;
+        return normalizeProfileSettings({
+          ...local,
+          cookies: local.cookies || remote.cookies || '',
+          proxy: local.proxy && !/^(direct)$/i.test(local.proxy) ? local.proxy : (remote.proxy || local.proxy),
+          platform: {
+            ...(local.platform || {}),
+            password: local.platform?.password || remote.platform?.password || '',
+            totpSecret: local.platform?.totpSecret || remote.platform?.totpSecret || '',
+          },
+        });
+      });
+      // Engine-only profiles (restored from disk) not yet in UI list
+      for (const remote of engineStatus) {
+        if (!ui.profiles.some((item) => item.id === remote.id)) {
+          ui.profiles.push(normalizeProfileSettings(remote));
+        }
+      }
+    }
+  } catch (_) {}
+  save();
   engineProfiles = await window.ops.syncProfiles(ui.profiles); await refreshExtensions(); await refreshSessions(); renderProfiles(); renderLogs();
   log('System', readyBrowserLog(info));
   switchView(document.querySelector('.view.active')?.id?.replace(/^view-/, '') || 'profiles');

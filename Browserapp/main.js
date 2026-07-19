@@ -23,6 +23,8 @@ const localSettingsFile = path.join(app.getPath('userData'), 'openbrowser-local-
 
 const UPDATE_REPOSITORY = 'lyu0805/OpenBrowser';
 const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPOSITORY}/releases/latest`;
+const UPDATE_LATEST_HTML = `https://github.com/${UPDATE_REPOSITORY}/releases/latest`;
+const UPDATE_RELEASES_ATOM = `https://github.com/${UPDATE_REPOSITORY}/releases.atom`;
 const UPDATE_ASSETS = Object.freeze({
   'darwin:x64': 'OpenBrowser-macOS-x86_64.dmg',
   'darwin:arm64': 'OpenBrowser-macOS-arm64.dmg',
@@ -30,7 +32,7 @@ const UPDATE_ASSETS = Object.freeze({
 });
 const UPDATE_MAX_BYTES = 1024 * 1024 * 1024;
 const UPDATE_TIMEOUT_MS = 20000;
-const UPDATE_ALLOWED_HOSTS = new Set(['github.com', 'objects.githubusercontent.com']);
+const UPDATE_ALLOWED_HOSTS = new Set(['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com']);
 
 function updatePlatformKey() {
   return `${process.platform}:${process.arch}`;
@@ -70,68 +72,214 @@ function compareVersions(left, right) {
 function updateUrlIsAllowed(value, assetName) {
   try {
     const url = new URL(String(value || ''));
-    return (url.protocol === 'https:' && UPDATE_ALLOWED_HOSTS.has(url.hostname)
-      && decodeURIComponent(url.pathname).endsWith('/' + assetName));
+    if (url.protocol !== 'https:') return false;
+    const pathName = decodeURIComponent(url.pathname);
+    const endsWithAsset = pathName.endsWith('/' + assetName) || pathName.endsWith(assetName);
+    if (!endsWithAsset) return false;
+    return UPDATE_ALLOWED_HOSTS.has(url.hostname)
+      || (url.hostname === 'github.com' && pathName.includes('/releases/download/'));
   } catch (_) {
     return false;
   }
 }
 
-async function fetchUpdateRelease() {
+function updateUserAgent() {
+  return `OpenBrowser/${app.getVersion()} (+https://github.com/${UPDATE_REPOSITORY})`;
+}
+
+function normalizeRemoteTag(value) {
+  return String(value || '').trim().replace(/^v/i, '');
+}
+
+function metaFromTag(tag, source, releaseUrl) {
+  const remoteVersion = normalizeRemoteTag(tag);
+  if (!remoteVersion) return null;
+  return {
+    remoteVersion,
+    releaseName: remoteVersion,
+    releaseUrl: releaseUrl || `https://github.com/${UPDATE_REPOSITORY}/releases/tag/v${remoteVersion}`,
+    source,
+  };
+}
+
+/**
+ * Resolve latest release tag without relying solely on GitHub API
+ * (unauthenticated REST hits rate limits → false "unknown/yellow" light).
+ * Priority: Atom feed → HTML follow/redirect → REST API.
+ */
+async function resolveLatestReleaseMeta() {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPDATE_TIMEOUT_MS);
+  const htmlHeaders = { 'User-Agent': updateUserAgent(), Accept: 'text/html,application/xhtml+xml,*/*' };
   try {
+    // 1) Atom feed — no API quota, works in Electron without redirect:manual quirks
+    try {
+      const response = await fetch(UPDATE_RELEASES_ATOM, {
+        headers: { 'User-Agent': updateUserAgent(), Accept: 'application/atom+xml,application/xml,text/xml,*/*' },
+        signal: controller.signal,
+      });
+      if (response.ok) {
+        const atom = await response.text();
+        // Prefer entry-level ids/links (first entry is newest)
+        const entry = atom.match(/<entry\b[\s\S]*?<\/entry>/i)?.[0] || atom;
+        const fromAtom = entry.match(/\/releases\/tag\/([^<"'\s]+)/i)
+          || entry.match(/<id>tag:github\.com,\d+:Repository\/\d+\/([^<]+)<\/id>/i)
+          || atom.match(/\/releases\/tag\/([^<"'\s]+)/i);
+        const meta = fromAtom ? metaFromTag(decodeURIComponent(fromAtom[1]), 'atom') : null;
+        if (meta) return meta;
+      }
+    } catch (_) { /* try next */ }
+
+    // 2) /releases/latest — follow redirects; final URL or body contains /releases/tag/vX.Y.Z
+    //    (prefer follow over manual: Electron Chromium often hides Location on opaqueredirect)
+    try {
+      const response = await fetch(UPDATE_LATEST_HTML, {
+        method: 'GET',
+        redirect: 'follow',
+        headers: htmlHeaders,
+        signal: controller.signal,
+      });
+      const finalUrl = String(response.url || '');
+      const fromUrl = finalUrl.match(/\/releases\/tag\/([^/?#]+)/i);
+      if (fromUrl) {
+        const meta = metaFromTag(decodeURIComponent(fromUrl[1]), 'html-url', finalUrl);
+        if (meta) return meta;
+      }
+      if (response.ok) {
+        const html = await response.text();
+        const fromHtml = html.match(/\/releases\/tag\/(v?[\w.-]+)/i);
+        const meta = fromHtml ? metaFromTag(fromHtml[1], 'html') : null;
+        if (meta) return meta;
+      }
+    } catch (_) { /* try next */ }
+
+    // 2b) manual redirect Location (Node undici / some hosts)
+    try {
+      const response = await fetch(UPDATE_LATEST_HTML, {
+        method: 'GET',
+        redirect: 'manual',
+        headers: htmlHeaders,
+        signal: controller.signal,
+      });
+      const location = response.headers.get('location') || response.headers.get('Location') || '';
+      const fromLoc = location.match(/\/releases\/tag\/([^/?#]+)/i);
+      if (fromLoc) {
+        const abs = location.startsWith('http') ? location : `https://github.com${location}`;
+        const meta = metaFromTag(decodeURIComponent(fromLoc[1]), 'redirect', abs);
+        if (meta) return meta;
+      }
+    } catch (_) { /* try next */ }
+
+    // 3) REST API (last resort; unauthenticated often 403 rate-limit)
     const response = await fetch(UPDATE_API_URL, {
       headers: {
         Accept: 'application/vnd.github+json',
-        'User-Agent': `OpenBrowser/${app.getVersion()}`,
+        'User-Agent': updateUserAgent(),
       },
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`GitHub Releases request failed (${response.status})`);
-    return await response.json();
+    const release = await response.json();
+    const tag = normalizeRemoteTag(release.tag_name || release.name || '');
+    if (!tag) throw new Error('GitHub Release has no version tag');
+    return {
+      remoteVersion: tag,
+      releaseName: String(release.name || release.tag_name || tag),
+      releaseUrl: String(release.html_url || `https://github.com/${UPDATE_REPOSITORY}/releases/tag/v${tag}`),
+      source: 'api',
+      apiRelease: release,
+    };
   } finally {
     clearTimeout(timer);
   }
 }
 
+async function resolveReleaseAsset(remoteVersion, assetName) {
+  if (!assetName || !remoteVersion) return null;
+  const directUrl = `https://github.com/${UPDATE_REPOSITORY}/releases/download/v${remoteVersion}/${assetName}`;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPDATE_TIMEOUT_MS);
+    try {
+      const response = await fetch(directUrl, {
+        method: 'HEAD',
+        redirect: 'follow',
+        headers: { 'User-Agent': updateUserAgent() },
+        signal: controller.signal,
+      });
+      if (response.ok) {
+        return {
+          name: assetName,
+          size: Number(response.headers.get('content-length')) || 0,
+          browser_download_url: directUrl,
+        };
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (_) { /* optional */ }
+  return { name: assetName, size: 0, browser_download_url: directUrl };
+}
+
+/** @deprecated use resolveLatestReleaseMeta — kept for download path compatibility */
+async function fetchUpdateRelease() {
+  const meta = await resolveLatestReleaseMeta();
+  if (meta.apiRelease) return meta.apiRelease;
+  return {
+    tag_name: `v${meta.remoteVersion}`,
+    name: meta.releaseName,
+    html_url: meta.releaseUrl,
+    assets: [],
+  };
+}
+
+/**
+ * Version traffic light only needs remote tag vs app.getVersion().
+ * Download package availability is optional (canDownload).
+ * green = up to date; red = remote is newer.
+ */
 async function checkAppUpdate() {
   const assetName = updateAssetName();
   const currentVersion = app.getVersion();
-  if (!assetName) {
-    return { supported: false, repository: UPDATE_REPOSITORY, currentVersion, platform: process.platform, arch: process.arch };
-  }
-  const release = await fetchUpdateRelease();
-  const remoteVersion = String(release.tag_name || release.name || '').replace(/^v/i, '');
-  const asset = Array.isArray(release.assets)
-    ? release.assets.find((item) => item?.name === assetName)
-    : null;
+  const meta = await resolveLatestReleaseMeta();
+  const remoteVersion = meta.remoteVersion;
   if (!remoteVersion) throw new Error('GitHub Release has no version tag');
-  if (!asset || !updateUrlIsAllowed(asset.browser_download_url, assetName)) {
-    throw new Error(`Release is missing the ${assetName} package`);
+  const upToDate = compareVersions(remoteVersion, currentVersion) <= 0;
+  let asset = null;
+  if (assetName) {
+    asset = await resolveReleaseAsset(remoteVersion, assetName);
+    // Prefer API asset URL if present
+    if (meta.apiRelease && Array.isArray(meta.apiRelease.assets)) {
+      const fromApi = meta.apiRelease.assets.find((item) => item?.name === assetName);
+      if (fromApi?.browser_download_url && updateUrlIsAllowed(fromApi.browser_download_url, assetName)) {
+        asset = { name: fromApi.name, size: Number(fromApi.size) || 0, browser_download_url: fromApi.browser_download_url };
+      }
+    }
   }
   return {
+    // supported = can show green/red for this build (always when we resolved a remote tag)
     supported: true,
+    canDownload: Boolean(assetName && asset?.browser_download_url),
     repository: UPDATE_REPOSITORY,
     currentVersion,
     remoteVersion,
-    upToDate: compareVersions(remoteVersion, currentVersion) <= 0,
-    releaseName: String(release.name || release.tag_name || remoteVersion),
-    releaseUrl: String(release.html_url || `https://github.com/${UPDATE_REPOSITORY}/releases`),
+    upToDate,
+    releaseName: meta.releaseName || remoteVersion,
+    releaseUrl: meta.releaseUrl || `https://github.com/${UPDATE_REPOSITORY}/releases`,
     platform: process.platform,
     arch: process.arch,
-    asset: { name: asset.name, size: Number(asset.size) || 0 },
+    source: meta.source || 'unknown',
+    asset: asset ? { name: asset.name, size: asset.size || 0, browser_download_url: asset.browser_download_url } : null,
   };
 }
 
 async function downloadAppUpdate() {
   const result = await checkAppUpdate();
-  if (!result.supported) throw new Error('This platform is not supported by the published OpenBrowser packages');
+  if (!result.canDownload || !result.asset?.name) throw new Error('This platform has no published OpenBrowser installer package');
   if (result.upToDate) return { success: false, upToDate: true, version: result.currentVersion, assetName: result.asset.name };
-  const release = await fetchUpdateRelease();
-  const asset = Array.isArray(release.assets) ? release.assets.find((item) => item?.name === result.asset.name) : null;
-  const downloadUrl = asset?.browser_download_url;
-  if (!asset || !updateUrlIsAllowed(downloadUrl, result.asset.name)) throw new Error('The selected update package URL is not trusted');
+  const downloadUrl = result.asset.browser_download_url
+    || `https://github.com/${UPDATE_REPOSITORY}/releases/download/v${result.remoteVersion}/${result.asset.name}`;
+  if (!updateUrlIsAllowed(downloadUrl, result.asset.name)) throw new Error('The selected update package URL is not trusted');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
   const extension = path.extname(result.asset.name).toLowerCase();
@@ -171,6 +319,164 @@ async function downloadAppUpdate() {
   } finally {
     clearTimeout(timer);
   }
+}
+
+
+/** Last GitHub Releases check; pushed to UI as traffic-light status. */
+let lastAppUpdateStatus = null;
+let appUpdateWatchTimer = null;
+const APP_UPDATE_POLL_MS = 6 * 60 * 60 * 1000;
+const APP_UPDATE_STARTUP_DELAY_MS = 2500;
+const APP_UPDATE_CACHE_FILE = path.join(app.getPath('userData'), 'openbrowser-update-status.json');
+
+function appUpdateLightFromResult(result) {
+  // Product rule: green = latest, red = update available.
+  // Never use yellow for "I am latest". Failed checks without cache → gray "unknown".
+  if (!result) return 'unknown';
+  if (result.remoteVersion != null && result.currentVersion != null && result.upToDate != null) {
+    return result.upToDate ? 'green' : 'red';
+  }
+  return 'unknown';
+}
+
+async function loadCachedAppUpdateStatus() {
+  try {
+    const raw = JSON.parse(await fsp.readFile(APP_UPDATE_CACHE_FILE, 'utf8'));
+    if (!raw || typeof raw !== 'object') return null;
+    if (raw.remoteVersion == null || raw.upToDate == null) return null;
+    // Cache only useful if it was for this same local version
+    if (raw.currentVersion && String(raw.currentVersion) !== String(app.getVersion())) return null;
+    lastAppUpdateStatus = {
+      supported: true,
+      canDownload: Boolean(raw.canDownload),
+      repository: UPDATE_REPOSITORY,
+      currentVersion: String(raw.currentVersion || app.getVersion()),
+      remoteVersion: String(raw.remoteVersion),
+      upToDate: Boolean(raw.upToDate),
+      releaseName: raw.releaseName || raw.remoteVersion,
+      releaseUrl: raw.releaseUrl || `https://github.com/${UPDATE_REPOSITORY}/releases`,
+      platform: process.platform,
+      arch: process.arch,
+      source: raw.source || 'cache',
+      asset: raw.asset || null,
+      cachedAt: raw.checkedAt || null,
+    };
+    return lastAppUpdateStatus;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function saveCachedAppUpdateStatus(result) {
+  if (!result || result.remoteVersion == null || result.upToDate == null) return;
+  try {
+    await fsp.mkdir(path.dirname(APP_UPDATE_CACHE_FILE), { recursive: true });
+    const payload = {
+      currentVersion: result.currentVersion,
+      remoteVersion: result.remoteVersion,
+      upToDate: result.upToDate,
+      canDownload: result.canDownload,
+      releaseName: result.releaseName,
+      releaseUrl: result.releaseUrl,
+      source: result.source,
+      asset: result.asset || null,
+      checkedAt: new Date().toISOString(),
+    };
+    const temporary = APP_UPDATE_CACHE_FILE + '.tmp';
+    await fsp.writeFile(temporary, JSON.stringify(payload, null, 2), 'utf8');
+    await fsp.rm(APP_UPDATE_CACHE_FILE, { force: true });
+    await fsp.rename(temporary, APP_UPDATE_CACHE_FILE);
+  } catch (_) { /* non-fatal */ }
+}
+
+/**
+ * Check GitHub latest release and push status to all windows (traffic light).
+ * green = up to date; red = newer release available; unknown = check failed (gray).
+ */
+async function pushAppUpdateStatus({ check = true } = {}) {
+  try {
+    const result = check ? await checkAppUpdate() : lastAppUpdateStatus;
+    if (!result) {
+      const cached = lastAppUpdateStatus;
+      if (cached?.remoteVersion != null && cached.upToDate != null) {
+        const payload = {
+          type: 'app-update-status',
+          light: cached.upToDate ? 'green' : 'red',
+          checkedAt: new Date().toISOString(),
+          ...cached,
+          stale: true,
+        };
+        emit(payload);
+        return payload;
+      }
+      const payload = {
+        type: 'app-update-status',
+        light: 'unknown',
+        currentVersion: app.getVersion(),
+        checkedAt: new Date().toISOString(),
+      };
+      emit(payload);
+      return payload;
+    }
+    lastAppUpdateStatus = { ...result, error: null };
+    await saveCachedAppUpdateStatus(lastAppUpdateStatus);
+    const payload = {
+      type: 'app-update-status',
+      light: appUpdateLightFromResult(result),
+      checkedAt: new Date().toISOString(),
+      ...result,
+    };
+    emit(payload);
+    return payload;
+  } catch (error) {
+    // Prefer last successful green/red over a confusing amber "error" light
+    if (lastAppUpdateStatus?.remoteVersion != null && lastAppUpdateStatus.upToDate != null) {
+      const payload = {
+        type: 'app-update-status',
+        light: lastAppUpdateStatus.upToDate ? 'green' : 'red',
+        checkedAt: new Date().toISOString(),
+        ...lastAppUpdateStatus,
+        stale: true,
+        warning: String(error && error.message || error),
+      };
+      emit(payload);
+      return payload;
+    }
+    const payload = {
+      type: 'app-update-status',
+      light: 'unknown',
+      currentVersion: app.getVersion(),
+      error: String(error && error.message || error),
+      checkedAt: new Date().toISOString(),
+    };
+    emit(payload);
+    return payload;
+  }
+}
+
+function startAppUpdateWatcher() {
+  // Paint cached green/red immediately so UI never sticks on yellow/checking
+  loadCachedAppUpdateStatus().then((cached) => {
+    if (cached) {
+      emit({
+        type: 'app-update-status',
+        light: appUpdateLightFromResult(cached),
+        checkedAt: new Date().toISOString(),
+        ...cached,
+        stale: true,
+      });
+    }
+  }).catch(() => {});
+
+  const run = () => {
+    pushAppUpdateStatus({ check: true }).catch((error) => {
+      console.warn('OpenBrowser update check failed:', error.message || error);
+    });
+  };
+  setTimeout(run, APP_UPDATE_STARTUP_DELAY_MS);
+  if (appUpdateWatchTimer) clearInterval(appUpdateWatchTimer);
+  appUpdateWatchTimer = setInterval(run, APP_UPDATE_POLL_MS);
+  if (typeof appUpdateWatchTimer.unref === 'function') appUpdateWatchTimer.unref();
 }
 
 function normalizeProfileDataRoot(value) {
@@ -931,9 +1237,17 @@ async function createWindow() {
     minWidth: 960,
     minHeight: 680,
     title: 'OpenBrowser',
-    icon: path.join(__dirname, 'assets', isMac && fs.existsSync(path.join(__dirname, 'assets', 'logo.icns'))
-      ? 'logo.icns'
-      : (fs.existsSync(path.join(__dirname, 'assets', 'logo.png')) ? 'logo.png' : 'logo.ico')),
+    icon: (() => {
+      // Window / taskbar: software pixel logo
+      const pixelPng = path.join(__dirname, 'assets', 'logo-pixel.png');
+      const icns = path.join(__dirname, 'assets', 'logo.icns');
+      const png = path.join(__dirname, 'assets', 'logo.png');
+      const ico = path.join(__dirname, 'assets', 'logo.ico');
+      if (isMac && fs.existsSync(icns)) return icns;
+      if (fs.existsSync(pixelPng)) return pixelPng;
+      if (fs.existsSync(png)) return png;
+      return ico;
+    })(),
     backgroundColor: chrome.bg,
     show: false,
     autoHideMenuBar: true,
@@ -979,11 +1293,27 @@ app.whenReady().then(async () => {
   try { app.setName('OpenBrowser'); } catch (_) { /* ignore */ }
   try { process.title = 'OpenBrowser'; } catch (_) { /* ignore */ }
   if (process.platform === 'darwin' && app.dock) {
-    const dockIcon = path.join(__dirname, 'assets', 'logo.png');
+    // Software Dock / shortcut icon = logo-pixel (not browser logo-native)
     try {
-      if (fs.existsSync(dockIcon)) app.dock.setIcon(dockIcon);
+      const { rebuildAppShortcutIcons } = require('./automation/env-icon');
+      rebuildAppShortcutIcons();
     } catch (error) {
-      console.warn('OpenBrowser Dock icon could not be applied:', error.message);
+      console.warn('OpenBrowser app icons rebuild skipped:', error.message);
+    }
+    const dockCandidates = [
+      path.join(__dirname, 'assets', 'logo-pixel.png'),
+      path.join(__dirname, 'assets', 'logo.png'),
+      path.join(__dirname, 'assets', 'logo.icns'),
+    ];
+    for (const dockIcon of dockCandidates) {
+      try {
+        if (fs.existsSync(dockIcon)) {
+          app.dock.setIcon(dockIcon);
+          break;
+        }
+      } catch (error) {
+        console.warn('OpenBrowser Dock icon could not be applied:', error.message);
+      }
     }
   }
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
@@ -1066,7 +1396,14 @@ app.whenReady().then(async () => {
     titleBarIntegrated: process.platform === 'darwin' || process.platform === 'win32',
     platform: process.platform,
   }));
-  registerTrustedIpc('app:update-check', () => checkAppUpdate());
+  registerTrustedIpc('app:update-check', async () => {
+    const payload = await pushAppUpdateStatus({ check: true });
+    if (payload?.error && !payload?.remoteVersion) throw new Error(payload.error);
+    // Return check fields (without event envelope noise for renderer helpers)
+    const { type, light, checkedAt, error, ...rest } = payload || {};
+    if (error && !rest.supported) throw new Error(error);
+    return rest.currentVersion != null ? { ...rest, light, checkedAt } : await checkAppUpdate();
+  });
   registerTrustedIpc('app:update-download', () => downloadAppUpdate());
   registerTrustedIpc('app:open-github', async () => {
     const url = `https://github.com/${UPDATE_REPOSITORY}`;
@@ -1549,6 +1886,7 @@ app.whenReady().then(async () => {
   }));
 
   await createWindow();
+  startAppUpdateWatcher();
 });
 
 app.on('before-quit', (event) => {

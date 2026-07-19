@@ -13,6 +13,32 @@ const {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const OUTPUT_DIRECTORY = path.join(process.cwd(), 'rpa-output');
 
+function isPathInsideRoot(candidate, root) {
+  const child = path.resolve(candidate);
+  const base = path.resolve(root);
+  const normalize = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
+  return normalize(child) === normalize(base) || normalize(child).startsWith(normalize(base) + path.sep);
+}
+
+/**
+ * Resolve a user-supplied local file path for RPA steps.
+ * Absolute paths must stay under OUTPUT_DIRECTORY (or optional extraRoots).
+ * Relative paths resolve under OUTPUT_DIRECTORY only.
+ */
+function resolveSafeRpaPath(filePath, { extraRoots = [], mustExist = false } = {}) {
+  const raw = String(filePath || '').trim();
+  if (!raw) throw new Error('file path required');
+  if (raw.includes('\0')) throw new Error('invalid file path');
+  const roots = [OUTPUT_DIRECTORY, ...extraRoots].map((item) => path.resolve(item));
+  const resolved = path.isAbsolute(raw)
+    ? path.resolve(raw)
+    : path.resolve(OUTPUT_DIRECTORY, raw);
+  if (!roots.some((root) => isPathInsideRoot(resolved, root))) {
+    throw new Error('RPA file path must be inside the RPA output directory');
+  }
+  return resolved;
+}
+
 const EXECUTABLE_STEP_TYPES = new Set([
   'wait', 'sleep', 'delay', 'waittime',
   'goto', 'navigate', 'open', 'gotourl',
@@ -477,11 +503,12 @@ class RpaEngine {
     if (type === 'useexcel') {
       const filePath = text(params.path);
       if (!filePath) throw new Error('useExcel requires a CSV or JSON file path');
-      const extension = path.extname(filePath).toLowerCase();
+      const safePath = resolveSafeRpaPath(filePath);
+      const extension = path.extname(safePath).toLowerCase();
       if (extension !== '.csv' && extension !== '.json') {
         throw new Error('useExcel currently accepts .csv or .json. Convert the spreadsheet and update dataExcelPath.');
       }
-      const raw = await fs.readFile(filePath, 'utf8');
+      const raw = await fs.readFile(safePath, 'utf8');
       let records;
       if (extension === '.json') {
         records = JSON.parse(raw);
@@ -498,12 +525,7 @@ class RpaEngine {
     if (type === 'importtext') {
       const filePath = text(params.path || params.filePath || params.file);
       if (!filePath) throw new Error('importText requires a file path');
-      const resolved = path.resolve(filePath);
-      const root = path.resolve(OUTPUT_DIRECTORY);
-      // Only allow files under the RPA output root to avoid arbitrary local reads.
-      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-        throw new Error('importText path must be inside the RPA output directory');
-      }
+      const resolved = resolveSafeRpaPath(filePath);
       const raw = await fs.readFile(resolved, 'utf8');
       const lines = raw.split(/\r?\n/).filter((line) => line.length > 0);
       variables[params.variable || 'textLines'] = lines;
@@ -583,7 +605,8 @@ class RpaEngine {
       const selector = text(params.selector);
       const filePath = text(params.url || params.path);
       if (!selector || !filePath) throw new Error('uploadAttachment requires selector and local file path');
-      await fs.access(filePath);
+      const safePath = resolveSafeRpaPath(filePath);
+      await fs.access(safePath);
       if (String(params.selectorRadio || 'CSS').toUpperCase().startsWith('X')) {
         throw new Error('uploadAttachment currently requires a CSS selector');
       }
@@ -591,7 +614,7 @@ class RpaEngine {
         const document = await cdp.call(ws, 'DOM.getDocument', { depth: 1 });
         const node = await cdp.call(ws, 'DOM.querySelector', { nodeId: document.root.nodeId, selector });
         if (!node.nodeId) throw new Error('uploadAttachment selector not found: ' + selector);
-        await cdp.call(ws, 'DOM.setFileInputFiles', { nodeId: node.nodeId, files: [filePath] });
+        await cdp.call(ws, 'DOM.setFileInputFiles', { nodeId: node.nodeId, files: [safePath] });
       });
       return;
     }

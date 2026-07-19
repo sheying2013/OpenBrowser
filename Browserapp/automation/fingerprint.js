@@ -1245,24 +1245,32 @@ function buildInjectionScript(fp) {
         const Wrapped = function(...args) {
           const pc = new Original(...args);
           try {
-            const originalSetLocal = pc.setLocalDescription?.bind(pc);
-            if (originalSetLocal) {
-              pc.setLocalDescription = async function(desc) {
-                const result = await originalSetLocal(desc);
-                return result;
-              };
-            }
+            const rewriteSdp = (desc) => {
+              if (!desc || typeof desc.sdp !== 'string' || !targetIp) return desc;
+              try {
+                return Object.assign({}, desc, {
+                  sdp: desc.sdp.replace(/(\n)a=candidate:.* typ host .*/g, (line) => {
+                    return line.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/, targetIp);
+                  }),
+                });
+              } catch (_) { return desc; }
+            };
             const originalCreateOffer = pc.createOffer?.bind(pc);
             if (originalCreateOffer) {
               pc.createOffer = async function(...oArgs) {
-                const offer = await originalCreateOffer(...oArgs);
-                if (offer && typeof offer.sdp === 'string' && targetIp) {
-                  // Soft rewrite host candidates if present (best-effort; kernel path is stronger)
-                  offer.sdp = offer.sdp.replace(/(\n)a=candidate:.* typ host .*/g, (line) => {
-                    return line.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/, targetIp);
-                  });
-                }
-                return offer;
+                return rewriteSdp(await originalCreateOffer(...oArgs));
+              };
+            }
+            const originalCreateAnswer = pc.createAnswer?.bind(pc);
+            if (originalCreateAnswer) {
+              pc.createAnswer = async function(...aArgs) {
+                return rewriteSdp(await originalCreateAnswer(...aArgs));
+              };
+            }
+            const originalSetLocal = pc.setLocalDescription?.bind(pc);
+            if (originalSetLocal) {
+              pc.setLocalDescription = async function(desc) {
+                return originalSetLocal(rewriteSdp(desc));
               };
             }
           } catch (_) {}
@@ -1422,6 +1430,9 @@ function buildWorkerInjectionScript(fp) {
     seed: fp.seed,
     stability: {
       active: Boolean(stability.active),
+      mode: String(stability.mode || 'auto'),
+      hosts: Array.isArray(stability.hosts) ? stability.hosts : [],
+      skipHosts: Array.isArray(stability.skipHosts) ? stability.skipHosts : [],
       noiseAmplitude: Number(stability.noiseAmplitude) || 3,
       sampleStepDivisor: Number(stability.sampleStepDivisor) || 64,
       maxWidth: Number(stability.maxWidth) || 600,
@@ -1433,10 +1444,39 @@ function buildWorkerInjectionScript(fp) {
   const CFG = ${json};
   const seedNum = parseInt(String(CFG.seed || '1').slice(0, 8), 16) || 1;
   const noise = (n) => { const x = Math.sin((n + 1) * seedNum) * 10000; return x - Math.floor(x); };
-  const amp = Number(CFG.stability?.noiseAmplitude) || 3;
   const square = Math.max(2, Number(CFG.stability?.square) || 8);
   const workerLocks = new Map();
-  const stableWorker = Boolean(CFG.stability?.active);
+  const normalizeHost = (value) => String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/:\\d+$/, '')
+    .replace(/^\\*\\./, '');
+  const hostMatches = (host, pattern) => {
+    const h = normalizeHost(host);
+    const p = normalizeHost(pattern);
+    if (!h || !p) return false;
+    if (h === p) return true;
+    return h.endsWith('.' + p);
+  };
+  const listHasHost = (list, host) => Array.isArray(list) && list.some((item) => hostMatches(host, item));
+  const currentHost = () => {
+    try { return normalizeHost(self && self.location && self.location.hostname); } catch (_) { return ''; }
+  };
+  // Match main-thread stabilityActiveNow: evaluate host at noise-time, not only at launch.
+  const stabilityActiveNow = () => {
+    const st = CFG.stability || {};
+    if (st.mode === 'force') return !listHasHost(st.skipHosts, currentHost());
+    if (st.mode === 'off') return false;
+    const host = currentHost();
+    if (!host) return Boolean(st.active);
+    if (listHasHost(st.skipHosts, host)) return false;
+    if (listHasHost(st.hosts, host)) return true;
+    return Boolean(st.active);
+  };
+  const noiseAmplitudeNow = () => stabilityActiveNow() ? 1 : (Number(CFG.stability?.noiseAmplitude) || 3);
+  const sampleStepDivisorNow = () => stabilityActiveNow()
+    ? (Number(CFG.stability?.sampleStepDivisor) || 128)
+    : 64;
   const applyNoise = (imageData, mark) => {
     try {
       const data = imageData.data;
@@ -1446,6 +1486,8 @@ function buildWorkerInjectionScript(fp) {
       const maxH = Number(CFG.stability?.maxHeight) || 600;
       const limitW = width > 0 ? Math.min(width, maxW) : width;
       const limitH = height > 0 ? Math.min(height, maxH) : height;
+      const amp = noiseAmplitudeNow();
+      const stableWorker = stabilityActiveNow();
       if (width > 0 && height > 0) {
         if (stableWorker) {
           const key = width + 'x' + height + ':' + mark + ':' + square + ':' + amp;
@@ -1600,9 +1642,8 @@ function buildWorkerInjectionScript(fp) {
         const result = original.apply(this, args);
         try {
           const pixels = args[6];
-          const step = Math.max(4, Math.floor((pixels?.length || 0) / 64));
-          const ampW = Number(CFG.stability?.noiseAmplitude) || 3;
-          const stepDiv = Number(CFG.stability?.sampleStepDivisor) || 64;
+          const ampW = noiseAmplitudeNow();
+          const stepDiv = sampleStepDivisorNow();
           const step2 = Math.max(4, Math.floor((pixels?.length || 0) / stepDiv));
           for (let i = 0; pixels && i < pixels.length; i += step2) {
             const n = Math.floor(noise(i + mark) * ampW) - Math.floor(ampW / 2);
@@ -1697,6 +1738,15 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     longitude = Number(profile.exitLongitude);
   }
 
+  // cdpCall may be:
+  //  1) (wsUrl, method, params) — classic page WebSocket path
+  //  2) (method, params) — flattened session path (sessionId bound by caller)
+  const invoke = async (method, params = {}) => {
+    if (typeof cdpCall !== 'function') throw new Error('CDP call function required');
+    if (webSocketDebuggerUrl == null) return cdpCall(method, params);
+    return cdpCall(webSocketDebuggerUrl, method, params);
+  };
+
   // Network/Emulation.setUserAgentOverride + UserAgentMetadata (Client Hints)
   if (fp.userAgent || fp.uaProfile) {
     const uaProfile = fp.uaProfile || buildUaProfile({
@@ -1706,10 +1756,10 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     const acceptLanguage = (fp.languages || []).join(',');
     const override = cdpUserAgentOverride(uaProfile, acceptLanguage);
     // Emulation affects navigator + most page JS
-    await cdpCall(webSocketDebuggerUrl, 'Emulation.setUserAgentOverride', override);
+    await invoke('Emulation.setUserAgentOverride', override);
     // Network affects HTTP headers (User-Agent + sec-ch-ua*)
-    await cdpCall(webSocketDebuggerUrl, 'Network.enable', {});
-    await cdpCall(webSocketDebuggerUrl, 'Network.setUserAgentOverride', {
+    await invoke('Network.enable', {});
+    await invoke('Network.setUserAgentOverride', {
       userAgent: override.userAgent,
       acceptLanguage: override.acceptLanguage,
       platform: override.platform,
@@ -1717,7 +1767,7 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     });
   }
   if (fp.screen) {
-    await cdpCall(webSocketDebuggerUrl, 'Emulation.setDeviceMetricsOverride', {
+    await invoke('Emulation.setDeviceMetricsOverride', {
       width: fp.screen.width,
       height: fp.screen.height,
       deviceScaleFactor: fp.screen.devicePixelRatio || 1,
@@ -1725,22 +1775,23 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     });
   }
   if (timezone) {
-    await cdpCall(webSocketDebuggerUrl, 'Emulation.setTimezoneOverride', { timezoneId: timezone });
+    await invoke('Emulation.setTimezoneOverride', { timezoneId: timezone });
   }
   if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-    await cdpCall(webSocketDebuggerUrl, 'Emulation.setGeolocationOverride', {
+    await invoke('Emulation.setGeolocationOverride', {
       latitude,
       longitude,
       accuracy: privacy.accuracy || 100,
     });
   }
   if (fp.languages?.[0]) {
-    await cdpCall(webSocketDebuggerUrl, 'Emulation.setLocaleOverride', { locale: fp.languages[0] });
+    await invoke('Emulation.setLocaleOverride', { locale: fp.languages[0] });
   }
 
   const source = buildInjectionScript(fp);
-  await cdpCall(webSocketDebuggerUrl, 'Page.addScriptToEvaluateOnNewDocument', { source });
-  await cdpCall(webSocketDebuggerUrl, 'Runtime.evaluate', { expression: source });
+  await invoke('Page.addScriptToEvaluateOnNewDocument', { source });
+  // Best-effort for already-started documents; new navigations use addScript above.
+  await invoke('Runtime.evaluate', { expression: source }).catch(() => {});
 }
 
 module.exports = {

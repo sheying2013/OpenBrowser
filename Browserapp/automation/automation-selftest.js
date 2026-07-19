@@ -8,6 +8,7 @@
  */
 
 const path = require('path');
+const os = require('os');
 const http = require('http');
 const assert = require('assert');
 const { LocalApiServer } = require('./local-api-server');
@@ -223,7 +224,7 @@ async function main() {
   assert.ok(peakRuns >= 2, 'rpa tasks run concurrently across environments');
   ok('rpa-engine parallel multi-environment plan');
 
-  const proxyStore = new ProxyStore(path.join('/tmp', 'openbrowser-automation-selftest-proxies.json'));
+  const proxyStore = new ProxyStore(path.join(os.tmpdir(), `openbrowser-automation-selftest-proxies-${process.pid}.json`));
   await proxyStore.load();
   const proxyCountBeforeImport = proxyStore.list().length;
   const importedProxies = await proxyStore.createMany([
@@ -286,15 +287,22 @@ async function main() {
   assert.strictEqual(badStartOrigin.status, 403);
   const directResponse = await httpJson(startPage.port, 'GET', '/api/network?pid=direct&refresh=1', undefined, startHeaders(directToken));
   assert.strictEqual(directResponse.status, 200);
-  assert.deepStrictEqual(directResponse.body.data, directNetwork);
+  assert.strictEqual(directResponse.body.data.healthScore.score, 70);
+  assert.strictEqual(directResponse.body.data.healthScore.level, 'review');
+  assert.strictEqual(directResponse.body.data.healthScore.confidence, 'low');
+  assert.strictEqual(directResponse.body.data.healthScore.factors.at(-1).code, 'ippure-unavailable');
   const proxyResponse = await httpJson(startPage.port, 'GET', '/api/network?pid=proxy&refresh=1', undefined, startHeaders(proxyToken));
   assert.strictEqual(proxyResponse.status, 200);
-  assert.deepStrictEqual(proxyResponse.body.data, proxyNetwork);
+  assert.strictEqual(proxyResponse.body.data.healthScore.score, 25);
+  assert.strictEqual(proxyResponse.body.data.healthScore.level, 'risky');
+  assert.strictEqual(proxyResponse.body.data.healthScore.label, '高风险');
+  assert.deepStrictEqual({ ...proxyResponse.body.data, healthScore: undefined }, { ...proxyNetwork, healthScore: undefined });
   assert.strictEqual(directLookups, 1, 'direct network lookup runs once');
   assert.strictEqual(proxyLookups, 1, 'proxy network lookup receives the real proxy config');
   const staleProxyResponse = await httpJson(startPage.port, 'GET', '/api/network?pid=direct-with-stale-proxy&refresh=1', undefined, startHeaders(staleProxyToken));
   assert.strictEqual(staleProxyResponse.status, 200);
-  assert.deepStrictEqual(staleProxyResponse.body.data, directNetwork);
+  assert.strictEqual(staleProxyResponse.body.data.healthScore.score, 70);
+  assert.deepStrictEqual({ ...staleProxyResponse.body.data, healthScore: undefined }, { ...directNetwork, healthScore: undefined });
   assert.strictEqual(directLookups, 2, 'explicit direct mode ignores stale proxy fields');
   assert.strictEqual(proxyLookups, 1, 'explicit direct mode never checks the stale proxy');
   const staleSessionResponse = await httpJson(startPage.port, 'GET', '/api/session?pid=stale-link');
@@ -319,6 +327,11 @@ async function main() {
   assert.ok(startHtml.includes("text('ip-ip','检测失败')"));
   assert.ok(startHtml.includes('id="ip-error"'));
   assert.ok(startHtml.includes('本地一致性评估'));
+  assert.ok(startHtml.includes('IP 健康评分'));
+  assert.ok(startHtml.includes('health-score-card'));
+  assert.ok(!startHtml.includes('多国语言支持'));
+  assert.ok(!startHtml.includes('Network &amp; Fingerprint Check'));
+  assert.ok(startHtml.includes('image-rendering:pixelated'));
   assert.ok(startHtml.includes('IP 网络身份'));
   assert.ok(startHtml.includes('泄露与一致性'));
   assert.ok(startHtml.includes('访问能力'));

@@ -7,6 +7,7 @@ const net = require('net');
 const crypto = require('crypto');
 const { URL } = require('url');
 const { buildStartPageHtml } = require('./start-page-template');
+const { calculateIpHealthScore } = require('./ip-health-score');
 const { lookupDirectCountry, parseProxy, startAuthenticatedProxy } = require('../proxy-forwarder');
 
 /**
@@ -95,6 +96,14 @@ async function lookupDirectNetwork() {
   return {
     ...network,
     protocol: 'direct',
+  };
+}
+
+function decorateNetwork(network) {
+  if (!network || typeof network !== 'object') return network;
+  return {
+    ...network,
+    healthScore: calculateIpHealthScore(network),
   };
 }
 
@@ -466,7 +475,7 @@ class StartPageServer {
     if (!this.port) throw new Error('启动页服务未启动');
     const profileId = String(profile.id || '');
     const serial = String(profile.number || profile.serial || extras.serial || profileId);
-    const network = extras.network || profile.network || null;
+    const network = decorateNetwork(extras.network || profile.network || null);
     const timezone = extras.timezone
       || profile.exitTimezone
       || network?.timezone
@@ -544,10 +553,11 @@ class StartPageServer {
   updateNetwork(pid, network) {
     const session = this.getSession(pid);
     if (!session || !network) return session;
-    session.network = { ...network };
-    session.exitIp = network.ip || session.exitIp;
-    session.countryCode = network.countryCode || session.countryCode;
-    if (network.timezone) session.timezone = network.timezone;
+    const decoratedNetwork = decorateNetwork(network);
+    session.network = decoratedNetwork;
+    session.exitIp = decoratedNetwork.ip || session.exitIp;
+    session.countryCode = decoratedNetwork.countryCode || session.countryCode;
+    if (decoratedNetwork.timezone) session.timezone = decoratedNetwork.timezone;
     session.at = Date.now();
     return session;
   }
@@ -656,7 +666,7 @@ class StartPageServer {
             : await this.engine.checkProxy(profile);
           if (isDirect) this.engine.networkInfo?.set?.(String(pid), network);
           this.updateNetwork(pid, network);
-          return network;
+          return decorateNetwork(network);
         } catch (error) {
           if (session?.network?.ip) return session.network;
           if (isDirect) {
@@ -675,7 +685,7 @@ class StartPageServer {
               checkedAt: new Date().toISOString(),
             };
             this.updateNetwork(pid, soft);
-            return soft;
+            return decorateNetwork(soft);
           }
           if (session?.network) return session.network;
           const endpoint = proxyEndpoint(profile.proxy);
@@ -686,16 +696,16 @@ class StartPageServer {
       }
       if (runningNet) {
         this.updateNetwork(pid, runningNet);
-        return runningNet;
+        return decorateNetwork(runningNet);
       }
     }
     // 旧启动页链接可能在应用重启后失去会话。此时仍允许按当前机器直连检测，
     // 但已知代理配置的失败必须在上面的代理分支中原样返回。
     if (refresh && !session) {
       try {
-        return await this.lookupDirectNetwork();
+        return decorateNetwork(await this.lookupDirectNetwork());
       } catch (_) {
-        return {
+        return decorateNetwork({
           ip: '',
           country: '',
           countryCode: '',
@@ -705,27 +715,27 @@ class StartPageServer {
           protocol: 'direct',
           soft: true,
           checkedAt: new Date().toISOString(),
-        };
+        });
       }
     }
-    if (session?.network) return session.network;
+    if (session?.network) return decorateNetwork(session.network);
     if (session?.exitIp) {
-      return {
+      return decorateNetwork({
         ip: session.exitIp,
         countryCode: session.countryCode || '',
         timezone: session.timezone || '',
         protocol: session.networkMode === 'direct' || session.proxyProtocol === 'direct' ? 'direct' : undefined,
-      };
+      });
     }
     if (session && (session.networkMode === 'direct' || session.proxyProtocol === 'direct')) {
-      return {
+      return decorateNetwork({
         ip: '',
         countryCode: session.countryCode || '',
         timezone: session.timezone || '',
         protocol: 'direct',
         soft: true,
         checkedAt: new Date().toISOString(),
-      };
+      });
     }
     return null;
   }
@@ -817,7 +827,7 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
       try {
         const network = await this.#resolveNetwork(pid, refresh);
         if (!network) return this.#json(res, 404, { ok: false, msg: 'network not found', pid });
-        return this.#json(res, 200, { ok: true, data: network });
+        return this.#json(res, 200, { ok: true, data: decorateNetwork(network) });
       } catch (error) {
         return this.#json(res, 500, { ok: false, msg: error.message });
       }

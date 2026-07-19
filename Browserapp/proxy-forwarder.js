@@ -524,6 +524,34 @@ async function requestProxyHttp(config, hostname, pathname) {
   }
 }
 
+async function requestProxyHttps(config, hostname, pathname) {
+  const bridge = await startAuthenticatedProxy(config); let socket; let secure;
+  try {
+    socket = await connectBridge(bridge, hostname, 443);
+    secure = tls.connect({ socket, servername: hostname, rejectUnauthorized: true });
+    const response = await new Promise((resolve, reject) => {
+      const chunks = [];
+      const timer = setTimeout(() => { secure.destroy(); reject(new Error('HTTPS proxy request timed out')); }, 15000);
+      const cleanup = () => clearTimeout(timer);
+      secure.once('secureConnect', () => {
+        secure.write('GET ' + pathname + ' HTTP/1.1\r\nHost: ' + hostname + '\r\nAccept: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\nUser-Agent: OpenBrowser/2.0\r\n\r\n');
+      });
+      secure.on('data', (chunk) => chunks.push(chunk));
+      secure.once('end', () => { cleanup(); resolve(Buffer.concat(chunks)); });
+      secure.once('error', (error) => { cleanup(); reject(error); });
+    });
+    const marker = response.indexOf('\r\n\r\n');
+    if (marker < 0) throw new Error('Invalid HTTPS proxy response');
+    const header = response.subarray(0, marker).toString('latin1');
+    const status = Number(header.split('\r\n', 1)[0].match(/\s(\d{3})(?:\s|$)/)?.[1] || 0);
+    let body = response.subarray(marker + 4);
+    if (/transfer-encoding:\s*chunked/i.test(header)) body = decodeChunked(body);
+    return { status, body };
+  } finally {
+    secure?.destroy(); socket?.destroy(); await bridge.close().catch(() => {});
+  }
+}
+
 function normalizeIpApiResult(value) {
   const ip = String(value.query || '');
   const countryCode = String(value.countryCode || '').toUpperCase();
@@ -551,6 +579,55 @@ function normalizeIpApiResult(value) {
   };
 }
 
+function normalizeIpPureResult(value) {
+  const ip = String(value.ip || '').trim();
+  const fraudScore = Number(value.fraudScore);
+  if (!ip || !Number.isFinite(fraudScore) || fraudScore < 0 || fraudScore > 100) {
+    throw new Error('IPPure response was incomplete');
+  }
+  return {
+    ip,
+    fraudScore,
+    isResidential: typeof value.isResidential === 'boolean' ? value.isResidential : null,
+    isBroadcast: typeof value.isBroadcast === 'boolean' ? value.isBroadcast : null,
+    asn: value.asn == null ? '' : 'AS' + String(value.asn).replace(/^AS/i, ''),
+    asOrganization: String(value.asOrganization || ''),
+    country: String(value.country || ''),
+    countryCode: String(value.countryCode || '').toUpperCase(),
+    city: String(value.city || ''),
+    timezone: String(value.timezone || ''),
+    latitude: Number.isFinite(Number(value.latitude)) ? Number(value.latitude) : null,
+    longitude: Number.isFinite(Number(value.longitude)) ? Number(value.longitude) : null,
+    postalCode: String(value.postalCode || ''),
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+function attachIpPure(network, result) {
+  if (!result || result.ip !== network.ip) return network;
+  return { ...network, ipPure: result };
+}
+
+async function lookupIpPureDirect() {
+  const { status, body } = await fetchUrlText('https://my.ippure.com/v1/info', { timeout: 12000 });
+  if (status !== 200) throw new Error('IPPure lookup returned HTTP ' + status);
+  return normalizeIpPureResult(JSON.parse(body));
+}
+
+async function lookupIpPureProxy(config) {
+  const response = await requestProxyHttps(config, 'my.ippure.com', '/v1/info');
+  if (response.status !== 200) throw new Error('IPPure proxy lookup returned HTTP ' + response.status);
+  return normalizeIpPureResult(JSON.parse(response.body.toString('utf8')));
+}
+
+async function enrichWithIpPure(network, lookup) {
+  try {
+    return attachIpPure(network, await lookup());
+  } catch (_) {
+    return network;
+  }
+}
+
 function classifyProxyError(error) {
   const msg = String(error && error.message ? error.message : error || '');
   if (/authentication failed|username or password|407|rejected available authentication/i.test(msg)) return 'auth';
@@ -567,12 +644,78 @@ function networkTypeFromLookup(result = {}) {
   return 'broadband';
 }
 
-async function fetchUrlText(url, { timeout = 15000, method = 'GET' } = {}) {
+function isCloudMetadataHostname(hostname) {
+  const host = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) return true;
+  if (host === 'metadata' || host === 'metadata.google.internal') return true;
+  if (host.endsWith('.metadata.google.internal')) return true;
+  // AWS/GCP/Azure instance metadata
+  if (host === '169.254.169.254' || host === '169.254.170.2') return true;
+  return false;
+}
+
+function isPrivateOrLocalHostname(hostname) {
+  const host = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) return true;
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  if (host === '0.0.0.0' || host === '::' || host === '::1') return true;
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const parts = m.slice(1).map((n) => Number(n));
+    if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+    const [a, b] = parts;
+    if (a === 10 || a === 127 || a === 0) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 198 && (b === 18 || b === 19)) return true;
+  }
+  if (host.includes(':')) {
+    if (host === '::1' || host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) return true;
+  }
+  return false;
+}
+
+/** Always-blocked hosts (cloud metadata). Private/loopback controlled separately. */
+function isBlockedOutboundHostname(hostname) {
+  return isCloudMetadataHostname(hostname);
+}
+
+function resolveAllowPrivateOutbound(options = {}) {
+  if (options.allowPrivate === true) return true;
+  if (options.allowPrivate === false) return false;
+  const env = String(process.env.OPENBROWSER_ALLOW_PRIVATE_OUTBOUND || '').trim();
+  if (env === '0' || /^false$/i.test(env)) return false;
+  if (env === '1' || /^true$/i.test(env)) return true;
+  // Desktop default: local proxy dashboards often live on 127.0.0.1 / LAN.
+  // Cloud metadata remains blocked regardless.
+  return true;
+}
+
+function assertSafeOutboundUrl(url, options = {}) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) throw new Error('URL 必须以 http:// 或 https:// 开头');
+  let parsed;
+  try { parsed = new URL(target); } catch (_) { throw new Error('URL 无效'); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('仅允许 http/https URL');
+  if (parsed.username || parsed.password) throw new Error('出站 URL 不允许内嵌账号密码');
+  if (isCloudMetadataHostname(parsed.hostname)) {
+    throw new Error('出站 URL 禁止访问云 metadata 地址（防 SSRF）');
+  }
+  if (!resolveAllowPrivateOutbound(options) && isPrivateOrLocalHostname(parsed.hostname)) {
+    throw new Error('出站 URL 禁止访问本机/内网地址（OPENBROWSER_ALLOW_PRIVATE_OUTBOUND=0）');
+  }
+  return parsed;
+}
+
+async function fetchUrlText(url, { timeout = 15000, method = 'GET', allowPrivate, maxRedirects = 3 } = {}) {
+  const options = { allowPrivate };
+  const parsed = assertSafeOutboundUrl(url, options);
+  const target = parsed.toString();
   const https = require('https');
   const http = require('http');
-  const lib = target.startsWith('https') ? https : http;
+  const lib = parsed.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
     const req = lib.request(target, {
       method,
@@ -582,15 +725,39 @@ async function fetchUrlText(url, { timeout = 15000, method = 'GET' } = {}) {
         'User-Agent': 'OpenBrowser/2.0',
       },
     }, (res) => {
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => {
-        const body = Buffer.concat(chunks).toString('utf8');
-        if ((res.statusCode || 0) >= 400) {
-          reject(new Error('HTTP ' + res.statusCode + ': ' + body.slice(0, 160)));
+      const status = res.statusCode || 0;
+      if (status >= 300 && status < 400 && res.headers.location) {
+        res.resume();
+        if (maxRedirects <= 0) {
+          reject(new Error('重定向次数过多'));
           return;
         }
-        resolve({ status: res.statusCode || 0, body, headers: res.headers || {} });
+        try {
+          const next = new URL(String(res.headers.location), target).toString();
+          assertSafeOutboundUrl(next, options);
+          fetchUrlText(next, { timeout, method, allowPrivate, maxRedirects: maxRedirects - 1 }).then(resolve, reject);
+        } catch (error) {
+          reject(error);
+        }
+        return;
+      }
+      const chunks = [];
+      let size = 0;
+      res.on('data', (c) => {
+        size += c.length;
+        if (size > 2 * 1024 * 1024) {
+          req.destroy(new Error('响应体过大'));
+          return;
+        }
+        chunks.push(c);
+      });
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        if (status >= 400) {
+          reject(new Error('HTTP ' + status + ': ' + body.slice(0, 160)));
+          return;
+        }
+        resolve({ status, body, headers: res.headers || {} });
       });
     });
     req.on('error', reject);
@@ -685,11 +852,11 @@ async function lookupProxyCountry(config) {
     const value = JSON.parse(response.body.toString('utf8'));
     const result = normalizeIpApiResult(value);
     const latencyMs = Date.now() - started;
-    return {
+    return enrichWithIpPure({
       ...result,
       latencyMs,
       networkType: networkTypeFromLookup(result),
-    };
+    }, () => lookupIpPureProxy(config));
   } catch (error) {
     const err = new Error(error.message || String(error));
     err.errorClass = classifyProxyError(error);
@@ -743,8 +910,8 @@ async function lookupDirectCountry() {
       const { status, body } = await fetchUrlText(endpoint.url, { timeout: 12000 });
       if (status !== 200) throw new Error('HTTP ' + status);
       const value = JSON.parse(body);
-      if (endpoint.kind === 'ip-api') return normalizeIpApiResult(value);
-      return normalizeIpWhoResult(value);
+      const network = endpoint.kind === 'ip-api' ? normalizeIpApiResult(value) : normalizeIpWhoResult(value);
+      return enrichWithIpPure(network, lookupIpPureDirect);
     } catch (error) {
       errors.push(String(error.message || error));
     }
@@ -791,6 +958,10 @@ module.exports = {
   classifyProxyError,
   networkTypeFromLookup,
   fetchUrlText,
+  assertSafeOutboundUrl,
+  isBlockedOutboundHostname,
+  isCloudMetadataHostname,
+  isPrivateOrLocalHostname,
   extractProxyStrings,
   extractProxyFromApi,
   invokeProxyRefresh,

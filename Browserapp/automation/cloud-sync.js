@@ -382,7 +382,7 @@ async function buildBackupPackage({
     const allow = new Set(profileIds.map(String));
     list = list.filter((p) => allow.has(String(p.id)));
   }
-  // default: only environments that explicitly enable cloudBackup (ix/Hub per-profile opt-in)
+  // default: only environments that explicitly enable cloudBackup (per-profile opt-in)
   if (!Array.isArray(profileIds)) {
     list = list.filter((p) => Boolean(p?.advanced?.cloudBackup));
   }

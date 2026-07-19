@@ -20,6 +20,16 @@ function log(msg) {
   console.log('[brand]', msg);
 }
 
+// Rebuild logo.icns / logo.png from logo-pixel.svg so Finder / Dock shortcuts match the pixel brand.
+try {
+  const { rebuildAppShortcutIcons } = require(path.join(appRoot, 'automation', 'env-icon'));
+  const result = rebuildAppShortcutIcons();
+  if (result?.error) log(`icon rebuild warning: ${result.error}`);
+  else log('icons rebuilt from logo-pixel.svg');
+} catch (error) {
+  log(`icon rebuild skipped: ${error.message}`);
+}
+
 function findApp(dist) {
   if (!fs.existsSync(dist)) return null;
   const names = fs.readdirSync(dist).filter((n) => n.endsWith('.app'));
