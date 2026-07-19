@@ -42,6 +42,8 @@ jobs:
             v*) ;;
             *) echo "release_tag must start with v, got: $RELEASE_TAG" >&2; exit 1 ;;
           esac
+      - name: Check out source
+        uses: actions/checkout@v4
       - name: Create or update release
         shell: bash
         run: |
