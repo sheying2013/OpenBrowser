@@ -1,4 +1,8 @@
-# OpenBrowser English README
+<div align="center">
+
+<h1>OpenBrowser English README</h1>
+
+</div>
 
 The English README is now the primary project README:
 
