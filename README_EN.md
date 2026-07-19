@@ -1,6 +1,8 @@
 <div align="center">
 
-<h1>OpenBrowser English README</h1>
+<img src="./assets/openbrowser-title.svg" alt="OpenBrowser" width="820">
+
+<strong>English README compatibility entry</strong>
 
 </div>
 

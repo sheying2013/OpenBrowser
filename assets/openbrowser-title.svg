@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="150" viewBox="0 0 980 150" role="img" aria-labelledby="title desc">
+  <title id="title">OpenBrowser</title>
+  <desc id="desc">Large centered OpenBrowser project title</desc>
+  <defs>
+    <linearGradient id="titleGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="52%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+  <rect width="980" height="150" fill="none"/>
+  <text x="490" y="102" text-anchor="middle" font-family="Inter, SF Pro Display, Segoe UI, Arial, sans-serif" font-size="88" font-weight="800" letter-spacing="-2" fill="url(#titleGradient)">OpenBrowser</text>
+</svg>
