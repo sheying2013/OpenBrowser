@@ -39,6 +39,130 @@ function displayProxy(value) {
   } catch (_) { return 'Invalid proxy'; }
 }
 
+
+/**
+ * Local TLS profile descriptors for future dialer integration.
+ * These describe ClientHello-oriented preferences only; Node's tls.connect
+ * still performs the handshake. A dedicated dialer can consume the same shape.
+ */
+const TLS_PROFILE_PRESETS = {
+  chrome: {
+    id: 'chrome',
+    alpn: ['h2', 'http/1.1'],
+    minVersion: 'TLSv1.2',
+    maxVersion: 'TLSv1.3',
+    // Cipher order approximates modern Chrome; exact GREASE/extension order needs a custom dialer.
+    ciphers: [
+      'TLS_AES_128_GCM_SHA256',
+      'TLS_AES_256_GCM_SHA384',
+      'TLS_CHACHA20_POLY1305_SHA256',
+      'ECDHE-ECDSA-AES128-GCM-SHA256',
+      'ECDHE-RSA-AES128-GCM-SHA256',
+      'ECDHE-ECDSA-AES256-GCM-SHA384',
+      'ECDHE-RSA-AES256-GCM-SHA384',
+      'ECDHE-ECDSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-AES128-SHA',
+      'ECDHE-RSA-AES256-SHA',
+      'AES128-GCM-SHA256',
+      'AES256-GCM-SHA384',
+      'AES128-SHA',
+      'AES256-SHA',
+    ].join(':'),
+    ecdhCurve: 'X25519:P-256:P-384',
+    permuteExtensions: true,
+    grease: true,
+  },
+  chrome_legacy: {
+    id: 'chrome_legacy',
+    alpn: ['h2', 'http/1.1'],
+    minVersion: 'TLSv1.2',
+    maxVersion: 'TLSv1.3',
+    ciphers: [
+      'TLS_AES_128_GCM_SHA256',
+      'TLS_AES_256_GCM_SHA384',
+      'TLS_CHACHA20_POLY1305_SHA256',
+      'ECDHE-ECDSA-AES128-GCM-SHA256',
+      'ECDHE-RSA-AES128-GCM-SHA256',
+      'ECDHE-ECDSA-AES256-GCM-SHA384',
+      'ECDHE-RSA-AES256-GCM-SHA384',
+      'ECDHE-ECDSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-AES128-SHA',
+      'ECDHE-RSA-AES256-SHA',
+      'AES128-GCM-SHA256',
+      'AES256-GCM-SHA384',
+      'AES128-SHA',
+      'AES256-SHA',
+    ].join(':'),
+    ecdhCurve: 'X25519:P-256:P-384',
+    permuteExtensions: false,
+    grease: false,
+  },
+  node: {
+    id: 'node',
+    alpn: ['http/1.1', 'h2'],
+    minVersion: 'TLSv1.2',
+    maxVersion: 'TLSv1.3',
+    ciphers: null,
+    ecdhCurve: null,
+    permuteExtensions: false,
+    grease: false,
+  },
+};
+
+function resolveTlsProfile(input = {}) {
+  if (!input || input === false || input === 'off' || input === 'disabled') {
+    return { ...TLS_PROFILE_PRESETS.node, id: 'off', enabled: false };
+  }
+  const raw = typeof input === 'string' ? { id: input } : (typeof input === 'object' ? input : {});
+  const major = Number(raw.chromeMajor || raw.major || 0) || 0;
+  let id = String(raw.id || raw.profile || raw.name || '').trim().toLowerCase();
+  if (!id || id === 'auto') {
+    id = major && major < 106 ? 'chrome_legacy' : 'chrome';
+  }
+  if (id === 'chrome' && major && major < 106) id = 'chrome_legacy';
+  const base = TLS_PROFILE_PRESETS[id] || TLS_PROFILE_PRESETS.chrome;
+  const profile = {
+    ...base,
+    id: base.id,
+    enabled: raw.enabled !== false,
+    chromeMajor: major || null,
+    servername: raw.servername ? String(raw.servername).slice(0, 253) : null,
+    alpn: Array.isArray(raw.alpn) && raw.alpn.length
+      ? raw.alpn.map((v) => String(v)).filter(Boolean).slice(0, 8)
+      : base.alpn.slice(),
+    minVersion: raw.minVersion || base.minVersion,
+    maxVersion: raw.maxVersion || base.maxVersion,
+    ciphers: raw.ciphers != null ? String(raw.ciphers) : base.ciphers,
+    ecdhCurve: raw.ecdhCurve != null ? String(raw.ecdhCurve) : base.ecdhCurve,
+    permuteExtensions: raw.permuteExtensions != null ? Boolean(raw.permuteExtensions) : base.permuteExtensions,
+    grease: raw.grease != null ? Boolean(raw.grease) : base.grease,
+  };
+  return profile;
+}
+
+/** Options for Node tls.connect that we can apply today without a custom dialer. */
+function tlsConnectOptionsFromProfile(profile, { socket, servername, rejectUnauthorized = true } = {}) {
+  const resolved = resolveTlsProfile(profile || 'node');
+  const options = {
+    rejectUnauthorized: rejectUnauthorized !== false,
+  };
+  if (socket) options.socket = socket;
+  const sn = servername || resolved.servername;
+  if (sn) options.servername = sn;
+  if (!resolved.enabled || resolved.id === 'off' || resolved.id === 'node') {
+    return options;
+  }
+  if (resolved.minVersion) options.minVersion = resolved.minVersion;
+  if (resolved.maxVersion) options.maxVersion = resolved.maxVersion;
+  if (resolved.ciphers) options.ciphers = resolved.ciphers;
+  if (resolved.ecdhCurve) options.ecdhCurve = resolved.ecdhCurve;
+  if (resolved.alpn && resolved.alpn.length) options.ALPNProtocols = resolved.alpn.slice();
+  return options;
+}
+
+
 class BufferedReader {
   constructor(socket) {
     this.socket = socket; this.buffer = Buffer.alloc(0); this.waiters = []; this.failure = null;
@@ -269,7 +393,13 @@ function forwardedHeader(header, config) {
 }
 
 function connectHttpUpstream(config, onConnect) {
-  if (config.protocol === 'https') return tls.connect({ host: config.host, port: config.port, servername: config.host, rejectUnauthorized: true }, onConnect);
+  if (config.protocol === 'https') {
+    const tlsProfile = resolveTlsProfile(config.tlsProfile || 'chrome');
+    const opts = tlsConnectOptionsFromProfile(tlsProfile, { servername: config.host, rejectUnauthorized: true });
+    opts.host = config.host;
+    opts.port = config.port;
+    return tls.connect(opts, onConnect);
+  }
   return net.connect({ host: config.host, port: config.port }, onConnect);
 }
 
@@ -599,11 +729,12 @@ async function probeProxyTunnel(config, hostname = 'www.google.com', port = 443)
   }
 }
 
-async function probeProxyHttps(config, hostname = 'www.google.com', pathname = '/generate_204') {
+async function probeProxyHttps(config, hostname = 'www.google.com', pathname = '/generate_204', options = {}) {
   const bridge = await startAuthenticatedProxy(config); let socket; let secure;
   try {
     socket = await connectBridge(bridge, hostname, 443);
-    secure = tls.connect({ socket, servername: hostname, rejectUnauthorized: true });
+    const tlsProfile = resolveTlsProfile(options.tlsProfile || config.tlsProfile || 'chrome');
+    secure = tls.connect(tlsConnectOptionsFromProfile(tlsProfile, { socket, servername: hostname, rejectUnauthorized: true }));
     await new Promise((resolve, reject) => { const timer = setTimeout(() => { secure.destroy(); reject(new Error('Google HTTPS handshake timed out')); }, 15000); secure.once('secureConnect', () => { clearTimeout(timer); resolve(); }); secure.once('error', (error) => { clearTimeout(timer); reject(error); }); });
     const reader = new BufferedReader(secure);
     secure.write('HEAD ' + pathname + ' HTTP/1.1\r\nHost: ' + hostname + '\r\nConnection: close\r\nUser-Agent: OpenBrowser/2.0\r\n\r\n');
@@ -630,4 +761,7 @@ module.exports = {
   extractProxyStrings,
   extractProxyFromApi,
   invokeProxyRefresh,
+  resolveTlsProfile,
+  tlsConnectOptionsFromProfile,
+  TLS_PROFILE_PRESETS,
 };

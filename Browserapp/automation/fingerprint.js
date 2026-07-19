@@ -189,6 +189,96 @@ function matchStabilityHost(host, privacy = {}) {
   return resolveStabilityPolicy(privacy, { host }).active;
 }
 
+/** Sample R-channel block origins for canvas consistency checks. */
+function sampleCanvasBlocks(data, width, height, options = {}) {
+  const maxWidth = Math.min(4096, Math.max(1, Number(options.maxWidth) || 600));
+  const maxHeight = Math.min(4096, Math.max(1, Number(options.maxHeight) || 600));
+  const square = Math.min(64, Math.max(2, Number(options.square) || 8));
+  const w = Math.max(0, Number(width) || 0);
+  const h = Math.max(0, Number(height) || 0);
+  const limitW = w > 0 ? Math.min(w, maxWidth) : 0;
+  const limitH = h > 0 ? Math.min(h, maxHeight) : 0;
+  const samples = [];
+  if (!data || !limitW || !limitH) return samples;
+  const len = data.length;
+  for (let y = 0; y < limitH; y += square) {
+    for (let x = 0; x < limitW; x += square) {
+      const px = ((y * w) + x) * 4;
+      if (px >= len) continue;
+      samples.push(data[px] & 0xff);
+    }
+  }
+  return samples;
+}
+
+/** Bit-level Hamming distance between equal-length byte arrays / number arrays. */
+function hammingDistance(a, b) {
+  if (!a || !b) return Number.POSITIVE_INFINITY;
+  const n = Math.min(a.length, b.length);
+  let dist = 0;
+  for (let i = 0; i < n; i += 1) {
+    let x = (a[i] ^ b[i]) & 0xff;
+    // popcount
+    x = x - ((x >>> 1) & 0x55);
+    x = (x & 0x33) + ((x >>> 2) & 0x33);
+    dist += (((x + (x >>> 4)) & 0x0f) * 0x01) & 0xff;
+  }
+  dist += Math.abs((a.length || 0) - (b.length || 0)) * 8;
+  return dist;
+}
+
+/**
+ * Apply deterministic block noise and optionally lock deltas for session consistency.
+ * When lockMap is provided and key exists, reuses prior deltas so repeated reads stay within hamming threshold.
+ */
+function applyStableCanvasNoise(imageData, mark, options = {}) {
+  const data = imageData && imageData.data;
+  if (!data) return imageData;
+  const width = imageData.width || 0;
+  const height = imageData.height || 0;
+  const maxWidth = Math.min(4096, Math.max(1, Number(options.maxWidth) || 600));
+  const maxHeight = Math.min(4096, Math.max(1, Number(options.maxHeight) || 600));
+  const square = Math.min(64, Math.max(2, Number(options.square) || 8));
+  const amp = Math.max(1, Number(options.noiseAmplitude) || 1);
+  const seedNum = Number(options.seedNum) || 1;
+  const noise = typeof options.noise === 'function'
+    ? options.noise
+    : ((n) => {
+      let x = Math.sin((n + 1) * seedNum) * 10000;
+      return x - Math.floor(x);
+    });
+  const limitW = width > 0 ? Math.min(width, maxWidth) : width;
+  const limitH = height > 0 ? Math.min(height, maxHeight) : height;
+  const lockMap = options.lockMap || null;
+  const lockKey = options.lockKey || `${width}x${height}:${mark}:${square}:${amp}`;
+  let locked = lockMap && lockMap.get ? lockMap.get(lockKey) : null;
+  if (!locked) {
+    locked = [];
+    for (let y = 0; y < (limitH || height); y += square) {
+      for (let x = 0; x < (limitW || width); x += square) {
+        const px = ((y * width) + x) * 4;
+        if (px + 3 >= data.length) continue;
+        const delta = Math.floor(noise(px + mark) * amp) - Math.floor(amp / 2);
+        locked.push({ px, delta });
+      }
+    }
+    if (lockMap && lockMap.set) lockMap.set(lockKey, locked);
+  }
+  for (const item of locked) {
+    const px = item.px;
+    if (px + 3 >= data.length) continue;
+    data[px] = Math.max(0, Math.min(255, data[px] + item.delta));
+  }
+  return imageData;
+}
+
+/** True when two sample vectors are within the configured Hamming threshold. */
+function withinHammingThreshold(a, b, threshold = 12) {
+  const limit = Math.min(64, Math.max(0, Number(threshold) || 12));
+  return hammingDistance(a, b) <= limit;
+}
+
+
 
 /** Deterministic battery snapshot derived from seed. */
 function createBatteryFromSeed(seedInput, override = null) {
@@ -787,6 +877,7 @@ function buildInjectionScript(fp) {
   };
   const noiseAmplitudeNow = () => stabilityActiveNow() ? (Number(CFG.stability?.noiseAmplitude) || 1) : 3;
   const sampleStepDivisorNow = () => stabilityActiveNow() ? (Number(CFG.stability?.sampleStepDivisor) || 128) : 64;
+  const canvasNoiseLocks = new Map();
   const applyCanvasNoise = (imageData, mark) => {
     try {
       const data = imageData.data;
@@ -798,6 +889,30 @@ function buildInjectionScript(fp) {
       const limitW = width > 0 ? Math.min(width, maxW) : width;
       const limitH = height > 0 ? Math.min(height, maxH) : height;
       const square = Math.max(2, Number(CFG.stability?.square) || 8);
+      const stable = stabilityActiveNow();
+      // On high-risk hosts, lock first-read deltas so repeated samples stay within hamming threshold.
+      if (stable) {
+        const key = width + 'x' + height + ':' + mark + ':' + square + ':' + amp;
+        let locked = canvasNoiseLocks.get(key);
+        if (!locked) {
+          locked = [];
+          for (let y = 0; y < (limitH || height); y += square) {
+            for (let x = 0; x < (limitW || width); x += square) {
+              const px = ((y * width) + x) * 4;
+              if (px + 3 >= data.length) continue;
+              const delta = Math.floor(noise(px + mark) * amp) - Math.floor(amp / 2);
+              locked.push({ px: px, delta: delta });
+            }
+          }
+          canvasNoiseLocks.set(key, locked);
+        }
+        for (let i = 0; i < locked.length; i += 1) {
+          const item = locked[i];
+          if (item.px + 3 >= data.length) continue;
+          data[item.px] = Math.max(0, Math.min(255, data[item.px] + item.delta));
+        }
+        return imageData;
+      }
       for (let y = 0; y < (limitH || height); y += square) {
         for (let x = 0; x < (limitW || width); x += square) {
           const px = ((y * width) + x) * 4;
@@ -1607,6 +1722,10 @@ module.exports = {
   clientRectMarkFromSeed,
   resolveStabilityPolicy,
   matchStabilityHost,
+  sampleCanvasBlocks,
+  hammingDistance,
+  applyStableCanvasNoise,
+  withinHammingThreshold,
   DEFAULT_STABILITY_HOSTS,
   DEFAULT_STABILITY_SKIP_HOSTS,
   WEBGL_PRESETS,
