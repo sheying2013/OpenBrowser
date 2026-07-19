@@ -273,6 +273,8 @@ class BrowserEngine {
             ? String(proxyMetaValue.backupProxies).split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8)
             : []),
         fillFingerprint: proxyMetaValue.fillFingerprint !== false,
+        requireReady: proxyMetaValue.requireReady !== false,
+        notReadyPolicy: allowed(proxyMetaValue.notReadyPolicy, ['block', 'direct', 'continue'], proxyMetaValue.requireReady === false ? 'continue' : 'block'),
       },
       privacy: {
         webrtc: allowed(privacyValue.webrtc, ['proxy', 'disabled', 'real'], 'proxy'),
@@ -295,6 +297,39 @@ class BrowserEngine {
         webgpu: allowed(privacyValue.webgpu, ['real', 'blocked', 'webgl'], privacyValue.webgpu === 'webgl' ? 'webgl' : (privacyValue.webgpu === 'blocked' ? 'blocked' : 'real')),
         audio: allowed(privacyValue.audio, ['real', 'noise', 'muted'], privacyValue.audio === 'muted' ? 'muted' : (privacyValue.audio === 'real' ? 'real' : 'noise')),
         media: allowed(privacyValue.media, ['real', 'blocked', 'noise'], privacyValue.media === 'blocked' ? 'blocked' : (privacyValue.media === 'noise' ? 'noise' : 'real')),
+        mediaDevices: allowed(privacyValue.mediaDevices, ['real', 'noise', 'empty'], privacyValue.mediaDevices === 'real' ? 'real' : (privacyValue.mediaDevices === 'empty' ? 'empty' : (privacyValue.media === 'noise' ? 'noise' : (privacyValue.media === 'blocked' ? 'empty' : 'noise')))),
+        mediaLabels: privacyValue.mediaLabels && typeof privacyValue.mediaLabels === 'object' ? {
+          audioinput: String(privacyValue.mediaLabels.audioinput || privacyValue.mediaLabels.input || '').slice(0, 200),
+          videoinput: String(privacyValue.mediaLabels.videoinput || privacyValue.mediaLabels.video || '').slice(0, 200),
+          audiooutput: String(privacyValue.mediaLabels.audiooutput || privacyValue.mediaLabels.output || '').slice(0, 200),
+        } : null,
+        battery: allowed(privacyValue.battery, ['real', 'noise', 'blocked'], privacyValue.battery === 'blocked' ? 'blocked' : (privacyValue.battery === 'real' ? 'real' : 'noise')),
+        batterySnapshot: privacyValue.batterySnapshot && typeof privacyValue.batterySnapshot === 'object' ? {
+          charging: privacyValue.batterySnapshot.charging !== false,
+          level: Math.min(1, Math.max(0, Number(privacyValue.batterySnapshot.level) || 0.87)),
+          chargingTime: Number.isFinite(Number(privacyValue.batterySnapshot.chargingTime)) ? Number(privacyValue.batterySnapshot.chargingTime) : null,
+          dischargingTime: Number.isFinite(Number(privacyValue.batterySnapshot.dischargingTime)) ? Number(privacyValue.batterySnapshot.dischargingTime) : null,
+        } : null,
+        webrtcPolicy: (() => {
+          const n = Number(privacyValue.webrtcPolicy);
+          if (!Number.isFinite(n)) return privacyValue.webrtc === 'disabled' ? 0 : (privacyValue.webrtc === 'real' ? 1 : 3);
+          return Math.min(3, Math.max(0, Math.round(n)));
+        })(),
+        stabilityMode: allowed(privacyValue.stabilityMode, ['off', 'auto', 'force'], 'auto'),
+        stabilityHamming: Math.min(64, Math.max(1, Number(privacyValue.stabilityHamming) || 12)),
+        stabilityMaxWidth: Math.min(4096, Math.max(64, Number(privacyValue.stabilityMaxWidth) || 600)),
+        stabilityMaxHeight: Math.min(4096, Math.max(64, Number(privacyValue.stabilityMaxHeight) || 600)),
+        stabilitySquare: Math.min(64, Math.max(2, Number(privacyValue.stabilitySquare) || 8)),
+        stabilityHosts: Array.isArray(privacyValue.stabilityHosts)
+          ? privacyValue.stabilityHosts.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean).slice(0, 800)
+          : (typeof privacyValue.stabilityHosts === 'string'
+            ? String(privacyValue.stabilityHosts).split(/[\r\n,;\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean).slice(0, 800)
+            : null),
+        stabilitySkipHosts: Array.isArray(privacyValue.stabilitySkipHosts)
+          ? privacyValue.stabilitySkipHosts.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean).slice(0, 200)
+          : (typeof privacyValue.stabilitySkipHosts === 'string'
+            ? String(privacyValue.stabilitySkipHosts).split(/[\r\n,;\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean).slice(0, 200)
+            : null),
         clientRects: allowed(privacyValue.clientRects, ['real', 'noise'], privacyValue.clientRects === 'real' ? 'real' : 'noise'),
         speech: allowed(privacyValue.speech, ['real', 'blocked', 'noise'], privacyValue.speech === 'blocked' ? 'blocked' : (privacyValue.speech === 'noise' ? 'noise' : 'real')),
         deviceNameMode: allowed(privacyValue.deviceNameMode, ['noise', 'custom', 'real'], 'noise'),
@@ -320,7 +355,7 @@ class BrowserEngine {
         restoreSession: Boolean(advancedValue.restoreSession) || advancedValue.tabMode === 'restore',
         blockVideo: Boolean(advancedValue.blockVideo || advancedValue.blockSound),
         blockImages: Boolean(advancedValue.blockImages), clearCacheOnStart: Boolean(advancedValue.clearCacheOnStart),
-        // opt-in per environment (ix/Hub style: each profile chooses cloud sync)
+        // opt-in per environment (each profile chooses cloud sync)
         cloudBackup: Boolean(advancedValue.cloudBackup),
         syncCookiesOnClose: advancedValue.syncCookiesOnClose !== false,
         syncIndexedDB: Boolean(advancedValue.syncIndexedDB),
@@ -492,7 +527,7 @@ class BrowserEngine {
     if (profile.advanced.blockImages) content.images = 2; else delete content.images;
     if (profile.advanced.blockSound) content.sound = 2; else delete content.sound;
     if (profile.advanced.blockNotifications) content.notifications = 2; else delete content.notifications;
-    // ix:「完全禁用弹窗拦截」= 允许弹窗 (ALLOW=1)，不是屏蔽弹窗 (BLOCK=2)
+    // 「完全禁用弹窗拦截」= 允许弹窗 (ALLOW=1)，不是屏蔽弹窗 (BLOCK=2)
     if (profile.advanced.blockPopups) content.popups = 1; else delete content.popups;
     if (profile.privacy.media === 'blocked') { content.media_stream_mic = 2; content.media_stream_camera = 2; } else { delete content.media_stream_mic; delete content.media_stream_camera; }
     if (profile.privacy.geoMode === 'disabled') content.geolocation = 2;
@@ -550,7 +585,7 @@ class BrowserEngine {
     if (cookies.length) await connection.command('Storage.setCookies', { cookies }, 30000); return cookies.length;
   }
 
-  /** Export live cookies via CDP for cloud backup on close (Hub/ix style). */
+  /** Export live cookies via CDP for cloud backup on close. */
   async exportProfileCookies(connection) {
     if (!connection?.command) return '';
     try {
@@ -1646,9 +1681,30 @@ class BrowserEngine {
         }
       }
       if (!ok && lastError) {
-        this.emit({ type: 'proxy-error', id: working.id, message: '启动前代理检测失败：' + (lastError.message || lastError) });
-        throw new Error('启动前代理检测失败：' + (lastError.message || lastError));
+        const policy = String(meta.notReadyPolicy || (meta.requireReady === false ? 'continue' : 'block'));
+        const message = '启动前代理未就绪：' + (lastError.message || lastError);
+        this.emit({ type: 'proxy-error', id: working.id, code: 'proxy-not-ready', message, policy });
+        if (policy === 'direct') {
+          working = this.sanitizeProfile({ ...working, networkMode: 'direct', proxy: 'Direct' });
+          this.emit({ type: 'proxy-fallback', id: working.id, message: '代理未就绪，已按策略回落直连' });
+        } else if (policy === 'continue') {
+          this.emit({ type: 'proxy-warn', id: working.id, message: message + '（continue 策略，继续启动）' });
+        } else {
+          throw new Error(message);
+        }
       }
+    } else if (
+      working.networkMode === 'proxy'
+      && working.proxy
+      && !/^(direct|offline|none)$/i.test(String(working.proxy))
+      && meta.requireReady !== false
+      && meta.notReadyPolicy === 'block'
+      && !shouldCheck
+      && !this.networkInfo.get(working.id)?.ip
+    ) {
+      // Soft gate: proxy mode without any known exit IP and without deferred check still starts,
+      // but mark not-ready so callers/UI can surface it. Hard block only when check was requested.
+      this.emit({ type: 'proxy-warn', id: working.id, code: 'proxy-unchecked', message: '代理模式尚未检测出口，继续启动' });
     }
     return working;
   }
