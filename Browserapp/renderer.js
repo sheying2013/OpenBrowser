@@ -3713,7 +3713,14 @@ window.ops.onEvent(async (value) => {
   if (value.type === 'sync-disconnected') { toast(value.message); log('Sync', value.message); }
 });
 
-window.ops.onEvent((value) => { if (value.type === 'proxy-error') { const profile = ui.profiles.find((item) => item.id === value.id); const message = '\u73af\u5883 ' + displayProfileNumber(profile || { id: value.id }) + '\uff1a' + value.message; toast(message); log('Proxy', message); } });
+window.ops.onEvent((value) => {
+  if (value.type === 'proxy-error' || value.type === 'proxy-warn') {
+    const profile = ui.profiles.find((item) => item.id === value.id);
+    const message = '环境 ' + displayProfileNumber(profile || { id: value.id }) + '：' + value.message;
+    if (value.type === 'proxy-error') toast(message);
+    log(value.type === 'proxy-error' ? 'Proxy' : 'ProxyWarn', message);
+  }
+});
 
 function updateProfileStorageDisplay(profileRoot) {
   const value = String(profileRoot || '');

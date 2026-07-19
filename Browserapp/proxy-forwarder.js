@@ -698,25 +698,58 @@ async function lookupProxyCountry(config) {
   }
 }
 
-/** Direct (no proxy) exit lookup for language-from-IP on local direct mode */
+function normalizeIpWhoResult(value) {
+  const ip = String(value.ip || value.query || '');
+  const countryCode = String(value.country_code || value.countryCode || '').toUpperCase();
+  if (value.success === false || !ip || !/^[A-Z]{2}$/.test(countryCode)) {
+    throw new Error(String(value.message || 'Direct exit lookup response was incomplete'));
+  }
+  const tz = value.timezone && typeof value.timezone === 'object'
+    ? String(value.timezone.id || value.timezone.name || '')
+    : String(value.timezone || '');
+  return {
+    ip,
+    country: String(value.country || ''),
+    countryCode,
+    region: String(value.region || value.regionName || ''),
+    city: String(value.city || ''),
+    zip: String(value.postal || value.zip || ''),
+    timezone: tz,
+    latitude: Number.isFinite(Number(value.latitude ?? value.lat)) ? Number(value.latitude ?? value.lat) : null,
+    longitude: Number.isFinite(Number(value.longitude ?? value.lon)) ? Number(value.longitude ?? value.lon) : null,
+    isp: String(value.connection?.isp || value.isp || ''),
+    organization: String(value.connection?.org || value.org || ''),
+    asn: String(value.connection?.asn || value.asn || value.as || '').toString().split(/\s+/, 1)[0],
+    asName: String(value.connection?.org || value.asname || ''),
+    mobile: Boolean(value.connection?.mobile || value.mobile),
+    proxy: Boolean(value.security?.proxy || value.proxy),
+    hosting: Boolean(value.connection?.hosting || value.hosting),
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+/** Direct (no proxy) exit lookup for language-from-IP on local direct mode. */
 async function lookupDirectCountry() {
-  const https = require('https');
   const fields = 'status,message,country,countryCode,regionName,city,zip,timezone,lat,lon,isp,org,as,asname,mobile,proxy,hosting,query';
-  const body = await new Promise((resolve, reject) => {
-    const req = https.get(
-      `https://ip-api.com/json/?fields=${fields}`,
-      { timeout: 12000, headers: { Accept: 'application/json' } },
-      (res) => {
-        const chunks = [];
-        res.on('data', (c) => chunks.push(c));
-        res.on('end', () => resolve({ status: res.statusCode || 0, body: Buffer.concat(chunks) }));
-      }
-    );
-    req.on('error', reject);
-    req.on('timeout', () => req.destroy(new Error('Direct exit lookup timeout')));
-  });
-  if (body.status !== 200) throw new Error('Direct exit lookup returned HTTP ' + body.status);
-  return normalizeIpApiResult(JSON.parse(body.body.toString('utf8')));
+  // Free ip-api.com only allows HTTP; HTTPS returns 403. Prefer HTTP, then other public endpoints.
+  const endpoints = [
+    { url: `http://ip-api.com/json/?fields=${fields}`, kind: 'ip-api' },
+    { url: 'https://ipwho.is/', kind: 'ipwho' },
+    { url: 'http://ipwho.is/', kind: 'ipwho' },
+  ];
+  const errors = [];
+  for (const endpoint of endpoints) {
+    try {
+      const { status, body } = await fetchUrlText(endpoint.url, { timeout: 12000 });
+      if (status !== 200) throw new Error('HTTP ' + status);
+      const value = JSON.parse(body);
+      if (endpoint.kind === 'ip-api') return normalizeIpApiResult(value);
+      return normalizeIpWhoResult(value);
+    } catch (error) {
+      errors.push(String(error.message || error));
+    }
+  }
+  throw new Error(errors[0] ? ('本地出口查询失败：' + errors[0]) : '本地出口查询失败');
 }
 
 async function probeProxyTunnel(config, hostname = 'www.google.com', port = 443) {
