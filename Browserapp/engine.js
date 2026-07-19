@@ -3,7 +3,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const cdp = require('./cdp');
 const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
@@ -23,6 +23,32 @@ const {
 } = require('./automation/kernel-init-sync');
 
 const KERNEL_POLICY_VERSION = 2;
+
+/** Kill options that match both kernel binary and macOS env Dock shell (OpenBrowser.bin). */
+function managedBrowserKillOptions(itemOrBrowser, root, launchBinary = null) {
+  const browserPath = itemOrBrowser?.browser?.path || itemOrBrowser?.path || itemOrBrowser || null;
+  const launch = launchBinary || itemOrBrowser?.launchBinary || null;
+  const executables = [launch, browserPath, 'OpenBrowser.bin', 'OpenBrowser'].filter(Boolean);
+  return {
+    force: true,
+    expectedExecutables: [...new Set(executables.map((v) => String(v)))],
+    expectedUserDataDir: root || itemOrBrowser?.root || null,
+  };
+}
+
+/** Best-effort: stop detached ipc-stub.py for this env's kernel window name. */
+function stopIpcStubForWindow(windowName) {
+  const win = String(windowName || '').trim();
+  if (!win || process.platform === 'win32') return false;
+  // Only allow our stable SB* window tokens in the pkill pattern.
+  if (!/^SB[0-9A-Za-z_-]{4,64}$/.test(win)) return false;
+  try {
+    execFileSync('pkill', ['-f', `ipc-stub.py ${win}`], { stdio: 'ignore' });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 
 async function retryProxyOperation(operation, attempts = 3) {
   let lastError;
@@ -1246,12 +1272,9 @@ class BrowserEngine {
     releaseProfileLock(item.root, item.profileLock).catch(() => {});
     // Best-effort kill remaining helpers when CDP already dead
     if (item.child && item.child.exitCode === null && item.pid) {
-      killProcessTree(item.pid, {
-        force: true,
-        expectedExecutable: item.browser?.path,
-        expectedUserDataDir: item.root,
-      }).catch(() => {});
+      killProcessTree(item.pid, managedBrowserKillOptions(item, item.root)).catch(() => {});
     }
+    stopIpcStubForWindow(item.kernelWindowName);
     if (!expected) this.markProfileCleanExit(item.root).catch(() => {});
     item.cleanedUp = true;
     this.running.delete(profileId);
@@ -1505,7 +1528,10 @@ class BrowserEngine {
       port = await this.waitForPort(root, 30000, child);
       connection = await portConnection(port);
     } catch (error) {
-      if (child && child.exitCode === null) await killProcessTree(child.pid, { force: true, expectedExecutable: browser.path, expectedUserDataDir: root }).catch(() => {});
+      if (child && child.exitCode === null) {
+        await killProcessTree(child.pid, managedBrowserKillOptions(browser, root, launchBinary)).catch(() => {});
+      }
+      stopIpcStubForWindow(kernelWindowName);
       await proxyForwarder?.close().catch(() => {});
       await releaseProfileLock(root, profileLock);
       throw error;
@@ -1540,6 +1566,7 @@ class BrowserEngine {
     const item = {
       child, cdpConnection: connection, proxyForwarder, markerProcess, profileLock,
       pid: child.pid, browser, root, profile, port,
+      launchBinary,
       startedAt: new Date().toISOString(),
       extensions: extensions.map((entry) => entry.id),
       loadedExtensions: reconciled.extensions,
@@ -1554,6 +1581,7 @@ class BrowserEngine {
       item.workerFingerprintConnection?.close();
       if (item.markerProcess && !item.markerProcess.killed) { try { item.markerProcess.kill(); } catch (_) {} }
       item.proxyForwarder?.close().catch(() => {});
+      stopIpcStubForWindow(item.kernelWindowName);
       releaseProfileLock(root, profileLock).catch(() => {});
       if (exitedNormally) this.markProfileCleanExit(item.root).catch(() => {});
       this.running.delete(profile.id);
@@ -1689,9 +1717,10 @@ class BrowserEngine {
       });
     }
     if (!graceful && item.child.exitCode === null) {
-      await killProcessTree(item.pid, { force: true, expectedExecutable: item.browser.path, expectedUserDataDir: item.root });
+      await killProcessTree(item.pid, managedBrowserKillOptions(item, item.root));
     }
     if (item.markerProcess && !item.markerProcess.killed) { try { item.markerProcess.kill(); } catch (_) {} }
+    stopIpcStubForWindow(item.kernelWindowName);
     await item.proxyForwarder?.close().catch(() => {});
     await releaseProfileLock(item.root, item.profileLock);
     await this.markProfileCleanExit(item.root);
