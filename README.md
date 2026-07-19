@@ -126,17 +126,13 @@ npm run selftest:cloud
 
 ### 打包
 
-正式包由 GitHub Actions 按平台打：装运行时、跑自测，产物在 `Browserapp/dist/`。
-
-本地打包可以指定架构：
-
 ```bash
-export OPENBROWSER_PACKAGE_ARCH=x86_64  # 或 arm64
 cd Browserapp
+# 可选：OPENBROWSER_PACKAGE_ARCH=x86_64 或 arm64
 npm run package:portable
 ```
 
-Windows 包带 `START.cmd`；macOS 包带 `OpenBrowser.app` 和 `启动.command`。
+产物在 `Browserapp/dist/`。Windows 包里有 `START.cmd`，macOS 包里有 `OpenBrowser.app` 和 `启动.command`。
 
 ### 数据与安全
 
@@ -280,17 +276,13 @@ npm run selftest:cloud
 
 ### Packaging
 
-GitHub Actions builds per platform: install runtime, run self-tests, emit under `Browserapp/dist/`.
-
-Local package with arch override:
-
 ```bash
-export OPENBROWSER_PACKAGE_ARCH=x86_64  # or arm64
 cd Browserapp
+# optional: OPENBROWSER_PACKAGE_ARCH=x86_64 or arm64
 npm run package:portable
 ```
 
-Windows builds include `START.cmd`. macOS builds include `OpenBrowser.app` and `启动.command`.
+Output goes to `Browserapp/dist/`. Windows packages include `START.cmd`; macOS packages include `OpenBrowser.app` and `启动.command`.
 
 ### Data & security
 
