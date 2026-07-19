@@ -149,6 +149,22 @@ class ProxyStore {
     item.lastCheck = new Date().toISOString();
     item.lastIp = String(result.ip || '');
     item.lastCountryCode = String(result.countryCode || result.country_code || '');
+    item.lastLatencyMs = Number.isFinite(Number(result.latencyMs)) ? Number(result.latencyMs) : null;
+    item.lastNetworkType = String(result.networkType || '');
+    item.lastErrorClass = result.errorClass ? String(result.errorClass) : '';
+    item.lastCheckOk = !result.errorClass && Boolean(result.ip);
+    item.update_time = item.lastCheck;
+    await this.save();
+    return item;
+  }
+
+  async markCheckError(id, error = {}) {
+    const item = this.get(id);
+    if (!item) throw new Error('代理不存在: ' + id);
+    item.lastCheck = new Date().toISOString();
+    item.lastLatencyMs = Number.isFinite(Number(error.latencyMs)) ? Number(error.latencyMs) : null;
+    item.lastErrorClass = String(error.errorClass || error.code || 'unknown');
+    item.lastCheckOk = false;
     item.update_time = item.lastCheck;
     await this.save();
     return item;

@@ -224,13 +224,20 @@
                   <div class="proxy-host-row">
                     <label>代理主机<input id="editor-proxy-host" placeholder="127.0.0.1"></label>
                     <label>代理端口<input id="editor-proxy-port" type="number" min="1" max="65535" placeholder="1080"></label>
-                    <button class="outline" id="editor-test-proxy" type="button">代理检测</button>
                   </div>
                   <div class="form-two">
                     <label>代理账号<input id="editor-proxy-user" autocomplete="off"></label>
                     <label>代理密码<input id="editor-proxy-password" type="password" autocomplete="new-password"></label>
                   </div>
-                  <label>刷新 / API 提取 URL（可选）<input id="editor-refresh-url" type="url" placeholder="https://provider.example/refresh"></label>
+                  <label>刷新 URL（可选）<input id="editor-refresh-url" type="url" placeholder="https://example.com/refresh"></label>
+                  <label>API 提取 URL（可选）<input id="editor-api-extract-url" type="url" placeholder="https://example.com/get?format=txt"></label>
+                  <label>备用代理（每行一条，主代理失败时切换）
+                    <textarea id="editor-backup-proxies" rows="2" placeholder="socks5://127.0.0.1:1081&#10;http://user:pass@127.0.0.1:8080"></textarea>
+                  </label>
+                  <div class="form-two">
+                    <label class="check-row"><input id="editor-proxy-refresh-start" type="checkbox"> 每次启动先刷新代理</label>
+                    <label class="check-row"><input id="editor-proxy-fill-fingerprint" type="checkbox" checked> 检测后自动对齐指纹（时区/语言/定位）</label>
+                  </div>
                   <div class="settings-row"><span>使用系统代理</span>
                     <select id="editor-system-proxy">
                       <option value="global">跟随全局</option>
@@ -240,6 +247,11 @@
                   </div>
                   <label class="check-row"><input id="editor-direct-bypass" type="checkbox"> 直连白名单（部分域名不走代理）</label>
                   <label>白名单（逗号/换行分隔）<textarea id="editor-bypass-list" rows="2" placeholder="*.local, intranet.company.com"></textarea></label>
+                  <div class="actions" style="margin:8px 0;display:flex;gap:8px;flex-wrap:wrap">
+                    <button class="outline" id="editor-test-proxy" type="button">代理检测</button>
+                    <button class="outline" id="editor-apply-proxy-fp" type="button">用代理填充指纹</button>
+                    <button class="outline" id="editor-refresh-proxy" type="button">刷新代理 IP</button>
+                  </div>
                   <div class="proxy-test-result" id="editor-proxy-result">尚未检测</div>
                 </div>
               </section>
@@ -391,6 +403,7 @@
               <button class="primary" id="proxy-create" type="button"><i data-lucide="plus"></i>新建代理</button>
               <button class="outline" id="proxy-refresh" type="button"><i data-lucide="refresh-cw"></i>刷新</button>
               <button class="outline" id="proxy-check-selected" type="button"><i data-lucide="activity"></i>检测选中</button>
+              <button class="outline" id="proxy-check-all" type="button"><i data-lucide="list-checks"></i>检测全部</button>
               <button class="danger" id="proxy-delete-selected" type="button"><i data-lucide="trash-2"></i>删除选中</button>
               <span class="extension-counts" id="proxy-count"></span>
             </div>
@@ -410,6 +423,8 @@
                   <th>主机:端口</th>
                   <th>认证</th>
                   <th>出口 IP</th>
+                  <th>延迟</th>
+                  <th>类型</th>
                   <th>备注</th>
                   <th>操作</th>
                 </tr>

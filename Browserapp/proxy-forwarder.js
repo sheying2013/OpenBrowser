@@ -421,12 +421,151 @@ function normalizeIpApiResult(value) {
   };
 }
 
+function classifyProxyError(error) {
+  const msg = String(error && error.message ? error.message : error || '');
+  if (/authentication failed|username or password|407|rejected available authentication/i.test(msg)) return 'auth';
+  if (/timed?\s*out|timeout/i.test(msg)) return 'timeout';
+  if (/ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|socket hang up|connect/i.test(msg)) return 'unreachable';
+  if (/Unsupported proxy protocol|Invalid proxy|SOCKS|protocol/i.test(msg)) return 'protocol';
+  return 'unknown';
+}
+
+function networkTypeFromLookup(result = {}) {
+  if (result.mobile) return 'mobile';
+  if (result.hosting) return 'hosting';
+  if (result.proxy) return 'proxy';
+  return 'broadband';
+}
+
+async function fetchUrlText(url, { timeout = 15000, method = 'GET' } = {}) {
+  const target = String(url || '').trim();
+  if (!/^https?:\/\//i.test(target)) throw new Error('URL 必须以 http:// 或 https:// 开头');
+  const https = require('https');
+  const http = require('http');
+  const lib = target.startsWith('https') ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = lib.request(target, {
+      method,
+      timeout,
+      headers: {
+        Accept: 'text/plain, application/json, */*',
+        'User-Agent': 'OpenBrowser/2.0',
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        if ((res.statusCode || 0) >= 400) {
+          reject(new Error('HTTP ' + res.statusCode + ': ' + body.slice(0, 160)));
+          return;
+        }
+        resolve({ status: res.statusCode || 0, body, headers: res.headers || {} });
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('请求超时')));
+    req.end();
+  });
+}
+
+function extractProxyStrings(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return [];
+  const out = [];
+  const push = (value) => {
+    const s = String(value || '').trim();
+    if (s && !out.includes(s)) out.push(s);
+  };
+  try {
+    const json = JSON.parse(raw);
+    const walk = (node, depth = 0) => {
+      if (depth > 6 || node == null) return;
+      if (typeof node === 'string') {
+        push(node);
+        return;
+      }
+      if (Array.isArray(node)) {
+        for (const item of node.slice(0, 50)) walk(item, depth + 1);
+        return;
+      }
+      if (typeof node === 'object') {
+        const host = node.host || node.ip || node.server || node.hostname;
+        const port = node.port;
+        const user = node.username || node.user || node.login;
+        const pass = node.password || node.pass || node.pwd;
+        const protocol = String(node.protocol || node.type || node.schema || 'http').toLowerCase().replace('://', '');
+        if (host && port) {
+          if (user && pass) push(`${protocol}://${user}:${pass}@${host}:${port}`);
+          else push(`${protocol}://${host}:${port}`);
+        }
+        for (const key of ['proxy', 'proxies', 'data', 'result', 'list', 'items', 'url', 'raw', 'line', 'value', 'content']) {
+          if (key in node) walk(node[key], depth + 1);
+        }
+      }
+    };
+    walk(json);
+  } catch (_) {
+    // plain text body
+  }
+  for (const line of raw.split(/[\r\n,;]+/)) {
+    const s = line.trim();
+    if (!s || s.startsWith('#') || s.length > 400) continue;
+    if (/^(https?|socks5):\/\//i.test(s) || /^[\w.-]+:\d{2,5}(?::[^\s]+)?$/.test(s)) push(s);
+  }
+  const re = /(?:(?:https?|socks5):\/\/)?(?:[^\s@/:]+:[^\s@/]+@)?[\w.-]+:\d{2,5}/gi;
+  let m;
+  while ((m = re.exec(raw)) && out.length < 30) push(m[0]);
+  return out;
+}
+
+async function extractProxyFromApi(url) {
+  const { body } = await fetchUrlText(url, { timeout: 20000 });
+  const candidates = extractProxyStrings(body);
+  const errors = [];
+  for (const candidate of candidates.slice(0, 20)) {
+    try {
+      const config = parseProxy(candidate);
+      if (config) return config;
+    } catch (error) {
+      errors.push(String(error.message || error));
+    }
+  }
+  throw new Error(errors[0] ? ('API 响应无法解析为代理：' + errors[0]) : 'API 响应中未找到代理地址');
+}
+
+async function invokeProxyRefresh(url) {
+  const started = Date.now();
+  const result = await fetchUrlText(url, { timeout: 20000, method: 'GET' });
+  return {
+    ok: true,
+    status: result.status,
+    latencyMs: Date.now() - started,
+    refreshedAt: new Date().toISOString(),
+    preview: String(result.body || '').slice(0, 200),
+  };
+}
+
 async function lookupProxyCountry(config) {
   const fields = 'status,message,country,countryCode,regionName,city,zip,timezone,lat,lon,isp,org,as,asname,mobile,proxy,hosting,query';
-  const response = await requestProxyHttp(config, 'ip-api.com', '/json/?fields=' + fields);
-  if (response.status !== 200) throw new Error('Proxy exit lookup returned HTTP ' + response.status);
-  const value = JSON.parse(response.body.toString('utf8'));
-  return normalizeIpApiResult(value);
+  const started = Date.now();
+  try {
+    const response = await requestProxyHttp(config, 'ip-api.com', '/json/?fields=' + fields);
+    if (response.status !== 200) throw new Error('Proxy exit lookup returned HTTP ' + response.status);
+    const value = JSON.parse(response.body.toString('utf8'));
+    const result = normalizeIpApiResult(value);
+    const latencyMs = Date.now() - started;
+    return {
+      ...result,
+      latencyMs,
+      networkType: networkTypeFromLookup(result),
+    };
+  } catch (error) {
+    const err = new Error(error.message || String(error));
+    err.errorClass = classifyProxyError(error);
+    err.latencyMs = Date.now() - started;
+    throw err;
+  }
 }
 
 /** Direct (no proxy) exit lookup for language-from-IP on local direct mode */
@@ -485,4 +624,10 @@ module.exports = {
   lookupDirectCountry,
   probeProxyTunnel,
   probeProxyHttps,
+  classifyProxyError,
+  networkTypeFromLookup,
+  fetchUrlText,
+  extractProxyStrings,
+  extractProxyFromApi,
+  invokeProxyRefresh,
 };

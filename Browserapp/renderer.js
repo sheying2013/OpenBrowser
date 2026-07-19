@@ -222,10 +222,15 @@ function normalizeProfileSettings(profile) {
       ipChannel: String(proxyMeta.ipChannel || 'ip-api'),
       refreshUrl: String(proxyMeta.refreshUrl || ''),
       checkOnStart: Boolean(proxyMeta.checkOnStart),
+      refreshOnStart: Boolean(proxyMeta.refreshOnStart),
       systemProxy: String(proxyMeta.systemProxy || 'global'),
       directBypass: Boolean(proxyMeta.directBypass),
       bypassList: String(proxyMeta.bypassList || ''),
-      apiExtractUrl: String(proxyMeta.apiExtractUrl || ''),
+      apiExtractUrl: String(proxyMeta.apiExtractUrl || proxyMeta.refreshUrl || ''),
+      backupProxies: Array.isArray(proxyMeta.backupProxies)
+        ? proxyMeta.backupProxies.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 8)
+        : String(proxyMeta.backupProxies || '').split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8),
+      fillFingerprint: proxyMeta.fillFingerprint !== false,
     },
     privacy: {
       webrtc: String(privacy.webrtc || 'proxy'),
@@ -1358,10 +1363,13 @@ function editorDraft(strict = true) {
       ipChannel: $('#editor-ip-channel')?.value || 'ip-api',
       refreshUrl: ($('#editor-refresh-url')?.value || '').trim(),
       checkOnStart: Boolean($('#editor-proxy-check-start')?.checked),
+      refreshOnStart: Boolean($('#editor-proxy-refresh-start')?.checked),
       systemProxy: $('#editor-system-proxy')?.value || 'global',
       directBypass: Boolean($('#editor-direct-bypass')?.checked),
       bypassList: ($('#editor-bypass-list')?.value || '').trim(),
-      apiExtractUrl: ($('#editor-refresh-url')?.value || '').trim(),
+      apiExtractUrl: ($('#editor-api-extract-url')?.value || '').trim(),
+      backupProxies: ($('#editor-backup-proxies')?.value || '').split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8),
+      fillFingerprint: $('#editor-proxy-fill-fingerprint')?.checked !== false,
     },
     privacy,
     advanced: {
@@ -1487,7 +1495,11 @@ function openProfileEditor(id) {
   editorSet('#editor-proxy-password', proxy.password);
   editorSet('#editor-ip-channel', profile.proxyMeta.ipChannel);
   editorSet('#editor-refresh-url', profile.proxyMeta.refreshUrl);
+  editorSet('#editor-api-extract-url', profile.proxyMeta.apiExtractUrl || '');
+  editorSet('#editor-backup-proxies', Array.isArray(profile.proxyMeta.backupProxies) ? profile.proxyMeta.backupProxies.join('\n') : '');
   editorCheck('#editor-proxy-check-start', profile.proxyMeta.checkOnStart);
+  editorCheck('#editor-proxy-refresh-start', profile.proxyMeta.refreshOnStart);
+  editorCheck('#editor-proxy-fill-fingerprint', profile.proxyMeta.fillFingerprint !== false);
   editorSet('#editor-system-proxy', profile.proxyMeta.systemProxy || 'global');
   editorCheck('#editor-direct-bypass', profile.proxyMeta.directBypass);
   editorSet('#editor-bypass-list', profile.proxyMeta.bypassList || '');
@@ -1581,14 +1593,108 @@ function openProfileEditor(id) {
   switchView('profile-editor');
 }
 
+function formatProxyCheckResult(result = {}) {
+  const parts = [
+    result.ip || '',
+    result.countryCode ? (countryFlag(result.countryCode) + ' ' + countryName(result.countryCode)) : '',
+    Number.isFinite(Number(result.latencyMs)) ? (Number(result.latencyMs) + 'ms') : '',
+    result.networkType || '',
+    result.timezone || '',
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+function applyEditorNetworkResult(result = {}, { fillFingerprint = true } = {}) {
+  editorNetworkResult = result;
+  if (!fillFingerprint) return;
+  if (result.timezone) {
+    editorSet('#editor-timezone-mode', 'ip');
+    editorSet('#editor-timezone', result.timezone);
+  }
+  if (result.countryCode) {
+    editorSet('#editor-language-mode', 'ip');
+  }
+  if (Number.isFinite(Number(result.latitude)) && Number.isFinite(Number(result.longitude))) {
+    editorSet('#editor-geo-mode', 'ip');
+  }
+  updateEditorVisibility();
+  renderEditorSummary();
+}
+
 async function testEditorProxy() {
   const output = $('#editor-proxy-result');
   try {
-    const draft = editorDraft(true); if (/^Direct$/i.test(draft.proxy)) throw new Error(tx('本地直连无需代理检测'));
-    output.className = 'proxy-test-result'; output.textContent = tx('正在检测代理出口...'); const result = await window.ops.testProfileProxy(draft);
-    editorNetworkResult = result;
-    output.className = 'proxy-test-result success'; output.textContent = tx('连接成功 · ') + result.ip + ' · ' + countryFlag(result.countryCode) + ' ' + countryName(result.countryCode);
-  } catch (error) { output.className = 'proxy-test-result error'; output.textContent = tx('检测失败 · ') + error.message; }
+    const draft = editorDraft(true);
+    if (/^Direct$/i.test(draft.proxy) && !draft.proxyMeta?.apiExtractUrl) throw new Error(tx('本地直连无需代理检测'));
+    output.className = 'proxy-test-result';
+    output.textContent = tx('正在检测代理出口...');
+    const result = await window.ops.testProfileProxy(draft);
+    const fill = $('#editor-proxy-fill-fingerprint')?.checked !== false;
+    applyEditorNetworkResult(result, { fillFingerprint: fill });
+    output.className = 'proxy-test-result success';
+    output.textContent = tx('连接成功 · ') + formatProxyCheckResult(result);
+  } catch (error) {
+    output.className = 'proxy-test-result error';
+    const cls = error?.errorClass ? ` [${error.errorClass}]` : '';
+    output.textContent = tx('检测失败 · ') + error.message + cls;
+  }
+}
+
+async function applyEditorProxyFingerprint() {
+  const output = $('#editor-proxy-result');
+  try {
+    const draft = editorDraft(true);
+    if (/^Direct$/i.test(draft.proxy) && !draft.proxyMeta?.apiExtractUrl) throw new Error(tx('本地直连无需代理检测'));
+    output.className = 'proxy-test-result';
+    output.textContent = tx('正在用代理对齐指纹...');
+    const result = await window.ops.applyProxyFingerprint(draft);
+    applyEditorNetworkResult(result, { fillFingerprint: true });
+    if (result.appliedFingerprint?.language) {
+      // language is resolved server-side; keep mode as IP-based
+      editorSet('#editor-language-mode', 'ip');
+    }
+    output.className = 'proxy-test-result success';
+    output.textContent = tx('已对齐指纹 · ') + formatProxyCheckResult(result);
+    toast(tx('已按出口 IP 填充时区 / 语言 / 定位'));
+  } catch (error) {
+    output.className = 'proxy-test-result error';
+    output.textContent = tx('对齐失败 · ') + error.message;
+    toast(tx('对齐失败：') + error.message);
+  }
+}
+
+async function refreshEditorProxy() {
+  const output = $('#editor-proxy-result');
+  try {
+    const draft = editorDraft(true);
+    if (!draft.proxyMeta?.refreshUrl && !draft.proxyMeta?.apiExtractUrl) {
+      throw new Error(tx('请先填写刷新 URL 或 API 提取 URL'));
+    }
+    output.className = 'proxy-test-result';
+    output.textContent = tx('正在刷新代理...');
+    const result = await window.ops.refreshProfileProxy(draft);
+    const network = result.network || result;
+    if (result.profile?.proxy) {
+      // if API extract rotated host/port, reflect into editor fields when possible
+      try {
+        const raw = String(result.profile.proxy);
+        const url = new URL(raw.includes('://') ? raw : ('socks5://' + raw));
+        editorSet('#editor-proxy-type', (url.protocol || 'socks5:').replace(':', '') || 'socks5');
+        editorSet('#editor-proxy-host', url.hostname || '');
+        editorSet('#editor-proxy-port', url.port || '');
+        editorSet('#editor-proxy-user', decodeURIComponent(url.username || ''));
+        editorSet('#editor-proxy-password', decodeURIComponent(url.password || ''));
+      } catch (_) {}
+    }
+    applyEditorNetworkResult(network, { fillFingerprint: $('#editor-proxy-fill-fingerprint')?.checked !== false });
+    output.className = 'proxy-test-result success';
+    output.textContent = tx('刷新成功 · ') + formatProxyCheckResult(network);
+    toast(tx('代理已刷新'));
+  } catch (error) {
+    output.className = 'proxy-test-result error';
+    output.textContent = tx('刷新失败 · ') + error.message;
+    toast(tx('刷新失败：') + error.message);
+  }
 }
 
 function useSystemEditorDefaults() {
@@ -1906,7 +2012,11 @@ function renderProxies() {
     checkCell.append(check);
     const host = `${item.host}:${item.port}`;
     const auth = item.authenticated ? t('common.confirm') : t('common.cancel');
-    const exit = item.lastIp ? `${item.lastIp}${item.lastCountryCode ? ' · ' + item.lastCountryCode : ''}` : '—';
+    const exit = item.lastIp
+      ? `${item.lastIp}${item.lastCountryCode ? ' · ' + item.lastCountryCode : ''}${item.lastCheckOk === false ? ' · 失败' : ''}`
+      : (item.lastCheckOk === false ? (item.lastErrorClass || '失败') : '—');
+    const latency = Number.isFinite(Number(item.lastLatencyMs)) ? `${Number(item.lastLatencyMs)}ms` : '—';
+    const netType = item.lastNetworkType || '—';
     const actions = element('div', 'actions');
     const edit = element('button', 'mini edit', t('action.edit')); edit.dataset.proxyEdit = item.id;
     const test = element('button', 'mini blue', t('action.check')); test.dataset.proxyTest = item.id;
@@ -1939,6 +2049,8 @@ function renderProxies() {
       element('td', '', host),
       element('td', '', auth),
       element('td', '', exit),
+      element('td', '', latency),
+      element('td', '', netType),
       element('td', '', item.remark || '—'),
       actionCell
     );
@@ -2196,8 +2308,14 @@ async function checkProfileProxy(id) {
   try {
     toast('正在通过环境 ' + displayProfileNumber(profile) + ' 的代理检测出口 IP...');
     const result = await window.ops.checkProfileProxy(profile);
-    profile.exitIp = result.ip; profile.exitCountryCode = result.countryCode; profile.exitTimezone = result.timezone || ''; profile.exitLatitude = result.latitude; profile.exitLongitude = result.longitude; profile.exitCheckedAt = result.checkedAt; save();
-    const number = displayProfileNumber(profile); await refreshStatus(); renderProfiles(); log('Proxy', '环境 ' + number + ' 出口检测成功 · ' + result.ip + ' · ' + countryName(result.countryCode)); toast('环境 ' + number + ' 出口：' + result.ip + ' · ' + countryName(result.countryCode));
+    profile.exitIp = result.ip; profile.exitCountryCode = result.countryCode; profile.exitTimezone = result.timezone || ''; profile.exitLatitude = result.latitude; profile.exitLongitude = result.longitude; profile.exitCheckedAt = result.checkedAt;
+    if (result.appliedFingerprint?.language) profile.language = result.appliedFingerprint.language;
+    if (result.appliedFingerprint?.privacy) profile.privacy = { ...(profile.privacy || {}), ...result.appliedFingerprint.privacy };
+    save();
+    const number = displayProfileNumber(profile); await refreshStatus(); renderProfiles();
+    const detail = formatProxyCheckResult(result);
+    log('Proxy', '环境 ' + number + ' 出口检测成功 · ' + detail);
+    toast('环境 ' + number + ' 出口：' + detail);
   } catch (error) { log('Proxy', '环境 ' + displayProfileNumber(profile) + ' 检测失败 · ' + error.message); toast('代理检测失败：' + error.message); }
 }
 
@@ -3274,10 +3392,19 @@ $('#proxy-delete-selected')?.addEventListener('click', async () => {
     log('Proxy', '删除 ' + ids.length + ' 条');
   } catch (error) { toast(error.message); }
 });
-$('#proxy-check-selected')?.addEventListener('click', async () => {
-  const ids = [...selectedProxies];
+async function runProxyBatchCheck(ids) {
   if (!ids.length) return toast(tx('请先勾选代理'));
   toast('正在检测 ' + ids.length + ' 条代理…');
+  try {
+    if (window.ops.proxyCheckMany) {
+      const summary = await window.ops.proxyCheckMany({ ids });
+      await refreshProxies();
+      toast(tx(`检测完成：成功 ${summary.ok || 0} · 失败 ${summary.fail || 0}`));
+      return;
+    }
+  } catch (_) {
+    // fallback sequential
+  }
   let ok = 0; let fail = 0;
   for (const id of ids) {
     try { await window.ops.proxyCheck({ id }); ok += 1; }
@@ -3285,6 +3412,14 @@ $('#proxy-check-selected')?.addEventListener('click', async () => {
   }
   await refreshProxies();
   toast(tx(`检测完成：成功 ${ok} · 失败 ${fail}`));
+}
+$('#proxy-check-selected')?.addEventListener('click', async () => {
+  await runProxyBatchCheck([...selectedProxies]);
+});
+$('#proxy-check-all')?.addEventListener('click', async () => {
+  const ids = (proxyLibrary || []).map((item) => item.id);
+  if (!ids.length) return toast(tx('代理库为空'));
+  await runProxyBatchCheck(ids);
 });
 document.addEventListener('change', (event) => {
   const box = event.target.closest('[data-proxy-select]');
@@ -5054,3 +5189,7 @@ window.ops.onEvent((value) => {
     refreshCloudPanel().catch(() => {});
   }
 });
+
+$('#editor-test-proxy')?.addEventListener('click', testEditorProxy);
+$('#editor-apply-proxy-fp')?.addEventListener('click', applyEditorProxyFingerprint);
+$('#editor-refresh-proxy')?.addEventListener('click', refreshEditorProxy);
