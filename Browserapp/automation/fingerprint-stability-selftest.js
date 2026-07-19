@@ -343,7 +343,49 @@ async function runProxyPolicies(engineBlock, BrowserEngine) {
   assert.ok(fpSrc.includes('resolveStabilityPolicy'));
   assert.ok(fpSrc.includes('createBatteryFromSeed'));
 
-  console.log('FINGERPRINT_STABILITY_SELFTEST_OK host=1 schema=1 inject=1 proxy-policy=1 hamming=1 tls=1 scrub=1');
+  // frontend ↔ backend field wiring (editor collect / fill / normalize)
+  const rendererSrc = fs.readFileSync(path.join(__dirname, '../renderer.js'), 'utf8');
+  const htmlSrc = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  for (const id of [
+    'editor-stability-mode',
+    'editor-stability-hamming',
+    'editor-stability-max-width',
+    'editor-stability-max-height',
+    'editor-stability-square',
+    'editor-stability-hosts',
+    'editor-stability-skip-hosts',
+    'editor-battery',
+    'editor-media-devices',
+    'editor-media-label-audio',
+    'editor-media-label-video',
+    'editor-media-label-output',
+    'editor-proxy-require-ready',
+    'editor-proxy-not-ready-policy',
+    'editor-proxy-tls-profile',
+    'editor-proxy-tls-chrome-major',
+    'editor-webgl-meta',
+  ]) {
+    assert.ok(htmlSrc.includes(`id="${id}"`), 'missing editor control ' + id);
+  }
+  for (const needle of [
+    "stabilityMode: $('#editor-stability-mode')",
+    "battery: $('#editor-battery')",
+    "mediaDevices: ($('#editor-media-devices')",
+    "requireReady: $('#editor-proxy-require-ready')",
+    "notReadyPolicy: $('#editor-proxy-not-ready-policy')",
+    "tlsProfile: $('#editor-proxy-tls-profile')",
+    "editorSet('#editor-stability-mode'",
+    "editorSet('#editor-battery'",
+    "editorCheck('#editor-proxy-require-ready'",
+    "stabilityMode: ['off', 'auto', 'force']",
+    "requireReady: proxyMeta.requireReady !== false",
+    "apiExtractUrl: String(proxyMeta.apiExtractUrl || '')",
+  ]) {
+    assert.ok(rendererSrc.includes(needle), 'renderer wiring missing: ' + needle);
+  }
+  assert.ok(!rendererSrc.includes("apiExtractUrl: String(proxyMeta.apiExtractUrl || proxyMeta.refreshUrl || '')"), 'renderer must not bleed refreshUrl into apiExtractUrl');
+
+  console.log('FINGERPRINT_STABILITY_SELFTEST_OK host=1 schema=1 inject=1 proxy-policy=1 hamming=1 tls=1 scrub=1 fe-be=1');
 }
 
 main().catch((error) => {

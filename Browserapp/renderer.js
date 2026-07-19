@@ -226,11 +226,22 @@ function normalizeProfileSettings(profile) {
       systemProxy: String(proxyMeta.systemProxy || 'global'),
       directBypass: Boolean(proxyMeta.directBypass),
       bypassList: String(proxyMeta.bypassList || ''),
-      apiExtractUrl: String(proxyMeta.apiExtractUrl || proxyMeta.refreshUrl || ''),
+      apiExtractUrl: String(proxyMeta.apiExtractUrl || ''),
       backupProxies: Array.isArray(proxyMeta.backupProxies)
         ? proxyMeta.backupProxies.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 8)
         : String(proxyMeta.backupProxies || '').split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8),
       fillFingerprint: proxyMeta.fillFingerprint !== false,
+      requireReady: proxyMeta.requireReady !== false,
+      notReadyPolicy: ['block', 'direct', 'continue'].includes(String(proxyMeta.notReadyPolicy || ''))
+        ? String(proxyMeta.notReadyPolicy)
+        : (proxyMeta.requireReady === false ? 'continue' : 'block'),
+      tlsProfile: ['auto', 'chrome', 'chrome_legacy', 'node', 'off'].includes(String(proxyMeta.tlsProfile || ''))
+        ? String(proxyMeta.tlsProfile)
+        : 'auto',
+      tlsChromeMajor: (() => {
+        const n = Number(proxyMeta.tlsChromeMajor);
+        return Number.isFinite(n) && n >= 80 && n <= 200 ? Math.floor(n) : null;
+      })(),
     },
     privacy: {
       webrtc: String(privacy.webrtc || 'proxy'),
@@ -253,6 +264,13 @@ function normalizeProfileSettings(profile) {
       webgpu: String(privacy.webgpu || 'webgl'),
       audio: String(privacy.audio || 'noise'),
       media: String(privacy.media || 'noise'),
+      mediaDevices: String(privacy.mediaDevices || ''),
+      mediaLabels: privacy.mediaLabels && typeof privacy.mediaLabels === 'object' ? {
+        audioinput: String(privacy.mediaLabels.audioinput || privacy.mediaLabels.input || '').slice(0, 200),
+        videoinput: String(privacy.mediaLabels.videoinput || privacy.mediaLabels.video || '').slice(0, 200),
+        audiooutput: String(privacy.mediaLabels.audiooutput || privacy.mediaLabels.output || '').slice(0, 200),
+      } : { audioinput: '', videoinput: '', audiooutput: '' },
+      battery: String(privacy.battery || 'noise'),
       clientRects: String(privacy.clientRects || 'noise'),
       speech: String(privacy.speech || 'noise'),
       deviceNameMode: String(privacy.deviceNameMode || 'noise'),
@@ -263,6 +281,19 @@ function normalizeProfileSettings(profile) {
       portScanAllow: String(privacy.portScanAllow || ''),
       cfOptimize: privacy.cfOptimize !== false,
       refreshFingerprintOnStart: Boolean(privacy.refreshFingerprintOnStart),
+      stabilityMode: ['off', 'auto', 'force'].includes(String(privacy.stabilityMode || ''))
+        ? String(privacy.stabilityMode)
+        : 'auto',
+      stabilityHamming: Math.min(64, Math.max(1, Number(privacy.stabilityHamming) || 12)),
+      stabilityMaxWidth: Math.min(4096, Math.max(64, Number(privacy.stabilityMaxWidth) || 600)),
+      stabilityMaxHeight: Math.min(4096, Math.max(64, Number(privacy.stabilityMaxHeight) || 600)),
+      stabilitySquare: Math.min(64, Math.max(2, Number(privacy.stabilitySquare) || 8)),
+      stabilityHosts: Array.isArray(privacy.stabilityHosts)
+        ? privacy.stabilityHosts.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 800)
+        : String(privacy.stabilityHosts || '').split(/[\r\n,;\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 800),
+      stabilitySkipHosts: Array.isArray(privacy.stabilitySkipHosts)
+        ? privacy.stabilitySkipHosts.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 200)
+        : String(privacy.stabilitySkipHosts || '').split(/[\r\n,;\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 200),
       cores: privacy.cores || '',
       memory: privacy.memory || '',
       fingerprint: privacy.fingerprint && typeof privacy.fingerprint === 'object' ? privacy.fingerprint : {},
@@ -1276,6 +1307,13 @@ function editorDraft(strict = true) {
     webgpu: $('#editor-webgpu')?.value || 'webgl',
     audio: $('#editor-audio')?.value || 'noise',
     media: $('#editor-media')?.value || 'noise',
+    mediaDevices: ($('#editor-media-devices')?.value || '').trim(),
+    mediaLabels: {
+      audioinput: ($('#editor-media-label-audio')?.value || '').trim().slice(0, 200),
+      videoinput: ($('#editor-media-label-video')?.value || '').trim().slice(0, 200),
+      audiooutput: ($('#editor-media-label-output')?.value || '').trim().slice(0, 200),
+    },
+    battery: $('#editor-battery')?.value || 'noise',
     clientRects: $('#editor-client-rects')?.value || 'noise',
     speech: $('#editor-speech')?.value || 'noise',
     deviceNameMode: $('#editor-device-name-mode')?.value || 'noise',
@@ -1286,6 +1324,13 @@ function editorDraft(strict = true) {
     portScanAllow: ($('#editor-port-scan-allow')?.value || '').trim(),
     cfOptimize: $('#editor-cf-optimize')?.checked !== false,
     refreshFingerprintOnStart: Boolean($('#editor-refresh-fingerprint')?.checked),
+    stabilityMode: $('#editor-stability-mode')?.value || 'auto',
+    stabilityHamming: Number($('#editor-stability-hamming')?.value) || 12,
+    stabilityMaxWidth: Number($('#editor-stability-max-width')?.value) || 600,
+    stabilityMaxHeight: Number($('#editor-stability-max-height')?.value) || 600,
+    stabilitySquare: Number($('#editor-stability-square')?.value) || 8,
+    stabilityHosts: ($('#editor-stability-hosts')?.value || '').split(/[\r\n,;\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 800),
+    stabilitySkipHosts: ($('#editor-stability-skip-hosts')?.value || '').split(/[\r\n,;\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 200),
     cores: $('#editor-cores')?.value || '',
     memory: $('#editor-memory')?.value || '',
     fingerprint: {
@@ -1370,6 +1415,15 @@ function editorDraft(strict = true) {
       apiExtractUrl: ($('#editor-api-extract-url')?.value || '').trim(),
       backupProxies: ($('#editor-backup-proxies')?.value || '').split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8),
       fillFingerprint: $('#editor-proxy-fill-fingerprint')?.checked !== false,
+      requireReady: $('#editor-proxy-require-ready')?.checked !== false,
+      notReadyPolicy: $('#editor-proxy-not-ready-policy')?.value || 'block',
+      tlsProfile: $('#editor-proxy-tls-profile')?.value || 'auto',
+      tlsChromeMajor: (() => {
+        const raw = ($('#editor-proxy-tls-chrome-major')?.value || '').trim();
+        if (!raw) return null;
+        const n = Number(raw);
+        return Number.isFinite(n) && n >= 80 && n <= 200 ? Math.floor(n) : null;
+      })(),
     },
     privacy,
     advanced: {
@@ -1434,7 +1488,12 @@ function renderEditorSummary() {
     [tx('浏览器'), 'Google Chrome'], [tx('分组'), groupNameOf(draft)], ['User-Agent', draft.userAgent || 'Chrome 默认'], [tx('网络'), maskProxy(draft.proxy)], ['WebRTC', labels.webrtc[privacy.webrtc]],
     [tx('时区'), labels.timezoneMode[privacy.timezoneMode]], [tx('地理位置'), labels.geoMode[privacy.geoMode]], [tx('语言'), draft.language], [tx('界面语言'), privacy.uiLanguage === 'profile' ? '跟随语言' : privacy.uiLanguage],
     [tx('分辨率'), draft.width + ' × ' + draft.height], [tx('字体'), privacy.fontMode === 'custom' ? privacy.fontSize + 'px' : '默认'], ['Canvas', labels.canvas[privacy.canvas]],
-    ['WebGL', labels.webgl[privacy.webgl]], ['WebGPU', privacy.webgpu === 'blocked' ? '禁用' : '真实'], ['AudioContext', labels.audio[privacy.audio]], [tx('媒体设备'), labels.media[privacy.media]], ['ClientRects', '真实'],
+    ['WebGL', labels.webgl[privacy.webgl]], ['WebGPU', privacy.webgpu === 'blocked' ? '禁用' : (privacy.webgpu === 'webgl' ? '基于 WebGL' : '真实')], ['AudioContext', labels.audio[privacy.audio]], [tx('媒体设备'), labels.media[privacy.media]],
+    [tx('电池'), privacy.battery === 'blocked' ? '关闭' : (privacy.battery === 'real' ? '真实' : '随机')],
+    [tx('站点稳定性'), privacy.stabilityMode === 'force' ? '强制' : (privacy.stabilityMode === 'off' ? '关闭' : '自动')],
+    [tx('代理未就绪'), draft.proxyMeta?.notReadyPolicy === 'direct' ? '回退直连' : (draft.proxyMeta?.notReadyPolicy === 'continue' ? '继续' : '阻断')],
+    [tx('TLS 配置'), draft.proxyMeta?.tlsProfile || 'auto'],
+    ['ClientRects', privacy.clientRects === 'real' ? '真实' : '随机'],
     ['SpeechVoices', labels.speech[privacy.speech]], ['CPU', (navigator.hardwareConcurrency || '未知') + ' 核'], ['RAM', navigator.deviceMemory ? navigator.deviceMemory + ' GB' : '由系统管理'], ['Do Not Track', privacy.dnt ? '启用' : '默认'],
     [tx('每次打开刷新指纹'), privacy.refreshFingerprintOnStart ? '开启' : '关闭']
   ];
@@ -1500,6 +1559,10 @@ function openProfileEditor(id) {
   editorCheck('#editor-proxy-check-start', profile.proxyMeta.checkOnStart);
   editorCheck('#editor-proxy-refresh-start', profile.proxyMeta.refreshOnStart);
   editorCheck('#editor-proxy-fill-fingerprint', profile.proxyMeta.fillFingerprint !== false);
+  editorCheck('#editor-proxy-require-ready', profile.proxyMeta.requireReady !== false);
+  editorSet('#editor-proxy-not-ready-policy', profile.proxyMeta.notReadyPolicy || (profile.proxyMeta.requireReady === false ? 'continue' : 'block'));
+  editorSet('#editor-proxy-tls-profile', profile.proxyMeta.tlsProfile || 'auto');
+  editorSet('#editor-proxy-tls-chrome-major', profile.proxyMeta.tlsChromeMajor == null ? '' : profile.proxyMeta.tlsChromeMajor);
   editorSet('#editor-system-proxy', profile.proxyMeta.systemProxy || 'global');
   editorCheck('#editor-direct-bypass', profile.proxyMeta.directBypass);
   editorSet('#editor-bypass-list', profile.proxyMeta.bypassList || '');
@@ -1538,6 +1601,11 @@ function openProfileEditor(id) {
   editorSet('#editor-webgpu', privacy.webgpu);
   editorSet('#editor-audio', privacy.audio);
   editorSet('#editor-media', privacy.media);
+  editorSet('#editor-media-devices', privacy.mediaDevices || '');
+  editorSet('#editor-battery', privacy.battery || 'noise');
+  editorSet('#editor-media-label-audio', privacy.mediaLabels?.audioinput || privacy.mediaLabels?.input || '');
+  editorSet('#editor-media-label-video', privacy.mediaLabels?.videoinput || privacy.mediaLabels?.video || '');
+  editorSet('#editor-media-label-output', privacy.mediaLabels?.audiooutput || privacy.mediaLabels?.output || '');
   editorSet('#editor-client-rects', privacy.clientRects || 'noise');
   editorSet('#editor-speech', privacy.speech);
   editorSet('#editor-cores', privacy.cores || '');
@@ -1550,6 +1618,13 @@ function openProfileEditor(id) {
   editorSet('#editor-port-scan-allow', privacy.portScanAllow || '');
   editorCheck('#editor-cf-optimize', privacy.cfOptimize !== false);
   editorCheck('#editor-refresh-fingerprint', privacy.refreshFingerprintOnStart);
+  editorSet('#editor-stability-mode', privacy.stabilityMode || 'auto');
+  editorSet('#editor-stability-hamming', privacy.stabilityHamming || 12);
+  editorSet('#editor-stability-max-width', privacy.stabilityMaxWidth || 600);
+  editorSet('#editor-stability-max-height', privacy.stabilityMaxHeight || 600);
+  editorSet('#editor-stability-square', privacy.stabilitySquare || 8);
+  editorSet('#editor-stability-hosts', Array.isArray(privacy.stabilityHosts) ? privacy.stabilityHosts.join('\n') : (privacy.stabilityHosts || ''));
+  editorSet('#editor-stability-skip-hosts', Array.isArray(privacy.stabilitySkipHosts) ? privacy.stabilitySkipHosts.join('\n') : (privacy.stabilitySkipHosts || ''));
   const advanced = profile.advanced;
   for (const [sel, value] of [
     ['#editor-save-cookies', advanced.saveCookies],
