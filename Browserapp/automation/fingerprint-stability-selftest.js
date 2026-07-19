@@ -18,7 +18,16 @@ const {
   createBatteryFromSeed,
   createMediaDevicesFromSeed,
   DEFAULT_STABILITY_HOSTS,
+  hammingDistance,
+  sampleCanvasBlocks,
+  applyStableCanvasNoise,
+  withinHammingThreshold,
 } = require('./fingerprint');
+const {
+  resolveTlsProfile,
+  tlsConnectOptionsFromProfile,
+  TLS_PROFILE_PRESETS,
+} = require('../proxy-forwarder');
 
 function main() {
   // --- host matching ---
@@ -119,6 +128,59 @@ function main() {
   assert.strictEqual(quiet.stability.active, false);
   assert.strictEqual(quiet.stability.noiseAmplitude, 3);
 
+
+  // --- hamming session consistency ---
+  assert.strictEqual(hammingDistance([0], [0]), 0);
+  assert.strictEqual(hammingDistance([0xff], [0x00]), 8);
+  assert.strictEqual(hammingDistance([0b10101010], [0b01010101]), 8);
+  assert.ok(withinHammingThreshold([1, 2, 3], [1, 2, 3], 12));
+  assert.ok(!withinHammingThreshold([0], [0xff], 4));
+
+  const width = 48;
+  const height = 48;
+  const makeImg = () => {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let i = 0; i < data.length; i += 1) data[i] = (i * 13 + 7) & 255;
+    return { data, width, height };
+  };
+  const lockMap = new Map();
+  const opts = { noiseAmplitude: 1, seedNum: 0xabcdef, lockMap, square: 8, maxWidth: 600, maxHeight: 600, mark: 77 };
+  const imgA = makeImg();
+  const imgB = makeImg();
+  applyStableCanvasNoise(imgA, 77, opts);
+  applyStableCanvasNoise(imgB, 77, opts);
+  const blocksA = sampleCanvasBlocks(imgA.data, width, height, { square: 8 });
+  const blocksB = sampleCanvasBlocks(imgB.data, width, height, { square: 8 });
+  assert.deepStrictEqual(blocksA, blocksB, 'locked noise must be identical across reads');
+  assert.ok(withinHammingThreshold(blocksA, blocksB, 12));
+  // unlocked different mark diverges from first sample
+  const imgC = makeImg();
+  applyStableCanvasNoise(imgC, 1, { ...opts, lockMap: new Map(), mark: 1 });
+  const blocksC = sampleCanvasBlocks(imgC.data, width, height, { square: 8 });
+  assert.ok(hammingDistance(blocksA, blocksC) >= 0);
+  const forceScript = buildInjectionScript(buildFingerprint({
+    id: 'prof_hamming_1',
+    name: 'hamming',
+    privacy: { stabilityMode: 'force', stabilityHamming: 12 },
+  }));
+  assert.ok(forceScript.includes('canvasNoiseLocks'), 'injection must lock deltas on stable hosts');
+  assert.ok(forceScript.includes('locked.push'));
+
+  // --- TLS profile hooks ---
+  assert.ok(TLS_PROFILE_PRESETS.chrome);
+  const autoModern = resolveTlsProfile({ id: 'auto', chromeMajor: 131 });
+  assert.strictEqual(autoModern.id, 'chrome');
+  assert.strictEqual(autoModern.permuteExtensions, true);
+  const autoLegacy = resolveTlsProfile({ id: 'auto', chromeMajor: 100 });
+  assert.strictEqual(autoLegacy.id, 'chrome_legacy');
+  assert.strictEqual(autoLegacy.permuteExtensions, false);
+  const connectOpts = tlsConnectOptionsFromProfile(autoModern, { servername: 'example.com' });
+  assert.ok(connectOpts.ciphers && connectOpts.ciphers.includes('TLS_AES_128_GCM_SHA256'));
+  assert.deepStrictEqual(connectOpts.ALPNProtocols, ['h2', 'http/1.1']);
+  assert.strictEqual(connectOpts.servername, 'example.com');
+  const offOpts = tlsConnectOptionsFromProfile('off', { servername: 'x.com' });
+  assert.ok(!offOpts.ciphers, 'off profile must not force ciphers');
+
   // --- engine sanitize schema ---
   const { BrowserEngine } = require('../engine');
   const engine = Object.create(BrowserEngine.prototype);
@@ -150,6 +212,8 @@ function main() {
       requireReady: true,
       notReadyPolicy: 'block',
       checkOnStart: false,
+      tlsProfile: 'chrome',
+      tlsChromeMajor: 131,
     },
   });
   assert.strictEqual(sanitized.privacy.battery, 'noise');
@@ -160,6 +224,8 @@ function main() {
   assert.strictEqual(sanitized.privacy.mediaLabels.audioinput, 'A');
   assert.strictEqual(sanitized.proxyMeta.requireReady, true);
   assert.strictEqual(sanitized.proxyMeta.notReadyPolicy, 'block');
+  assert.strictEqual(sanitized.proxyMeta.tlsProfile, 'chrome');
+  assert.strictEqual(sanitized.proxyMeta.tlsChromeMajor, 131);
 
   // proxy not-ready: block
   const engineBlock = Object.create(BrowserEngine.prototype);
@@ -251,13 +317,20 @@ async function runProxyPolicies(engineBlock, BrowserEngine) {
   for (const banned of ['ThirdPartySuite', 'Hubstudio', 'HubStudio', '逆向', '复刻']) {
     assert.ok(!engSrc.includes(banned), 'engine.js must not contain ' + banned);
   }
+  const proxySrc = fs.readFileSync(path.join(__dirname, '../proxy-forwarder.js'), 'utf8');
+  for (const banned of ['ThirdPartySuite', 'Hubstudio', 'HubStudio', '逆向', '复刻', 'envkit']) {
+    assert.ok(!proxySrc.includes(banned), 'proxy-forwarder.js must not contain ' + banned);
+  }
+  assert.ok(proxySrc.includes('resolveTlsProfile'));
+  assert.ok(fpSrc.includes('hammingDistance'));
+  assert.ok(fpSrc.includes('applyStableCanvasNoise'));
   assert.ok(engSrc.includes('notReadyPolicy'));
   assert.ok(engSrc.includes('requireReady'));
   assert.ok(engSrc.includes('stabilityMode'));
   assert.ok(fpSrc.includes('resolveStabilityPolicy'));
   assert.ok(fpSrc.includes('createBatteryFromSeed'));
 
-  console.log('FINGERPRINT_STABILITY_SELFTEST_OK host=1 schema=1 inject=1 proxy-policy=1 scrub=1');
+  console.log('FINGERPRINT_STABILITY_SELFTEST_OK host=1 schema=1 inject=1 proxy-policy=1 hamming=1 tls=1 scrub=1');
 }
 
 main().catch((error) => {

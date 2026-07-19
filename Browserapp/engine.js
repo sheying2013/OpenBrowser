@@ -275,6 +275,11 @@ class BrowserEngine {
         fillFingerprint: proxyMetaValue.fillFingerprint !== false,
         requireReady: proxyMetaValue.requireReady !== false,
         notReadyPolicy: allowed(proxyMetaValue.notReadyPolicy, ['block', 'direct', 'continue'], proxyMetaValue.requireReady === false ? 'continue' : 'block'),
+        tlsProfile: allowed(proxyMetaValue.tlsProfile, ['auto', 'chrome', 'chrome_legacy', 'node', 'off'], 'auto'),
+        tlsChromeMajor: (() => {
+          const n = Number(proxyMetaValue.tlsChromeMajor);
+          return Number.isFinite(n) && n >= 1 && n <= 999 ? Math.round(n) : null;
+        })(),
       },
       privacy: {
         webrtc: allowed(privacyValue.webrtc, ['proxy', 'disabled', 'real'], 'proxy'),
@@ -1180,6 +1185,16 @@ class BrowserEngine {
       : null;
     const startUrl = customStartUrls[0] || infoStartUrl;
     const proxyConfig = this.proxyConfig(profile.proxy); let proxyForwarder = null;
+    if (proxyConfig) {
+      const meta = profile.proxyMeta || {};
+      const major = Number(meta.tlsChromeMajor)
+        || Number(String(profile.userAgent || '').match(/Chrome\/(\d+)/)?.[1])
+        || 0;
+      proxyConfig.tlsProfile = {
+        id: meta.tlsProfile || 'auto',
+        chromeMajor: major || undefined,
+      };
+    }
     if (proxyConfig?.authenticated) {
       proxyForwarder = await startAuthenticatedProxy(proxyConfig, (value) => this.emit({ type: 'proxy-error', id: profile.id, code: value.code, message: value.message }));
     }
