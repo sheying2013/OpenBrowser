@@ -34,7 +34,7 @@ OpenBrowser 是一款本地指纹浏览器。用来管多套互相隔离的 Chro
 - **窗口同步**：通过 CDP 同步点击、滚动、输入、标签页和窗口操作
 - **本地 RPA**：流程、任务、模板和运行记录；支持打开页面、等待、点击、输入、截图等
 - **Local API / MCP**：本机 HTTP API（默认只监听回环地址）+ stdio MCP，方便接外部工具
-- **独立内核**：优先从 Donut Browser 的 `wayfern.json` 拉 Wayfern 反检测 Chromium；当前平台没有包时回退到 Google Chrome for Testing；也支持自定义内核路径。本仓库不重新分发内核二进制
+- **独立内核**：可下载独立 Chromium，也可指定本地自定义路径（本仓库不打包内核二进制）
 - **备份**：本地、WebDAV、GitHub、谷歌云、微软云、夸克、百度等；只有你主动配置或操作时才会访问外部服务
 
 ### 适合做什么
@@ -150,6 +150,10 @@ npm run package:portable
 - 自动化模块：[`Browserapp/automation/README.md`](./Browserapp/automation/README.md)
 - 免责声明：[`DISCLAIMER.md`](./DISCLAIMER.md)
 
+### 第三方内核
+
+独立内核不是我们自研的。默认走 [Donut Browser](https://github.com/zhom/donutbrowser)（作者 [zhom](https://github.com/zhom)）公开的更新源 [wayfern.json](https://donutbrowser.com/wayfern.json)，下载的是 [Wayfern](https://wayfern.com/) 的反检测 Chromium（二进制来自 `download.wayfern.com`，使用请遵守 [Wayfern 服务条款](https://wayfern.com/tos)）。当前平台没有 Wayfern 包时，会回退到 Google 的 [Chrome for Testing](https://github.com/GoogleChromeLabs/chrome-for-testing)（更新源：[last-known-good-versions-with-downloads.json](https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json)）。OpenBrowser 只按公开源拉取，不重新分发这些内核。
+
 ### 许可证
 
 MIT，见 [`LICENSE`](./LICENSE)。
@@ -184,7 +188,7 @@ The UI language can be switched in local settings. Chinese and English are avail
 - **Window sync** — CDP-based sync for click, scroll, input, tabs, and window actions
 - **Local RPA** — flows, tasks, templates, run history (navigate, wait, click, type, screenshot, …)
 - **Local API / MCP** — loopback HTTP API by default, plus stdio MCP for external tools
-- **Independent kernel** — prefers Wayfern anti-detect Chromium via Donut Browser’s `wayfern.json`; falls back to Google Chrome for Testing when needed; custom kernel path supported. This repo does not redistribute kernel binaries
+- **Independent kernel** — optional download of a standalone Chromium, or a custom local path (this repo does not ship kernel binaries)
 - **Backup** — local, WebDAV, GitHub, Google, Microsoft, Quark, Baidu, etc. External services are only used when you configure or trigger them
 
 ### Typical use
@@ -299,6 +303,10 @@ Local API binds to loopback by default. If `OPENBROWSER_API_KEY` is set, send an
 
 - Automation: [`Browserapp/automation/README.md`](./Browserapp/automation/README.md)
 - Disclaimer: [`DISCLAIMER.md`](./DISCLAIMER.md)
+
+### Third-party kernels
+
+The independent kernel is not built by us. By default we use the public feed from [Donut Browser](https://github.com/zhom/donutbrowser) (by [zhom](https://github.com/zhom)): [wayfern.json](https://donutbrowser.com/wayfern.json), which points at [Wayfern](https://wayfern.com/) anti-detect Chromium (`download.wayfern.com`; see [Wayfern ToS](https://wayfern.com/tos)). If Wayfern has no build for the current OS/arch, we fall back to Google’s [Chrome for Testing](https://github.com/GoogleChromeLabs/chrome-for-testing) ([last-known-good-versions-with-downloads.json](https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json)). OpenBrowser only fetches from these public sources and does not redistribute the kernels.
 
 ### License
 
