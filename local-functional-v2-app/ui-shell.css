@@ -1,0 +1,1589 @@
+:root {
+  --ui-sidebar-width: 200px;
+  --ui-header-height: 74px;
+  --ui-radius: 8px;
+  --ui-radius-sm: 6px;
+  --ui-control-height: 34px;
+  --ui-mark-size: 2.125rem;
+  --ui-icon-size: 15px;
+  --ui-scale: 1;
+  --ui-sidebar: rgba(246, 248, 251, 0.82);
+  --ui-header: rgba(255, 255, 255, 0.74);
+  --ui-surface: #ffffff;
+  --ui-surface-muted: #f7f8fa;
+  --ui-border: rgba(23, 32, 48, 0.11);
+  --ui-border-strong: rgba(23, 32, 48, 0.18);
+  --ui-text: #20242d;
+  --ui-muted: #687080;
+  --ui-accent: #1677ff;
+  --ui-accent-soft: rgba(22, 119, 255, 0.1);
+  --ui-danger: #d94654;
+  --ui-shadow: 0 10px 28px rgba(25, 35, 55, 0.09);
+}
+
+/* Lucide baseline — without this, SVGs can render as empty boxes */
+.lucide,
+svg.lucide,
+i[data-lucide] {
+  display: inline-block;
+  width: 1.1em;
+  height: 1.1em;
+  min-width: 1.1em;
+  min-height: 1.1em;
+  flex: 0 0 auto;
+  vertical-align: -0.15em;
+  stroke: currentColor !important;
+  fill: none !important;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: inherit;
+  overflow: visible;
+}
+.lucide * {
+  stroke: inherit;
+  fill: inherit;
+}
+
+html[data-platform="macos"] body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+}
+
+html[data-platform="windows"] body {
+  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+}
+
+html, body { color: var(--ui-text); background: var(--ui-sidebar, #0b1117); }
+.app-shell { grid-template-columns: var(--ui-sidebar-width) minmax(0, 1fr); min-height: 100vh; }
+
+/* Avoid double native title text when chrome is fused */
+html.titlebar-integrated body,
+html[data-titlebar="integrated"] body {
+  overflow: hidden;
+}
+
+/* ===== Fused title bar (macOS hiddenInset / Windows titleBarOverlay) ===== */
+html.titlebar-integrated,
+html[data-titlebar="integrated"] {
+  /* Mac: clear zone under traffic lights — brand + nav start below */
+  --titlebar-drag-height: 38px;
+  --titlebar-content-offset: 52px;
+  --titlebar-caption-pad: 0px; /* Win only: space for min/max/close */
+}
+
+/* Windows: caption buttons sit on the RIGHT of the overlay strip */
+html[data-platform="windows"].titlebar-integrated,
+html[data-platform="windows"][data-titlebar="integrated"] {
+  /* Prefer env() so layout tracks real overlay geometry */
+  --titlebar-drag-height: env(titlebar-area-height, 40px);
+  --titlebar-content-offset: env(titlebar-area-height, 40px);
+  /* Width of the native caption button cluster (≈ min/max/close) */
+  --titlebar-caption-pad: max(
+    138px,
+    calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))
+  );
+}
+
+/* Draggable chrome: empty strip for system controls, then UI starts lower */
+html.titlebar-integrated .sidebar,
+html[data-titlebar="integrated"] .sidebar {
+  position: sticky;
+  padding-top: var(--titlebar-content-offset) !important;
+}
+html.titlebar-integrated .sidebar .brand,
+html[data-titlebar="integrated"] .sidebar .brand {
+  -webkit-app-region: drag;
+  app-region: drag;
+  padding-left: 4px;
+  min-height: 40px;
+}
+html.titlebar-integrated .content > header,
+html[data-titlebar="integrated"] .content > header {
+  -webkit-app-region: drag;
+  app-region: drag;
+  min-height: max(var(--ui-header-height), var(--titlebar-drag-height));
+  padding-top: 0;
+}
+
+/* Windows header: same top strip + keep controls clear of caption buttons */
+html[data-platform="windows"].titlebar-integrated .content > header,
+html[data-platform="windows"][data-titlebar="integrated"] .content > header {
+  min-height: calc(var(--ui-header-height) + var(--titlebar-drag-height));
+  padding-top: var(--titlebar-drag-height) !important;
+  padding-right: calc(var(--titlebar-caption-pad) + 8px) !important;
+  box-sizing: border-box;
+}
+html[data-platform="windows"].titlebar-integrated .content > header .header-right,
+html[data-platform="windows"][data-titlebar="integrated"] .content > header .header-right {
+  margin-right: 0;
+  gap: 10px;
+}
+
+/* Interactive controls must not drag the window */
+html.titlebar-integrated .sidebar .brand button,
+html.titlebar-integrated .sidebar .brand a,
+html.titlebar-integrated .sidebar .brand input,
+html.titlebar-integrated .sidebar nav,
+html.titlebar-integrated .sidebar .new-browser,
+html.titlebar-integrated .content > header button,
+html.titlebar-integrated .content > header input,
+html.titlebar-integrated .content > header select,
+html.titlebar-integrated .content > header a,
+html.titlebar-integrated .content > header .theme-picker,
+html.titlebar-integrated .content > header .engine-badge,
+html.titlebar-integrated .content > header .header-right,
+html[data-titlebar="integrated"] .sidebar .brand button,
+html[data-titlebar="integrated"] .sidebar .brand a,
+html[data-titlebar="integrated"] .sidebar .brand input,
+html[data-titlebar="integrated"] .sidebar nav,
+html[data-titlebar="integrated"] .sidebar .new-browser,
+html[data-titlebar="integrated"] .content > header button,
+html[data-titlebar="integrated"] .content > header input,
+html[data-titlebar="integrated"] .content > header select,
+html[data-titlebar="integrated"] .content > header a,
+html[data-titlebar="integrated"] .content > header .theme-picker,
+html[data-titlebar="integrated"] .content > header .engine-badge,
+html[data-titlebar="integrated"] .content > header .header-right {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* Extra top drag strip (mac traffic lights / win full-width overlay left of captions) */
+html.titlebar-integrated .sidebar::before,
+html[data-titlebar="integrated"] .sidebar::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar-drag-height);
+  -webkit-app-region: drag;
+  app-region: drag;
+  pointer-events: auto;
+  z-index: 5;
+}
+/* Windows content header also gets a full-width drag band under overlay */
+html[data-platform="windows"].titlebar-integrated .content > header::before,
+html[data-platform="windows"][data-titlebar="integrated"] .content > header::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: var(--titlebar-caption-pad);
+  height: var(--titlebar-drag-height);
+  -webkit-app-region: drag;
+  app-region: drag;
+  z-index: 0;
+}
+html[data-platform="windows"].titlebar-integrated .content > header,
+html[data-platform="windows"][data-titlebar="integrated"] .content > header {
+  position: relative;
+}
+html[data-platform="windows"].titlebar-integrated .content > header > *,
+html[data-platform="windows"][data-titlebar="integrated"] .content > header > * {
+  position: relative;
+  z-index: 1;
+}
+
+.themed-select {
+  position: relative; display: inline-grid; min-width: 0; width: 100%; vertical-align: middle;
+  /* Parent overflow must not clip the trigger; menu is portaled to body */
+  overflow: visible;
+}
+/* Profile editor / dialogs often nest selects — keep panels from clipping triggers */
+#view-profile-editor .editor-form,
+#view-profile-editor .editor-panel,
+#view-profile-editor .environment-editor,
+dialog[open] form,
+dialog[open] .dialog-body,
+.settings-grid article {
+  overflow: visible;
+}
+.themed-select-native {
+  position: absolute !important; width: 1px !important; height: 1px !important; margin: 0 !important;
+  padding: 0 !important; overflow: hidden !important; clip: rect(0 0 0 0); opacity: 0; pointer-events: none;
+}
+.themed-select-button {
+  display: grid; grid-template-columns: minmax(0, 1fr) 22px; align-items: center;
+  width: 100%; min-width: 0; min-height: var(--ui-control-height); margin: 0; padding: 0 0 0 10px !important;
+  border: 1px solid var(--ui-border) !important; background: var(--ui-surface) !important; color: var(--ui-text) !important;
+  border-radius: var(--ui-radius-sm); box-shadow: none !important; font: inherit; text-align: left; cursor: pointer; transition: all 150ms ease;
+}
+.themed-select-button:hover:not(:disabled) { border-color: var(--ui-border-strong) !important;
+}
+.themed-select-button:disabled { cursor: not-allowed; opacity: .55; }
+.themed-select-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-accent) 35%, transparent);
+  outline-offset: 1px;
+}
+.themed-select-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.themed-select-arrow {
+  display: grid; align-self: stretch; place-items: center; border-left: 1px solid var(--ui-border);
+  background: var(--ui-surface-muted); color: var(--ui-text); font-size: 11px; line-height: 1; border-radius: 0 var(--ui-radius-sm) var(--ui-radius-sm) 0;
+}
+.themed-select-button.open .themed-select-arrow { background: var(--ui-border); }
+.themed-select-menu {
+  position: fixed !important;
+  z-index: 2147483000 !important;
+  display: block !important;
+  align-content: start;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  margin: 0 !important;
+  padding: 4px;
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow);
+  border-radius: var(--ui-radius-sm);
+  /* Long option lists (platform / language) must scroll inside the panel */
+  max-height: min(50vh, 420px);
+  -webkit-overflow-scrolling: touch;
+  pointer-events: auto !important;
+}
+dialog[open] > .themed-select-menu {
+  inset-block: auto;
+  margin: 0 !important;
+}
+.themed-select-option {
+  display: block; width: 100%; min-height: 32px; padding: 6px 9px !important; border: 0 !important;
+  background: transparent !important; color: var(--ui-text) !important; box-shadow: none !important;
+  border-radius: 4px; font: inherit; text-align: left; text-transform: none !important; cursor: pointer; transition: background-color 100ms ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.themed-select-option:hover, .themed-select-option:focus-visible { outline: 0; background: var(--ui-surface-muted) !important; }
+.themed-select-option::before { content: ""; display: inline-block; width: 1.15em; }
+.themed-select-option.selected::before { content: "✓"; font-weight: 800; }
+.themed-select-option:disabled { color: var(--ui-muted) !important; cursor: not-allowed; }
+.sync-toolbar > .themed-select { width: auto; min-width: 170px; }
+.profile-page-size .themed-select { min-width: 98px; }
+.profile-selection-bar .themed-select { width: auto; max-width: 116px; }
+
+.themed-multiselect { position: relative; width: 100%; min-width: 0; }
+.themed-multiselect-list {
+  display: grid; align-content: start; width: 100%; min-height: 132px; max-height: 188px; overflow: auto;
+  padding: 4px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface); color: var(--ui-text); box-shadow: inset 0 1px 2px rgba(23, 32, 48, .06);
+  overscroll-behavior: contain;
+}
+.themed-multiselect-option {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; width: 100%; min-height: 32px;
+  padding: 5px 8px !important; border: 0 !important; border-radius: 4px; background: transparent !important;
+  color: var(--ui-text) !important; box-shadow: none !important; font: inherit; text-align: left; cursor: pointer;
+}
+.themed-multiselect-option:hover, .themed-multiselect-option:focus-visible { outline: 0; background: var(--ui-surface-muted) !important; }
+.themed-multiselect-option.selected { background: var(--ui-accent-soft) !important; color: var(--ui-text) !important; }
+.themed-multiselect-option:disabled { cursor: not-allowed; opacity: .5; }
+.themed-multiselect-check { visibility: hidden; color: var(--ui-accent); font-weight: 800; }
+.themed-multiselect-option.selected .themed-multiselect-check { visibility: visible; }
+.themed-multiselect-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.themed-color-control {
+  display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: stretch; min-height: var(--ui-control-height);
+  border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); background: var(--ui-surface); overflow: hidden;
+}
+.themed-color-preview { background: var(--group-color, #245cff); border-right: 1px solid var(--ui-border); }
+.themed-color-control input {
+  width: 100%; min-width: 0; margin: 0; border: 0 !important; border-radius: 0 !important;
+  background: transparent !important; color: var(--ui-text) !important; box-shadow: none !important;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace !important; text-transform: uppercase;
+}
+.themed-color-control:focus-within { outline: 2px solid color-mix(in srgb, var(--ui-accent) 35%, transparent); outline-offset: 1px; }
+
+.sidebar {
+  width: var(--ui-sidebar-width);
+  padding: 18px 14px 14px;
+  background: var(--ui-sidebar) !important;
+  border-right: 1px solid var(--ui-border) !important;
+  backdrop-filter: saturate(150%) blur(20px);
+  -webkit-backdrop-filter: saturate(150%) blur(20px);
+}
+
+.brand { min-height: 56px; gap: 10px; padding: 0 7px; }
+.brand .logo { width: 48px; height: 48px; border-radius: 0; background: transparent; overflow: visible; }
+.brand > div:last-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.brand strong { font-size: 14px; letter-spacing: 0; }
+.brand small { color: var(--ui-muted); font-size: 9px; font-weight: 650; letter-spacing: .06em; }
+
+.new-browser {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: 38px; margin: 14px 0 12px; border-radius: var(--ui-radius) !important;
+}
+.new-browser svg { width: 16px; height: 16px; }
+
+.sidebar nav { min-height: 0; padding: 2px 0 8px; overflow-y: auto; scrollbar-width: thin; }
+.sidebar .nav {
+  display: flex; align-items: center; gap: 10px; min-height: 38px;
+  margin: 2px 0; padding: 0 11px; border-radius: var(--ui-radius-sm) !important;
+  font-size: 13px; font-weight: 520; letter-spacing: 0;
+  min-width: 0; width: 100%; box-sizing: border-box;
+}
+.sidebar .nav > svg { width: 17px; height: 17px; flex: 0 0 17px; stroke-width: 1.8; }
+.sidebar .nav > svg:first-child { transform: none; }
+/* Labels live in span[data-i18n] after i18n — never constrain to icon width */
+.sidebar .nav > span[data-i18n],
+.sidebar .nav > span.nav-text,
+.sidebar .new-browser > span[data-i18n] {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto !important;
+  max-width: 100%;
+  font-size: inherit !important;
+  font-weight: inherit;
+  line-height: 1.25;
+  color: inherit !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  writing-mode: horizontal-tb;
+  word-break: normal;
+}
+.sidebar .nav.active { box-shadow: inset 0 0 0 1px rgba(22, 119, 255, 0.12); }
+.sidebar .nav-expand .nav-chevron { width: 14px; height: 14px; flex: 0 0 14px; margin-left: auto; transition: transform 160ms ease; }
+.sidebar .nav-expand[aria-expanded="true"] .nav-chevron { transform: rotate(180deg); }
+.sidebar .nav-child { min-height: 34px; padding-left: 28px; font-size: 12px; }
+.sidebar .nav-child > svg { width: 15px; height: 15px; }
+.sidebar .nav-label { margin: 16px 10px 6px; color: var(--ui-muted); font-size: 10px; font-weight: 700; letter-spacing: .06em; }
+
+.content { min-width: 0; }
+.content > header {
+  position: relative;
+  z-index: 400;
+  min-height: var(--ui-header-height); padding: 0 24px;
+  background: var(--ui-header) !important; border-bottom: 1px solid var(--ui-border) !important;
+  backdrop-filter: saturate(150%) blur(20px); -webkit-backdrop-filter: saturate(150%) blur(20px);
+}
+.content > header h1 { margin: 0; font-size: 20px; line-height: 1.2; letter-spacing: 0; }
+.content > header p { margin-top: 4px; font-size: 12px; }
+.header-right { gap: 10px; position: relative; z-index: 1; }
+.theme-picker { position: relative; z-index: 2; }
+.theme-trigger, .engine-badge { border-radius: var(--ui-radius-sm) !important; }
+
+/* Header browser ready — smaller than before, still readable */
+.engine-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  height: auto;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  user-select: none;
+  border-radius: 999px !important;
+}
+.engine-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: #a5afbf;
+  box-shadow: 0 0 0 2px rgba(165, 175, 191, 0.22);
+}
+.engine-badge-text {
+  font-size: 11px;
+  line-height: 1.2;
+}
+.engine-badge-checking {
+  background: #f3f4f6;
+  color: #6b7280;
+  border-color: #e5e7eb;
+}
+.engine-badge-checking .engine-badge-dot {
+  background: #9ca3af;
+  animation: engine-badge-pulse 1.1s ease-in-out infinite;
+}
+.engine-badge-ok {
+  background: #e9f8f2;
+  color: #12825c;
+  border-color: #c6ebd9;
+}
+.engine-badge-ok .engine-badge-dot {
+  background: #20b77a;
+  box-shadow: 0 0 0 2px rgba(32, 183, 122, 0.28);
+}
+.engine-badge-missing {
+  background: #fff2f3;
+  color: #c43a49;
+  border-color: #f0c3c8;
+}
+.engine-badge-missing .engine-badge-dot {
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.28);
+}
+@keyframes engine-badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+/* fixed so sticky table headers / main paint order never cover the menu.
+   Width/height use rem + vw so page zoom / UI scale / narrow windows all keep the panel on-screen. */
+.theme-popover {
+  position: fixed !important;
+  z-index: 100000 !important;
+  top: auto; right: auto; left: auto; margin: 0 !important;
+  box-sizing: border-box !important;
+  width: min(var(--theme-menu-width, 20.5rem), calc(100vw - 1rem)) !important;
+  max-width: calc(100vw - 1rem) !important;
+  max-height: min(80vh, calc(100dvh - 1rem));
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: var(--ui-radius) !important;
+  box-shadow: var(--ui-shadow);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+}
+.theme-option,
+.theme-option > span,
+.theme-option strong,
+.theme-option small {
+  min-width: 0;
+}
+
+.content > main { position: relative; z-index: 1; padding: 18px 22px 22px; }
+
+/* One page-level scroller for the desktop shell. The native window stays fixed;
+   long views such as the template store, guide, API/MCP and settings scroll here. */
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  overflow: hidden;
+}
+
+.app-shell {
+  height: 100vh;
+  min-height: 0;
+}
+
+.content {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.content > main {
+  flex: 1 1 auto;
+  min-height: 0 !important;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Page scrolling owns the available height; individual views must not create
+   a second viewport-sized track on top of it. */
+.content > main > .view {
+  min-width: 0;
+}
+
+.content > main > .view.rpa-view {
+  min-height: 0 !important;
+}
+#view-profiles { min-width: 0; }
+#view-profiles .group-chip-row { margin-bottom: 12px; padding-bottom: 2px; overflow-x: auto; }
+#view-profiles .group-chip { flex: 0 0 auto; min-height: 30px; border-radius: 999px !important; }
+
+#view-profiles .toolbar { margin-bottom: 10px; }
+.profile-primary-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.profile-primary-toolbar .toolbar-left { display: flex; flex-wrap: wrap; gap: 7px; }
+#view-profiles button svg, #view-profiles .search svg { width: 15px; height: 15px; flex: 0 0 15px; }
+#view-profiles .primary, #view-profiles .outline, #view-profiles .danger {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-height: 28px; padding: 0 8px; border-radius: var(--ui-radius-sm) !important;
+  font-size: 11px; line-height: 1; white-space: nowrap;
+}
+#view-profiles .search {
+  display: flex; align-items: center; gap: 7px; width: min(240px, 25vw); height: 28px;
+  padding: 0 8px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm) !important;
+  background: var(--ui-surface);
+}
+#view-profiles .search svg { color: var(--ui-muted); }
+#view-profiles .search input { min-width: 0; font-size: 12px; }
+
+.profile-selection-bar {
+  display: flex; align-items: center; gap: 12px; min-height: 48px; margin: 0 0 10px;
+  padding: 7px 9px 7px 12px; border: 1px solid rgba(22, 119, 255, .2);
+  border-radius: var(--ui-radius); background: var(--ui-accent-soft);
+}
+.profile-selection-bar[hidden] { display: none !important; }
+.profile-selection-bar > strong { flex: 0 0 auto; color: var(--ui-accent); font-size: 12px; }
+.selection-actions { display: flex; min-width: 0; flex: 1; align-items: center; gap: 6px; overflow-x: auto; padding-bottom: 1px; }
+.profile-selection-bar .batch-group-assign { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; font-size: 11px; white-space: nowrap; }
+.profile-selection-bar select { height: 32px; max-width: 116px; border-radius: var(--ui-radius-sm); font-size: 11px; }
+.profile-selection-bar .themed-select-button { min-height: 32px; font-size: 11px; }
+
+/* Profile list — even column scale; actions never fall off the right edge */
+#view-profiles .table-card {
+  overflow-x: auto;
+  overflow-y: auto;
+  border: 1px solid var(--ui-border) !important;
+  border-radius: var(--ui-radius) !important;
+  background: var(--ui-surface) !important;
+  box-shadow: 0 1px 2px rgba(25, 35, 55, .04);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+#view-profiles .table-card table,
+#view-profiles .table-card table.profile-table-compact {
+  width: 100% !important;
+  min-width: 0 !important; /* fill card; scale columns together instead of clipping right */
+  table-layout: fixed !important;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--ui-surface);
+}
+#view-profiles .table-card thead { position: sticky; top: 0; z-index: 2; }
+#view-profiles .table-card th {
+  background: var(--ui-surface-muted) !important;
+  color: var(--ui-muted);
+  font-size: 12px !important;
+  font-weight: 600;
+  text-align: left;
+  border-bottom: 1px solid var(--ui-border);
+  border-right: 1px solid color-mix(in srgb, var(--ui-border) 85%, transparent);
+}
+#view-profiles .table-card th:last-child { border-right: 0; }
+#view-profiles .table-card th,
+#view-profiles .table-card td {
+  padding: 8px 8px !important;
+  font-size: 12px !important;
+  line-height: 1.35 !important;
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+#view-profiles .table-card tbody td {
+  border-bottom: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent);
+}
+
+/*
+  Even % widths (sum 100%). Name flexes most; meta columns share remaining space.
+  Actions sticky right so it never “disappears” when the viewport shrinks.
+*/
+#view-profiles .table-card th.col-check,
+#view-profiles .table-card td:first-child,
+#view-profiles .table-card td.col-check {
+  width: 3.5%;
+  padding-left: 10px !important;
+  padding-right: 4px !important;
+}
+#view-profiles .table-card th.col-num,
+#view-profiles .table-card td:nth-child(2),
+#view-profiles .table-card td.col-num {
+  width: 5%;
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+#view-profiles .table-card th.col-name,
+#view-profiles .table-card td:nth-child(3),
+#view-profiles .table-card td.col-name {
+  width: 20%;
+}
+#view-profiles .table-card th.col-group,
+#view-profiles .table-card td.col-group { width: 9%; max-width: none !important; }
+#view-profiles .table-card th.col-browser,
+#view-profiles .table-card td.col-browser { width: 12%; max-width: none !important; }
+#view-profiles .table-card td.col-browser .env-browser-cell-app {
+  gap: 8px;
+}
+#view-profiles .table-card td.col-browser .env-badge {
+  /* same app-mark language as 环境名称 column */
+  flex: 0 0 var(--ui-mark-size, 2.125rem);
+}
+#view-profiles .table-card th.col-network,
+#view-profiles .table-card td.col-network { width: 7%; max-width: none !important; }
+#view-profiles .table-card th.col-exit,
+#view-profiles .table-card td.col-exit { width: 10%; max-width: none !important; }
+#view-profiles .table-card th.col-ext,
+#view-profiles .table-card td.col-ext {
+  width: 5%;
+  max-width: none !important;
+  text-align: center;
+  color: var(--ui-muted);
+  font-variant-numeric: tabular-nums;
+}
+#view-profiles .table-card th.col-status,
+#view-profiles .table-card td.col-status { width: 7%; max-width: none !important; }
+#view-profiles .table-card th.col-actions,
+#view-profiles .table-card td.col-actions {
+  width: 15.5%;
+  min-width: 132px;
+  overflow: visible;
+  text-overflow: clip;
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  background: var(--ui-surface) !important;
+  box-shadow: -6px 0 10px -8px rgba(15, 23, 42, 0.22);
+  white-space: nowrap;
+}
+#view-profiles .table-card thead th.col-actions {
+  z-index: 4;
+  background: var(--ui-surface-muted) !important;
+}
+#view-profiles .table-card tbody tr:hover td.col-actions {
+  background: color-mix(in srgb, var(--ui-surface) 88%, rgba(22, 119, 255, 0.06)) !important;
+}
+#view-profiles .table-card tbody tr.selected-row td.col-actions {
+  background: var(--ui-accent-soft) !important;
+}
+
+/* Meta cells: compact chips, still readable */
+#view-profiles .table-card td.col-group,
+#view-profiles .table-card td.col-browser,
+#view-profiles .table-card td.col-network,
+#view-profiles .table-card td.col-exit,
+#view-profiles .table-card td.col-status {
+  font-size: 11px !important;
+}
+#view-profiles .table-card .group-badge-compact {
+  max-width: 100%;
+  font-size: 11px;
+  padding: 2px 6px;
+}
+#view-profiles .table-card .env-browser-pill,
+#view-profiles .table-card .net-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+#view-profiles .table-card .exit-compact,
+#view-profiles .table-card .status-compact,
+#view-profiles .table-card .network-pending {
+  font-size: 11px;
+  max-width: 100%;
+}
+#view-profiles .table-card .network-info-compact { max-width: 100%; }
+
+/* Action buttons share the sticky cell evenly */
+#view-profiles .table-card .actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+#view-profiles .table-card .actions .mini {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 26px !important;
+  padding: 0 7px !important;
+  font-size: 11px !important;
+}
+
+#view-profiles .table-card tbody tr { transition: background-color 120ms ease, box-shadow 120ms ease; }
+#view-profiles .table-card tbody tr:hover { background: rgba(22, 119, 255, .035); }
+#view-profiles .table-card tbody tr.selected-row { background: var(--ui-accent-soft); box-shadow: inset 3px 0 var(--ui-accent); }
+#view-profiles .profile-name { gap: 8px; min-width: 0; }
+#view-profiles .env-identity { min-width: 0; }
+#view-profiles .env-identity-text { min-width: 0; overflow: hidden; }
+#view-profiles .env-identity-text strong,
+#view-profiles .env-identity-text small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#view-profiles .avatar { width: 28px; height: 28px; border-radius: var(--ui-radius-sm) !important; }
+#view-profiles .profile-name small { font-size: 11px !important; }
+#view-profiles .actions { display: flex; gap: 6px; flex-wrap: nowrap; }
+#view-profiles .mini {
+  min-height: 30px; padding: 0 10px !important; border-radius: 6px !important; font-size: 12px !important;
+}
+#view-profiles .network-check {
+  min-height: 22px !important; padding: 0 6px !important; border-radius: 4px !important; font-size: 11px !important;
+}
+
+#view-profiles .profile-pagination {
+  display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin-top: 10px;
+  color: var(--ui-muted); font-size: 11px;
+}
+#view-profiles .profile-page-nav { display: flex; align-items: center; gap: 4px; }
+#view-profiles .profile-page-nav button, #view-profiles .profile-page-nav input, #view-profiles .profile-page-size select {
+  height: 30px; border-radius: var(--ui-radius-sm) !important; font-size: 11px;
+}
+#view-profiles .profile-page-nav button, #view-profiles .profile-page-nav input { width: 30px; }
+
+/*
+ * Narrow window: ONLY tighten layout (sidebar / padding / gaps).
+ * Never shrink body text below readable sizes — icons track em so they stay with type.
+ */
+@media (max-width: 1200px) {
+  :root {
+    --ui-sidebar-width: 188px;
+    --ui-mark-size: 2rem; /* ~32px — still legible square marks */
+    --ui-control-height: 34px;
+  }
+  .content > main { padding-inline: 14px; }
+  .brand .logo { width: 44px !important; height: 44px !important; }
+  .brand { min-height: 48px !important; }
+  /* Keep nav text ≥ 13px */
+  .sidebar .nav { min-height: 36px; font-size: 13px; gap: 9px; }
+  .sidebar .nav > svg { width: 16px !important; height: 16px !important; flex-basis: 16px !important; }
+  .toolbar .primary, .toolbar .outline, .toolbar .danger {
+    padding: 7px 11px !important;
+    font-size: 13px !important;
+  }
+  .content > header h1 { font-size: 18px !important; line-height: 1.25 !important; }
+  .content > header p { font-size: 12px !important; }
+  .tabs button, .tabs button.active { font-size: 13px !important; }
+  .extension-card h3 { font-size: 13px !important; }
+  .extension-card p { font-size: 12px !important; line-height: 1.45 !important; }
+  .engine-badge-text { max-width: 7em; overflow: hidden; text-overflow: ellipsis; }
+}
+@media (max-width: 1000px) {
+  :root {
+    --ui-sidebar-width: 172px;
+    --ui-mark-size: 1.875rem; /* 30px */
+    --ui-control-height: 34px;
+    --ui-header-height: 68px;
+  }
+  body { min-width: 900px; }
+  .brand .logo { width: 40px !important; height: 40px !important; }
+  /* Floor readable type — do not go below these */
+  .brand strong { font-size: 13px !important; }
+  .brand small { font-size: 10px !important; letter-spacing: 0.04em !important; }
+  .new-browser { min-height: 36px !important; font-size: 13px !important; }
+  .sidebar .nav { min-height: 34px; font-size: 13px; padding: 0 10px; }
+  .sidebar .nav-label { font-size: 10px !important; }
+  .content > header h1 { font-size: 17px !important; }
+  .content > header p { font-size: 12px !important; }
+  .content > main { padding: 12px 12px 18px !important; }
+  .toolbar .primary, .toolbar .outline, .toolbar .danger { font-size: 13px !important; }
+  .tabs button { font-size: 13px !important; min-height: 34px; }
+  .extension-grid { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)) !important; }
+  .extension-card { max-width: none; }
+  th, td { font-size: 12px !important; }
+}
+@media (max-width: 1250px) {
+  .content > main { padding-inline: 16px; }
+  .profile-selection-bar { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .selection-actions { width: 100%; }
+}
+
+/* Ensure header title never sits under drag strip / overlays */
+.content > header > div:first-child,
+.content > header .header-title,
+.content > header h1 {
+  position: relative;
+  z-index: 2;
+  color: inherit;
+  opacity: 1;
+}
+.content > header p {
+  position: relative;
+  z-index: 2;
+  opacity: 1;
+}
+/* App-center tabs must stay below header and fully legible */
+.tabs {
+  position: relative;
+  z-index: 1;
+  gap: 18px;
+  min-height: 40px;
+  align-items: center;
+}
+.tabs button {
+  font-size: 13px !important;
+  line-height: 1.3 !important;
+  padding: 10px 0 !important;
+  opacity: 1 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .sidebar, .content > header, .theme-popover { background: var(--ui-surface) !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+}
+
+html.reduce-transparency .sidebar, html.reduce-transparency .content > header, html.reduce-transparency .theme-popover {
+  background: var(--ui-surface) !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+}
+
+/* Compact mode overrides for profile lists */
+#view-profiles .table-card th, #view-profiles .table-card td {
+  padding: 5px 6px !important;
+  font-size: 11px !important;
+}
+#view-profiles .profile-primary-toolbar {
+  margin-bottom: 6px;
+}
+#view-profiles .search {
+  height: 28px;
+}
+#view-profiles .primary, #view-profiles .outline, #view-profiles .danger {
+  min-height: 28px;
+}
+.sidebar .nav {
+  min-height: 32px;
+  margin: 1px 0;
+}
+
+/* extra small sizes for specific badges in compact cells */
+.env-browser-pill, .group-badge-compact, .status-compact, .network-mode, .exit-compact {
+  font-size: 9px !important;
+  padding: 0 3px !important;
+  min-height: 16px !important;
+  line-height: 16px !important;
+}
+.network-check {
+  font-size: 9px !important;
+  padding: 0 2px !important;
+  min-height: 14px !important;
+  line-height: 14px !important;
+}
+.net-badge {
+  font-size: 9px !important;
+  padding: 0 3px !important;
+  min-height: 16px !important;
+  line-height: 16px !important;
+}
+
+.content > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+
+/* Native OS Table Overrides */
+#view-profiles .table-card {
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: inset 0 0 0 1px var(--ui-border) !important;
+  overflow: auto;
+  border-radius: var(--ui-radius-sm) !important;
+}
+#view-profiles .table-card table {
+  border-collapse: collapse;
+}
+#view-profiles .table-card th {
+  background: var(--ui-surface) !important;
+  border-bottom: 1px solid var(--ui-border) !important;
+  font-weight: 500;
+  box-shadow: none !important;
+}
+#view-profiles .table-card td {
+  border-bottom: 1px solid var(--ui-border-light, rgba(23, 32, 48, 0.05)) !important;
+}
+
+/* Smaller group chips */
+#view-profiles .group-chip {
+  min-height: 24px !important;
+  font-size: 11px !important;
+  padding: 0 10px !important;
+}
+
+/* Window sync follows the compact environment-management density. */
+#view-sync,
+#view-sync .sync-main,
+#view-sync .console {
+  min-width: 0;
+}
+
+#view-sync .sync-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 12px;
+  height: auto;
+  min-height: calc(100vh - 150px);
+  align-items: stretch;
+}
+
+#view-sync .sync-toolbar {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+  align-items: start;
+  justify-content: initial;
+  gap: 6px 8px;
+  min-width: 0;
+  margin-bottom: 8px;
+}
+
+#view-sync .sync-toolbar > *,
+#view-sync .sync-toolbar-actions > *,
+#view-sync .sync-toolbar-status > * {
+  min-width: 0;
+}
+
+#view-sync .sync-toolbar select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+#view-sync .sync-toolbar-actions,
+#view-sync .sync-toolbar-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+#view-sync .sync-toolbar-status {
+  grid-column: 1 / -1;
+}
+
+#view-sync .sync-toolbar .sync-settings-button {
+  margin-left: 0;
+}
+
+#view-sync .sync-toolbar .sync-command,
+#view-sync .console-tabs button,
+#view-sync .action-grid button,
+#view-sync .row-actions button {
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+#view-sync .sync-toolbar .sync-command {
+  flex: 0 1 auto;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#view-sync .sync-toolbar .sync-command span,
+#view-sync .console-tabs button span,
+#view-sync .action-grid button span,
+#view-sync .row-actions button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#view-sync .sync-toolbar svg,
+#view-sync .console svg,
+#view-sync .sync-toolbar i[data-lucide],
+#view-sync .console i[data-lucide] {
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  max-width: 14px !important;
+  flex: 0 0 14px !important;
+}
+
+#view-sync .sync-selected,
+#view-sync .sync-health {
+  font-size: 10px;
+}
+
+#view-sync .sync-health {
+  padding: 4px 7px;
+}
+
+#view-sync .console-head {
+  padding: 10px 12px;
+}
+
+#view-sync .console-head h2 {
+  font-size: 13px;
+}
+
+#view-sync .console-tabs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 8px 10px 0;
+}
+
+#view-sync .console-tabs button {
+  min-width: 0;
+  padding-inline: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#view-sync .console-panel {
+  padding: 12px;
+}
+
+#view-sync .action-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+#view-sync .action-grid button {
+  min-width: 0;
+}
+
+#view-sync .wide-action {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1180px) {
+  #view-sync .sync-layout {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  #view-sync .console {
+    min-height: 300px;
+  }
+}
+
+@media (max-width: 760px) {
+  #view-sync .sync-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #view-sync .sync-toolbar-actions,
+  #view-sync .sync-toolbar-status {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Groups, proxy library and app center use the same compact control scale. */
+#view-groups,
+#view-proxies,
+#view-extensions {
+  min-width: 0;
+}
+
+#view-groups .toolbar,
+#view-proxies .toolbar,
+#view-extensions .toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 8px;
+}
+
+#view-groups .toolbar-left,
+#view-proxies .toolbar-left,
+#view-extensions .toolbar-left {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+#view-groups .toolbar button,
+#view-proxies .toolbar button,
+#view-extensions .toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  min-width: 0;
+  padding: 0 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+#view-groups .toolbar button svg,
+#view-proxies .toolbar button svg,
+#view-extensions .toolbar button svg,
+#view-groups .toolbar button i[data-lucide],
+#view-proxies .toolbar button i[data-lucide],
+#view-extensions .toolbar button i[data-lucide] {
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  max-width: 14px !important;
+  flex: 0 0 14px !important;
+}
+
+#view-groups .toolbar .profile-total,
+#view-proxies .toolbar .extension-counts,
+#view-extensions .toolbar .extension-counts {
+  min-width: 0;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+#view-proxies .toolbar .search,
+#view-extensions .toolbar .search {
+  flex: 0 1 220px;
+  width: min(220px, 100%);
+  min-width: 150px;
+  height: 28px;
+  padding: 0 8px;
+  gap: 5px;
+  border-radius: 5px;
+}
+
+#view-proxies .toolbar .search svg,
+#view-extensions .toolbar .search svg,
+#view-proxies .toolbar .search i[data-lucide],
+#view-extensions .toolbar .search i[data-lucide] {
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  max-width: 14px !important;
+}
+
+#view-proxies .toolbar .search input,
+#view-extensions .toolbar .search input {
+  min-width: 0;
+  font-size: 11px;
+}
+
+#view-groups .table-card,
+#view-proxies .table-card {
+  min-width: 0;
+  overflow: auto;
+}
+
+#view-groups .table-card th,
+#view-groups .table-card td,
+#view-proxies .table-card th,
+#view-proxies .table-card td {
+  height: 34px;
+  padding: 4px 8px !important;
+  font-size: 10px !important;
+  white-space: nowrap;
+}
+
+#view-groups .table-card td,
+#view-proxies .table-card td {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#view-groups .table-card .actions,
+#view-proxies .table-card .actions,
+#view-proxies .table-card .row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+#view-groups .table-card .actions button,
+#view-proxies .table-card .actions button,
+#view-proxies .table-card .row-actions button {
+  min-height: 26px;
+  min-width: 0;
+  padding: 0 7px;
+  border-radius: 4px;
+  font-size: 10px;
+}
+
+#view-groups .table-card .actions svg,
+#view-proxies .table-card .actions svg,
+#view-proxies .table-card .row-actions svg,
+#view-groups .table-card .actions i[data-lucide],
+#view-proxies .table-card .actions i[data-lucide],
+#view-proxies .table-card .row-actions i[data-lucide] {
+  width: 13px !important;
+  height: 13px !important;
+  min-width: 13px !important;
+  max-width: 13px !important;
+}
+
+#view-proxies .extension-note,
+#view-extensions .extension-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 10px;
+  min-width: 0;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+#view-proxies .extension-note span,
+#view-extensions .extension-note span {
+  min-width: 0;
+}
+
+#view-extensions .tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  min-width: 0;
+  margin: 0 0 12px;
+  padding: 0 4px 2px;
+  align-items: center;
+}
+
+#view-extensions .tabs button {
+  min-height: 36px;
+  padding: 8px 2px !important;
+  font-size: 13px !important;
+  line-height: 1.3 !important;
+  font-weight: 650 !important;
+}
+
+#view-extensions .extension-grid {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)) !important;
+  gap: 10px !important;
+  min-width: 0;
+}
+
+#view-extensions .extension-card {
+  min-width: 0;
+  max-width: none;
+  min-height: 0 !important;
+  padding: 12px;
+}
+#view-extensions .extension-card h3 {
+  font-size: 13px !important;
+  line-height: 1.35 !important;
+}
+#view-extensions .extension-card p {
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+}
+#view-extensions .extension-meta {
+  font-size: 11px !important;
+}
+
+/* API / MCP follows the same compact desktop-app scale as environment management. */
+#view-api-mcp,
+#view-api-mcp .rpa-api-page {
+  min-width: 0;
+}
+
+#view-api-mcp .rpa-api-page {
+  max-width: 1120px;
+}
+
+#view-api-mcp .rpa-section {
+  min-width: 0;
+  margin-bottom: 10px;
+  padding: 12px;
+  border-radius: var(--ui-radius-sm);
+}
+
+#view-api-mcp .rpa-h2 {
+  margin: 0 0 6px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+#view-api-mcp .rpa-desc {
+  max-width: 900px;
+  margin: 0 0 9px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+#view-api-mcp .rpa-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+#view-api-mcp .rpa-row.stack {
+  align-items: flex-start;
+}
+
+#view-api-mcp .rpa-label {
+  width: 62px;
+  flex: 0 0 62px;
+  font-size: 10px;
+}
+
+#view-api-mcp button,
+#view-api-mcp .rpa-seg button {
+  min-height: 28px;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: var(--ui-radius-sm);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+#view-api-mcp .rpa-input {
+  min-width: min(360px, 100%);
+  min-height: 28px;
+  padding: 4px 7px;
+  border-radius: var(--ui-radius-sm);
+  font-size: 10px;
+}
+
+#view-api-mcp .rpa-status-pill,
+#view-api-mcp .rpa-code-inline {
+  min-height: 22px;
+  box-sizing: border-box;
+  padding: 3px 7px;
+  border-radius: var(--ui-radius-sm);
+  font-size: 10px;
+}
+
+#view-api-mcp .rpa-code-inline {
+  min-width: 0;
+  max-width: min(360px, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#view-api-mcp .rpa-code-block {
+  min-width: 0;
+  max-height: 220px;
+  padding: 8px;
+  border-radius: var(--ui-radius-sm);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+#view-api-mcp .rpa-code-wrap {
+  gap: 6px;
+  min-width: 0;
+}
+
+#view-api-mcp .rpa-code-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 7px;
+  border-radius: var(--ui-radius-sm);
+}
+
+#view-api-mcp .rpa-code-line code {
+  min-width: 0;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+#view-api-mcp .rpa-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+  padding: 2px;
+  border-radius: var(--ui-radius-sm);
+}
+
+#view-api-mcp .api-endpoint-list {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+#view-api-mcp .api-endpoint-list code {
+  padding: 1px 4px;
+  font-size: 9px;
+  border-radius: 3px;
+}
+
+/* Profile editor and dialogs share the same small controls at desktop zoom. */
+#view-profile-editor .editor-tabs {
+  gap: 20px;
+}
+
+#view-profile-editor .editor-tabs button,
+#view-profile-editor .editor-back,
+#view-profile-editor .editor-form,
+#view-profile-editor .editor-form label,
+#view-profile-editor .editor-form input,
+#view-profile-editor .editor-form select,
+#view-profile-editor .editor-form textarea,
+#view-profile-editor .settings-row > span,
+#view-profile-editor .profile-summary,
+#view-profile-editor .profile-summary button {
+  font-size: 10px;
+}
+
+#view-profile-editor .environment-editor {
+  gap: 12px;
+  padding: 12px 18px 60px;
+}
+
+#view-profile-editor .editor-form,
+#view-profile-editor .profile-summary {
+  border-radius: var(--ui-radius-sm);
+}
+
+#view-profile-editor .editor-form {
+  padding: 14px;
+}
+
+#view-profile-editor .editor-form label {
+  gap: 4px;
+  margin-bottom: 9px;
+}
+
+#view-profile-editor .editor-form input,
+#view-profile-editor .editor-form select,
+#view-profile-editor .editor-form textarea {
+  min-height: 28px;
+  padding: 5px 7px;
+  border-radius: var(--ui-radius-sm);
+}
+
+#view-profile-editor .editor-panel h3 {
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+#view-profile-editor .form-two,
+#view-profile-editor .form-three,
+#view-profile-editor .privacy-grid {
+  gap: 8px;
+}
+
+#view-profile-editor .privacy-grid,
+#view-profile-editor .advanced-card {
+  padding: 10px;
+  border-radius: var(--ui-radius-sm);
+}
+
+#view-profile-editor .segmented label {
+  padding: 5px 9px;
+  font-size: 10px;
+}
+
+#view-profile-editor .editor-actions {
+  gap: 6px;
+  margin: 14px -14px -14px;
+  padding: 9px 14px;
+}
+
+dialog[open] .dialog-head,
+dialog[open] .dialog-actions {
+  min-height: 0;
+  padding: 9px 12px;
+}
+
+dialog[open] .dialog-head h2,
+dialog[open] .dialog-head h3 {
+  font-size: 14px;
+}
+
+dialog[open] .dialog-head p,
+dialog[open] .dialog-head button,
+dialog[open] label,
+dialog[open] input,
+dialog[open] select,
+dialog[open] textarea {
+  font-size: 10px;
+}
+
+dialog[open] .dialog-actions {
+  gap: 6px;
+}
+
+dialog[open] .dialog-actions button,
+dialog[open] .dialog-head > button {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 10px;
+}
+
+@media (max-width: 760px) {
+  #view-api-mcp .rpa-label {
+    width: 100%;
+    flex-basis: 100%;
+  }
+
+  #view-api-mcp .rpa-input,
+  #view-api-mcp .rpa-code-inline {
+    max-width: 100%;
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+
+  #view-profile-editor .environment-editor {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline: 10px;
+  }
+}
+
+#view-extensions .extension-top,
+#view-extensions .extension-meta,
+#view-extensions .extension-card .card-actions {
+  min-width: 0;
+  gap: 5px;
+}
+
+#view-extensions .extension-icon {
+  --ext-icon: 28px;
+  width: var(--ext-icon) !important;
+  height: var(--ext-icon) !important;
+  min-width: var(--ext-icon) !important;
+  max-width: var(--ext-icon) !important;
+  min-height: var(--ext-icon) !important;
+  max-height: var(--ext-icon) !important;
+  flex-basis: var(--ext-icon) !important;
+  border-radius: 4px !important;
+  font-size: 10px;
+}
+
+#view-extensions .extension-card h3 {
+  min-width: 0;
+  margin: 7px 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+#view-extensions .extension-card p {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+#view-extensions .extension-meta {
+  padding-top: 8px;
+  font-size: 9px;
+}
+
+#view-extensions .extension-card .card-actions button {
+  min-height: 26px;
+  min-width: 0;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+@media (max-width: 760px) {
+  #view-proxies .toolbar .search,
+  #view-extensions .toolbar .search {
+    flex-basis: 100%;
+    width: 100%;
+  }
+
+  #view-extensions .extension-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* Cloud preset chips */
+.cloud-preset-row .cloud-preset-btn { display: inline-flex; align-items: center; gap: 6px; }
+.cloud-preset-row .cloud-preset-btn.active { border-color: var(--ui-accent, #1677ff) !important; color: var(--ui-accent, #1677ff) !important; box-shadow: inset 0 0 0 1px var(--ui-accent, #1677ff); }
+.cloud-preset-row .cloud-preset-btn svg { width: 14px; height: 14px; }

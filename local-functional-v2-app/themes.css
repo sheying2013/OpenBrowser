@@ -1,0 +1,209 @@
+/* Complete UI skins. A skin owns layout, controls, typography and color together. */
+:root {
+  --blue: #000;
+  --blue2: #e0e0e0;
+  --border: #000;
+  --muted: #666;
+  --green: #087f3d;
+  --theme-bg: #ece9e4;
+  --theme-surface: #fff;
+  --theme-surface-alt: #f2f2f2;
+  --theme-active: #e0e0e0;
+  --theme-soft: #e0e0e0;
+  --theme-text: #1a1a1a;
+  --theme-muted: #666;
+  --theme-accent-strong: #000;
+  --theme-shadow: rgba(0, 0, 0, .2);
+  --theme-glow: none;
+  --theme-input: #fff;
+  --theme-table-line: #d8d8d8;
+  --theme-sidebar-status-bg: #fff;
+  --theme-sidebar-status-border: #000;
+  --theme-sidebar-status-text: #000;
+  --theme-code-bg: #111;
+  --theme-code-fg: #f5f5f5;
+}
+
+html, body { background: var(--theme-bg); color: var(--theme-text); }
+body, .content, main { background: var(--theme-bg); }
+.sidebar, header, .table-card, .extension-card, .console, .settings-grid article {
+  background: var(--theme-surface);
+  border-color: var(--border);
+}
+header p, .header-right, .profile-name small, .extension-card p, .extension-meta, .tab-group span { color: var(--theme-muted); }
+th { background: var(--theme-surface-alt); color: var(--theme-muted); }
+tbody tr:hover { background: var(--theme-surface-alt); }
+td, th { border-bottom-color: var(--theme-table-line) !important; color: var(--theme-text); }
+.nav { color: var(--theme-text); }
+/* Icon-only muted tint; label text inherits button color (must NOT force width:20px — that stacks CJK) */
+.nav > i[data-lucide],
+.nav > .lucide,
+.nav > svg:first-child { color: var(--theme-muted); }
+.nav > span[data-i18n],
+.nav > span.nav-text {
+  color: inherit;
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav:hover { background: var(--theme-soft); }
+.nav.active { background: var(--theme-active); color: var(--theme-accent-strong); }
+.nav.active > i[data-lucide],
+.nav.active > .lucide,
+.nav.active > svg:first-child { color: inherit; }
+.tabs button { color: var(--theme-muted); }
+.tabs button.active { border-bottom-color: var(--blue); color: var(--theme-accent-strong); }
+.primary, .new-browser { background: var(--blue); border-color: var(--blue); color: #fff; }
+input, select, textarea { background: var(--theme-input); border-color: var(--border); color: var(--theme-text); }
+.outline, .mini, .action-grid button, .row-actions button { background: var(--theme-surface); border-color: var(--border); color: var(--theme-accent-strong); }
+.engine-badge, .extension-note, .avatar, .help-box, .delay-row { background: var(--theme-soft); color: var(--theme-accent-strong); }
+.toast { background: var(--theme-text); color: var(--theme-bg); }
+
+.theme-picker { position: relative; z-index: 2; }
+/* Theme menu tokens — rem so Electron/page zoom and UI scale stay in sync */
+:root {
+  --theme-menu-width: 20.5rem; /* ~328px @ 16px */
+  --theme-menu-pad: 0.875rem;
+  --theme-option-icon: 3rem; /* 48px */
+  --theme-option-gap: 0.75rem;
+  --theme-option-min-h: 4.5rem;
+}
+.theme-trigger {
+  display: inline-flex; align-items: center; gap: 0.5rem; min-height: 2.125rem; padding: 0 0.7rem;
+  border: 1px solid #000; background: #fff; color: #000; font: inherit; cursor: pointer;
+  box-shadow: 2px 2px 0 #000;
+}
+.theme-trigger:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 #000; }
+.theme-trigger-dot { width: 0.75rem; height: 0.75rem; flex: 0 0 auto; background: #1534b5; border: 2px solid #000; }
+.theme-popover {
+  position: fixed; z-index: 100000;
+  box-sizing: border-box;
+  width: min(var(--theme-menu-width), calc(100vw - 1rem));
+  max-width: calc(100vw - 1rem);
+  max-height: min(80vh, calc(100dvh - 1rem));
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--theme-menu-pad);
+  border: 2px solid #000; background: #c9c9c9; box-shadow: 4px 4px 0 #000;
+}
+.theme-popover[hidden] { display: none !important; }
+.theme-popover-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem;
+  margin-bottom: 0.75rem; min-width: 0;
+}
+.theme-popover-head strong { font-size: 0.9375rem; min-width: 0; }
+.theme-popover-head span {
+  color: #555; font-size: 0.6875rem; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.theme-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; min-width: 0; }
+.theme-option {
+  position: relative;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: var(--theme-option-icon) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--theme-option-gap);
+  min-height: var(--theme-option-min-h);
+  min-width: 0;
+  width: 100%;
+  padding: 0.5rem;
+  border: 2px solid #000; background: #fff; color: #000; text-align: left; cursor: pointer;
+  box-shadow: 2px 2px 0 #000;
+}
+.theme-option > i {
+  box-sizing: border-box;
+  width: var(--theme-option-icon); height: var(--theme-option-icon);
+  min-width: var(--theme-option-icon); min-height: var(--theme-option-icon);
+  flex: 0 0 auto;
+  border: 2px solid #000;
+  background: linear-gradient(135deg, #1534b5 0 48%, #000 48% 52%, #f2f2f2 52% 100%);
+}
+.theme-option > span {
+  display: grid; gap: 0.25rem; min-width: 0; overflow: hidden;
+}
+.theme-option strong {
+  font-size: 0.875rem; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.theme-option small {
+  color: #555; font-size: 0.6875rem; min-width: 0; line-height: 1.35;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.theme-option.active::after {
+  content: ""; position: absolute;
+  right: 0.85rem; top: 50%; width: 0.45rem; height: 0.85rem;
+  margin-top: -0.55rem;
+  border: solid #1534b5; border-width: 0 3px 3px 0; transform: rotate(45deg);
+}
+
+/* Retro Desktop is the product UI, not a color preset. */
+html[data-ui-theme="retro-desktop"] {
+  --ui-sidebar: #e5e5e5;
+  --ui-header: #fff;
+  --ui-surface: #fff;
+  --ui-surface-muted: #f2f2f2;
+  --ui-border: #000;
+  --ui-border-strong: #000;
+  --ui-text: #000;
+  --ui-muted: #666;
+  --ui-accent: #000;
+  --ui-accent-soft: #e0e0e0;
+  --ui-danger: #d00000;
+  --ui-shadow: 2px 2px 0 #000;
+  --ui-radius: 4px;
+  --ui-radius-sm: 2px;
+}
+
+html[data-ui-theme="retro-desktop"] #view-logs { font-family: "Courier New", Consolas, monospace; }
+html[data-ui-theme="retro-desktop"] .retro-log-window {
+  min-height: calc(100vh - 122px); overflow: hidden; border: 2px solid #000; background: #fff;
+  box-shadow: 4px 4px 0 #000;
+}
+html[data-ui-theme="retro-desktop"] .retro-log-titlebar {
+  display: flex; min-height: 46px; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 6px 8px 6px 12px; border-bottom: 2px solid #000; background: #c9c9c9;
+}
+html[data-ui-theme="retro-desktop"] .retro-log-title { display: flex; min-width: 0; align-items: center; gap: 9px; }
+html[data-ui-theme="retro-desktop"] .retro-log-title svg { width: 17px; height: 17px; stroke-width: 2; }
+html[data-ui-theme="retro-desktop"] .retro-log-title strong { font-size: 13px; }
+html[data-ui-theme="retro-desktop"] .retro-log-title span { color: #555; font-size: 10px; }
+html[data-ui-theme="retro-desktop"] .retro-log-titlebar .outline {
+  display: inline-flex; min-height: 29px; align-items: center; gap: 6px; padding: 0 9px;
+  border: 1px solid #000; border-radius: 0; background: #fff; color: #000; box-shadow: 2px 2px 0 #000;
+  font: 700 11px "Courier New", Consolas, monospace; cursor: pointer;
+}
+html[data-ui-theme="retro-desktop"] .retro-log-titlebar .outline:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 #000; }
+html[data-ui-theme="retro-desktop"] .retro-log-titlebar .outline svg { width: 13px; height: 13px; }
+html[data-ui-theme="retro-desktop"] .log-runtime-note {
+  min-height: 28px; padding: 5px 12px; border-bottom: 2px solid #000; background: #fffff0; color: #555;
+}
+html[data-ui-theme="retro-desktop"] .log-runtime-note svg { width: 13px; height: 13px; }
+html[data-ui-theme="retro-desktop"] .retro-log-columns,
+html[data-ui-theme="retro-desktop"] .log-row {
+  display: grid; grid-template-columns: 112px 132px minmax(0, 1fr); column-gap: 0;
+}
+html[data-ui-theme="retro-desktop"] .retro-log-columns {
+  border-bottom: 2px solid #000; background: #f2f2f2; color: #000; font-size: 10px; font-weight: 700;
+}
+html[data-ui-theme="retro-desktop"] .retro-log-columns span,
+html[data-ui-theme="retro-desktop"] .log-row span { min-width: 0; padding: 9px 12px; border-right: 1px solid #000; }
+html[data-ui-theme="retro-desktop"] .retro-log-columns span:last-child,
+html[data-ui-theme="retro-desktop"] .log-row span:last-child { border-right: 0; }
+html[data-ui-theme="retro-desktop"] .log-card {
+  min-height: 420px; max-height: calc(100vh - 216px); overflow: auto; padding: 0;
+  border-radius: 0; background: #fff; color: #111; font-family: inherit;
+}
+html[data-ui-theme="retro-desktop"] .log-row { border-bottom: 1px solid #b8b8b8; font-size: 11px; line-height: 1.45; }
+html[data-ui-theme="retro-desktop"] .log-row:nth-child(even) { background: #f2f2f2; }
+html[data-ui-theme="retro-desktop"] .log-row:hover { background: #e1e7ff; }
+html[data-ui-theme="retro-desktop"] .log-row span:first-child { color: #555; white-space: nowrap; }
+html[data-ui-theme="retro-desktop"] .log-row span:nth-child(2) { color: #1534b5; font-weight: 700; overflow-wrap: anywhere; }
+html[data-ui-theme="retro-desktop"] .log-row span:last-child { overflow-wrap: anywhere; }
+html[data-ui-theme="retro-desktop"] .log-empty {
+  display: grid; min-height: 420px; place-items: center; color: #666; font-size: 12px;
+  background-image: repeating-linear-gradient(0deg, transparent 0 27px, #e4e4e4 27px 28px);
+}
