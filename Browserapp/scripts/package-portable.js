@@ -9,10 +9,11 @@ const {
   findHostWindowsExe,
   findMacBinary,
 } = require('./resolve-host-dist');
+const { ensureHostRuntime } = require('./ensure-host-runtime');
 
 const appRoot = path.resolve(__dirname, '..');
 const packageArch = resolvePackageArch();
-const hostDist = (() => {
+let hostDist = (() => {
   try {
     return resolveHostDist(appRoot);
   } catch (_) {
@@ -111,9 +112,17 @@ function packageWindowsInstaller(packageRoot) {
   console.log('Windows 安装程序：' + output);
 }
 
+function ensureResolvedHostDist() {
+  if (!hostDist) {
+    ensureHostRuntime(appRoot);
+    hostDist = resolveHostDist(appRoot);
+  }
+  return hostDist;
+}
+
 function packageWindows() {
-  if (!hostDist) throw new Error('缺少应用运行环境。请执行 npm install --force --include=dev。');
-  const hostExe = findHostWindowsExe(hostDist);
+  const resolvedHostDist = ensureResolvedHostDist();
+  const hostExe = findHostWindowsExe(resolvedHostDist);
 
   run(process.execPath, [path.join(__dirname, 'build-native.js'), appRoot]);
 
@@ -122,7 +131,7 @@ function packageWindows() {
   const resourceApp = path.join(runtimeRoot, 'resources', 'app');
   removeIfExists(packageRoot);
   fs.mkdirSync(runtimeRoot, { recursive: true });
-  copyRecursive(hostDist, runtimeRoot);
+  copyRecursive(resolvedHostDist, runtimeRoot);
 
   const mainExe = path.join(runtimeRoot, 'OpenBrowser.exe');
   const copiedHostExe = path.join(runtimeRoot, path.basename(hostExe));
@@ -180,8 +189,8 @@ function packageWindows() {
 }
 
 function packageMac() {
-  if (!hostDist) throw new Error('缺少应用运行环境。请执行 npm install --force --include=dev。');
-  const hostApp = findHostAppBundle(hostDist);
+  const resolvedHostDist = ensureResolvedHostDist();
+  const hostApp = findHostAppBundle(resolvedHostDist);
 
   run(process.execPath, [path.join(__dirname, 'build-native.js'), appRoot]);
 
