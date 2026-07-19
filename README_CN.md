@@ -1,6 +1,6 @@
-# OpenBrowser
-
 <div align="center">
+
+<h1>OpenBrowser</h1>
 
 [![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/sheying2013/OpenBrowser)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](https://github.com/sheying2013/OpenBrowser)
