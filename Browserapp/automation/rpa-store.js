@@ -122,7 +122,7 @@ class RpaStore {
   }
 
   static stripExternalBranding(value) {
-    // Whole-token only: bare "ads" / "adspower" — never substrings like "Leads".
+    // Whole-token match only; avoid stripping substrings inside ordinary words.
     return String(value || '')
       .replace(/\bads(?:power)?\b/gi, '')
       .replace(/\s{2,}/g, ' ')
@@ -188,7 +188,7 @@ class RpaStore {
 
   async ensureLocalCatalogTemplates() {
     const catalogTemplates = Array.isArray(localCatalog.templates) ? localCatalog.templates : [];
-    // Collapse historical id variants (ads-27 / remote-27 / catalog-ads-27) onto catalog-<id>.
+    // Collapse historical external/catalog id variants onto catalog-<id>.
     const byCanonical = new Map();
     const retained = [];
     for (const template of this.data.templates) {
