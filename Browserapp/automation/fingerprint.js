@@ -84,6 +84,149 @@ const SPEECH_VOICE_POOL = [
   { name: 'Microsoft David - English (United States)', lang: 'en-US' },
 ];
 
+
+/** High-risk hosts where canvas/webgl noise stays tighter for session consistency. */
+const DEFAULT_STABILITY_HOSTS = [
+  'amazon.com', 'amazon.co.jp', 'amazon.co.uk', 'amazon.de', 'amazon.fr', 'amazon.es', 'amazon.it',
+  'amazonaws.com', 'smile.amazon.com',
+  'shopee.com', 'shopee.sg', 'shopee.co.id', 'shopee.tw', 'shopee.vn', 'shopee.co.th', 'shopee.ph', 'shopee.com.my', 'shopee.com.br',
+  'lazada.com', 'lazada.sg', 'lazada.co.id', 'lazada.com.my', 'lazada.vn', 'lazada.co.th', 'lazada.ph',
+  'tiktok.com', 'tiktokv.com', 'bytedance.com',
+  'ebay.com', 'ebay.co.uk', 'ebay.de',
+  'paypal.com', 'stripe.com', 'checkout.stripe.com',
+  'binance.com', 'coinbase.com', 'okx.com', 'bybit.com',
+  'facebook.com', 'instagram.com', 'twitter.com', 'x.com', 'linkedin.com',
+  'google.com', 'accounts.google.com', 'gmail.com',
+  'microsoft.com', 'login.live.com', 'account.microsoft.com',
+  'apple.com', 'icloud.com',
+  'browserleaks.com', 'browserleaks.org', 'creepjs.com', 'amiunique.org', 'coveryourtracks.eff.org',
+  'fingerprintjs.com', 'fingerprint.com', 'pixelscan.net', 'sannysoft.com', 'bot.sannysoft.com',
+  'iphey.com', 'whoer.net', 'whatismybrowser.com', 'deviceinfo.me',
+];
+
+/** Hosts that should keep normal noise even when parent domains match. */
+const DEFAULT_STABILITY_SKIP_HOSTS = [
+  'sephora.com', 'whatsapp.com', 'web.whatsapp.com', 'dhgate.com', 'cdn.', 'static.',
+];
+
+function normalizeHost(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/:\d+$/, '')
+    .replace(/^\*\./, '')
+    .replace(/^\.+/, '');
+}
+
+function hostMatchesPattern(host, pattern) {
+  const h = normalizeHost(host);
+  const p = normalizeHost(pattern);
+  if (!h || !p) return false;
+  if (p.endsWith('.')) return h === p.slice(0, -1) || h.endsWith('.' + p.slice(0, -1)) || h.startsWith(p);
+  if (h === p) return true;
+  return h.endsWith('.' + p);
+}
+
+function listIncludesHost(list, host) {
+  if (!Array.isArray(list) || !list.length) return false;
+  const h = normalizeHost(host);
+  if (!h) return false;
+  return list.some((item) => hostMatchesPattern(h, item));
+}
+
+/**
+ * Resolve site-aware canvas/webgl stability.
+ * mode: off | auto | force
+ * On high-risk hosts (not skipped): reduced noise amplitude for tighter consistency.
+ */
+function resolveStabilityPolicy(privacy = {}, options = {}) {
+  const fpIn = privacy.fingerprint && typeof privacy.fingerprint === 'object' ? privacy.fingerprint : {};
+  const modeRaw = String(options.mode || fpIn.stabilityMode || privacy.stabilityMode || 'auto').toLowerCase();
+  const mode = ['off', 'auto', 'force'].includes(modeRaw) ? modeRaw : 'auto';
+  const customHosts = Array.isArray(fpIn.stabilityHosts)
+    ? fpIn.stabilityHosts
+    : (Array.isArray(privacy.stabilityHosts) ? privacy.stabilityHosts : null);
+  const customSkip = Array.isArray(fpIn.stabilitySkipHosts)
+    ? fpIn.stabilitySkipHosts
+    : (Array.isArray(privacy.stabilitySkipHosts) ? privacy.stabilitySkipHosts : null);
+  const hosts = (customHosts && customHosts.length ? customHosts : DEFAULT_STABILITY_HOSTS)
+    .map(normalizeHost).filter(Boolean).slice(0, 800);
+  const skipHosts = (customSkip && customSkip.length ? customSkip : DEFAULT_STABILITY_SKIP_HOSTS)
+    .map(normalizeHost).filter(Boolean).slice(0, 200);
+  const hamming = Math.min(64, Math.max(1, Number(fpIn.stabilityHamming ?? privacy.stabilityHamming) || 12));
+  const maxWidth = Math.min(4096, Math.max(64, Number(fpIn.stabilityMaxWidth ?? privacy.stabilityMaxWidth) || 600));
+  const maxHeight = Math.min(4096, Math.max(64, Number(fpIn.stabilityMaxHeight ?? privacy.stabilityMaxHeight) || 600));
+  const square = Math.min(64, Math.max(2, Number(fpIn.stabilitySquare ?? privacy.stabilitySquare) || 8));
+  const host = normalizeHost(options.host || options.hostname || '');
+  const skipped = host ? listIncludesHost(skipHosts, host) : false;
+  const matched = host ? listIncludesHost(hosts, host) : false;
+  let active = false;
+  if (mode === 'force') active = !skipped;
+  else if (mode === 'auto') active = matched && !skipped;
+  // reduced amplitude: 1 (stable) vs 3 (default) pixel delta range
+  const noiseAmplitude = active ? 1 : 3;
+  const sampleStepDivisor = active ? 128 : 64;
+  return {
+    mode,
+    active,
+    matched,
+    skipped,
+    host: host || null,
+    hosts,
+    skipHosts,
+    hamming,
+    maxWidth,
+    maxHeight,
+    square,
+    noiseAmplitude,
+    sampleStepDivisor,
+  };
+}
+
+function matchStabilityHost(host, privacy = {}) {
+  return resolveStabilityPolicy(privacy, { host }).active;
+}
+
+
+/** Deterministic battery snapshot derived from seed. */
+function createBatteryFromSeed(seedInput, override = null) {
+  if (override && typeof override === 'object') {
+    const level = Math.min(1, Math.max(0, Number(override.level)));
+    const charging = override.charging !== false && override.charging !== 0 && override.charging !== '0';
+    return {
+      charging,
+      // null means "unknown / Infinity" for JSON-safe transport into injection
+      chargingTime: Number.isFinite(Number(override.chargingTime))
+        ? Math.max(0, Number(override.chargingTime))
+        : (charging ? 0 : null),
+      dischargingTime: Number.isFinite(Number(override.dischargingTime))
+        ? Math.max(0, Number(override.dischargingTime))
+        : (charging ? null : 7200),
+      level: Number.isFinite(level) ? level : 0.87,
+    };
+  }
+  const seed = hashSeed(String(seedInput || 'battery'));
+  const levelRaw = 55 + (u32(seed, 0) % 40); // 0.55 - 0.94
+  const charging = (u32(seed, 4) % 5) !== 0; // mostly charging on desktop
+  const level = levelRaw / 100;
+  if (charging) {
+    return {
+      charging: true,
+      chargingTime: 600 + (u32(seed, 8) % 5400),
+      dischargingTime: null,
+      level,
+    };
+  }
+  return {
+    charging: false,
+    chargingTime: null,
+    dischargingTime: 1800 + (u32(seed, 12) % 14400),
+    level,
+  };
+}
+
 /** Seed-stable mic/camera/speaker labels for mediaDevices spoof. */
 function createMediaDevicesFromSeed(seedInput, options = {}) {
   const raw = String(seedInput || 'default');
@@ -104,10 +247,14 @@ function createMediaDevicesFromSeed(seedInput, options = {}) {
   }
   const tpl = MEDIA_DEVICE_TEMPLATES[acc % MEDIA_DEVICE_TEMPLATES.length] || MEDIA_DEVICE_TEMPLATES[0];
   const emptyLabels = options.emptyLabels === true;
+  const labelOverride = options.labels && typeof options.labels === 'object' ? options.labels : null;
+  const inputLabel = emptyLabels ? '' : String(labelOverride?.audioinput || labelOverride?.input || tpl.input);
+  const videoLabel = emptyLabels ? '' : String(labelOverride?.videoinput || labelOverride?.video || `Integrated Camera (${head}:${tail})`);
+  const outputLabel = emptyLabels ? '' : String(labelOverride?.audiooutput || labelOverride?.output || tpl.output);
   const devices = [
-    { kind: 'audioinput', label: emptyLabels ? '' : tpl.input, deviceId: `ob-ai-${head}`, groupId: `ob-g-${tail}` },
-    { kind: 'videoinput', label: emptyLabels ? '' : `Integrated Camera (${head}:${tail})`, deviceId: `ob-vi-${tail}`, groupId: `ob-g-${tail}` },
-    { kind: 'audiooutput', label: emptyLabels ? '' : tpl.output, deviceId: `ob-ao-${head}${tail.slice(0, 2)}`, groupId: `ob-g-${tail}` },
+    { kind: 'audioinput', label: inputLabel, deviceId: `ob-ai-${head}`, groupId: `ob-g-${tail}` },
+    { kind: 'videoinput', label: videoLabel, deviceId: `ob-vi-${tail}`, groupId: `ob-g-${tail}` },
+    { kind: 'audiooutput', label: outputLabel, deviceId: `ob-ao-${head}${tail.slice(0, 2)}`, groupId: `ob-g-${tail}` },
   ];
   if (Array.isArray(options.extra) && options.extra.length) {
     for (const item of options.extra.slice(0, 8)) {
@@ -254,8 +401,18 @@ function buildFingerprint(profile = {}) {
   const audioMode = mode('audio', ['real', 'noise', 'muted'], privacy.audio === 'muted' ? 'muted' : 'noise');
   const clientRectsMode = mode('clientRects', ['real', 'noise'], 'noise');
   const webrtcMode = mode('webrtc', ['real', 'proxy', 'disabled'], privacy.webrtc || 'proxy');
-  const mediaDevicesMode = mode('mediaDevices', ['real', 'noise', 'empty'], privacy.mediaDevices === 'real' ? 'real' : (privacy.mediaDevices === 'empty' ? 'empty' : 'noise'));
+  const webrtcPolicyRaw = Number(fpIn.webrtcPolicy ?? privacy.webrtcPolicy);
+  const webrtcPolicy = Number.isFinite(webrtcPolicyRaw)
+    ? Math.min(3, Math.max(0, Math.round(webrtcPolicyRaw)))
+    : (webrtcMode === 'disabled' ? 0 : (webrtcMode === 'proxy' ? 3 : 1));
+  const mediaDevicesMode = mode('mediaDevices', ['real', 'noise', 'empty'], privacy.mediaDevices === 'real' ? 'real' : (privacy.mediaDevices === 'empty' ? 'empty' : (privacy.media === 'noise' ? 'noise' : (privacy.media === 'blocked' ? 'empty' : 'noise'))));
   const speechMode = mode('speech', ['real', 'noise', 'blocked'], privacy.speech === 'blocked' ? 'blocked' : (privacy.speech === 'noise' ? 'noise' : 'real'));
+  const batteryMode = mode('battery', ['real', 'noise', 'blocked'], privacy.battery === 'blocked' ? 'blocked' : (privacy.battery === 'real' ? 'real' : 'noise'));
+  const webgpuMode = mode('webgpu', ['real', 'blocked', 'webgl'], privacy.webgpu === 'blocked' ? 'blocked' : (privacy.webgpu === 'webgl' ? 'webgl' : 'real'));
+  const stability = resolveStabilityPolicy(privacy, {
+    host: fpIn.stabilityHost || privacy.stabilityHost || profile.stabilityHost || '',
+    mode: fpIn.stabilityMode || privacy.stabilityMode,
+  });
 
   // --- User-Agent + Client Hints ---
   // Custom profile.userAgent wins; otherwise deterministic seeded UA.
@@ -331,12 +488,21 @@ function buildFingerprint(profile = {}) {
   const screenX = Math.max(availLeft, Math.round(Number(fpIn.screenX) || availLeft));
   const screenY = Math.max(availTop, Math.round(Number(fpIn.screenY) || availTop));
 
+  const mediaLabelTemplates = (fpIn.mediaLabels && typeof fpIn.mediaLabels === 'object')
+    ? fpIn.mediaLabels
+    : ((privacy.mediaLabels && typeof privacy.mediaLabels === 'object') ? privacy.mediaLabels : null);
   const mediaDevices = mediaDevicesMode === 'real'
     ? null
     : createMediaDevicesFromSeed(stableIdentity + ':' + seed.toString('hex').slice(0, 12), {
       emptyLabels: mediaDevicesMode === 'empty',
       extra: Array.isArray(fpIn.mediaDevices) ? fpIn.mediaDevices : null,
+      labels: mediaLabelTemplates,
     });
+  const battery = batteryMode === 'real'
+    ? null
+    : (batteryMode === 'blocked'
+      ? { blocked: true }
+      : createBatteryFromSeed(stableIdentity + ':battery:' + seed.toString('hex').slice(0, 8), fpIn.battery || privacy.batterySnapshot || null));
   const speechVoices = createSpeechVoicesFromSeed(
     stableIdentity + ':speech:' + seed.toString('hex').slice(0, 8),
     Array.isArray(fpIn.languages) ? fpIn.languages : languages,
@@ -378,6 +544,7 @@ function buildFingerprint(profile = {}) {
     renderer: fpIn.webglRenderer || webglPreset.renderer,
     mark: Number.isFinite(Number(fpIn.webglId)) ? Number(fpIn.webglId) : webglId,
     gpu: webglGpu,
+    stability,
   };
   webgl.fpPayload = buildWebglFpPayload(webgl);
 
@@ -409,6 +576,7 @@ function buildFingerprint(profile = {}) {
     canvas: {
       mode: canvasMode,
       mark: Number.isFinite(Number(fpIn.canvasId)) ? Number(fpIn.canvasId) : canvasId,
+      stability,
     },
     audio: {
       mode: audioMode,
@@ -419,11 +587,22 @@ function buildFingerprint(profile = {}) {
       mark: Number.isFinite(Number(fpIn.clientRectsId)) ? Number(fpIn.clientRectsId) : clientRectsId,
     },
     webrtc: webrtcMode,
+    webrtcPolicy,
     webrtcAddress,
+    battery: {
+      mode: batteryMode,
+      value: battery,
+    },
+    webgpu: {
+      mode: webgpuMode,
+      gpu: webglGpu,
+    },
     mediaDevices: {
       mode: mediaDevicesMode,
       devices: mediaDevices,
+      labels: mediaLabelTemplates,
     },
+    stability,
     speech: {
       mode: speechMode,
       voices: speechVoices,
@@ -443,6 +622,10 @@ function buildFingerprint(profile = {}) {
       clientRectFp: Number.isFinite(Number(fpIn.clientRectsId)) ? Number(fpIn.clientRectsId) : clientRectsId,
       maxTouchPoints: Number(fpIn.maxTouchPoints) >= 0 ? Number(fpIn.maxTouchPoints) : 0,
       mediaDevices,
+      mediaLabels: mediaLabelTemplates,
+      battery,
+      webrtcPolicy,
+      stability,
       userAgentMetadata: uaProfile.metadata,
       webglFp: webgl.fpPayload,
     },
@@ -516,6 +699,7 @@ function fingerprintConsistencyIssues(fp) {
  * Document-start injection implementing noise/block modes.
  */
 function buildInjectionScript(fp) {
+  const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     platform: fp.platform,
     userAgent: fp.userAgent,
@@ -534,13 +718,28 @@ function buildInjectionScript(fp) {
     audio: fp.audio,
     clientRects: fp.clientRects,
     webrtc: fp.webrtc,
+    webrtcPolicy: fp.webrtcPolicy,
     webrtcAddress: fp.webrtcAddress || null,
+    battery: fp.battery || null,
+    webgpu: fp.webgpu || null,
     mediaDevices: fp.mediaDevices || null,
     speech: fp.speech || null,
     maxTouchPoints: fp.maxTouchPoints,
     vendor: fp.vendor || fp.uaProfile?.vendor || 'Google Inc.',
     doNotTrack: fp.doNotTrack,
     seed: fp.seed,
+    stability: {
+      mode: stability.mode,
+      active: Boolean(stability.active),
+      noiseAmplitude: Number(stability.noiseAmplitude) || 3,
+      sampleStepDivisor: Number(stability.sampleStepDivisor) || 64,
+      hamming: Number(stability.hamming) || 12,
+      maxWidth: Number(stability.maxWidth) || 600,
+      maxHeight: Number(stability.maxHeight) || 600,
+      square: Number(stability.square) || 8,
+      hosts: Array.isArray(stability.hosts) ? stability.hosts.slice(0, 800) : [],
+      skipHosts: Array.isArray(stability.skipHosts) ? stability.skipHosts.slice(0, 200) : [],
+    },
   });
 
   // UA + Client Hints (userAgentData) injected first
@@ -556,12 +755,56 @@ function buildInjectionScript(fp) {
     let x = Math.sin((n + 1) * seedNum) * 10000;
     return x - Math.floor(x);
   };
+  const normalizeHost = (value) => String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/:\d+$/, '')
+    .replace(/^\*\./, '');
+  const hostMatches = (host, pattern) => {
+    const h = normalizeHost(host);
+    const p = normalizeHost(pattern);
+    if (!h || !p) return false;
+    if (h === p) return true;
+    return h.endsWith('.' + p);
+  };
+  const listHasHost = (list, host) => Array.isArray(list) && list.some((item) => hostMatches(host, item));
+  const currentHost = () => {
+    try { return normalizeHost(location && location.hostname); } catch (_) { return ''; }
+  };
+  const stabilityActiveNow = () => {
+    const st = CFG.stability || {};
+    if (st.mode === 'force') {
+      return !listHasHost(st.skipHosts, currentHost());
+    }
+    if (st.mode === 'off') return false;
+    const host = currentHost();
+    if (!host) return Boolean(st.active);
+    if (listHasHost(st.skipHosts, host)) return false;
+    if (listHasHost(st.hosts, host)) return true;
+    return Boolean(st.active);
+  };
+  const noiseAmplitudeNow = () => stabilityActiveNow() ? (Number(CFG.stability?.noiseAmplitude) || 1) : 3;
+  const sampleStepDivisorNow = () => stabilityActiveNow() ? (Number(CFG.stability?.sampleStepDivisor) || 128) : 64;
   const applyCanvasNoise = (imageData, mark) => {
     try {
       const data = imageData.data;
-      for (let i = 0; i < data.length; i += 4) {
-        const n = Math.floor(noise(i + mark) * 3) - 1;
-        data[i] = Math.max(0, Math.min(255, data[i] + n));
+      const amp = noiseAmplitudeNow();
+      const maxW = Number(CFG.stability?.maxWidth) || 600;
+      const maxH = Number(CFG.stability?.maxHeight) || 600;
+      const width = imageData.width || 0;
+      const height = imageData.height || 0;
+      const limitW = width > 0 ? Math.min(width, maxW) : width;
+      const limitH = height > 0 ? Math.min(height, maxH) : height;
+      const square = Math.max(2, Number(CFG.stability?.square) || 8);
+      for (let y = 0; y < (limitH || height); y += square) {
+        for (let x = 0; x < (limitW || width); x += square) {
+          const px = ((y * width) + x) * 4;
+          if (px + 3 >= data.length) continue;
+          const n = Math.floor(noise(px + mark) * amp) - Math.floor(amp / 2);
+          data[px] = Math.max(0, Math.min(255, data[px] + n));
+        }
       }
     } catch (_) {}
     return imageData;
@@ -776,9 +1019,10 @@ function buildInjectionScript(fp) {
           try {
             const pixels = args[6];
             if (pixels && pixels.length) {
-              const step = Math.max(4, Math.floor(pixels.length / 64));
+              const amp = noiseAmplitudeNow();
+              const step = Math.max(4, Math.floor(pixels.length / sampleStepDivisorNow()));
               for (let i = 0; i < pixels.length; i += step) {
-                const n = Math.floor(noise(i + mark) * 3) - 1;
+                const n = Math.floor(noise(i + mark) * amp) - Math.floor(amp / 2);
                 pixels[i] = Math.max(0, Math.min(255, (pixels[i] || 0) + n));
               }
             }
@@ -960,6 +1204,47 @@ function buildInjectionScript(fp) {
     } catch (_) {}
   }
 
+
+  // --- battery ---
+  if (CFG.battery && CFG.battery.mode === 'blocked') {
+    try {
+      if (navigator.getBattery) {
+        const blocked = function getBattery() {
+          return Promise.reject(new DOMException('Battery status is disabled by this profile', 'NotAllowedError'));
+        };
+        Object.defineProperty(navigator, 'getBattery', {
+          configurable: true, writable: true, value: nativeLike(blocked, navigator.getBattery),
+        });
+      }
+    } catch (_) {}
+  } else if (CFG.battery && CFG.battery.mode === 'noise' && CFG.battery.value && !CFG.battery.value.blocked) {
+    try {
+      const snap = CFG.battery.value;
+      const makeManager = () => {
+        const manager = {
+          charging: Boolean(snap.charging),
+          chargingTime: snap.chargingTime == null ? Infinity : Number(snap.chargingTime),
+          dischargingTime: snap.dischargingTime == null ? Infinity : Number(snap.dischargingTime),
+          level: Math.min(1, Math.max(0, Number(snap.level) || 0)),
+          addEventListener() {},
+          removeEventListener() {},
+          dispatchEvent() { return false; },
+          onchargingchange: null,
+          onchargingtimechange: null,
+          ondischargingtimechange: null,
+          onlevelchange: null,
+        };
+        return manager;
+      };
+      if (navigator.getBattery) {
+        const spoofed = function getBattery() { return Promise.resolve(makeManager()); };
+        Object.defineProperty(navigator, 'getBattery', {
+          configurable: true, writable: true, value: nativeLike(spoofed, navigator.getBattery),
+        });
+      }
+    } catch (_) {}
+  }
+
   // --- WebGPU adapter info when gpu vendor/architecture is configured ---
   if (CFG.webgl && CFG.webgl.gpu && (CFG.webgl.gpu.vendor || CFG.webgl.gpu.architecture) && navigator.gpu) {
     try {
@@ -990,6 +1275,7 @@ function buildInjectionScript(fp) {
 
 /** Worker-safe subset injected before attached workers are resumed. */
 function buildWorkerInjectionScript(fp) {
+  const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     platform: fp.platform,
     userAgent: fp.userAgent,
@@ -1008,16 +1294,44 @@ function buildWorkerInjectionScript(fp) {
     },
     canvas: fp.canvas,
     seed: fp.seed,
+    stability: {
+      active: Boolean(stability.active),
+      noiseAmplitude: Number(stability.noiseAmplitude) || 3,
+      sampleStepDivisor: Number(stability.sampleStepDivisor) || 64,
+      maxWidth: Number(stability.maxWidth) || 600,
+      maxHeight: Number(stability.maxHeight) || 600,
+      square: Number(stability.square) || 8,
+    },
   });
   return `(() => {
   const CFG = ${json};
   const seedNum = parseInt(String(CFG.seed || '1').slice(0, 8), 16) || 1;
   const noise = (n) => { const x = Math.sin((n + 1) * seedNum) * 10000; return x - Math.floor(x); };
+  const amp = Number(CFG.stability?.noiseAmplitude) || 3;
+  const square = Math.max(2, Number(CFG.stability?.square) || 8);
   const applyNoise = (imageData, mark) => {
     try {
-      for (let i = 0; i < imageData.data.length; i += 4) {
-        const n = Math.floor(noise(i + mark) * 3) - 1;
-        imageData.data[i] = Math.max(0, Math.min(255, imageData.data[i] + n));
+      const data = imageData.data;
+      const width = imageData.width || 0;
+      const height = imageData.height || 0;
+      const maxW = Number(CFG.stability?.maxWidth) || 600;
+      const maxH = Number(CFG.stability?.maxHeight) || 600;
+      const limitW = width > 0 ? Math.min(width, maxW) : width;
+      const limitH = height > 0 ? Math.min(height, maxH) : height;
+      if (width > 0 && height > 0) {
+        for (let y = 0; y < limitH; y += square) {
+          for (let x = 0; x < limitW; x += square) {
+            const px = ((y * width) + x) * 4;
+            if (px + 3 >= data.length) continue;
+            const n = Math.floor(noise(px + mark) * amp) - Math.floor(amp / 2);
+            data[px] = Math.max(0, Math.min(255, data[px] + n));
+          }
+        }
+      } else {
+        for (let i = 0; i < data.length; i += 4) {
+          const n = Math.floor(noise(i + mark) * amp) - Math.floor(amp / 2);
+          data[i] = Math.max(0, Math.min(255, data[i] + n));
+        }
       }
     } catch (_) {}
     return imageData;
@@ -1135,8 +1449,11 @@ function buildWorkerInjectionScript(fp) {
         try {
           const pixels = args[6];
           const step = Math.max(4, Math.floor((pixels?.length || 0) / 64));
-          for (let i = 0; pixels && i < pixels.length; i += step) {
-            const n = Math.floor(noise(i + mark) * 3) - 1;
+          const ampW = Number(CFG.stability?.noiseAmplitude) || 3;
+          const stepDiv = Number(CFG.stability?.sampleStepDivisor) || 64;
+          const step2 = Math.max(4, Math.floor((pixels?.length || 0) / stepDiv));
+          for (let i = 0; pixels && i < pixels.length; i += step2) {
+            const n = Math.floor(noise(i + mark) * ampW) - Math.floor(ampW / 2);
             pixels[i] = Math.max(0, Math.min(255, (pixels[i] || 0) + n));
           }
         } catch (_) {}
@@ -1284,9 +1601,14 @@ module.exports = {
   hashSeed,
   createMediaDevicesFromSeed,
   createSpeechVoicesFromSeed,
+  createBatteryFromSeed,
   buildWebglFpPayload,
   audioMarkFromSeed,
   clientRectMarkFromSeed,
+  resolveStabilityPolicy,
+  matchStabilityHost,
+  DEFAULT_STABILITY_HOSTS,
+  DEFAULT_STABILITY_SKIP_HOSTS,
   WEBGL_PRESETS,
   // re-export UA helpers for UI / selftest
   buildUaProfile,
