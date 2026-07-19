@@ -7,56 +7,73 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![Node](https://img.shields.io/badge/Node.js-LTS-339933.svg)](https://nodejs.org/)
 
-**本地指纹浏览器 · 多环境隔离 · 代理 / 指纹 / 同步 / RPA**
+**Multi-language support / 多国语言支持**
 
-**中文** | [English](./README_EN.md)
+🇺🇸 **English** · 🇨🇳 [中文](./README_CN.md)
+
+**Local fingerprint browser · Isolated Chromium profiles · Proxy / fingerprint / sync / RPA**
 
 </div>
 
 ---
 
-## 简介
+## Overview
 
-OpenBrowser 是一款本地桌面指纹浏览器，用来管理多套互相隔离的 Chromium 环境。代理、指纹、扩展、窗口同步、本机 API、MCP 和本地 RPA 都在一个应用里完成。界面支持中文 / 英文切换。
+OpenBrowser is a local desktop fingerprint browser for managing multiple isolated Chromium environments. It combines profile isolation, proxy configuration, browser fingerprint controls, extension management, window synchronization, a local API, MCP integration, and local RPA workflows in one desktop app.
 
-> 使用前请阅读 [免责声明](./DISCLAIMER.md)。不保证匿名、指纹唯一或对特定网站的兼容性。
+The app supports multiple UI languages, currently including English and Chinese.
 
-## 界面预览
+> Read the [disclaimer](./DISCLAIMER.md) before use. OpenBrowser does not guarantee anonymity, unique fingerprints, or compatibility with any specific website.
 
-| 主界面 | 环境管理 |
+## Contents
+
+- [Screenshots](#screenshots)
+- [Key features](#key-features)
+- [Supported platforms](#supported-platforms)
+- [Quick start](#quick-start)
+- [Packaging](#packaging)
+- [Self-tests](#self-tests)
+- [Project layout](#project-layout)
+- [Data and security](#data-and-security)
+
+## Screenshots
+
+| Overview | Environments |
 | :---: | :---: |
-| ![主界面](./docs/screenshots/openbrowser-overview.png) | ![环境管理](./docs/screenshots/environment-management.png) |
-| 主导航与模块入口 | Profile 列表、启停、分组 |
+| ![Overview](./docs/screenshots/openbrowser-overview.png) | ![Environments](./docs/screenshots/environment-management.png) |
+| Main navigation and module entry points | Profiles, start/stop controls, and groups |
 
-| 环境 / 指纹编辑 | 本地设置 |
+| Profile / fingerprint | Local settings |
 | :---: | :---: |
-| ![环境编辑](./docs/screenshots/profile-fingerprint-editor.png) | ![本地设置](./docs/screenshots/automation-and-system.png) |
-| 代理、指纹、扩展 | 主题、语言、系统项 |
+| ![Profile editor](./docs/screenshots/profile-fingerprint-editor.png) | ![Settings](./docs/screenshots/automation-and-system.png) |
+| Proxy, fingerprint, and extension settings | Theme, language, and system options |
 
-## 功能
+## Key features
 
-- **环境隔离** — 独立 Profile，Cookie / 缓存 / 存储互不混用
-- **批量管理** — 分组、标签、批量启停、日志、窗口尺寸
-- **代理** — HTTP / HTTPS / SOCKS，按环境绑定，支持出口检测
-- **指纹参数** — 平台、语言、时区、UA、Canvas、WebGL、WebRTC 等
-- **扩展中心** — 内置 / 推荐 / 本地扩展，按环境加载
-- **窗口同步** — CDP 同步点击、滚动、输入、标签页
-- **本地 RPA** — 流程与任务：打开页面、等待、点击、输入、截图
-- **Local API / MCP** — 默认 `127.0.0.1:50325`，可接外部工具
-- **独立内核** — 可下载独立 Chromium，或指定本地路径
-- **备份** — 本地、WebDAV、GitHub、各家网盘（主动配置才出网）
+| Area | What it provides |
+| --- | --- |
+| **Profile isolation** | Separate Chromium profiles so cookies, cache, and storage do not mix. |
+| **Batch management** | Groups, tags, bulk start/stop, logs, and window sizing. |
+| **Proxy support** | HTTP / HTTPS / SOCKS proxies per environment, with egress checks. |
+| **Fingerprint controls** | Platform, language, timezone, user agent, Canvas, WebGL, WebRTC, and more. |
+| **Extension center** | Built-in, recommended, and local extensions loaded per environment. |
+| **Window sync** | CDP-based synchronization for clicks, scrolling, input, and tabs. |
+| **Local RPA** | Flows for navigation, waiting, clicking, typing, and screenshots. |
+| **Local API / MCP** | Local integration endpoint on `127.0.0.1:50325` by default. |
+| **Independent kernel** | Download a standalone Chromium kernel or use a custom local path. |
+| **Backup options** | Local, WebDAV, GitHub, and cloud-drive backups when explicitly enabled. |
 
-## 支持平台
+## Supported platforms
 
-| 平台 | 架构 | 状态 |
+| Platform | Architecture | Status |
 | --- | --- | --- |
-| Windows | x86_64 | ✅ |
-| macOS | x86_64 | ✅ |
-| macOS | arm64 | ✅ |
+| Windows | x86_64 | ✅ Supported |
+| macOS | x86_64 | ✅ Supported |
+| macOS | arm64 | ✅ Supported |
 
-## 快速开始
+## Quick start
 
-需要 Node.js LTS 和 npm：
+Requires Node.js LTS and npm.
 
 ```bash
 cd Browserapp
@@ -65,70 +82,83 @@ npm run selftest
 npm start
 ```
 
-或从仓库根目录启动：
+Or use the launcher scripts from the repository root:
 
-- macOS：[`start-test.command`](./start-test.command)
-- Windows：[`start-test.cmd`](./start-test.cmd)
+| Platform | Launcher |
+| --- | --- |
+| macOS | [`start-test.command`](./start-test.command) |
+| Windows | [`start-test.cmd`](./start-test.cmd) |
 
-## 打包
+## Packaging
 
 ```bash
 cd Browserapp
-# 可选：OPENBROWSER_PACKAGE_ARCH=x86_64 或 arm64
+# Optional: OPENBROWSER_PACKAGE_ARCH=x86_64 or arm64
 npm run package:portable
 ```
 
-产物在 `Browserapp/dist/`。Windows 含 `START.cmd`，macOS 含 `OpenBrowser.app` 与 `启动.command`。
+Build output is written to `Browserapp/dist/`.
 
-## 自测
+| Platform | Output notes |
+| --- | --- |
+| Windows | Includes `START.cmd`. |
+| macOS | Includes `OpenBrowser.app` and `启动.command`. |
+
+## Self-tests
 
 ```bash
 cd Browserapp
-npm run selftest              # 基础
-npm run selftest:automation   # 自动化 / RPA
-npm run selftest:protocol     # 协议 / 同步
-npm run selftest:isolation    # 隔离
-npm run selftest:kernel       # 内核
-npm run selftest:cloud        # 云同步策略
+npm run selftest
+npm run selftest:automation
+npm run selftest:protocol
+npm run selftest:isolation
+npm run selftest:kernel
+npm run selftest:cloud
 ```
 
-## 项目结构
+## Project layout
 
 ```text
 OpenBrowser/
-├── Browserapp/            # 应用源码
-├── docs/screenshots/      # 截图
-├── start-test.command     # macOS 启动
-├── start-test.cmd         # Windows 启动
+├── Browserapp/            # App source
+├── docs/screenshots/      # Screenshots
+├── start-test.command     # macOS launcher
+├── start-test.cmd         # Windows launcher
 ├── DISCLAIMER.md
 ├── LICENSE
-├── README.md              # 中文说明
-└── README_EN.md           # English
+├── README.md              # English documentation
+└── README_CN.md           # Chinese documentation
 ```
 
-仓库只含源码与文档，不含 Profile、Cookie、代理凭据、内核二进制或安装包。
+This repository contains source code and documentation only. It does not include profiles, cookies, proxy credentials, kernel binaries, or installers.
 
-## 数据与安全
+## Data and security
 
-本地 API 默认只监听回环地址；设置了 `OPENBROWSER_API_KEY` 时请求需带 `api-key` 头。第三方组件见 [`THIRD-PARTY-NOTICES.md`](./Browserapp/THIRD-PARTY-NOTICES.md)。
+- The local API binds to loopback by default.
+- If `OPENBROWSER_API_KEY` is set, requests must include the `api-key` header.
+- Third-party notices are documented in [`THIRD-PARTY-NOTICES.md`](./Browserapp/THIRD-PARTY-NOTICES.md).
+- Cloud backup integrations only connect outward after explicit user configuration.
 
-## 文档
+## Documentation
 
-- [自动化模块](./Browserapp/automation/README.md)
-- [免责声明](./DISCLAIMER.md)
+- [Automation module](./Browserapp/automation/README.md)
+- [Disclaimer](./DISCLAIMER.md)
+- [Third-party notices](./Browserapp/THIRD-PARTY-NOTICES.md)
 
 ---
 
 <details>
-<summary>第三方内核来源</summary>
+<summary>Third-party kernel sources</summary>
 
 <br>
 
-独立内核来自 [Donut Browser](https://github.com/zhom/donutbrowser) / [Wayfern](https://wayfern.com/)（作者 [zhom](https://github.com/zhom)，更新源 [wayfern.json](https://donutbrowser.com/wayfern.json)，[服务条款](https://wayfern.com/tos)）。本仓库不重新分发内核。
+The independent kernel comes from [Donut Browser](https://github.com/zhom/donutbrowser) / [Wayfern](https://wayfern.com/) by [zhom](https://github.com/zhom). Update feed: [wayfern.json](https://donutbrowser.com/wayfern.json). Terms: [Wayfern ToS](https://wayfern.com/tos).
+
+This repository does not redistribute the kernel.
 
 </details>
 
-## 许可证
+## License
 
 [MIT](./LICENSE)
 
@@ -136,6 +166,6 @@ OpenBrowser/
 
 <div align="center">
 
-如果觉得有用，欢迎 Star ⭐
+If OpenBrowser is useful to you, a Star is appreciated ⭐
 
 </div>
