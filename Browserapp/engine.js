@@ -221,8 +221,19 @@ class BrowserEngine {
     const finite = (candidate) => candidate !== '' && candidate !== null && candidate !== undefined && Number.isFinite(Number(candidate)) ? Number(candidate) : null;
     const width = Math.min(7680, Math.max(640, Number(value.width) || 1280)); const height = Math.min(4320, Math.max(480, Number(value.height) || 820));
     const number = Number.parseInt(value.number, 10);
-    const cores = Math.min(64, Math.max(1, Number(privacyValue.cores || privacyValue.fingerprint?.cores) || 0)) || null;
-    const memory = Math.min(128, Math.max(1, Number(privacyValue.memory || privacyValue.fingerprint?.memory) || 0)) || null;
+    const parseLimitedOption = (candidate, values) => {
+      if (candidate === '' || candidate === null || candidate === undefined) return null;
+      const value = Number(candidate);
+      return values.includes(value) ? value : null;
+    };
+    const cpuCandidate = privacyValue.cores === '' || privacyValue.cores === null || privacyValue.cores === undefined
+      ? privacyValue.fingerprint?.cores
+      : privacyValue.cores;
+    const memoryCandidate = privacyValue.memory === '' || privacyValue.memory === null || privacyValue.memory === undefined
+      ? privacyValue.fingerprint?.memory
+      : privacyValue.memory;
+    const cores = parseLimitedOption(cpuCandidate, [0, 2, 4, 6, 8, 10, 12, 16]);
+    const memory = parseLimitedOption(memoryCandidate, [0, 2, 4, 6, 8]);
     const rawProxy = String(value.proxy || '').trim().slice(0, 500);
     const networkMode = value.networkMode === 'direct' || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy) ? 'direct' : 'proxy';
     return {

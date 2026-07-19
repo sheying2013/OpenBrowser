@@ -89,8 +89,12 @@ function buildFingerprint(profile = {}) {
   const privacy = profile.privacy || {};
   const fpIn = privacy.fingerprint && typeof privacy.fingerprint === 'object' ? privacy.fingerprint : {};
 
-  const coresOverride = Number(fpIn.cores || privacy.cores);
-  const memoryOverride = Number(fpIn.memory || privacy.memory);
+  const rawCoresOverride = fpIn.cores ?? privacy.cores;
+  const rawMemoryOverride = fpIn.memory ?? privacy.memory;
+  const coresOverride = rawCoresOverride === '' || rawCoresOverride === null || rawCoresOverride === undefined ? NaN : Number(rawCoresOverride);
+  const memoryOverride = rawMemoryOverride === '' || rawMemoryOverride === null || rawMemoryOverride === undefined ? NaN : Number(rawMemoryOverride);
+  const useRealCores = coresOverride === 0;
+  const useRealMemory = memoryOverride === 0;
   const cores = Number.isFinite(coresOverride) && coresOverride > 0
     ? Math.min(64, Math.max(1, Math.round(coresOverride)))
     : [4, 6, 8, 12, 16][u32(seed, 12) % 5];
@@ -196,8 +200,8 @@ function buildFingerprint(profile = {}) {
     clientHints: uaProfile.clientHints,
     userAgentMetadata: uaProfile.metadata,
     languages: Array.isArray(fpIn.languages) ? fpIn.languages : languages,
-    hardwareConcurrency: Number(fpIn.hardwareConcurrency) > 0 ? Number(fpIn.hardwareConcurrency) : cores,
-    deviceMemory: Number(fpIn.deviceMemory) > 0 ? Number(fpIn.deviceMemory) : memory,
+    hardwareConcurrency: useRealCores ? null : (Number(fpIn.hardwareConcurrency) > 0 ? Number(fpIn.hardwareConcurrency) : cores),
+    deviceMemory: useRealMemory ? null : (Number(fpIn.deviceMemory) > 0 ? Number(fpIn.deviceMemory) : memory),
     screen: {
       width: screenWidth,
       height: screenHeight,
@@ -284,11 +288,11 @@ function fingerprintConsistencyIssues(fp) {
   if (!(Number(screen.devicePixelRatio) > 0 && Number(screen.devicePixelRatio) <= 4)) {
     add('device-pixel-ratio-invalid', 'devicePixelRatio must be within the supported desktop range.', 'error');
   }
-  if (!(Number(fp?.hardwareConcurrency) >= 1 && Number(fp?.hardwareConcurrency) <= 64)) {
-    add('cores-invalid', 'hardwareConcurrency must be between 1 and 64.', 'error');
+  if (fp?.hardwareConcurrency != null && !(Number(fp.hardwareConcurrency) >= 1 && Number(fp.hardwareConcurrency) <= 64)) {
+    add('cores-invalid', 'hardwareConcurrency must be between 1 and 64 when overridden.', 'error');
   }
-  if (!(Number(fp?.deviceMemory) >= 1 && Number(fp?.deviceMemory) <= 128)) {
-    add('memory-invalid', 'deviceMemory must be between 1 and 128.', 'error');
+  if (fp?.deviceMemory != null && !(Number(fp.deviceMemory) >= 1 && Number(fp.deviceMemory) <= 128)) {
+    add('memory-invalid', 'deviceMemory must be between 1 and 128 when overridden.', 'error');
   }
   return { ok: !issues.some((issue) => issue.severity === 'error'), issues };
 }
@@ -399,14 +403,14 @@ function buildInjectionScript(fp) {
   // --- navigator (non-UA fields; UA handled by uaScript) ---
   const navPatch = {
     platform: { get: () => CFG.platform },
-    hardwareConcurrency: { get: () => CFG.hardwareConcurrency },
-    deviceMemory: { get: () => CFG.deviceMemory },
     maxTouchPoints: { get: () => CFG.maxTouchPoints },
     vendor: { get: () => CFG.vendor },
     languages: { get: () => Object.freeze([...CFG.languages]) },
     language: { get: () => CFG.languages[0] || 'en-US' },
     webdriver: { get: () => false },
   };
+  if (CFG.hardwareConcurrency != null) navPatch.hardwareConcurrency = { get: () => CFG.hardwareConcurrency };
+  if (CFG.deviceMemory != null) navPatch.deviceMemory = { get: () => CFG.deviceMemory };
   if (CFG.doNotTrack != null) navPatch.doNotTrack = { get: () => CFG.doNotTrack };
   try {
     for (const [key, desc] of Object.entries(navPatch)) {
@@ -696,16 +700,17 @@ function buildWorkerInjectionScript(fp) {
   try {
     const navProto = globalThis.WorkerNavigator?.prototype;
     if (navProto) {
-      for (const [key, value] of Object.entries({
+      const navValues = {
         platform: CFG.platform,
         userAgent: CFG.userAgent,
         appVersion: CFG.appVersion,
         vendor: CFG.vendor,
-        hardwareConcurrency: CFG.hardwareConcurrency,
-        deviceMemory: CFG.deviceMemory,
         languages: Object.freeze([...(CFG.languages || [])]),
         language: (CFG.languages || [])[0] || 'en-US',
-      })) {
+      };
+      if (CFG.hardwareConcurrency != null) navValues.hardwareConcurrency = CFG.hardwareConcurrency;
+      if (CFG.deviceMemory != null) navValues.deviceMemory = CFG.deviceMemory;
+      for (const [key, value] of Object.entries(navValues)) {
         try { Object.defineProperty(navProto, key, { configurable: true, enumerable: true, get: () => value }); } catch (_) {}
       }
       const metadata = CFG.userAgentMetadata || {};
