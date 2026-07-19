@@ -77,7 +77,11 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
         with:
-          lfs: true
+          lfs: false
+          sparse-checkout: |
+            /*
+            !/Browserapp/kernels/
+          sparse-checkout-cone-mode: false
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -113,7 +117,7 @@ jobs:
   macos-x86_64:
     name: macOS x86_64
     needs: prepare-release
-    runs-on: macos-13
+    runs-on: macos-15-intel
     defaults:
       run:
         working-directory: Browserapp
@@ -171,7 +175,11 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
         with:
-          lfs: true
+          lfs: false
+          sparse-checkout: |
+            /*
+            !/Browserapp/kernels/
+          sparse-checkout-cone-mode: false
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
