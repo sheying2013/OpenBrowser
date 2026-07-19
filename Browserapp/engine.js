@@ -43,7 +43,8 @@ function stopIpcStubForWindow(windowName) {
   // Only allow our stable SB* window tokens in the pkill pattern.
   if (!/^SB[0-9A-Za-z_-]{4,64}$/.test(win)) return false;
   try {
-    execFileSync('pkill', ['-f', `ipc-stub.py ${win}`], { stdio: 'ignore' });
+    // Anchor end-of-arg so SB123 does not pkill SB1234 / SB12345.
+    execFileSync('pkill', ['-f', `ipc-stub\\.py ${win}( |$)`], { stdio: 'ignore' });
     return true;
   } catch (_) {
     return false;
@@ -1051,19 +1052,26 @@ class BrowserEngine {
     const values = await cdp.tabs(port); if (!values.length) return;
     const expected = String(startUrl || '').trim();
     let keep = values.find((tab) => this.isStartPageUrl(tab.url)) || values[0];
+    const preferredId = keep?.id;
     // Always force-navigate to OpenBrowser start page when provided (148 kernel may open NTP/about:blank).
-    if (expected) {
+    if (expected && keep?.webSocketDebuggerUrl) {
       try {
         const href = String(keep.url || '');
         if (!this.isStartPageUrl(href) || !href.includes(expected.split('?')[0])) {
           await cdp.call(keep.webSocketDebuggerUrl, 'Page.navigate', { url: expected });
+          // Brief settle so URL updates before we re-list tabs (avoid closing the navigated tab).
+          await new Promise((resolve) => { const t = setTimeout(resolve, 200); t.unref?.(); });
         }
       } catch (_) {
         try { await cdp.call(keep.webSocketDebuggerUrl, 'Page.navigate', { url: expected }); } catch (__) {}
       }
     }
     const after = await cdp.tabs(port).catch(() => values);
-    keep = after.find((tab) => this.isStartPageUrl(tab.url)) || after[0] || keep;
+    // Prefer: current start-page URL → same target we navigated → first tab.
+    keep = after.find((tab) => this.isStartPageUrl(tab.url))
+      || after.find((tab) => preferredId && tab.id === preferredId)
+      || after[0]
+      || keep;
     for (const tab of after) if (tab.id !== keep.id) await cdp.closeTab(port, tab.id).catch(() => {});
     await cdp.activateTab(port, keep.id).catch(() => {});
   }
@@ -1500,10 +1508,11 @@ class BrowserEngine {
     }
     const finalArgs = loadPaths.length ? mergeLoadExtensionArgs(args, loadPaths) : args;
 
-    // macOS: Dock wrapper so process shows logo+number (same brand as app shortcut)
+    // macOS + openbrowser-148 only: Dock wrapper so process shows logo-native+number.
+    // Non-148 Chromium has no OpenBrowser.bin layout; do not force a shell (would fail hard).
     let launchBinary = browser.path;
     try {
-      if (process.platform === 'darwin') {
+      if (process.platform === 'darwin' && isOpenBrowser148(browser)) {
         const dockBin = await prepareMacDockWrapper({
           profileId: profile.id,
           envNumber,

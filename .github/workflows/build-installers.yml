@@ -1,18 +1,12 @@
 name: Build OpenBrowser installers
 
-# 内核打包约定（与 scripts/package-portable.js appResourceExcludes 一致）：
-# - openbrowser-148（Browserapp/kernels/openbrowser）仅适用于 macOS x86_64（Intel）
-# - 仅 macos-x86_64 job 打入该内核，并作为该架构默认独立内核（无需再下 Wayfern/CfT）
-# - macos-arm64 / windows-x86_64 等产物必须排除 kernels/，不得打入 148
-# - 本 workflow 各 job 的 OPENBROWSER_PACKAGE_ARCH 决定 package-portable 是否 copy kernels/
-
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.0'
+        description: 'Release tag to create, for example v1.0.1'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.0.1'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -26,74 +20,51 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ inputs.release_tag }}
+  GH_TOKEN: ${{ github.token }}
+  RELEASE_NOTES: |
+    ## OpenBrowser ${{ inputs.release_tag }}
+
+    - 修复若干问题，优化稳定性。
+    - 优化跨平台封装与发行版上传流程。
+
 jobs:
-  macos-x86_64:
-    name: macOS x86_64
-    # Intel runner：与 OPENBROWSER_PACKAGE_ARCH=x86_64 一致，打入 openbrowser-148 默认内核
-    runs-on: macos-13
-    defaults:
-      run:
-        working-directory: Browserapp
-    env:
-      OPENBROWSER_PACKAGE_ARCH: x86_64
+  prepare-release:
+    name: Prepare GitHub Release
+    runs-on: ubuntu-latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-        with:
-          # 若内核走 Git LFS，需拉实体文件
-          lfs: true
-      - name: Require openbrowser-148 kernel tree (macOS x86_64 only)
+      - name: Validate release tag
+        shell: bash
         run: |
           set -euo pipefail
-          K="kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
-          if [[ ! -f "$K" ]]; then
-            echo "ERROR: 缺少 macOS x86_64 默认内核：$K" >&2
-            echo "openbrowser-148 必须在源码树 Browserapp/kernels/openbrowser 中（仅该架构打包/默认启用）。" >&2
-            exit 1
-          fi
-          chmod +x "$K" || true
-          chmod +x "kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser.bin" || true
-          echo "OK default kernel present for macOS x86_64: $K"
-          du -sh kernels/openbrowser
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: Browserapp/package-lock.json
-      - name: Install dependencies
-        run: npm ci --include=dev
-      - name: Run self-tests
-        run: |
-          npm run selftest
-          npm run selftest:automation
-          npm run selftest:protocol
-          npm run selftest:isolation
-          npm run selftest:kernel
-      - name: Package (must embed kernels/openbrowser)
-        run: npm run package:portable
-      - name: Verify package embeds openbrowser-148 only for this arch
+          case "$RELEASE_TAG" in
+            v*) ;;
+            *) echo "release_tag must start with v, got: $RELEASE_TAG" >&2; exit 1 ;;
+          esac
+      - name: Create or update release
+        shell: bash
         run: |
           set -euo pipefail
-          APP="dist/OpenBrowser-macOS-x86_64/OpenBrowser.app/Contents/Resources/app"
-          K="$APP/kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
-          if [[ ! -f "$K" ]]; then
-            echo "ERROR: 打包结果未包含 openbrowser-148 默认内核：$K" >&2
-            ls -la "$APP" || true
-            ls -la "$APP/kernels" || true
-            exit 1
+          notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
+          printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            edit_args=("$RELEASE_TAG" --title "OpenBrowser $RELEASE_TAG" --notes-file "$notes_file")
+            if [[ "${{ inputs.prerelease }}" == "true" ]]; then
+              edit_args+=(--prerelease)
+            fi
+            gh release edit "${edit_args[@]}"
+          else
+            args=("$RELEASE_TAG" --target "$GITHUB_SHA" --title "OpenBrowser $RELEASE_TAG" --notes-file "$notes_file")
+            if [[ "${{ inputs.prerelease }}" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            gh release create "${args[@]}"
           fi
-          echo "OK embedded default kernel: $K"
-      - name: Upload package
-        uses: actions/upload-artifact@v4
-        with:
-          name: OpenBrowser-macOS-x86_64
-          path: Browserapp/dist/OpenBrowser-macOS-x86_64.dmg
-          if-no-files-found: error
 
   macos-arm64:
     name: macOS arm64
-    # Apple Silicon：禁止打入 openbrowser-148（x86 内核）
+    needs: prepare-release
     runs-on: macos-14
     defaults:
       run:
@@ -113,6 +84,8 @@ jobs:
           cache-dependency-path: Browserapp/package-lock.json
       - name: Install dependencies
         run: npm ci --include=dev
+      - name: Prepare release notes
+        run: printf '%s\n' "$RELEASE_NOTES" > "$RUNNER_TEMP/openbrowser-release-notes.md"
       - name: Run self-tests
         run: |
           npm run selftest
@@ -120,28 +93,72 @@ jobs:
           npm run selftest:protocol
           npm run selftest:isolation
           npm run selftest:kernel
-      - name: Package (must exclude kernels/)
+      - name: Package
         run: npm run package:portable
-      - name: Verify package excludes openbrowser-148
+      - name: Verify package
         run: |
           set -euo pipefail
           APP="dist/OpenBrowser-macOS-arm64/OpenBrowser.app/Contents/Resources/app"
           if [[ -d "$APP/kernels" ]]; then
-            echo "ERROR: macOS arm64 包不应包含 kernels/（openbrowser-148 仅 macOS x86_64）" >&2
+            echo "ERROR: macOS arm64 package contains an unsupported kernel directory" >&2
             find "$APP/kernels" -maxdepth 3 -type f 2>/dev/null | head -20
             exit 1
           fi
-          echo "OK kernels/ excluded from macOS arm64 package"
-      - name: Upload package
-        uses: actions/upload-artifact@v4
+          test -f "dist/OpenBrowser-macOS-arm64.dmg"
+      - name: Upload package to release
+        run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-macOS-arm64.dmg"
+
+  macos-x86_64:
+    name: macOS x86_64
+    needs: prepare-release
+    runs-on: macos-13
+    defaults:
+      run:
+        working-directory: Browserapp
+    env:
+      OPENBROWSER_PACKAGE_ARCH: x86_64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
         with:
-          name: OpenBrowser-macOS-arm64
-          path: Browserapp/dist/OpenBrowser-macOS-arm64.dmg
-          if-no-files-found: error
+          lfs: true
+      - name: Require bundled runtime tree
+        run: |
+          set -euo pipefail
+          test -f "kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
+          chmod +x "kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser" || true
+          chmod +x "kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser.bin" || true
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Browserapp/package-lock.json
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Prepare release notes
+        run: printf '%s\n' "$RELEASE_NOTES" > "$RUNNER_TEMP/openbrowser-release-notes.md"
+      - name: Run self-tests
+        run: |
+          npm run selftest
+          npm run selftest:automation
+          npm run selftest:protocol
+          npm run selftest:isolation
+          npm run selftest:kernel
+      - name: Package
+        run: npm run package:portable
+      - name: Verify package
+        run: |
+          set -euo pipefail
+          APP="dist/OpenBrowser-macOS-x86_64/OpenBrowser.app/Contents/Resources/app"
+          test -f "$APP/kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
+          test -f "dist/OpenBrowser-macOS-x86_64.dmg"
+      - name: Upload package to release
+        run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-macOS-x86_64.dmg"
 
   windows-x86_64:
     name: Windows x86_64
-    # Windows：禁止打入 openbrowser-148
+    needs: prepare-release
     runs-on: windows-2022
     defaults:
       run:
@@ -161,6 +178,9 @@ jobs:
           cache-dependency-path: Browserapp/package-lock.json
       - name: Install dependencies
         run: npm ci --include=dev
+      - name: Prepare release notes
+        shell: bash
+        run: printf '%s\n' "$RELEASE_NOTES" > "$RUNNER_TEMP/openbrowser-release-notes.md"
       - name: Install NSIS
         run: choco install nsis --no-progress --yes
       - name: Run self-tests
@@ -170,58 +190,20 @@ jobs:
           npm run selftest:protocol
           npm run selftest:isolation
           npm run selftest:kernel
-      - name: Package (must exclude kernels/)
+      - name: Package
         run: npm run package:portable
-      - name: Verify package excludes openbrowser-148
+      - name: Verify package
         shell: bash
         run: |
           set -euo pipefail
           APP="dist/OpenBrowser-Windows-x86_64/runtime/resources/app"
           if [[ -d "$APP/kernels" ]]; then
-            echo "ERROR: Windows 包不应包含 kernels/（openbrowser-148 仅 macOS x86_64）" >&2
+            echo "ERROR: Windows package contains an unsupported kernel directory" >&2
             find "$APP/kernels" -maxdepth 3 -type f 2>/dev/null | head -20
             exit 1
           fi
-          echo "OK kernels/ excluded from Windows package"
-      - name: Upload package
-        uses: actions/upload-artifact@v4
-        with:
-          name: OpenBrowser-Windows-x86_64
-          path: |
-            Browserapp/dist/OpenBrowser-Windows-x86_64.exe
-            Browserapp/dist/OpenBrowser-Windows-x86_64.zip
-          if-no-files-found: error
-
-  release:
-    name: Publish GitHub Release
-    needs: [macos-x86_64, macos-arm64, windows-x86_64]
-    runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ inputs.release_tag }}
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Validate release tag
-        run: |
-          case "$RELEASE_TAG" in
-            v*) ;;
-            *) echo "release_tag must start with v, got: $RELEASE_TAG" >&2; exit 1 ;;
-          esac
-      - name: Download packaged assets
-        uses: actions/download-artifact@v4
-        with:
-          pattern: OpenBrowser-*
-          path: release-assets
-          merge-multiple: true
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          target_commitish: ${{ github.sha }}
-          name: OpenBrowser ${{ env.RELEASE_TAG }}
-          generate_release_notes: true
-          prerelease: ${{ inputs.prerelease }}
-          files: release-assets/*
-          fail_on_unmatched_files: true
+          test -f "dist/OpenBrowser-Windows-x86_64.exe"
+          test -f "dist/OpenBrowser-Windows-x86_64.zip"
+      - name: Upload package to release
+        shell: bash
+        run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-Windows-x86_64.exe" "dist/OpenBrowser-Windows-x86_64.zip"

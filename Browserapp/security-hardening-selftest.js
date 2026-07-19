@@ -130,6 +130,14 @@ function main() {
   assert.ok(renderer.includes('cookies: \'\''), 'redact clears cookies');
   assert.ok(renderer.includes('totpSecret: \'\''), 'redact clears totp');
 
+  // --- IPC sender trust: exact app index.html path, not any file:…/index.html ---
+  const mainSrc = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+  assert.ok(mainSrc.includes('function trustedAppIndexUrl'), 'main must pin trusted UI path');
+  assert.ok(mainSrc.includes("path.join(__dirname, 'index.html')"), 'trusted URL must be app index.html under __dirname');
+  assert.ok(!/senderUrl\.startsWith\('file:'\)\s*\|\|\s*!senderUrl\.endsWith\('\/index\.html'\)/.test(mainSrc)
+    && !/!senderUrl\.startsWith\('file:'\)\s*\|\|\s*!senderUrl\.endsWith\('\/index\.html'\)/.test(mainSrc),
+    'must not accept any file:…/index.html');
+
   // --- proxy-forwarder exports ---
   assert.ok(typeof assertSafeOutboundUrl === 'function');
   assert.ok(typeof extractProxyFromApi === 'function');
