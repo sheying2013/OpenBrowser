@@ -1649,10 +1649,6 @@ async function applyEditorProxyFingerprint() {
     output.textContent = tx('正在用代理对齐指纹...');
     const result = await window.ops.applyProxyFingerprint(draft);
     applyEditorNetworkResult(result, { fillFingerprint: true });
-    if (result.appliedFingerprint?.language) {
-      // language is resolved server-side; keep mode as IP-based
-      editorSet('#editor-language-mode', 'ip');
-    }
     output.className = 'proxy-test-result success';
     output.textContent = tx('已对齐指纹 · ') + formatProxyCheckResult(result);
     toast(tx('已按出口 IP 填充时区 / 语言 / 定位'));
@@ -1675,7 +1671,6 @@ async function refreshEditorProxy() {
     const result = await window.ops.refreshProfileProxy(draft);
     const network = result.network || result;
     if (result.profile?.proxy) {
-      // if API extract rotated host/port, reflect into editor fields when possible
       try {
         const raw = String(result.profile.proxy);
         const url = new URL(raw.includes('://') ? raw : ('socks5://' + raw));
@@ -1687,9 +1682,13 @@ async function refreshEditorProxy() {
       } catch (_) {}
     }
     applyEditorNetworkResult(network, { fillFingerprint: $('#editor-proxy-fill-fingerprint')?.checked !== false });
+    updateEditorVisibility();
+    renderEditorSummary();
     output.className = 'proxy-test-result success';
-    output.textContent = tx('刷新成功 · ') + formatProxyCheckResult(network);
-    toast(tx('代理已刷新'));
+    let msg = tx('刷新成功 · ') + formatProxyCheckResult(network);
+    if (result.extractError) msg += ' · ' + tx('提取警告：') + result.extractError;
+    output.textContent = msg;
+    toast(result.extractError ? (tx('代理已刷新（提取有警告）')) : tx('代理已刷新'));
   } catch (error) {
     output.className = 'proxy-test-result error';
     output.textContent = tx('刷新失败 · ') + error.message;
@@ -2309,6 +2308,8 @@ async function checkProfileProxy(id) {
     toast('正在通过环境 ' + displayProfileNumber(profile) + ' 的代理检测出口 IP...');
     const result = await window.ops.checkProfileProxy(profile);
     profile.exitIp = result.ip; profile.exitCountryCode = result.countryCode; profile.exitTimezone = result.timezone || ''; profile.exitLatitude = result.latitude; profile.exitLongitude = result.longitude; profile.exitCheckedAt = result.checkedAt;
+    if (Number.isFinite(Number(result.latencyMs))) profile.exitLatencyMs = Number(result.latencyMs);
+    if (result.networkType) profile.exitNetworkType = result.networkType;
     if (result.appliedFingerprint?.language) profile.language = result.appliedFingerprint.language;
     if (result.appliedFingerprint?.privacy) profile.privacy = { ...(profile.privacy || {}), ...result.appliedFingerprint.privacy };
     save();
@@ -3397,15 +3398,18 @@ $('#proxy-delete-selected')?.addEventListener('click', async () => {
 async function runProxyBatchCheck(ids) {
   if (!ids.length) return toast(tx('请先勾选代理'));
   toast('正在检测 ' + ids.length + ' 条代理…');
-  try {
-    if (window.ops.proxyCheckMany) {
+  if (typeof window.ops.proxyCheckMany === 'function') {
+    try {
       const summary = await window.ops.proxyCheckMany({ ids });
       await refreshProxies();
       toast(tx(`检测完成：成功 ${summary.ok || 0} · 失败 ${summary.fail || 0}`));
       return;
+    } catch (error) {
+      await refreshProxies();
+      toast(tx('批量检测失败：') + (error.message || error));
+      log('Proxy', '批量检测失败 · ' + (error.message || error));
+      return;
     }
-  } catch (_) {
-    // fallback sequential
   }
   let ok = 0; let fail = 0;
   for (const id of ids) {

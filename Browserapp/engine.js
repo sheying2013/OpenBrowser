@@ -249,6 +249,8 @@ class BrowserEngine {
       userAgent: String(value.userAgent || '').replace(/[\r\n]/g, ' ').slice(0, 1000), cookies: String(value.cookies || '').slice(0, 500000), note: String(value.note || '').slice(0, 2000),
       exitIp: String(value.exitIp || '').slice(0, 80), exitCountryCode: String(value.exitCountryCode || '').slice(0, 4), exitTimezone: String(value.exitTimezone || '').slice(0, 100),
       exitLatitude: finite(value.exitLatitude), exitLongitude: finite(value.exitLongitude),
+      exitLatencyMs: finite(value.exitLatencyMs),
+      exitNetworkType: String(value.exitNetworkType || '').slice(0, 40),
       platform: {
         type: String(platformValue.type || 'other').slice(0, 40),
         startUrl: String(platformValue.startUrl || value.startUrl || '').slice(0, 2000),
@@ -264,7 +266,7 @@ class BrowserEngine {
         systemProxy: allowed(proxyMetaValue.systemProxy, ['global', 'use', 'off'], 'global'),
         directBypass: Boolean(proxyMetaValue.directBypass),
         bypassList: String(proxyMetaValue.bypassList || '').slice(0, 4000),
-        apiExtractUrl: String(proxyMetaValue.apiExtractUrl || proxyMetaValue.refreshUrl || '').slice(0, 2000),
+        apiExtractUrl: String(proxyMetaValue.apiExtractUrl || '').slice(0, 2000),
         backupProxies: Array.isArray(proxyMetaValue.backupProxies)
           ? proxyMetaValue.backupProxies.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 8)
           : (typeof proxyMetaValue.backupProxies === 'string'
@@ -791,11 +793,11 @@ class BrowserEngine {
   async ensureExitNetworkForLocale(profile) {
     if (!this.needsExitNetworkForLocale(profile)) return null;
     let network = this.networkInfo.get(profile.id);
-    if (network?.countryCode) return network;
+    if (network?.countryCode || network?.ip) return network;
     const hasProxy = profile.proxy && !/^(direct|offline|none)$/i.test(String(profile.proxy));
     try {
       if (hasProxy) {
-        network = await this.checkProxy(profile);
+        network = await this.checkProxy(profile, { allowExtract: false });
       } else {
         network = await lookupDirectCountry();
         this.networkInfo.set(profile.id, network);
@@ -1516,7 +1518,15 @@ class BrowserEngine {
 
   async testProxy(raw, options = {}) {
     const profile = this.sanitizeProfile(raw);
-    const resolved = await this.resolveProfileProxyConfig(profile, { allowExtract: options.allowExtract !== false });
+    const forcedRaw = String(options.proxy || options.forcedProxy || '').trim();
+    let resolved;
+    if (forcedRaw && !/^(direct|offline|none)$/i.test(forcedRaw)) {
+      const config = parseProxy(forcedRaw);
+      if (!config) throw new Error('代理配置无效');
+      resolved = { profile, config, raw: forcedRaw, source: options.proxySource || 'forced' };
+    } else {
+      resolved = await this.resolveProfileProxyConfig(profile, { allowExtract: options.allowExtract !== false });
+    }
     try {
       const result = await retryProxyOperation(() => lookupProxyCountry(resolved.config));
       return {
@@ -1548,13 +1558,16 @@ class BrowserEngine {
 
   async refreshProfileProxy(raw) {
     const profile = this.sanitizeProfile(raw);
-    const url = String(profile.proxyMeta?.refreshUrl || profile.proxyMeta?.apiExtractUrl || '').trim();
+    const refreshUrl = String(profile.proxyMeta?.refreshUrl || '').trim();
+    const extractUrl = String(profile.proxyMeta?.apiExtractUrl || '').trim();
+    const url = refreshUrl || extractUrl;
     if (!url) throw new Error('未配置刷新 URL');
     const refresh = await invokeProxyRefresh(url);
     let nextProfile = profile;
-    if (String(profile.proxyMeta?.apiExtractUrl || '').trim()) {
+    let extractError = null;
+    if (extractUrl) {
       try {
-        const extracted = await extractProxyFromApi(profile.proxyMeta.apiExtractUrl);
+        const extracted = await extractProxyFromApi(extractUrl);
         const rawProxy = extracted.raw || (
           extracted.protocol + '://'
           + (extracted.username ? (encodeURIComponent(extracted.username) + ':' + encodeURIComponent(extracted.password) + '@') : '')
@@ -1562,10 +1575,20 @@ class BrowserEngine {
         );
         nextProfile = this.sanitizeProfile({ ...profile, networkMode: 'proxy', proxy: rawProxy });
         this.profiles.set(nextProfile.id, nextProfile);
-      } catch (_) {}
+      } catch (error) {
+        extractError = error;
+        if (!profile.proxy || /^(direct|offline|none)$/i.test(String(profile.proxy))) {
+          throw new Error('动态代理提取失败：' + (error.message || error));
+        }
+      }
     }
     const network = await this.checkProxy(nextProfile, { allowExtract: false, persist: true });
-    return { refresh, network, profile: this.profiles.get(nextProfile.id) };
+    return {
+      refresh,
+      network,
+      profile: this.profiles.get(nextProfile.id),
+      extractError: extractError ? String(extractError.message || extractError) : null,
+    };
   }
 
   async prepareProfileProxyForStart(profile) {
@@ -1596,14 +1619,25 @@ class BrowserEngine {
     }
     const shouldCheck = meta.checkOnStart || meta.refreshOnStart || Boolean(extractUrl);
     if (shouldCheck && working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy))) {
-      const candidates = [working.proxy, ...(meta.backupProxies || [])].filter(Boolean);
+      const candidates = [];
+      const push = (value) => {
+        const raw = String(value || '').trim();
+        if (!raw || /^(direct|offline|none)$/i.test(raw)) return;
+        if (!candidates.includes(raw)) candidates.push(raw);
+      };
+      push(working.proxy);
+      for (const item of meta.backupProxies || []) push(item);
       let lastError = null;
       let ok = false;
-      for (const candidate of candidates) {
+      for (let index = 0; index < candidates.length; index += 1) {
+        const candidate = candidates[index];
         try {
-          const trial = this.sanitizeProfile({ ...working, networkMode: 'proxy', proxy: candidate });
-          const network = await this.testProxy(trial, { allowExtract: false });
-          working = this.sanitizeProfile({ ...trial, proxy: network.proxyRaw || candidate });
+          const network = await this.testProxy(working, {
+            allowExtract: false,
+            proxy: candidate,
+            proxySource: index === 0 ? 'primary' : 'backup',
+          });
+          working = this.sanitizeProfile({ ...working, networkMode: 'proxy', proxy: network.proxyRaw || candidate });
           this.applyNetworkToProfile(working, network, { persist: false });
           ok = true;
           break;
