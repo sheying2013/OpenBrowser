@@ -926,11 +926,19 @@ class BrowserEngine {
    */
   async buildStartPageUrl(profile, root, browserName, extensionCount) {
     let pageNetwork = this.networkInfo.get(profile.id) || null;
-    // 启动前尽量用本引擎代理检测补全出口（有代理且尚未检测时）
+    // 启动前尽量补全出口信息，启动页打开即可显示 IP（直连/代理同理）
     const hasProxy = profile.proxy && !/^(direct|offline|none)$/i.test(String(profile.proxy));
-    if (hasProxy && !pageNetwork?.ip) {
+    if (!pageNetwork?.ip) {
       try {
-        pageNetwork = await this.checkProxy(profile);
+        if (hasProxy) {
+          pageNetwork = await this.checkProxy(profile);
+        } else {
+          pageNetwork = await lookupDirectCountry();
+          if (pageNetwork) {
+            pageNetwork = { ...pageNetwork, protocol: 'direct' };
+            this.networkInfo.set(profile.id, pageNetwork);
+          }
+        }
       } catch (_) {
         pageNetwork = this.networkInfo.get(profile.id) || null;
       }

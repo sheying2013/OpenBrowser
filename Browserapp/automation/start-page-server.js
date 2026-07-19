@@ -5,21 +5,21 @@ const https = require('https');
 const crypto = require('crypto');
 const { URL } = require('url');
 const { buildStartPageHtml } = require('./start-page-template');
+const { lookupDirectCountry } = require('../proxy-forwarder');
 
 /**
  * OpenBrowser · 原生启动页服务（纯本机）
  *
  * 浏览器打开：
-   *   http://127.0.0.1:<port>/?pid=<profileId>&token=<random-session-token>
+ *   http://127.0.0.1:<port>/?pid=<profileId>&token=<random-session-token>
  *
- * 数据：
+ * 数据来源：
  *   1) 主进程启动环境时 registerSession 写入的 profile + network
  *   2) 同端口 /api/session · /api/network 只读本机会话（可选刷新走 engine.checkProxy）
  * 页面 JS 只请求 127.0.0.1，不直接请求第三方。
  */
 
 const DEFAULT_PORT = Number(process.env.OPENBROWSER_START_PAGE_PORT || 50326);
-// OpenBrowser 启动页端口池
 const PORT_CANDIDATES = [DEFAULT_PORT, 50327, 50328, 50329, 0];
 const REACHABILITY_TARGETS = {
   google: 'https://www.google.com/generate_204',
@@ -30,46 +30,12 @@ const REACHABILITY_TARGETS = {
   wikipedia: 'https://www.wikipedia.org/favicon.ico',
 };
 
-function lookupDirectNetwork(timeout = 10000) {
-  return new Promise((resolve, reject) => {
-    const request = http.get({
-      hostname: 'ip-api.com',
-      path: '/json/?fields=status,message,country,countryCode,regionName,city,zip,timezone,lat,lon,isp,org,as,asname,mobile,proxy,hosting,query',
-      headers: { Accept: 'application/json', 'User-Agent': 'OpenBrowser/1.0' },
-    }, (response) => {
-      const chunks = [];
-      response.on('data', (chunk) => chunks.push(chunk));
-      response.once('end', () => {
-        try {
-          if (response.statusCode !== 200) throw new Error(`出口检测返回 HTTP ${response.statusCode}`);
-          const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-          if (value.status !== 'success' || !value.query) throw new Error(value.message || '出口检测响应不完整');
-          resolve({
-            ip: String(value.query),
-            country: String(value.country || ''),
-            countryCode: String(value.countryCode || '').toUpperCase(),
-            region: String(value.regionName || ''),
-            city: String(value.city || ''),
-            zip: String(value.zip || ''),
-            timezone: String(value.timezone || ''),
-            latitude: Number.isFinite(Number(value.lat)) ? Number(value.lat) : null,
-            longitude: Number.isFinite(Number(value.lon)) ? Number(value.lon) : null,
-            isp: String(value.isp || ''),
-            organization: String(value.org || ''),
-            asn: String(value.as || '').split(/\s+/, 1)[0],
-            asName: String(value.asname || ''),
-            mobile: Boolean(value.mobile),
-            proxy: Boolean(value.proxy),
-            hosting: Boolean(value.hosting),
-            checkedAt: new Date().toISOString(),
-            protocol: 'direct',
-          });
-        } catch (error) { reject(error); }
-      });
-    });
-    request.setTimeout(timeout, () => request.destroy(new Error('出口检测超时')));
-    request.once('error', reject);
-  });
+async function lookupDirectNetwork() {
+  const network = await lookupDirectCountry();
+  return {
+    ...network,
+    protocol: 'direct',
+  };
 }
 
 function probeReachability(url, timeout = 6000) {
@@ -340,10 +306,10 @@ class StartPageServer {
         session = this.getSession(pid);
       }
       if (refresh && profile) {
+        const isDirect = profile.networkMode === 'direct'
+          || !profile.proxy
+          || /^(direct|offline|none)$/i.test(String(profile.proxy));
         try {
-          const isDirect = profile.networkMode === 'direct'
-            || !profile.proxy
-            || /^(direct|offline|none)$/i.test(String(profile.proxy));
           const network = isDirect
             ? await this.lookupDirectNetwork()
             : await this.engine.checkProxy(profile);
@@ -351,6 +317,25 @@ class StartPageServer {
           this.updateNetwork(pid, network);
           return network;
         } catch (error) {
+          if (session?.network?.ip) return session.network;
+          if (isDirect) {
+            // Direct mode is still valid local exit; geo is best-effort only.
+            const soft = {
+              ip: session?.exitIp || profile.exitIp || '',
+              country: '',
+              countryCode: session?.countryCode || profile.exitCountryCode || '',
+              region: '',
+              city: '',
+              timezone: session?.timezone || profile.exitTimezone || '',
+              latitude: profile.exitLatitude ?? null,
+              longitude: profile.exitLongitude ?? null,
+              protocol: 'direct',
+              soft: true,
+              checkedAt: new Date().toISOString(),
+            };
+            this.updateNetwork(pid, soft);
+            return soft;
+          }
           if (session?.network) return session.network;
           const endpoint = proxyEndpoint(profile.proxy);
           throw new Error(endpoint
@@ -365,13 +350,40 @@ class StartPageServer {
     }
     // 旧启动页链接可能在应用重启后失去会话。此时仍允许按当前机器直连检测，
     // 但已知代理配置的失败必须在上面的代理分支中原样返回。
-    if (refresh && !session) return this.lookupDirectNetwork();
+    if (refresh && !session) {
+      try {
+        return await this.lookupDirectNetwork();
+      } catch (_) {
+        return {
+          ip: '',
+          country: '',
+          countryCode: '',
+          region: '',
+          city: '',
+          timezone: '',
+          protocol: 'direct',
+          soft: true,
+          checkedAt: new Date().toISOString(),
+        };
+      }
+    }
     if (session?.network) return session.network;
     if (session?.exitIp) {
       return {
         ip: session.exitIp,
         countryCode: session.countryCode || '',
         timezone: session.timezone || '',
+        protocol: session.networkMode === 'direct' || session.proxyProtocol === 'direct' ? 'direct' : undefined,
+      };
+    }
+    if (session && (session.networkMode === 'direct' || session.proxyProtocol === 'direct')) {
+      return {
+        ip: '',
+        countryCode: session.countryCode || '',
+        timezone: session.timezone || '',
+        protocol: 'direct',
+        soft: true,
+        checkedAt: new Date().toISOString(),
       };
     }
     return null;
@@ -395,12 +407,60 @@ class StartPageServer {
     }
 
     const pid = query.pid || query.id || '';
-    const session = this.getSession(pid);
+    let session = this.getSession(pid);
     const token = String(query.token || req.headers['x-openbrowser-start-token'] || '');
-    const authorized = Boolean(session && token && token.length === session.token.length
+    let authorized = Boolean(session && token && token.length === session.token.length
+      && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(session.token)));
+
+    // Running env but stale token (OpenBrowser restarted, or old bookmark): re-bind session and redirect.
+    if (!authorized && pid && this.engine?.running?.has?.(pid)
+      && (pathname === '/' || pathname === '/index.html' || pathname === '/start')) {
+      try {
+        const item = this.engine.running.get(pid);
+        const profile = item?.profile || { id: pid, name: pid, number: query.id || pid };
+        const freshUrl = this.registerSession(profile, {
+          network: item?.network || this.engine.networkInfo?.get?.(pid) || null,
+          browserName: item?.browser?.name || '',
+          extensionCount: Array.isArray(item?.extensions) ? item.extensions.length : 0,
+        });
+        res.writeHead(302, {
+          Location: freshUrl,
+          'Cache-Control': 'no-store',
+          'X-OpenBrowser-Start-Page': 'reissued',
+        });
+        res.end();
+        return;
+      } catch (_) { /* fall through to unauthorized */ }
+    }
+
+    session = this.getSession(pid);
+    authorized = Boolean(session && token && token.length === session.token.length
       && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(session.token)));
 
     if ((pathname.startsWith('/api/') || pathname === '/' || pathname === '/index.html' || pathname === '/start') && !authorized) {
+      // Browser navigations get HTML (JSON looks like "page won't open"); APIs stay JSON.
+      const accept = String(req.headers.accept || '');
+      const wantsHtml = !pathname.startsWith('/api/') && !/application\/json/i.test(accept);
+      if (wantsHtml) {
+        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>启动页会话无效</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#12141a;color:#e8eaf0;display:grid;place-items:center;min-height:100vh}
+.card{max-width:520px;padding:28px 24px;border-radius:14px;background:#1c1f28;border:1px solid #2a3040;line-height:1.7}
+h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5fd}</style></head>
+<body><div class="card">
+<h1>OpenBrowser 启动页会话无效</h1>
+<p>这个内部首页需要<strong>当次启动</strong>签发的 token，不能收藏后重复打开，也不能在 OpenBrowser 重启后继续用旧链接。</p>
+<p>请回到 OpenBrowser 客户端，<strong>停止环境后重新启动</strong>；不要手动粘贴旧的 <code>127.0.0.1:50326</code> 链接。</p>
+<p style="font-size:12px;color:#8b93a7">pid=${String(pid || '-')} · unauthorized session</p>
+</div></body></html>`;
+        res.writeHead(401, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'X-OpenBrowser-Start-Page': 'unauthorized',
+        });
+        res.end(html);
+        return;
+      }
       return this.#json(res, 401, { ok: false, msg: 'unauthorized session' });
     }
 
