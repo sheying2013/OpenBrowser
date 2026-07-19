@@ -270,6 +270,7 @@ class BrowserEngine {
           : (typeof proxyMetaValue.backupProxies === 'string'
             ? String(proxyMetaValue.backupProxies).split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8)
             : []),
+        fillFingerprint: proxyMetaValue.fillFingerprint !== false,
       },
       privacy: {
         webrtc: allowed(privacyValue.webrtc, ['proxy', 'disabled', 'real'], 'proxy'),
