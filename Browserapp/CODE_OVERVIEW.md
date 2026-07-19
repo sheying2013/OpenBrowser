@@ -8,7 +8,7 @@ OpenBrowser 是一个本地桌面浏览器环境管理器，基于桌面壳（np
 
 项目不依赖远程业务服务器才能运行。应用管理数据、浏览器环境数据、扩展文件、RPA 数据和代理库默认写入本机 `userData` 目录；本地 API 只监听回环地址。云同步和应用商店等功能只有在用户主动配置或操作时才访问对应的第三方服务。
 
-当前 package 版本为 `1.0.0`，产品名为 `OpenBrowser`。应用源码位于仓库中的 `local-functional-app/`。
+当前 package 版本为 `1.0.0`，产品名为 `OpenBrowser`。应用源码位于仓库中的 `Browserapp/`。
 
 ## 2. 启动和运行模型
 
@@ -53,7 +53,7 @@ npm start / scripts/run-app.js
 ### 3.1 应用根目录
 
 ```text
-local-functional-app/
+Browserapp/
 ├── main.js                 Electron 主进程和所有 IPC 入口
 ├── preload.js              renderer 可用能力的白名单桥接
 ├── renderer.js             单页 UI 状态、视图和交互逻辑
@@ -381,7 +381,7 @@ renderer 的其他轻量 UI 状态也使用独立的 `localStorage` 键，包括
 
 ## 12. 开发和验证命令
 
-在 `local-functional-app` 目录执行：
+在 `Browserapp` 目录执行：
 
 ```bash
 npm ci
@@ -405,7 +405,7 @@ npm run selftest:kernel
 | `npm run build:native` | 编译 Windows native 辅助程序 |
 | `npm run package:portable` | 生成便携发布包 |
 
-修改 UI 时可优先做静态检查和目标自测；修改内核、Profile 路径、进程终止、代理或同步协议时，应至少执行隔离、内核、协议和自动化自测。未经明确要求，不应执行打包命令或自动打开应用窗口。开发调试请使用桌面「OpenBrowser 开发测试.command」（路径指向本仓库 `local-functional-app`），不要随意打包。
+修改 UI 时可优先做静态检查和目标自测；修改内核、Profile 路径、进程终止、代理或同步协议时，应至少执行隔离、内核、协议和自动化自测。未经明确要求，不应执行打包命令或自动打开应用窗口。开发调试请使用桌面「OpenBrowser 开发测试.command」（路径指向本仓库 `Browserapp`），不要随意打包。
 
 ## 13. 修改指南
 

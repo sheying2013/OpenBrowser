@@ -40,7 +40,7 @@ function resolveHostBinary() {
     if (fs.existsSync(binary)) return binary;
   }
 
-  throw new Error('缺少当前平台的应用运行环境。请在 local-functional-app 目录执行 npm install --force --include=dev。');
+  throw new Error('缺少当前平台的应用运行环境。请在 Browserapp 目录执行 npm install --force --include=dev。');
 }
 
 const hostBin = resolveHostBinary();
