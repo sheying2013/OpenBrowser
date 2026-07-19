@@ -27,7 +27,7 @@ npm run selftest:kernel
 npm start
 ```
 
-The root launchers are `启动-macOS.command` and `启动应用中心与窗口同步版.cmd`. They enter the application directory and install platform dependencies when the desktop runtime is missing.
+The root launchers are `start-test.command` and `start-test.cmd`. They enter the application directory and install platform dependencies when the desktop runtime is missing.
 
 ## Packaging
 
