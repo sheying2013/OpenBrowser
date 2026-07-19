@@ -56,7 +56,51 @@ function toFileUrl(filePath) {
 }
 
 /**
- * Kill process tree for a managed browser pid.
+ * Normalize expectedExecutable / expectedExecutables into a list of path or basename hints.
+ * Dock shells spawn …/环境 N.app/…/OpenBrowser.bin while kernel meta still points at …/OpenBrowser.
+ */
+function normalizeExpectedExecutables(options = {}) {
+  const raw = options.expectedExecutables != null
+    ? options.expectedExecutables
+    : options.expectedExecutable;
+  if (raw == null || raw === '') return [];
+  return (Array.isArray(raw) ? raw : [raw])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+}
+
+/**
+ * Match a live `ps` command line against one expected executable path/name.
+ * Handles spaces in paths, env Dock shells (OpenBrowser.bin), and basename-only hints.
+ */
+function commandMatchesExecutable(command, executable) {
+  const cmd = String(command || '');
+  const hint = String(executable || '').trim();
+  if (!cmd || !hint) return false;
+  const base = path.basename(hint);
+  // Full absolute path (may contain spaces) appears as a substring of the command line.
+  if (path.isAbsolute(hint)) {
+    const resolved = path.resolve(hint);
+    if (cmd.includes(resolved) || cmd.includes(hint)) return true;
+  }
+  // Basename as a path segment: …/OpenBrowser.bin or …\OpenBrowser
+  if (base && (cmd.includes(`/${base}`) || cmd.includes(`\\${base}`))) return true;
+  // Bare argv0 without directory (e.g. "node script.js", "OpenBrowser.bin --flag")
+  if (base) {
+    const first = cmd.split(/\s+/)[0].replace(/^['"]|['"]$/g, '');
+    if (first === base || path.basename(first) === base) return true;
+  }
+  // OpenBrowser Dock shell: kernel path ends with OpenBrowser, live process is OpenBrowser.bin
+  if (/^OpenBrowser(\.bin)?$/i.test(base) && /(?:^|\/|\\)OpenBrowser(?:\.bin)?(?:\s|$)/i.test(cmd)) return true;
+  // env-apps Dock wrapper path is strong evidence for managed OpenBrowser shells
+  if (/env-apps[/\\]/.test(cmd) && /OpenBrowser(?:\.bin)?/i.test(cmd) && /OpenBrowser/i.test(base || hint)) return true;
+  return false;
+}
+
+/**
+ * Inspect a managed browser pid (macOS/Linux). Windows defers identity to taskkill.
+ * options.expectedExecutable(s): path(s) or basenames that may appear in the command line
+ * options.expectedUserDataDir: required --user-data-dir match when set
  */
 function processIdentity(pid, options = {}) {
   if (isWindows()) return { ok: true, reason: 'windows identity check delegated to taskkill' };
@@ -67,17 +111,17 @@ function processIdentity(pid, options = {}) {
     return { ok: false, reason: 'unable to inspect process identity' };
   }
   if (!command) return { ok: false, reason: 'process is not running' };
-  if (options.expectedExecutable) {
-    const executable = path.resolve(String(options.expectedExecutable));
-    const executableName = path.basename(executable);
-    if (!command.includes(executable) && !command.split(/\s+/)[0].replace(/^['"]|['"]$/g, '').endsWith(executableName)) {
-      return { ok: false, reason: 'managed executable does not match', command };
-    }
+  const executables = normalizeExpectedExecutables(options);
+  if (executables.length) {
+    const matched = executables.some((exe) => commandMatchesExecutable(command, exe));
+    if (!matched) return { ok: false, reason: 'managed executable does not match', command, executables };
   }
   if (options.expectedUserDataDir) {
     const expectedRoot = path.resolve(String(options.expectedUserDataDir));
     const userDataArg = command.match(/(?:^|\s)--user-data-dir=("[^"]*"|'[^']*'|[^\s]+)/)?.[1]?.replace(/^['"]|['"]$/g, '');
-    if (path.resolve(userDataArg || '') !== expectedRoot) return { ok: false, reason: 'managed user-data-dir does not match', command };
+    if (path.resolve(userDataArg || '') !== expectedRoot) {
+      return { ok: false, reason: 'managed user-data-dir does not match', command };
+    }
   }
   return { ok: true, command };
 }
@@ -140,6 +184,8 @@ module.exports = {
   toFileUrl,
   killProcessTree,
   processIdentity,
+  commandMatchesExecutable,
+  normalizeExpectedExecutables,
   LOCAL_API_PORTS,
   defaultApiPort,
   defaultStageRoots,

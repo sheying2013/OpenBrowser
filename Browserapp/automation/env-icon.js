@@ -513,18 +513,34 @@ async function prepareMacDockWrapper({
   // Keep a PNG preview in Resources for debugging
   try { await fsp.copyFile(png512, path.join(resources, 'env-icon.png')); } catch (_) {}
 
-  // MacOS payloads: OpenBrowser.bin must live as a real file path under this .app
-  // (symlink may resolve to the kernel app → Dock still shows Chrome icon).
-  // File is ~45KB stub; dylibs can stay symlinked.
+  // MacOS payloads: OpenBrowser.bin MUST be a real file under this .app.
+  // Symlink back to the kernel .app makes Dock resolve the kernel icon (Chrome/Hub mark)
+  // — never fall back to that path (see CODE_OVERVIEW §4B.2).
   {
     const src = path.join(layout.realMacOS, 'OpenBrowser.bin');
     const dest = path.join(macOS, 'OpenBrowser.bin');
+    if (!fs.existsSync(src)) {
+      throw new Error('Dock shell: kernel OpenBrowser.bin missing at ' + src);
+    }
     try { await fsp.rm(dest, { force: true }); } catch (_) {}
     try {
       await fsp.copyFile(src, dest);
       await fsp.chmod(dest, 0o755);
-    } catch (_) {
-      await forceSymlink(src, dest);
+    } catch (error) {
+      throw new Error(
+        'Dock shell requires a real OpenBrowser.bin copy under the env app (refusing kernel symlink): '
+        + (error && error.message ? error.message : error)
+      );
+    }
+    // Hard-fail if something re-created a symlink
+    try {
+      const st = await fsp.lstat(dest);
+      if (st.isSymbolicLink()) {
+        throw new Error('Dock shell OpenBrowser.bin must not be a symlink');
+      }
+    } catch (error) {
+      if (/must not be a symlink|refusing kernel/.test(String(error.message || error))) throw error;
+      throw new Error('Dock shell OpenBrowser.bin verify failed: ' + (error.message || error));
     }
   }
   for (const name of ['libskit.dylib', 'analysis', 'webdriver', 'main.dat']) {
