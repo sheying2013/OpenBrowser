@@ -126,7 +126,7 @@ Local API binds to loopback by default; send `api-key` when `OPENBROWSER_API_KEY
 
 <br>
 
-The independent kernel is not built by us. Default feed: [Donut Browser](https://github.com/zhom/donutbrowser) ([zhom](https://github.com/zhom)) → [wayfern.json](https://donutbrowser.com/wayfern.json) → [Wayfern](https://wayfern.com/) Chromium (`download.wayfern.com`, [ToS](https://wayfern.com/tos)). Fallback: Google [Chrome for Testing](https://github.com/GoogleChromeLabs/chrome-for-testing) ([version feed](https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json)). OpenBrowser only fetches public sources and does not redistribute kernels.
+Independent kernel from [Donut Browser](https://github.com/zhom/donutbrowser) / [Wayfern](https://wayfern.com/) (by [zhom](https://github.com/zhom); feed [wayfern.json](https://donutbrowser.com/wayfern.json); [ToS](https://wayfern.com/tos)). This repo does not redistribute the kernel.
 
 </details>
 
