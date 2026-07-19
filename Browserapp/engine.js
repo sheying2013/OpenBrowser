@@ -850,7 +850,11 @@ class BrowserEngine {
       }
       return network;
     } catch (error) {
-      this.emit({ type: 'proxy-error', id: profile.id, message: '出口信息检测失败（语言/时区可能回退）：' + error.message });
+      // Direct mode is still valid local exit; only soft-warn so locale can fall back.
+      const prefix = hasProxy
+        ? '出口信息检测失败（语言/时区可能回退）：'
+        : '本地出口信息暂不可用（将使用系统/已保存语言时区）：';
+      this.emit({ type: hasProxy ? 'proxy-error' : 'proxy-warn', id: profile.id, message: prefix + error.message });
       return this.networkInfo.get(profile.id) || null;
     }
   }
