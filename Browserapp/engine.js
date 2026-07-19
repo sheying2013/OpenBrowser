@@ -7,7 +7,7 @@ const { spawn } = require('child_process');
 const cdp = require('./cdp');
 const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
-const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry } = require('./proxy-forwarder');
+const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
 const { resolveProfileLanguage, localeFromCountryCode } = require('./automation/locale-from-country');
 const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
@@ -260,10 +260,16 @@ class BrowserEngine {
         ipChannel: allowed(proxyMetaValue.ipChannel, ['ip-api', 'ip2location'], 'ip-api'),
         refreshUrl: String(proxyMetaValue.refreshUrl || '').slice(0, 1000),
         checkOnStart: Boolean(proxyMetaValue.checkOnStart),
+        refreshOnStart: Boolean(proxyMetaValue.refreshOnStart),
         systemProxy: allowed(proxyMetaValue.systemProxy, ['global', 'use', 'off'], 'global'),
         directBypass: Boolean(proxyMetaValue.directBypass),
         bypassList: String(proxyMetaValue.bypassList || '').slice(0, 4000),
-        apiExtractUrl: String(proxyMetaValue.apiExtractUrl || '').slice(0, 2000),
+        apiExtractUrl: String(proxyMetaValue.apiExtractUrl || proxyMetaValue.refreshUrl || '').slice(0, 2000),
+        backupProxies: Array.isArray(proxyMetaValue.backupProxies)
+          ? proxyMetaValue.backupProxies.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 8)
+          : (typeof proxyMetaValue.backupProxies === 'string'
+            ? String(proxyMetaValue.backupProxies).split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8)
+            : []),
       },
       privacy: {
         webrtc: allowed(privacyValue.webrtc, ['proxy', 'disabled', 'real'], 'proxy'),
@@ -815,10 +821,10 @@ class BrowserEngine {
       timezone: profile.exitTimezone,
       latitude: profile.exitLatitude,
       longitude: profile.exitLongitude,
+      ip: profile.exitIp,
     };
     const privacy = { ...(profile.privacy || {}) };
     const language = resolveProfileLanguage(profile, network);
-    // Keep explicit languageMode; stamp resolved language for Chrome --lang / accept_languages
     const next = {
       ...profile,
       language,
@@ -827,11 +833,20 @@ class BrowserEngine {
         languageMode: privacy.languageMode || (privacy.langFromIp !== false ? 'ip' : (privacy.uiLanguage || 'profile')),
         langFromIp: (privacy.languageMode || 'ip') === 'ip' || privacy.langFromIp !== false,
       },
+      exitIp: network.ip || profile.exitIp || '',
       exitCountryCode: network.countryCode || profile.exitCountryCode || '',
       exitTimezone: network.timezone || profile.exitTimezone || '',
+      exitLatitude: network.latitude ?? profile.exitLatitude,
+      exitLongitude: network.longitude ?? profile.exitLongitude,
     };
     if ((privacy.timezoneMode === 'ip' || !privacy.timezoneMode) && network.timezone) {
       next.privacy = { ...next.privacy, timezone: network.timezone };
+    }
+    if ((privacy.geoMode === 'ip' || privacy.geoMode === 'allow' || !privacy.geoMode)
+      && Number.isFinite(Number(network.latitude))
+      && Number.isFinite(Number(network.longitude))) {
+      next.exitLatitude = Number(network.latitude);
+      next.exitLongitude = Number(network.longitude);
     }
     return next;
   }
@@ -1099,21 +1114,8 @@ class BrowserEngine {
       if (!profile.advanced.multiOpen) return this.publicRunning(profile.id);
       return this.publicRunning(profile.id);
     }
-    // Optional pre-start proxy IP check
-    if (profile.proxyMeta?.checkOnStart && profile.proxy && !/^(direct|offline|none)$/i.test(String(profile.proxy))) {
-      try {
-        const result = await this.checkProxy(profile);
-        this.networkInfo.set(profile.id, result);
-        profile.exitIp = result.ip; profile.exitCountryCode = result.countryCode;
-        profile.exitTimezone = result.timezone || profile.exitTimezone;
-        profile.exitLatitude = result.latitude; profile.exitLongitude = result.longitude;
-        profile.exitCheckedAt = result.checkedAt;
-      } catch (error) {
-        this.emit({ type: 'proxy-error', id: profile.id, message: '启动前代理检测失败：' + error.message });
-        throw new Error('启动前代理检测失败：' + error.message);
-      }
-    }
-    // Resolve language / timezone from exit IP when requested (e.g. JP → ja-JP)
+    profile = await this.prepareProfileProxyForStart(profile);
+    this.profiles.set(profile.id, profile);
     await this.ensureExitNetworkForLocale(profile).catch(() => {});
     profile = this.applyResolvedLocale(profile);
     this.profiles.set(profile.id, profile);
@@ -1422,17 +1424,198 @@ class BrowserEngine {
 
   status() { return [...this.profiles.values()].map((profile) => ({ ...profile, ...this.publicRunning(profile.id), network: this.networkInfo.get(profile.id) || null, assignedExtensions: [...(this.assignments.get(profile.id) || [])] })); }
 
-  async testProxy(raw) {
-    const profile = this.sanitizeProfile(raw); const config = parseProxy(profile.proxy);
-    if (!config) throw new Error('Direct environments do not have a proxy exit to inspect');
-    const result = await retryProxyOperation(() => lookupProxyCountry(config));
-    return { ...result, protocol: config.protocol, endpoint: config.host + ':' + config.port };
+  async resolveProfileProxyConfig(profile, { allowExtract = true } = {}) {
+    const working = this.sanitizeProfile(profile);
+    let lastError = null;
+    const candidates = [];
+    const pushCandidate = (value, source) => {
+      const raw = String(value || '').trim();
+      if (!raw || /^(direct|offline|none)$/i.test(raw)) return;
+      if (candidates.some((item) => item.raw === raw)) return;
+      candidates.push({ raw, source });
+    };
+    pushCandidate(working.proxy, 'primary');
+    for (const item of working.proxyMeta?.backupProxies || []) pushCandidate(item, 'backup');
+    if (allowExtract) {
+      const extractUrl = String(working.proxyMeta?.apiExtractUrl || '').trim();
+      if (extractUrl) {
+        try {
+          const extracted = await extractProxyFromApi(extractUrl);
+          const raw = extracted.raw || (
+            extracted.protocol + '://'
+            + (extracted.username ? (encodeURIComponent(extracted.username) + ':' + encodeURIComponent(extracted.password) + '@') : '')
+            + extracted.host + ':' + extracted.port
+          );
+          pushCandidate(raw, 'api');
+        } catch (error) {
+          lastError = error;
+        }
+      }
+    }
+    if (!candidates.length) {
+      if (lastError) throw lastError;
+      throw new Error('Direct environments do not have a proxy exit to inspect');
+    }
+    const errors = [];
+    for (const candidate of candidates) {
+      try {
+        const config = parseProxy(candidate.raw);
+        if (!config) continue;
+        return { profile: working, config, raw: candidate.raw, source: candidate.source };
+      } catch (error) {
+        errors.push(String(error.message || error));
+      }
+    }
+    throw new Error(errors[0] || '代理配置无效');
   }
 
-  async checkProxy(raw) {
-    const profile = this.sanitizeProfile(raw); const network = await this.testProxy(profile);
-    this.networkInfo.set(profile.id, network); this.emit({ type: 'status', id: profile.id, running: this.running.has(profile.id), network });
-    return network;
+  fingerprintPatchFromNetwork(network = {}, profile = {}) {
+    const privacy = { ...(profile.privacy || {}) };
+    const language = resolveProfileLanguage({
+      ...profile,
+      privacy: { ...privacy, languageMode: privacy.languageMode || 'ip' },
+    }, network);
+    const patch = {
+      exitIp: network.ip || '',
+      exitCountryCode: network.countryCode || '',
+      exitTimezone: network.timezone || '',
+      exitLatitude: network.latitude ?? null,
+      exitLongitude: network.longitude ?? null,
+      exitCheckedAt: network.checkedAt || new Date().toISOString(),
+      language,
+      privacy: { ...privacy },
+    };
+    if ((privacy.timezoneMode === 'ip' || !privacy.timezoneMode) && network.timezone) {
+      patch.privacy.timezoneMode = 'ip';
+      patch.privacy.timezone = network.timezone;
+    }
+    if ((privacy.languageMode === 'ip' || privacy.langFromIp !== false) && language) {
+      patch.privacy.languageMode = privacy.languageMode || 'ip';
+      patch.language = language;
+    }
+    return patch;
+  }
+
+  applyNetworkToProfile(profile, network, { persist = false } = {}) {
+    const patch = this.fingerprintPatchFromNetwork(network, profile);
+    const next = this.sanitizeProfile({
+      ...profile,
+      ...patch,
+      privacy: {
+        ...(profile.privacy || {}),
+        ...(patch.privacy || {}),
+      },
+    });
+    this.profiles.set(next.id, next);
+    this.networkInfo.set(next.id, network);
+    if (persist) this.persist().catch(() => {});
+    this.emit({ type: 'status', id: next.id, running: this.running.has(next.id), network, profile: next });
+    return { profile: next, network, patch };
+  }
+
+  async testProxy(raw, options = {}) {
+    const profile = this.sanitizeProfile(raw);
+    const resolved = await this.resolveProfileProxyConfig(profile, { allowExtract: options.allowExtract !== false });
+    try {
+      const result = await retryProxyOperation(() => lookupProxyCountry(resolved.config));
+      return {
+        ...result,
+        protocol: resolved.config.protocol,
+        endpoint: resolved.config.host + ':' + resolved.config.port,
+        proxySource: resolved.source,
+        proxyRaw: resolved.raw,
+        errorClass: null,
+      };
+    } catch (error) {
+      const err = new Error(error.message || String(error));
+      err.errorClass = error.errorClass || classifyProxyError(error);
+      err.latencyMs = error.latencyMs;
+      throw err;
+    }
+  }
+
+  async checkProxy(raw, options = {}) {
+    const profile = this.sanitizeProfile(raw);
+    const network = await this.testProxy(profile, options);
+    const applied = this.applyNetworkToProfile(profile, network, { persist: Boolean(options.persist) });
+    return {
+      ...network,
+      appliedFingerprint: applied.patch,
+      profile: applied.profile,
+    };
+  }
+
+  async refreshProfileProxy(raw) {
+    const profile = this.sanitizeProfile(raw);
+    const url = String(profile.proxyMeta?.refreshUrl || profile.proxyMeta?.apiExtractUrl || '').trim();
+    if (!url) throw new Error('未配置刷新 URL');
+    const refresh = await invokeProxyRefresh(url);
+    let nextProfile = profile;
+    if (String(profile.proxyMeta?.apiExtractUrl || '').trim()) {
+      try {
+        const extracted = await extractProxyFromApi(profile.proxyMeta.apiExtractUrl);
+        const rawProxy = extracted.raw || (
+          extracted.protocol + '://'
+          + (extracted.username ? (encodeURIComponent(extracted.username) + ':' + encodeURIComponent(extracted.password) + '@') : '')
+          + extracted.host + ':' + extracted.port
+        );
+        nextProfile = this.sanitizeProfile({ ...profile, networkMode: 'proxy', proxy: rawProxy });
+        this.profiles.set(nextProfile.id, nextProfile);
+      } catch (_) {}
+    }
+    const network = await this.checkProxy(nextProfile, { allowExtract: false, persist: true });
+    return { refresh, network, profile: this.profiles.get(nextProfile.id) };
+  }
+
+  async prepareProfileProxyForStart(profile) {
+    let working = this.sanitizeProfile(profile);
+    const meta = working.proxyMeta || {};
+    const hasProxy = working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy));
+    const extractUrl = String(meta.apiExtractUrl || '').trim();
+    if (extractUrl) {
+      try {
+        const extracted = await extractProxyFromApi(extractUrl);
+        const rawProxy = extracted.raw || (
+          extracted.protocol + '://'
+          + (extracted.username ? (encodeURIComponent(extracted.username) + ':' + encodeURIComponent(extracted.password) + '@') : '')
+          + extracted.host + ':' + extracted.port
+        );
+        working = this.sanitizeProfile({ ...working, networkMode: 'proxy', proxy: rawProxy });
+      } catch (error) {
+        if (!hasProxy) throw new Error('动态代理提取失败：' + (error.message || error));
+      }
+    }
+    if (meta.refreshOnStart && String(meta.refreshUrl || '').trim()) {
+      try {
+        await invokeProxyRefresh(meta.refreshUrl);
+      } catch (error) {
+        this.emit({ type: 'proxy-error', id: working.id, message: '启动前刷新代理失败：' + (error.message || error) });
+        throw new Error('启动前刷新代理失败：' + (error.message || error));
+      }
+    }
+    const shouldCheck = meta.checkOnStart || meta.refreshOnStart || Boolean(extractUrl);
+    if (shouldCheck && working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy))) {
+      const candidates = [working.proxy, ...(meta.backupProxies || [])].filter(Boolean);
+      let lastError = null;
+      let ok = false;
+      for (const candidate of candidates) {
+        try {
+          const trial = this.sanitizeProfile({ ...working, networkMode: 'proxy', proxy: candidate });
+          const network = await this.testProxy(trial, { allowExtract: false });
+          working = this.sanitizeProfile({ ...trial, proxy: network.proxyRaw || candidate });
+          this.applyNetworkToProfile(working, network, { persist: false });
+          ok = true;
+          break;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (!ok && lastError) {
+        this.emit({ type: 'proxy-error', id: working.id, message: '启动前代理检测失败：' + (lastError.message || lastError) });
+        throw new Error('启动前代理检测失败：' + (lastError.message || lastError));
+      }
+    }
+    return working;
   }
 
   async readExtension(directory, builtIn = false) {

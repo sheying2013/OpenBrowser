@@ -1340,14 +1340,70 @@ app.whenReady().then(async () => {
     const item = id ? store.get(id) : null;
     const raw = item?.raw || payload?.proxy || payload?.raw;
     if (!raw) throw new Error('proxy required');
-    const result = await engine.testProxy({
-      id: 'proxy-check',
-      name: 'proxy-check',
-      proxy: raw,
-      proxyMeta: { ipChannel: item?.ipChannel || payload?.ipChannel || 'ip-api' },
-    });
-    if (item) await store.markCheck(item.id, result);
-    return { ...result, proxy: item || null };
+    try {
+      const result = await engine.testProxy({
+        id: 'proxy-check',
+        name: 'proxy-check',
+        proxy: raw,
+        proxyMeta: {
+          ipChannel: item?.ipChannel || payload?.ipChannel || 'ip-api',
+          apiExtractUrl: item?.refreshUrl || payload?.apiExtractUrl || '',
+          refreshUrl: item?.refreshUrl || payload?.refreshUrl || '',
+        },
+      });
+      if (item) await store.markCheck(item.id, result);
+      return { ...result, proxy: item ? store.get(item.id) : null };
+    } catch (error) {
+      if (item) {
+        await store.markCheckError(item.id, {
+          errorClass: error.errorClass || 'unknown',
+          latencyMs: error.latencyMs,
+        });
+      }
+      throw error;
+    }
+  });
+  registerTrustedIpc('proxy:check-many', async (_event, payload) => {
+    const store = proxyStore();
+    const ids = Array.isArray(payload?.ids) ? payload.ids.map(String) : [];
+    if (!ids.length) throw new Error('ids required');
+    const results = [];
+    for (const id of ids.slice(0, 100)) {
+      const item = store.get(id);
+      if (!item) {
+        results.push({ id, ok: false, error: 'not found' });
+        continue;
+      }
+      try {
+        const result = await engine.testProxy({
+          id: 'proxy-check',
+          name: item.name || 'proxy-check',
+          proxy: item.raw,
+          proxyMeta: { ipChannel: item.ipChannel || 'ip-api', refreshUrl: item.refreshUrl || '', apiExtractUrl: item.refreshUrl || '' },
+        });
+        await store.markCheck(item.id, result);
+        results.push({ id, ok: true, ...result, proxy: store.get(item.id) });
+      } catch (error) {
+        await store.markCheckError(item.id, {
+          errorClass: error.errorClass || 'unknown',
+          latencyMs: error.latencyMs,
+        });
+        results.push({
+          id,
+          ok: false,
+          error: error.message || String(error),
+          errorClass: error.errorClass || 'unknown',
+          latencyMs: error.latencyMs || null,
+          proxy: store.get(item.id),
+        });
+      }
+    }
+    return { results, ok: results.filter((r) => r.ok).length, fail: results.filter((r) => !r.ok).length };
+  });
+  registerTrustedIpc('profiles:refresh-proxy', (_event, profile) => engine.refreshProfileProxy(profile));
+  registerTrustedIpc('profiles:apply-proxy-fingerprint', async (_event, profile) => {
+    const network = await engine.checkProxy(profile, { persist: true });
+    return network;
   });
   registerTrustedIpc('automation:app-center', (_event, filter) => {
     if (!automation?.appCenter) return { list: { builtin: [], recommended: [], local: [] }, counts: { builtin: 0, recommended: 0, local: 0, installed: 0 } };
