@@ -3716,7 +3716,12 @@ window.ops.onEvent(async (value) => {
 window.ops.onEvent((value) => {
   if (value.type === 'proxy-error' || value.type === 'proxy-warn') {
     const profile = ui.profiles.find((item) => item.id === value.id);
-    const message = '环境 ' + displayProfileNumber(profile || { id: value.id }) + '：' + value.message;
+    const msg = String(value.message || '');
+    const message = '环境 ' + displayProfileNumber(profile || { id: value.id }) + '：' + msg;
+    if (/出口信息检测失败（语言\/时区可能回退）|本地出口信息暂不可用|Direct exit lookup|本地出口查询失败/.test(msg)) {
+      log('ProxyWarn', message);
+      return;
+    }
     if (value.type === 'proxy-error') toast(message);
     log(value.type === 'proxy-error' ? 'Proxy' : 'ProxyWarn', message);
   }
