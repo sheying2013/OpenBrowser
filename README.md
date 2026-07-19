@@ -1,8 +1,8 @@
 # OpenBrowser
 
-> **OpenBrowser** 是一个本地桌面浏览器环境管理器，用于创建、启动和维护多个隔离的 Chromium 环境，并统一管理代理、指纹参数、扩展、窗口同步、Local API、MCP 与本地 RPA 工作流。
+> **OpenBrowser** 是一款指纹浏览器，用于管理多个隔离的 Chromium 配置，并统一提供代理、指纹参数、扩展、窗口同步、Local API、MCP 与本地 RPA 工作流。
 >
-> **OpenBrowser** is a local desktop browser environment manager for isolated Chromium environments, proxy settings, extensions, window synchronization, Local API, MCP, and local RPA workflows.
+> **OpenBrowser** is a fingerprint browser for managing isolated Chromium profiles, with proxy settings, fingerprint controls, extensions, window synchronization, Local API, MCP, and local RPA workflows.
 
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)
