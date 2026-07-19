@@ -126,7 +126,7 @@ OpenBrowser/
 
 <br>
 
-独立内核非本项目自研。默认使用 [Donut Browser](https://github.com/zhom/donutbrowser)（[zhom](https://github.com/zhom)）公开源 [wayfern.json](https://donutbrowser.com/wayfern.json)，对应 [Wayfern](https://wayfern.com/) 反检测 Chromium（`download.wayfern.com`，[服务条款](https://wayfern.com/tos)）。当前平台无包时回退 Google [Chrome for Testing](https://github.com/GoogleChromeLabs/chrome-for-testing)（[版本源](https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json)）。本仓库只按公开源拉取，不重新分发内核。
+独立内核来自 [Donut Browser](https://github.com/zhom/donutbrowser) / [Wayfern](https://wayfern.com/)（作者 [zhom](https://github.com/zhom)，更新源 [wayfern.json](https://donutbrowser.com/wayfern.json)，[服务条款](https://wayfern.com/tos)）。本仓库不重新分发内核。
 
 </details>
 
