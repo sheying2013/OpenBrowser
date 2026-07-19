@@ -1,29 +1,29 @@
 'use strict';
 
 /**
- * ThirdPartySuite RPA 模版商店 API 客户端（逆向自 app-global 前端）。
+ * RPA 模版商店 API 客户端（可选远程同步）。
  *
- * 鉴权要点（实测）：
+ * 仓库内不内置任何长期远程域名；调用方必须显式传入 base / origin。
+ * 运行时默认走本地离线包 automation/data/catalog-templates.json。
+ *
+ * 鉴权要点：
  *   - Cookie: mix_auth_token / mix_sys_token / …
  *   - Header: Cpl = LOCAL_KEY_IN_WEBSITE（缺省会导致 4006/1500）
  *
- * 接口：
+ * 接口（相对 base）：
  *   GET rpav2/template/category-list?lang=
  *   GET rpav2/template/template-list?lang=&keyword=&sort=&category_id=&pay_type=&page=&page_size=
  *   GET rpav2/template/template-info?template_id=&lang=  → 含 uri（.json.gz 流程包）
  *   GET uri → gunzip → process graph（或字段 c 经 AES 解密）
  *
- * 解密：key = md5(template_id).hex[0:16]，AES-CBC，iv=key（CryptoJS 对齐）
+ * 解密：key = md5(template_id).hex[0:16]，AES-CBC，iv=key
  */
 
 const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
 const zlib = require('zlib');
-const { parseProcessContent } = require('./protocol/ads-rpa-registry');
-
-const DEFAULT_BASE = 'https://api-global.adspower.net';
-const DEFAULT_ORIGIN = 'https://app-global.adspower.net';
+const { parseProcessContent } = require('./protocol/rpa-registry');
 
 function requestRaw(url, { method = 'GET', headers = {}, body = null, timeout = 30000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -38,8 +38,6 @@ function requestRaw(url, { method = 'GET', headers = {}, body = null, timeout = 
       headers: {
         Accept: '*/*',
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-        Origin: DEFAULT_ORIGIN,
-        Referer: DEFAULT_ORIGIN + '/rpa/marketplace',
         ...headers,
       },
       timeout,
@@ -76,6 +74,10 @@ function authHeaders(config = {}) {
     headers.Cookie = `mix_auth_token=${config.token}`;
   }
   if (config.apiKey) headers['Api-Key'] = String(config.apiKey);
+  if (config.origin) {
+    headers.Origin = String(config.origin);
+    headers.Referer = String(config.origin).replace(/\/$/, '') + '/rpa/marketplace';
+  }
   if (config.extraHeaders && typeof config.extraHeaders === 'object') {
     Object.assign(headers, config.extraHeaders);
   }
@@ -92,7 +94,7 @@ function unwrap(payload) {
   if (!payload || typeof payload !== 'object') throw new Error('空响应');
   const code = payload.code;
   if (code !== undefined && code !== 0 && code !== '0' && code !== 200) {
-    throw new Error(`Ads API code=${code}: ${payload.msg || payload.message || '失败'}`);
+    throw new Error(`远程模版 API code=${code}: ${payload.msg || payload.message || '失败'}`);
   }
   return payload.data !== undefined ? payload.data : payload;
 }
@@ -123,7 +125,7 @@ async function fetchProcessPack(uri, templateId) {
   return pack;
 }
 
-/** Flatten Ads RPA Plus graph (nodes[].data.type) to parseProcessContent shape */
+/** Flatten RPA Plus graph (nodes[].data.type) to parseProcessContent shape */
 function graphToProcessContent(pack) {
   if (!pack || typeof pack !== 'object') return pack;
   if (Array.isArray(pack.steps)) return pack;
@@ -138,9 +140,13 @@ function graphToProcessContent(pack) {
   return { nodes, edges: pack.edges || [] };
 }
 
-class AdsTemplateClient {
+class TemplateClient {
   constructor(config = {}) {
-    this.base = String(config.base || DEFAULT_BASE).replace(/\/$/, '');
+    const base = String(config.base || '').trim();
+    if (!base) {
+      throw new Error('未配置远程模版 API base：仓库不内置长期连接域名，请显式传入 config.base');
+    }
+    this.base = base.replace(/\/$/, '');
     this.lang = config.lang || 'zh-CN';
     this.config = config;
   }
@@ -189,7 +195,7 @@ class AdsTemplateClient {
   }
 }
 
-function normalizeAdsTemplate(item = {}, detail = null, processContent = null) {
+function normalizeRemoteTemplate(item = {}, detail = null, processContent = null) {
   const src = { ...item, ...(detail || {}) };
   const id = String(src.id || src.template_id || '');
   if (!id) throw new Error('模版缺少 id');
@@ -207,24 +213,24 @@ function normalizeAdsTemplate(item = {}, detail = null, processContent = null) {
   else if (pc) steps = parseProcessContent(pc);
 
   return {
-    id: `ads-${id}`,
-    ads_id: id,
-    name: String(src.name || src.template_name || `Ads 模版 ${id}`).slice(0, 120),
+    id: `remote-${id}`,
+    external_id: id,
+    name: String(src.name || src.template_name || `远程模版 ${id}`).slice(0, 120),
     cat: String(src.category_name || src.category || src.cat || 'Other').slice(0, 40),
     category_id: src.category_id != null ? String(src.category_id) : '',
     desc: String(src.description || src.abstract || src.desc || '').replace(/<[^>]+>/g, ' ').slice(0, 800),
-    tags: Array.isArray(src.tags) ? src.tags.map(String) : ['ThirdPartySuite', '免费'],
+    tags: Array.isArray(src.tags) ? src.tags.map(String) : ['远程', '免费'],
     steps,
     process_content: pc,
     uses: Number(src.use_num || src.uses || 0) || 0,
     pay_type: Number(src.pay_type || 1) || 1,
     price: src.price != null ? Number(src.price) : 0,
     developer: typeof src.developer === 'object' && src.developer
-      ? String(src.developer.name || 'ThirdPartySuite')
-      : String(src.developer || src.author || 'ThirdPartySuite').slice(0, 80),
+      ? String(src.developer.name || 'Remote')
+      : String(src.developer || src.author || 'Remote').slice(0, 80),
     img_url: src.img_url || src.cover || src.uri || '',
     builtin: false,
-    source: 'ads',
+    source: 'remote',
     create_time: src.create_time || new Date().toISOString(),
     update_time: src.updated_time || src.update_time || new Date().toISOString(),
   };
@@ -232,9 +238,13 @@ function normalizeAdsTemplate(item = {}, detail = null, processContent = null) {
 
 /**
  * Sync free (or filtered) templates. withDetail downloads uri process packs.
+ * Requires explicit config.base (no hard-coded host in repository).
  */
-async function syncAdsTemplateStore(config = {}, options = {}) {
-  const client = new AdsTemplateClient(config);
+async function syncRemoteTemplateStore(config = {}, options = {}) {
+  if (!String(config.base || '').trim()) {
+    throw new Error('未配置远程模版 API base：请显式传入 base，或使用本地离线包 loadBundledCatalogDump()');
+  }
+  const client = new TemplateClient(config);
   const pageSize = options.pageSize || 50;
   const maxPages = options.maxPages || 20;
   const withDetail = options.withDetail !== false;
@@ -282,7 +292,7 @@ async function syncAdsTemplateStore(config = {}, options = {}) {
         } catch (_) { /* keep list meta */ }
       }
       try {
-        list.push(normalizeAdsTemplate(item, detail, processContent));
+        list.push(normalizeRemoteTemplate(item, detail, processContent));
       } catch (_) { /* skip */ }
     }
     if (batch.length < pageSize) break;
@@ -299,10 +309,10 @@ async function syncAdsTemplateStore(config = {}, options = {}) {
 }
 
 /** Load bundled offline dump written by scrape script */
-function loadBundledFreeDump() {
+function loadBundledCatalogDump() {
   const fs = require('fs');
   const path = require('path');
-  const p = path.join(__dirname, 'data', 'ads-free-templates.json');
+  const p = path.join(__dirname, 'data', 'catalog-templates.json');
   if (!fs.existsSync(p)) return null;
   try {
     return JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -312,13 +322,12 @@ function loadBundledFreeDump() {
 }
 
 module.exports = {
-  AdsTemplateClient,
-  normalizeAdsTemplate,
-  syncAdsTemplateStore,
+  TemplateClient,
+  normalizeRemoteTemplate,
+  syncRemoteTemplateStore,
   parseProcessContent,
   fetchProcessPack,
   graphToProcessContent,
   decryptProcessCipher,
-  loadBundledFreeDump,
-  DEFAULT_BASE,
+  loadBundledCatalogDump,
 };

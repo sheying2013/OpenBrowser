@@ -1,10 +1,9 @@
 'use strict';
 
 /**
- * Pixel-level RPA action registry reconstructed from ThirdPartySuite rpa_plus.min.js
- * registerAction(...) list + Action.prototype param destructuring.
+ * RPA action registry (registerAction list + param schemas).
  *
- * process model (observed):
+ * process model:
  *   task { id, fbcc_user_id, process_content, process_id, process_name, type }
  *   runner connects: puppeteer.connect({ browserWSEndpoint, defaultViewport: null })
  *   timeout race 180s, retry up to 5
@@ -50,7 +49,7 @@ const RPA_PLUS_ACTIONS = Object.freeze([
   'get2faCode',
   'getRequest',
   'getResponse',
-  'stopLinsten', // typo preserved from ThirdPartySuite bundle
+  'stopLinsten', // historical typo preserved for template compatibility
   'getCookies',
   'clearCookies',
   'extractData',
@@ -74,8 +73,8 @@ const RPA_PLUS_ACTIONS = Object.freeze([
 ]);
 
 /**
- * Parameter schemas observed via destructuring in Action.prototype.*
- * Used for validation + documentation of pixel-faithful payloads.
+ * Parameter schemas for RPA actions.
+ * Used for validation + documentation of step payloads.
  */
 const ACTION_PARAM_SCHEMA = Object.freeze({
   gotoUrl: { fields: ['url', 'timeout'], defaults: { timeout: null } },

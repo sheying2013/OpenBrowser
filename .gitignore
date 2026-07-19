@@ -45,3 +45,5 @@ chrome-for-testing/
 auth.json
 cookies*.json
 proxy-credentials*
+
+# Offline RPA catalog dump is intentionally tracked (no secrets).

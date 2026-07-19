@@ -2,7 +2,7 @@
 
 /**
  * Self-contained verification for automation stack.
- * Does not require ThirdPartySuite, desktop host, or network (except optional free port bind).
+ * Does not require desktop host or network (except optional free port bind).
  *
  *   node automation/automation-selftest.js
  */
@@ -116,7 +116,7 @@ async function httpJson(port, method, urlPath, body, headers = {}) {
 }
 
 async function main() {
-  console.log('OpenBrowser automation selftest (no ThirdPartySuite dependency)\n');
+  console.log('OpenBrowser automation selftest\n');
 
   // 1) App center catalog
   const engine = createFakeEngine();
@@ -148,14 +148,15 @@ async function main() {
   assert.ok(templates.length >= 59, 'local catalog templates seeded');
   const catalog = templates.filter((template) => template.source === 'catalog');
   assert.ok(catalog.length >= 59, 'local catalog restored');
-  assert.ok(catalog.every((template) => template.ads_id === null), 'catalog does not retain external ids');
-  assert.ok(catalog.every((template) => !/ads(?:power)?/i.test([
+  assert.ok(catalog.every((template) => template.external_id === null), 'catalog does not retain external ids');
+  const brandPattern = new RegExp('ads(?:power)?', 'i');
+  assert.ok(catalog.every((template) => !brandPattern.test([
     template.name,
     template.cat,
     template.desc,
     template.developer,
     ...(template.tags || []),
-  ].join(' '))), 'catalog visible fields are rebranded');
+  ].join(' '))), 'catalog visible fields have no external brand');
   assert.ok(catalog.every((template) => Number(template.uses) === 0), 'catalog usage starts at zero locally');
   assert.ok(cloneBuiltinTemplates().every((template) => findUnsupportedSteps(template.steps).length === 0), 'all builtin templates use executable steps');
   assert.ok(catalog.every((template) => template.runnable), 'all local catalog templates use supported steps');

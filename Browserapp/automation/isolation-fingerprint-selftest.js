@@ -20,6 +20,11 @@ const {
   buildWorkerInjectionScript,
   chromeArgsForFingerprint,
   fingerprintConsistencyIssues,
+  createMediaDevicesFromSeed,
+  createSpeechVoicesFromSeed,
+  buildWebglFpPayload,
+  audioMarkFromSeed,
+  clientRectMarkFromSeed,
 } = require('./fingerprint');
 const {
   buildUaProfile,
@@ -85,7 +90,7 @@ async function main() {
   assert.ok(['noise', 'real', 'blocked'].includes(a1.canvas.mode));
   pass('fingerprint fields populated');
 
-  // Ads-style UA: custom UA + Client Hints consistency
+  // Custom UA + Client Hints consistency
   const customUa = buildFingerprint({
     id: 'env-ua',
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -98,7 +103,7 @@ async function main() {
   const cdp = cdpUserAgentOverride(customUa.uaProfile, 'en-US');
   assert.ok(cdp.userAgentMetadata.fullVersionList?.length >= 2);
   assert.strictEqual(cdp.platform, 'Win32');
-  pass('custom UA builds Ads-style Client Hints / CDP metadata');
+  pass('custom UA builds Client Hints / CDP metadata');
 
   const uaScript = buildInjectionScript(customUa);
   assert.ok(uaScript.includes('userAgentData'));
@@ -112,7 +117,7 @@ async function main() {
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36',
   }));
   assert.ok(oldTls.some((a) => a.startsWith('--disable-features=') && a.includes('PermuteTLSExtensions')));
-  pass('TLS PermuteTLSExtensions follows Chrome major (Ads setJA3)');
+  pass('TLS PermuteTLSExtensions follows Chrome major');
 
   const meta = buildUserAgentMetadata(
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36'
@@ -178,12 +183,43 @@ async function main() {
   assert.notStrictEqual(a1.canvas.mark, b1.canvas.mark);
   pass('canvas marks differ across profiles');
 
+  // MediaDevices / speech / WebGL payload / audio+clientRect marks / static-dynamic layers
+  const md1 = createMediaDevicesFromSeed('env-aaa');
+  const md2 = createMediaDevicesFromSeed('env-aaa');
+  const md3 = createMediaDevicesFromSeed('env-bbb');
+  assert.deepStrictEqual(md1, md2);
+  assert.notStrictEqual(md1[0].label, md3[0].label);
+  assert.ok(md1.some((d) => d.kind === 'audioinput'));
+  assert.ok(md1.some((d) => d.kind === 'videoinput' && /Integrated Camera/.test(d.label)));
+  assert.ok(Array.isArray(a1.mediaDevices.devices) && a1.mediaDevices.devices.length >= 3);
+  assert.ok(a1.webgl.fpPayload.UNMASKED_VENDOR_WEBGL);
+  assert.ok(a1.webgl.fpPayload.UNMASKED_RENDERER_WEBGL);
+  assert.ok(a1.webgl.gpu && a1.webgl.gpu.vendor);
+  assert.ok(a1.staticConfig && a1.staticConfig.canvasMark === a1.canvas.mark);
+  assert.ok(a1.dynamicConfig && 'timezone' in a1.dynamicConfig);
+  assert.strictEqual(typeof audioMarkFromSeed('abc'), 'number');
+  assert.ok(Math.abs(clientRectMarkFromSeed('abc')) <= 10000);
+  const voices = createSpeechVoicesFromSeed('env-aaa', ['zh-CN'], 'noise');
+  assert.ok(Array.isArray(voices) && voices.length >= 1);
+  assert.ok(voices.some((v) => v.default === true));
+  const blockedSpeech = buildFingerprint({ id: 'env-speech', privacy: { speech: 'blocked' } });
+  assert.strictEqual(blockedSpeech.speech.mode, 'blocked');
+  assert.deepStrictEqual(blockedSpeech.speech.voices, []);
+  const payload = buildWebglFpPayload(a1.webgl);
+  assert.strictEqual(payload.UNMASKED_VENDOR_WEBGL, a1.webgl.vendor);
+  pass('mediaDevices / speech / webgl payload / static-dynamic layers');
+
   const scriptA = buildInjectionScript(a1);
   const scriptB = buildInjectionScript(b1);
   assert.ok(scriptA.includes(String(a1.canvas.mark)));
   assert.ok(!scriptA.includes(String(b1.canvas.mark)) || a1.canvas.mark === b1.canvas.mark);
   assert.ok(scriptA.length > 500);
   assert.notStrictEqual(scriptA, scriptB);
+  assert.ok(scriptA.includes('enumerateDevices') || scriptA.includes('mediaDevices'));
+  assert.ok(scriptA.includes('Integrated Camera') || scriptA.includes('Microphone Array') || scriptA.includes('audioinput'));
+  const speechNoise = buildFingerprint({ id: 'env-speech-noise', language: 'en-US', privacy: { speech: 'noise' } });
+  const speechScript = buildInjectionScript(speechNoise);
+  assert.ok(speechScript.includes('getVoices'));
   pass('injection scripts profile-specific');
 
   const args = chromeArgsForFingerprint(a1, { privacy: { dnt: true } });

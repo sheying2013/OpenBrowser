@@ -457,7 +457,7 @@ function displayProfileNumber(profile) {
   return String(positiveProfileNumber(profile?.number) || profile?.name || profile?.id || '');
 }
 
-/** ixBrowser-style env identity colors (not Chrome branding) */
+/** Env identity colors (not Chrome branding) */
 const ENV_ICON_PALETTE = [
   ['#2563eb', '#1d4ed8'],
   ['#7c3aed', '#5b21b6'],
@@ -3072,7 +3072,7 @@ const onEditorFormChange = (event) => {
 $('#profile-editor-form').addEventListener('input', onEditorFormChange);
 $('#profile-editor-form').addEventListener('change', onEditorFormChange);
 
-// Platform preset → fill 指定地址 (ixBrowser: platform + open URL)
+// Platform preset → fill 指定地址
 function applyPlatformPresetToStartUrl() {
   const sel = document.getElementById('editor-platform-type');
   const urlInput = document.getElementById('editor-start-url');
@@ -3100,7 +3100,7 @@ document.getElementById('editor-platform-type')?.addEventListener('change', () =
   renderEditorSummary?.();
 });
 
-// Cookie tools (ixBrowser: export/import/clear)
+// Cookie tools (export/import/clear)
 document.getElementById('editor-cookie-export')?.addEventListener('click', () => {
   try {
     const raw = ($('#editor-cookies')?.value || '').trim() || '[]';

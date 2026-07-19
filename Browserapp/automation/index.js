@@ -12,7 +12,7 @@ const { ProxyStore } = require('./proxy-store');
 /**
  * Mount automation stack (Local API + RPA + window-sync + app center + proxy library).
  * MCP is a separate stdio process: `node automation/mcp-server.js`.
- * Fully self-contained — does not call or embed ThirdPartySuite binaries.
+ * Fully self-contained — does not call or embed external browser binaries.
  */
 async function startAutomation(context = {}) {
   const {

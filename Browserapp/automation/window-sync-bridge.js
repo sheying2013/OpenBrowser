@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Control surface that exposes OpenBrowser live-sync (ThirdPartySuite-style window sync).
+ * Control surface that exposes OpenBrowser live-sync (window sync).
  * Does not reimplement CDP fan-out; delegates to existing LiveSyncController.
  */
 class WindowSyncBridge {
@@ -42,7 +42,7 @@ class WindowSyncBridge {
       settings,
       platform: process.platform,
       capabilities: settings.capabilities || null,
-      // ThirdPartySuite parity naming
+      // Compatibility aliases for Local API clients
       startSync: Boolean(state.active),
       syncOperateList: operate.includes('move') || operate.includes('track')
         ? [...new Set(operate.map((k) => (k === 'track' ? 'move' : k)))]

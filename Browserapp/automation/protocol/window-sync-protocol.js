@@ -1,14 +1,14 @@
 'use strict';
 
 /**
- * Pixel-level protocol map for ThirdPartySuite window sync (research reconstruction).
+ * Protocol map for window sync.
  *
- * ThirdPartySuite ThirdPartyKernel exposes proprietary CDP methods. Standard Chromium does not.
+ * Custom Browser.* CDP methods are not available on stock Chromium.
  * This module:
- *  1) Documents the exact method names + payloads observed in main.min.js
+ *  1) Documents custom method names + payloads
  *  2) Translates them to standard CDP for OpenBrowser (Google Chrome / Edge)
  *
- * Observed slave fan-out (WsControl):
+ * Slave fan-out:
  *  - Browser.clickheadbox_withsize  { action, x, y, width, height, name? }
  *  - Browser.click                  { action, x, y }
  *  - Browser.scroll                 { dX, dY, x, y, phase }
@@ -39,7 +39,7 @@ const CUSTOM_BROWSER_METHODS = Object.freeze([
   'Browser.setNoSubWin',
 ]);
 
-/** ThirdPartySuite mouse action codes used with Browser.click* */
+/** Mouse action codes used with Browser.click* */
 const MOUSE_ACTION = Object.freeze({
   MOVE: 0,
   DOWN: 1,
@@ -63,7 +63,7 @@ function shouldHandle(operateList, eventKind) {
 }
 
 /**
- * Translate one ThirdPartySuite proprietary command into standard CDP calls.
+ * Translate one custom Browser.* command into standard CDP calls.
  * Returns array of { method, params } for sequential send.
  */
 function translateToStandardCdp(command, params = {}) {
@@ -77,7 +77,7 @@ function translateToStandardCdp(command, params = {}) {
     let sx = x;
     let sy = y;
     if (method === 'Browser.clickheadbox_withsize' && p.width && p.height) {
-      // Master coords already absolute in ThirdPartySuite; keep as-is for standard Chrome page viewport
+      // Master coords already absolute; keep as-is for standard Chrome page viewport
       sx = x;
       sy = y;
     }
@@ -89,7 +89,7 @@ function translateToStandardCdp(command, params = {}) {
       return [{ method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', x: sx, y: sy, button: 'left', clickCount: 1 } }];
     }
     if (action === MOUSE_ACTION.UP || action === 2 || action === MOUSE_ACTION.CLICK_SAVE || action === 3) {
-      // full click if only release/save observed
+      // full click if only release/save action
       return [
         { method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', x: sx, y: sy, button: 'left', clickCount: 1 } },
         { method: 'Input.dispatchMouseEvent', params: { type: 'mouseReleased', x: sx, y: sy, button: 'left', clickCount: 1 } },
@@ -118,7 +118,7 @@ function translateToStandardCdp(command, params = {}) {
 
   if (method === 'Browser.keyboard' || method === 'Browser.keyboard_toheadbox') {
     const event = { ...p };
-    delete event.type; // ThirdPartySuite strips type before fanout
+    delete event.type; // strip type before fanout
     const key = event.key || event.code || 'Unidentified';
     const windowsVirtualKeyCode = event.windowsVirtualKeyCode || event.keyCode || 0;
     return [
@@ -160,12 +160,12 @@ function translateToStandardCdp(command, params = {}) {
     return [];
   }
 
-  // Unknown proprietary method — no standard mapping
+  // Unknown custom method — no standard mapping
   return [];
 }
 
 /**
- * Build fan-out plan for one master event (ThirdPartySuite-shaped).
+ * Build fan-out plan for one master event.
  */
 function buildFanoutPlan(masterEvent, options = {}) {
   const operateList = parseOperateList(options.operate || options.syncOperateList);
@@ -218,7 +218,7 @@ function computeCascadeBounds(handles, options = {}) {
   const left = Number(options.left) || 0;
   const vs = Number(options.vs) || 40;
   return ids.map((id, indexFromStart) => {
-    const h = ids.length - 1 - indexFromStart; // ThirdPartySuite iterates h from length-1 down to 0
+    const h = ids.length - 1 - indexFromStart; // reverse index from length-1 down to 0
     const leftPos = left + vs * Math.abs(h - (ids.length - 1));
     // When iterating reverse, abs(h-(len-1)) = indexFromStart
     return {

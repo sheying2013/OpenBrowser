@@ -4,7 +4,7 @@ const { spawn } = require('child_process');
 const cdp = require('./cdp');
 const { LiveSyncController: LiveSyncV4, PersistentCdp, injection } = require('./live-sync-v4');
 const { planFanoutFromPayload } = require('./automation/protocol/sync-fanout');
-const { settingsToOperateList } = require('./automation/protocol/ads-event-map');
+const { settingsToOperateList } = require('./automation/protocol/event-map');
 const { syncCapabilities } = require('./automation/protocol/cross-platform');
 
 const masterMarker = String.raw`(() => {
@@ -75,14 +75,14 @@ class LiveSyncController extends LiveSyncV4 {
     return { ...this.syncSettings, operate: settingsToOperateList(this.syncSettings), capabilities: syncCapabilities() };
   }
 
-  /** ThirdPartySuite-faithful operate list for gates / Local API */
+  /** Operate list for gates / Local API */
   getOperateList() {
     return settingsToOperateList(this.syncSettings);
   }
 
   /**
-   * Plan fanout using reconstructed ThirdPartySuite event types (1/2/3/20/21...).
-   * Does not replace semantic forward(); validates gates + exposes proprietary command map.
+   * Plan fanout using protocol event types (1/2/3/20/21...).
+   * Does not replace semantic forward(); validates gates + exposes command map.
    */
   planProtocolFanout(payload) {
     return planFanoutFromPayload(payload, {
@@ -170,7 +170,7 @@ class LiveSyncController extends LiveSyncV4 {
   }
 
   async forward(tabId, payload) {
-    // Protocol gate: same operate flags as ThirdPartySuite WsControl (click+move / scroll+move / keyboard)
+    // Protocol gate: operate flags (click+move / scroll+move / keyboard)
     const plan = this.planProtocolFanout(payload);
     if (plan.skip && plan.reason === 'operate-gate') return;
     if (plan.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, plan.delayMs));
@@ -182,7 +182,7 @@ class LiveSyncController extends LiveSyncV4 {
       if (inputEvent && this.syncSettings.delayInput) await new Promise((resolve) => setTimeout(resolve, this.randomDelay(this.syncSettings.inputMinMs, this.syncSettings.inputMaxMs)));
     }
     // Semantic selector-based forward remains in v4 (more accurate than raw x/y on multi-resolution slaves).
-    // Protocol plan is retained for Local API telemetry / debugging parity.
+    // Protocol plan is retained for Local API telemetry / debugging.
     const result = await super.forward(tabId, payload);
     if (plan && !plan.skip && this.emit) {
       this.lastProtocolPlan = { eventType: plan.eventType, proprietary: plan.proprietary?.command, standardCount: plan.standard?.length || 0, at: Date.now() };
