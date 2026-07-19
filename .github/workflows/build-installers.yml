@@ -1,8 +1,6 @@
 name: Build OpenBrowser installers
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       release_tag:
@@ -16,7 +14,7 @@ on:
         default: false
 
 concurrency:
-  group: openbrowser-installers-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  group: openbrowser-installers-${{ inputs.release_tag }}
   cancel-in-progress: true
 
 permissions:
@@ -137,7 +135,7 @@ jobs:
     needs: [macos-x86_64, macos-arm64, windows-x86_64]
     runs-on: ubuntu-latest
     env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -162,6 +160,6 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: OpenBrowser ${{ env.RELEASE_TAG }}
           generate_release_notes: true
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          prerelease: ${{ inputs.prerelease }}
           files: release-assets/*
           fail_on_unmatched_files: true
