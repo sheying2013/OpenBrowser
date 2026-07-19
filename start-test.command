@@ -1,4 +1,4 @@
 #!/bin/bash
 set -euo pipefail
-cd "$(dirname "$0")/local-functional-app"
+cd "$(dirname "$0")/Browserapp"
 npm start

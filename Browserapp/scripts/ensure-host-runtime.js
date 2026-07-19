@@ -39,7 +39,7 @@ function ensureHostRuntime(appRoot) {
     root = packageRoot(appRoot);
   }
 
-  if (!root) throw new Error('缺少桌面运行时 npm 包。请在 local-functional-app 目录执行 npm install --force --include=dev。');
+  if (!root) throw new Error('缺少桌面运行时 npm 包。请在 Browserapp 目录执行 npm install --force --include=dev。');
 
   const installer = path.join(root, 'install.js');
   if (fs.existsSync(installer)) {
@@ -48,7 +48,7 @@ function ensureHostRuntime(appRoot) {
   }
 
   if (!hasRuntime(root)) {
-    throw new Error('当前平台的桌面运行时安装失败。请在 local-functional-app 目录执行 npm install --force --include=dev。');
+    throw new Error('当前平台的桌面运行时安装失败。请在 Browserapp 目录执行 npm install --force --include=dev。');
   }
   return root;
 }

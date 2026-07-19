@@ -10,14 +10,14 @@ Version: `1.0.0`
 - macOS x86_64
 - macOS arm64
 
-The application source is in `local-functional-app/`. The repository intentionally contains source code and build scripts only. User profiles, cookies, proxy credentials, browser kernels, and runtime output are local data and are not part of the repository.
+The application source is in `Browserapp/`. The repository intentionally contains source code and build scripts only. User profiles, cookies, proxy credentials, browser kernels, and runtime output are local data and are not part of the repository.
 
 ## Development
 
 Requirements: Node.js LTS and npm.
 
 ```bash
-cd local-functional-app
+cd Browserapp
 npm ci --include=dev
 npm run selftest
 npm run selftest:automation
@@ -31,7 +31,7 @@ The root launchers are `start-test.command` and `start-test.cmd`. They enter the
 
 ## Packaging
 
-Packaging is performed by GitHub Actions for the three supported targets. Each job installs the platform-specific desktop runtime, runs the self-tests, and produces a ZIP package under `local-functional-app/dist/`.
+Packaging is performed by GitHub Actions for the three supported targets. Each job installs the platform-specific desktop runtime, runs the self-tests, and produces a ZIP package under `Browserapp/dist/`.
 
 For a local build, set `OPENBROWSER_PACKAGE_ARCH` to `x86_64` or `arm64` and run:
 
@@ -43,7 +43,7 @@ The Windows package includes `START.cmd`; macOS packages include `OpenBrowser.ap
 
 ## Security and data handling
 
-Do not commit `.env` files, API keys, access tokens, cookies, proxy passwords, browser profiles, Chromium runtimes, or generated packages. See [DISCLAIMER.md](./DISCLAIMER.md) for the operational disclaimer and [THIRD-PARTY-NOTICES.md](./local-functional-app/THIRD-PARTY-NOTICES.md) for bundled notices.
+Do not commit `.env` files, API keys, access tokens, cookies, proxy passwords, browser profiles, Chromium runtimes, or generated packages. See [DISCLAIMER.md](./DISCLAIMER.md) for the operational disclaimer and [THIRD-PARTY-NOTICES.md](./Browserapp/THIRD-PARTY-NOTICES.md) for bundled notices.
 
 ## License
 

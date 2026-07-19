@@ -12,7 +12,7 @@
  *   "mcpServers": {
  *     "openbrowser-local-api": {
  *       "command": "node",
- *       "args": ["/path/to/local-functional-app/automation/mcp-server.js"],
+ *       "args": ["/path/to/Browserapp/automation/mcp-server.js"],
  *       "env": { "OPENBROWSER_API_PORT": "50325", "OPENBROWSER_API_KEY": "" }
  *     }
  *   }

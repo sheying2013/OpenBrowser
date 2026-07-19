@@ -1,7 +1,7 @@
 @echo off
 setlocal
 chcp 65001 >nul
-cd /d "%~dp0local-functional-app"
+cd /d "%~dp0Browserapp"
 if errorlevel 1 (
   echo Failed to enter OpenBrowser app directory.
   pause
