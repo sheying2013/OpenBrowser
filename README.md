@@ -1,62 +1,52 @@
 # OpenBrowser
 
-> **OpenBrowser** 是一款指纹浏览器，用于管理多个隔离的 Chromium 配置，并统一提供代理、指纹参数、扩展、窗口同步、Local API、MCP 与本地 RPA 工作流。
->
-> **OpenBrowser** is a fingerprint browser for managing isolated Chromium profiles, with proxy settings, fingerprint controls, extensions, window synchronization, Local API, MCP, and local RPA workflows.
-
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-## 界面预览 / Interface preview
+---
 
-| 英文界面总览 / English UI overview | 环境管理 / Environment management |
+## 中文
+
+OpenBrowser 是一款本地指纹浏览器。用来管多套互相隔离的 Chromium 环境，代理、指纹、扩展、窗口同步、本机 API、MCP 和本地 RPA 都集中在一个桌面应用里做。
+
+界面语言可在本地设置里切换，目前支持中文和英文。
+
+### 界面预览
+
+| 主界面 | 环境管理 |
 | --- | --- |
-| ![OpenBrowser 英文界面总览](./docs/screenshots/openbrowser-overview.png) | ![OpenBrowser 环境管理](./docs/screenshots/environment-management.png) |
-| 英文界面展示主导航、模块入口和基础布局。 / English UI showing the main navigation, module entry points, and overall layout. | 管理隔离 Profile、启动/停止、状态与环境分组。 / Manage isolated profiles, start/stop actions, status, and grouping. |
+| ![主界面](./docs/screenshots/openbrowser-overview.png) | ![环境管理](./docs/screenshots/environment-management.png) |
+| 主导航和各模块入口 | Profile 列表、启动/停止、分组和状态 |
 
-| 应用中心 / App Center | 本地设置与主题切换 / Local settings and theme switching |
+| 环境与指纹编辑 | 本地设置与主题 |
 | --- | --- |
-| ![OpenBrowser 应用中心](./docs/screenshots/profile-fingerprint-editor.png) | ![OpenBrowser 本地设置与主题切换](./docs/screenshots/automation-and-system.png) |
-| 展示应用中心、推荐资源和扩展分发说明。 / Shows the App Center, recommended resources, and extension distribution. | 展示本地设置、主题切换和系统外观配置。 / Shows local settings, theme switching, and system appearance configuration. |
+| ![环境编辑](./docs/screenshots/profile-fingerprint-editor.png) | ![本地设置](./docs/screenshots/automation-and-system.png) |
+| 代理、指纹参数、扩展等按环境配置 | 主题、语言和系统相关设置 |
 
-## 多国语言支持 / Multilingual support
+### 主要功能
 
-OpenBrowser supports a multilingual UI and can switch languages from local settings.
+- **环境隔离**：每个环境独立 Profile，Cookie、缓存、LocalStorage、IndexedDB、扩展状态互不混用
+- **批量管理**：列表、分组、标签、批量启停、状态刷新、日志、窗口尺寸
+- **代理**：HTTP / HTTPS / SOCKS，统一维护，可按环境绑定并做出口检测
+- **指纹参数**：平台、语言、时区、UA、Client Hints、Canvas、WebGL、WebRTC、硬件并发、内存等
+- **扩展与应用中心**：内置、推荐和本地扩展，按环境加载
+- **窗口同步**：通过 CDP 同步点击、滚动、输入、标签页和窗口操作
+- **本地 RPA**：流程、任务、模板和运行记录；支持打开页面、等待、点击、输入、截图等
+- **Local API / MCP**：本机 HTTP API（默认只监听回环地址）+ stdio MCP，方便接外部工具
+- **独立内核**：优先从 Donut Browser 的 `wayfern.json` 拉 Wayfern 反检测 Chromium；当前平台没有包时回退到 Google Chrome for Testing；也支持自定义内核路径。本仓库不重新分发内核二进制
+- **备份**：本地、WebDAV、GitHub、谷歌云、微软云、夸克、百度等；只有你主动配置或操作时才会访问外部服务
 
-- 🇨🇳 中文 / Chinese
-- 🇺🇸 English / English
-- 🌐 可扩展更多语言 / extensible to more languages
+### 适合做什么
 
-## 功能亮点 / Highlights
+- 本机维护多套 Profile，分别配代理、扩展、语言、时区、启动页
+- 多账号 / 多环境批量启动、检查状态、做窗口同步
+- 用 API、MCP 或 RPA 把重复操作串起来
+- 测扩展、页面兼容性、代理出口、独立内核
 
-- **隔离环境管理 / Isolated environments**：每个环境使用独立 Profile 目录，隔离 Cookie、缓存、LocalStorage、IndexedDB、扩展状态和浏览器会话。 / Each environment uses an isolated profile directory to separate cookies, cache, LocalStorage, IndexedDB, extension state, and browser sessions.
-- **环境批量操作 / Batch operations**：支持环境列表、分组、标签、批量启动/停止、状态刷新、运行日志和窗口尺寸管理。 / Supports profile lists, grouping, tags, batch start/stop, status refresh, run logs, and window sizing.
-- **代理库与出口检测 / Proxy management**：集中维护 HTTP、HTTPS、SOCKS 等代理配置，可按环境分配代理并记录检测结果。 / Centralized HTTP, HTTPS, and SOCKS proxy management with per-environment assignment and result logging.
-- **指纹参数配置 / Fingerprint settings**：按环境配置平台、语言、时区、User-Agent、Client Hints、Canvas、WebGL、WebRTC、硬件并发数和设备内存等参数。 / Configure platform, language, timezone, User-Agent, Client Hints, Canvas, WebGL, WebRTC, CPU cores, and device memory per environment.
-- **扩展与应用中心 / Extensions and App Center**：集中管理内置、推荐和本地扩展，按环境分配加载，并缓存推荐应用图标。 / Manage built-in, recommended, and local extensions, assign them per environment, and cache recommended app icons.
-- **窗口同步 / Window sync**：通过 CDP 组织多窗口点击、滚动、输入、标签页和窗口操作同步，适合本地测试和批量验证。 / Use CDP to synchronize clicks, scrolling, typing, tabs, and window actions across multiple environments.
-- **本地 RPA / Local RPA**：内置流程、任务、模板和运行记录，用 CDP 执行打开页面、等待、点击、输入、截图等自动化步骤。 / Built-in flows, tasks, templates, and run history for CDP-driven automation such as navigation, waiting, clicking, typing, and screenshots.
-- **Local API 与 MCP / Local API and MCP**：默认在回环地址提供本机 HTTP API，并支持 stdio MCP 接入外部自动化工具。 / Exposes a loopback-only local HTTP API and supports stdio MCP integration for external automation tools.
-- **独立内核策略 / Independent kernel policy**：独立内核优先使用 Donut Browser 官方 `wayfern.json` 更新源，拉取 Wayfern 反检测 Chromium；若当前平台没有可用包，则回退到 Google Chrome for Testing 官方发布；同时也支持自定义内核路径。OpenBrowser 只镜像公开更新源，不重新分发这些内核二进制。 / The independent kernel first uses Donut Browser's official `wayfern.json` feed to fetch Wayfern anti-detect Chromium; if no package is available for the current OS/arch, it falls back to the official Google Chrome for Testing build. Custom kernel paths are also supported. OpenBrowser mirrors the public update feed only and does not redistribute these binaries.
+不保证匿名、指纹唯一、账号成功率、自动化稳定，也不保证对某个网站一定兼容。用之前请看 [`DISCLAIMER.md`](./DISCLAIMER.md)。
 
-## 浏览器内核来源 / Browser kernel source
-
-OpenBrowser 的独立浏览器内核默认来自 Donut Browser 官方更新源 `https://donutbrowser.com/wayfern.json`，对应下载 Wayfern 反检测 Chromium。当前平台若没有可用包，会自动回退到 Google Chrome for Testing 官方版本；用户也可以手动选择自定义内核。 / OpenBrowser's independent browser kernel defaults to Donut Browser's official update feed at `https://donutbrowser.com/wayfern.json`, which points to Wayfern anti-detect Chromium. If no package is available for the current platform, it falls back to the official Google Chrome for Testing build, and users can also select a custom kernel path.
-- **云同步与备份 / Cloud sync and backup**：支持本地、WebDAV、GitHub、谷歌云、微软云、夸克云、百度云等备份入口；云同步仅在用户主动配置或操作时访问外部服务。 / Supports local, WebDAV, GitHub, Google Cloud, Microsoft Cloud, Quark, and Baidu backup paths; cloud sync only reaches external services when the user enables it.
-
-## 适用场景 / Use cases
-
-- 本地维护多套浏览器 Profile，并分别配置代理、扩展、语言、时区和启动页。 / Maintain multiple browser profiles locally with separate proxies, extensions, languages, timezones, and start pages.
-- 对多个测试账号或测试环境做批量启动、状态检查和窗口同步操作。 / Batch start, inspect, and synchronize multiple test accounts or environments.
-- 在本机用 Local API、MCP 或 RPA 流程串联重复性浏览器任务。 / Chain repetitive browser tasks locally with Local API, MCP, or RPA flows.
-- 验证扩展、页面兼容性、代理出口和独立内核策略。 / Validate extensions, page compatibility, proxy egress, and the independent kernel policy.
-
-OpenBrowser 不承诺匿名性、指纹唯一性、账号访问成功率、自动化稳定性或对特定网站的兼容性。使用前请阅读 [`DISCLAIMER.md`](./DISCLAIMER.md)。
-
-OpenBrowser does not promise anonymity, unique fingerprints, account success rates, automation stability, or compatibility with any specific website. Please read [`DISCLAIMER.md`](./DISCLAIMER.md) before use.
-
-## 支持平台 / Supported platforms
+### 支持平台
 
 | 平台 | 架构 | 状态 |
 | --- | --- | --- |
@@ -64,26 +54,24 @@ OpenBrowser does not promise anonymity, unique fingerprints, account success rat
 | macOS | x86_64 | 支持 |
 | macOS | arm64 | 支持 |
 
-## 项目结构 / Project structure
+### 项目结构
 
 ```text
 OpenBrowser/
-├── Browserapp/                 # 应用源码 / application source
-├── docs/screenshots/           # README 使用的界面截图 / screenshots used by this README
-├── start-test.command          # macOS 本地测试启动器 / macOS test launcher
-├── start-test.cmd              # Windows 本地测试启动器 / Windows test launcher
-├── DISCLAIMER.md               # 使用与安全免责声明 / operational disclaimer
-├── LICENSE                     # 开源许可证 / license
-└── README.md                   # 项目说明 / project readme
+├── Browserapp/            # 应用源码
+├── docs/screenshots/      # README 截图
+├── start-test.command     # macOS 测试启动
+├── start-test.cmd         # Windows 测试启动
+├── DISCLAIMER.md
+├── LICENSE
+└── README.md
 ```
 
-应用源码位于 [`Browserapp/`](./Browserapp/)。仓库只保存源码、文档资源和构建脚本，不包含用户 Profile、Cookie、代理凭据、浏览器内核、运行日志或打包产物。
+仓库里只有源码、文档和构建脚本，不包含用户 Profile、Cookie、代理账号、浏览器内核、运行日志或安装包。
 
-The application source lives in [`Browserapp/`](./Browserapp/). The repository keeps source code, documentation assets, and build scripts only; it does not include user profiles, cookies, proxy credentials, browser kernels, runtime logs, or packaged artifacts.
+### 快速开始
 
-## 快速开始 / Quick start
-
-要求：Node.js LTS 和 npm。 / Requires Node.js LTS and npm.
+需要 Node.js LTS 和 npm：
 
 ```bash
 cd Browserapp
@@ -92,48 +80,31 @@ npm run selftest
 npm start
 ```
 
-如果只想从仓库根目录启动测试环境，也可以使用：
+也可以从仓库根目录用启动脚本（会进入 `Browserapp/`，缺桌面运行时会装依赖）：
 
 - macOS：[`start-test.command`](./start-test.command)
 - Windows：[`start-test.cmd`](./start-test.cmd)
 
-The launchers enter `Browserapp/` and install the required platform dependencies if the desktop runtime is missing.
+### 能力说明
 
-## 主要能力 / Core capabilities
+**环境**  
+在列表里建 Profile。名称、编号、分组、标签、窗口尺寸、启动页、代理、扩展、指纹、数据保留策略都可以按环境单独设。启动后会等独立 CDP 端口就绪；关掉最后一个浏览器窗口后状态会自动同步回来。
 
-### 管理浏览器环境 / Manage browser environments
+**代理与指纹**  
+代理库负责增删改查、批量检测和分配。环境编辑器里改平台、语言、时区、UA 等参数。代理认证走本地转发；指纹通过 CDP 在启动和新开标签时注入。
 
-在环境列表中创建和维护多个 Profile。每个环境都可以独立设置名称、编号、分组、标签、窗口尺寸、启动页、代理、扩展、指纹参数和数据保留策略。环境启动后，OpenBrowser 会等待独立 CDP 端口可用，并在用户关闭最后一个浏览器窗口后自动同步状态。
+**窗口同步与 RPA**  
+主控窗口的操作可以同步到其他环境。RPA 按流程执行 `goto`、`wait`、`click`、`type`、截图和变量处理等，数据都存在本机。
 
-Create and maintain multiple profiles in the environment list. Each environment can have its own name, number, group, tags, window size, start page, proxy, extensions, fingerprint settings, and data retention policy. After launch, OpenBrowser waits for an isolated CDP port and automatically syncs state when the last browser window closes.
+**Local API 与 MCP**  
+主进程会起本地自动化服务，默认 `127.0.0.1:50325`。HTTP 可查版本、列环境、启停、触发同步、跑 RPA。MCP 入口：`automation/mcp-server.js`（stdio）。
 
-### 配置代理和指纹参数 / Configure proxies and fingerprints
+**内核、扩展、同步**  
+内核由 `automation/browser-kernel.js` 管理，Profile 数据限制在专属目录。应用中心管扩展；云同步支持加密备份包和合并恢复。
 
-代理库负责代理增删改查、批量检测和环境分配。环境编辑器负责平台、语言、时区、User-Agent、Client Hints、Canvas、WebGL、WebRTC、硬件并发数和设备内存等参数。代理认证会通过本地转发器处理，指纹参数会在启动和新开标签时通过 CDP 注入。
+### 自测
 
-The proxy library handles create/read/update/delete, batch checks, and environment assignment. The environment editor controls platform, language, timezone, User-Agent, Client Hints, Canvas, WebGL, WebRTC, CPU cores, and memory settings. Proxy authentication is handled by a local forwarder, and fingerprint settings are injected through CDP during startup and when new tabs open.
-
-### 同步窗口和运行 RPA / Sync windows and run RPA
-
-窗口同步可把主控窗口的点击、移动、滚动、键盘、标签页和窗口操作同步到其他环境。本地 RPA 引擎可按流程执行 `goto`、`wait`、`click`、`type`、截图和变量处理等步骤，流程、任务和模板保存在本机。
-
-Window synchronization can mirror clicks, movement, scrolling, keyboard input, tabs, and window actions from a controller window to other environments. The local RPA engine can execute flows such as `goto`, `wait`, `click`, `type`, screenshots, and variable handling, with flows, tasks, and templates stored locally.
-
-### 接入 Local API 和 MCP / Use Local API and MCP
-
-OpenBrowser 随主进程启动本地自动化服务，默认监听 `127.0.0.1:50325`。可通过 HTTP API 查询版本、列出环境、启动环境、停止环境、触发窗口同步或执行 RPA。MCP 服务可通过 `automation/mcp-server.js` 以 stdio 方式接入外部工具。
-
-OpenBrowser starts a local automation service with the main process and listens on `127.0.0.1:50325` by default. The HTTP API can query the version, list environments, start and stop environments, trigger window sync, and run RPA. The MCP server can be launched from `automation/mcp-server.js` over stdio for external tools.
-
-### 管理内核、扩展和同步 / Manage kernels, extensions, and sync
-
-独立浏览器内核由 `automation/browser-kernel.js` 管理，Profile 数据会被限制在专属目录中。应用中心支持内置、推荐和本地扩展；云同步支持加密备份包、合并恢复和多个备份入口。
-
-Independent browser kernels are managed by `automation/browser-kernel.js`, and profile data is constrained to dedicated directories. The App Center supports built-in, recommended, and local extensions, while cloud sync supports encrypted backup packages, merge restore, and multiple backup targets.
-
-## 自测命令 / Self-tests
-
-在 `Browserapp/` 目录下执行：
+在 `Browserapp/` 下：
 
 ```bash
 npm run selftest
@@ -146,20 +117,18 @@ npm run selftest:cloud
 
 | 命令 | 说明 |
 | --- | --- |
-| `npm run selftest` | 基础环境与配置自测 / basic environment and configuration checks |
-| `npm run selftest:automation` | 自动化、RPA 与本地服务自测 / automation, RPA, and local service checks |
-| `npm run selftest:protocol` | 协议与同步能力自测 / protocol and sync checks |
-| `npm run selftest:isolation` | Profile 与隔离策略自测 / profile and isolation checks |
-| `npm run selftest:kernel` | 浏览器内核策略自测 / browser kernel policy checks |
-| `npm run selftest:cloud` | 云同步安全策略自测 / cloud sync security checks |
+| `npm run selftest` | 基础环境与配置 |
+| `npm run selftest:automation` | 自动化、RPA、本地服务 |
+| `npm run selftest:protocol` | 协议与同步 |
+| `npm run selftest:isolation` | Profile 与隔离 |
+| `npm run selftest:kernel` | 内核策略 |
+| `npm run selftest:cloud` | 云同步安全策略 |
 
-## 打包 / Packaging
+### 打包
 
-打包由 GitHub Actions 为支持的平台执行。每个任务会安装对应平台的桌面运行时，执行自测，并在 `Browserapp/dist/` 下生成产物。
+正式包由 GitHub Actions 按平台打：装运行时、跑自测，产物在 `Browserapp/dist/`。
 
-Packaging runs in GitHub Actions for the supported targets. Each job installs the platform desktop runtime, runs self-tests, and emits artifacts under `Browserapp/dist/`.
-
-本地打包时，可设置目标架构：
+本地打包可以指定架构：
 
 ```bash
 export OPENBROWSER_PACKAGE_ARCH=x86_64  # 或 arm64
@@ -167,30 +136,178 @@ cd Browserapp
 npm run package:portable
 ```
 
-Windows 包含 `START.cmd`；macOS 包含 `OpenBrowser.app` 和 `启动.command`。
+Windows 包带 `START.cmd`；macOS 包带 `OpenBrowser.app` 和 `启动.command`。
 
-Windows packages include `START.cmd`; macOS packages include `OpenBrowser.app` and `启动.command`.
+### 数据与安全
 
-## 数据和安全边界 / Data and security boundaries
+请不要提交或公开：
 
-请不要提交或公开以下内容：
+- `.env`、API Key、令牌
+- Cookie、密码、代理账号密码
+- Profile、缓存、日志、运行输出
+- Chromium 运行时、第三方二进制、生成的安装包
 
-- `.env` 文件、API Key、访问令牌 / `.env` files, API keys, and access tokens
-- Cookie、密码、代理账号或代理密码 / cookies, passwords, proxy usernames, or proxy passwords
-- 浏览器 Profile、缓存、日志和运行输出 / browser profiles, cache, logs, and runtime output
-- Chromium 运行时、第三方二进制和生成的安装包 / Chromium runtimes, third-party binaries, and generated packages
+本地 API 默认只绑回环地址。若设置了 `OPENBROWSER_API_KEY`，请求需带 `api-key` 头。云同步、应用商店图标、第三方备份只有你主动用时才会出网。第三方说明见 [`THIRD-PARTY-NOTICES.md`](./Browserapp/THIRD-PARTY-NOTICES.md)。
 
-OpenBrowser 的本地 API 默认只监听回环地址；如设置 `OPENBROWSER_API_KEY`，请求需要携带 `api-key` 头。云同步、应用商店图标获取和第三方备份入口只有在用户主动配置或操作时访问外部服务。第三方组件说明见 [`THIRD-PARTY-NOTICES.md`](./Browserapp/THIRD-PARTY-NOTICES.md)。
-
-By default, OpenBrowser's local API listens only on loopback. If `OPENBROWSER_API_KEY` is set, requests must include the `api-key` header. Cloud sync, app-store icon fetches, and third-party backup targets only access external services when the user explicitly enables them. Third-party notices are listed in [`THIRD-PARTY-NOTICES.md`](./Browserapp/THIRD-PARTY-NOTICES.md).
-
-## 维护文档 / More docs
+### 更多文档
 
 - 自动化模块：[`Browserapp/automation/README.md`](./Browserapp/automation/README.md)
-- 使用免责声明：[`DISCLAIMER.md`](./DISCLAIMER.md)
+- 免责声明：[`DISCLAIMER.md`](./DISCLAIMER.md)
 
-## 许可证 / License
+### 许可证
 
-本项目使用 MIT License。详见 [`LICENSE`](./LICENSE)。
+MIT，见 [`LICENSE`](./LICENSE)。
 
-This project is licensed under the MIT License. See [`LICENSE`](./LICENSE).
+---
+
+## English
+
+OpenBrowser is a local fingerprint browser for managing multiple isolated Chromium environments. Proxies, fingerprints, extensions, window sync, a local API, MCP, and basic RPA live in one desktop app.
+
+The UI language can be switched in local settings. Chinese and English are available today.
+
+### Screenshots
+
+| Overview | Environments |
+| --- | --- |
+| ![Overview](./docs/screenshots/openbrowser-overview.png) | ![Environments](./docs/screenshots/environment-management.png) |
+| Main nav and module entry points | Profiles, start/stop, groups, status |
+
+| Profile / fingerprint editor | Local settings & themes |
+| --- | --- |
+| ![Profile editor](./docs/screenshots/profile-fingerprint-editor.png) | ![Settings](./docs/screenshots/automation-and-system.png) |
+| Proxy, fingerprint, extensions per environment | Theme, language, system options |
+
+### Features
+
+- **Isolation** — separate profile directory per environment (cookies, cache, LocalStorage, IndexedDB, extensions)
+- **Batch management** — list, groups, tags, bulk start/stop, status refresh, logs, window size
+- **Proxies** — HTTP / HTTPS / SOCKS, assign per environment, egress checks
+- **Fingerprint knobs** — platform, language, timezone, UA, Client Hints, Canvas, WebGL, WebRTC, cores, memory, etc.
+- **Extensions / App Center** — built-in, recommended, and local extensions, loaded per environment
+- **Window sync** — CDP-based sync for click, scroll, input, tabs, and window actions
+- **Local RPA** — flows, tasks, templates, run history (navigate, wait, click, type, screenshot, …)
+- **Local API / MCP** — loopback HTTP API by default, plus stdio MCP for external tools
+- **Independent kernel** — prefers Wayfern anti-detect Chromium via Donut Browser’s `wayfern.json`; falls back to Google Chrome for Testing when needed; custom kernel path supported. This repo does not redistribute kernel binaries
+- **Backup** — local, WebDAV, GitHub, Google, Microsoft, Quark, Baidu, etc. External services are only used when you configure or trigger them
+
+### Typical use
+
+- Keep several profiles on one machine with different proxy / extension / locale / start-page setups
+- Batch-start test accounts, check status, sync windows
+- Drive repetitive work through the local API, MCP, or RPA
+- Check extensions, page behavior, proxy egress, and kernel choice
+
+No promise of anonymity, unique fingerprints, account success rates, automation stability, or site-specific compatibility. Read [`DISCLAIMER.md`](./DISCLAIMER.md) before use.
+
+### Platforms
+
+| Platform | Arch | Status |
+| --- | --- | --- |
+| Windows | x86_64 | Supported |
+| macOS | x86_64 | Supported |
+| macOS | arm64 | Supported |
+
+### Layout
+
+```text
+OpenBrowser/
+├── Browserapp/            # app source
+├── docs/screenshots/      # README screenshots
+├── start-test.command     # macOS test launcher
+├── start-test.cmd         # Windows test launcher
+├── DISCLAIMER.md
+├── LICENSE
+└── README.md
+```
+
+Source, docs, and build scripts only. No user profiles, cookies, proxy credentials, kernels, runtime logs, or release packages.
+
+### Quick start
+
+Needs Node.js LTS and npm:
+
+```bash
+cd Browserapp
+npm ci --include=dev
+npm run selftest
+npm start
+```
+
+Or use the root launchers (they `cd` into `Browserapp/` and install desktop runtime deps if missing):
+
+- macOS: [`start-test.command`](./start-test.command)
+- Windows: [`start-test.cmd`](./start-test.cmd)
+
+### How it works (short)
+
+**Environments**  
+Create profiles in the list. Name, number, group, tags, window size, start page, proxy, extensions, fingerprint, and retention are per-environment. On launch, OpenBrowser waits for a dedicated CDP port; when the last browser window closes, status is synced back.
+
+**Proxy & fingerprint**  
+Proxy library: CRUD, batch checks, assignment. Editor: platform, language, timezone, UA, and related knobs. Auth goes through a local forwarder; fingerprint settings are injected over CDP at startup and on new tabs.
+
+**Window sync & RPA**  
+Mirror controller actions to other environments. RPA runs steps like `goto`, `wait`, `click`, `type`, screenshots, and variables. Everything stays on disk locally.
+
+**Local API & MCP**  
+Automation service defaults to `127.0.0.1:50325`. HTTP: version, list/start/stop environments, window sync, RPA. MCP: `automation/mcp-server.js` over stdio.
+
+**Kernel, extensions, backup**  
+Kernel logic lives in `automation/browser-kernel.js`; profile data is kept under dedicated directories. App Center handles extensions. Cloud sync supports encrypted backup packages and merge restore.
+
+### Self-tests
+
+From `Browserapp/`:
+
+```bash
+npm run selftest
+npm run selftest:automation
+npm run selftest:protocol
+npm run selftest:isolation
+npm run selftest:kernel
+npm run selftest:cloud
+```
+
+| Command | What it covers |
+| --- | --- |
+| `npm run selftest` | Basic env / config |
+| `npm run selftest:automation` | Automation, RPA, local service |
+| `npm run selftest:protocol` | Protocol / sync |
+| `npm run selftest:isolation` | Profile isolation |
+| `npm run selftest:kernel` | Kernel policy |
+| `npm run selftest:cloud` | Cloud-sync safety |
+
+### Packaging
+
+GitHub Actions builds per platform: install runtime, run self-tests, emit under `Browserapp/dist/`.
+
+Local package with arch override:
+
+```bash
+export OPENBROWSER_PACKAGE_ARCH=x86_64  # or arm64
+cd Browserapp
+npm run package:portable
+```
+
+Windows builds include `START.cmd`. macOS builds include `OpenBrowser.app` and `启动.command`.
+
+### Data & security
+
+Do not commit or publish:
+
+- `.env`, API keys, tokens
+- Cookies, passwords, proxy credentials
+- Profiles, cache, logs, runtime output
+- Chromium runtimes, third-party binaries, generated installers
+
+Local API binds to loopback by default. If `OPENBROWSER_API_KEY` is set, send an `api-key` header. Cloud sync, store icons, and third-party backup targets only go online when you use them. Third-party notices: [`THIRD-PARTY-NOTICES.md`](./Browserapp/THIRD-PARTY-NOTICES.md).
+
+### More docs
+
+- Automation: [`Browserapp/automation/README.md`](./Browserapp/automation/README.md)
+- Disclaimer: [`DISCLAIMER.md`](./DISCLAIMER.md)
+
+### License
+
+MIT — see [`LICENSE`](./LICENSE).
