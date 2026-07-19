@@ -11,8 +11,11 @@ const {
   findHostWindowsExe,
   findMacBinary,
 } = require('./resolve-host-dist.js');
+const { ensureHostRuntime } = require('./ensure-host-runtime.js');
 
 const appRoot = path.resolve(__dirname, '..');
+
+ensureHostRuntime(appRoot);
 
 if (process.platform === 'darwin') {
   // Must brand BEFORE resolving binary (renames Electron.app -> OpenBrowser.app).

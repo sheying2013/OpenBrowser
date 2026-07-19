@@ -24,23 +24,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "node_modules\desktop-shell\dist" if not exist "node_modules\electron\dist" (
-  echo OpenBrowser Windows runtime is missing or was installed for another platform.
-  echo Installing Windows runtime now...
-  call npm install --force --include=dev
-  if errorlevel 1 (
-    echo Windows runtime installation failed.
-    pause
-    exit /b 1
-  )
-)
-
-if not exist "node_modules\desktop-shell\dist" if not exist "node_modules\electron\dist" (
-  echo OpenBrowser Windows runtime is still missing after reinstall.
-  pause
-  exit /b 1
-)
-
 call npm start
 if errorlevel 1 (
   echo OpenBrowser exited with an error.
