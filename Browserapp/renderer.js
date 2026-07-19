@@ -6,6 +6,89 @@ function t(key, params) {
   return window.OpenBrowserI18n?.t?.(key, params) ?? key;
 }
 
+function tx(s) {
+  if (s == null || s === '') return s;
+  try {
+    if (window.OpenBrowserI18n?.getLocale?.() === 'zh-CN') return String(s);
+    return window.OpenBrowserI18n?.translateChineseUiText?.(String(s)) ?? String(s);
+  } catch (_) { return String(s); }
+}
+
+
+const appUpdateState = { status: 'idle', result: null, message: '', progress: null };
+
+function renderAppUpdateState() {
+  const status = document.getElementById('app-update-status');
+  const version = document.getElementById('app-update-version');
+  const check = document.getElementById('app-check-update');
+  const download = document.getElementById('app-download-update');
+  if (!status || !version || !check || !download) return;
+  const result = appUpdateState.result;
+  version.textContent = result?.remoteVersion ? `v${result.remoteVersion}` : '—';
+  check.disabled = appUpdateState.status === 'checking' || appUpdateState.status === 'downloading';
+  download.hidden = !(result?.supported && !result.upToDate && appUpdateState.status !== 'downloading');
+  download.disabled = appUpdateState.status === 'checking' || appUpdateState.status === 'downloading';
+  if (appUpdateState.message) {
+    status.textContent = appUpdateState.message;
+    return;
+  }
+  if (appUpdateState.status === 'checking') status.textContent = t('system.update.checking');
+  else if (appUpdateState.status === 'downloading') {
+    const progress = appUpdateState.progress;
+    if (progress?.percent != null) status.textContent = t('system.update.downloadingPercent', { percent: progress.percent });
+    else if (progress?.received && progress?.total) status.textContent = t('system.update.downloadingBytes', { received: formatBytes(progress.received), total: formatBytes(progress.total) });
+    else status.textContent = t('system.update.downloading');
+  }
+  else if (result?.supported && result.upToDate) status.textContent = t('system.update.latest', { version: result.currentVersion });
+  else if (result?.supported && !result.upToDate) status.textContent = t('system.update.available', { current: result.currentVersion, version: result.remoteVersion });
+  else if (result && !result.supported) status.textContent = t('system.update.unsupported');
+  else status.textContent = t('system.update.idle');
+}
+
+async function checkAppUpdate() {
+  appUpdateState.status = 'checking'; appUpdateState.result = null; appUpdateState.message = ''; appUpdateState.progress = null; renderAppUpdateState();
+  try {
+    appUpdateState.result = await window.ops.checkAppUpdate();
+    appUpdateState.status = 'ready';
+  } catch (error) {
+    appUpdateState.status = 'error';
+    appUpdateState.message = t('system.update.error', { message: error.message });
+  }
+  renderAppUpdateState();
+}
+
+async function downloadAppUpdate() {
+  appUpdateState.status = 'downloading'; appUpdateState.message = ''; appUpdateState.progress = null; renderAppUpdateState();
+  try {
+    const result = await window.ops.downloadAppUpdate();
+    appUpdateState.status = 'ready';
+    appUpdateState.message = result.upToDate
+      ? t('system.update.latest', { version: result.version })
+      : t('system.update.downloaded', { path: result.path });
+  } catch (error) {
+    appUpdateState.status = 'error';
+    appUpdateState.message = t('system.update.error', { message: error.message });
+  }
+  renderAppUpdateState();
+}
+
+function formatBytes(value) {
+  const bytes = Number(value) || 0;
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+document.getElementById('github-link')?.addEventListener('click', async (event) => {
+  event.preventDefault();
+  try { await window.ops.openGithub(); } catch (error) { toast(error.message); }
+});
+document.getElementById('app-check-update')?.addEventListener('click', () => checkAppUpdate());
+document.getElementById('app-download-update')?.addEventListener('click', () => downloadAppUpdate());
+
+function afterUiRender(root) {
+  try { window.OpenBrowserI18n?.applyDom?.(root || document); } catch (_) {}
+}
+
 function refreshLocaleChrome() {
   const i18n = window.OpenBrowserI18n;
   if (!i18n) return;
@@ -38,6 +121,7 @@ function refreshLocaleChrome() {
   }
   if (typeof syncThemedSelects === 'function') syncThemedSelects();
   if (typeof refreshIcons === 'function') refreshIcons();
+  renderAppUpdateState();
 }
 
 function applyPlatformClass() {
@@ -302,9 +386,33 @@ function findGroup(id) {
   return listGroups().find((g) => g.id === id) || null;
 }
 
+function localizeSystemLabel(name) {
+  const n = String(name || '').trim();
+  if (!n) return n;
+  // Prefer full UI phrase map (covers 主控/工作组/代理/默认分组/…)
+  if (window.OpenBrowserI18n?.translateChineseUiText) {
+    const translated = window.OpenBrowserI18n.translateChineseUiText(n);
+    if (translated && translated !== n) return translated;
+  }
+  if (n === '未分组' || n === 'Ungrouped') return t('groups.ungrouped');
+  if (n === '默认分组' || n === 'Default group') return t('groups.default');
+  if (n === '全部' || n === 'All') return t('groups.all');
+  if (n === '全部分组' || n === 'All groups') return t('groups.allGroups');
+  if (n === '主控' || n === 'Master') return t('tag.master');
+  if (n === '工作组' || n === 'Workgroup') return t('tag.workgroup');
+  if (n === '代理' || n === 'Proxy') return t('tag.proxy');
+  return n;
+}
+
 function groupNameOf(profile) {
   const g = findGroup(profile?.groupId);
-  return g ? g.name : '未分组';
+  return g ? localizeSystemLabel(g.name) : t('groups.ungrouped');
+}
+
+/** Raw stored group name (for data), not display-localized */
+function groupNameRaw(profile) {
+  const g = findGroup(profile?.groupId);
+  return g ? g.name : '';
 }
 
 function groupColorOf(profile) {
@@ -325,19 +433,19 @@ function fillGroupSelect(selectEl, selectedId = '', { includeAll = false, includ
   if (includeAll) {
     const opt = document.createElement('option');
     opt.value = 'all';
-    opt.textContent = '全部分组';
+    opt.textContent = t('groups.allGroups');
     selectEl.append(opt);
   }
   if (includeUngrouped) {
     const opt = document.createElement('option');
     opt.value = UNGROUPED_ID;
-    opt.textContent = '未分组';
+    opt.textContent = t('groups.ungrouped');
     selectEl.append(opt);
   }
   for (const g of listGroups()) {
     const opt = document.createElement('option');
     opt.value = g.id;
-    opt.textContent = g.name;
+    opt.textContent = localizeSystemLabel(g.name);
     selectEl.append(opt);
   }
   if (selectedId === 'all' && includeAll) selectEl.value = 'all';
@@ -420,7 +528,7 @@ function buildEnvBadge(profile, size = UI_MARK_SIZE) {
   badge.style.width = size + 'px';
   badge.style.height = size + 'px';
   badge.style.background = `linear-gradient(145deg, ${c1}, ${c2})`;
-  badge.title = '环境 ' + n;
+  badge.title = t('profiles.envName', { n });
   const num = document.createElement('span');
   num.className = 'env-badge-num';
   num.textContent = n;
@@ -439,12 +547,12 @@ function buildEnvIdentity(profile) {
   text.className = 'env-identity-text';
   const titleText = (profile.title && String(profile.title).trim() && String(profile.title) !== String(n))
     ? String(profile.title).trim()
-    : ('环境 ' + n);
+    : t('profiles.envName', { n });
   text.append(element('strong', '', titleText));
-  const sub = profile.tag
+  const sub = (profile.tag ? localizeSystemLabel(profile.tag) : '')
     || (profile.platform?.startUrl ? String(profile.platform.startUrl).slice(0, 42) : '')
     || (profile.platform?.type && profile.platform.type !== 'other' ? String(profile.platform.type) : '')
-    || ('环境 ' + n);
+    || t('profiles.envName', { n });
   text.append(element('small', '', sub));
   box.append(text);
   return box;
@@ -458,16 +566,16 @@ function buildEnvBrowserCell(profile) {
   wrap.append(buildEnvBadge(profile, UI_MARK_SIZE));
   const label = document.createElement('div');
   label.className = 'env-browser-label';
-  label.append(element('strong', '', '环境 ' + n));
+  label.append(element('strong', '', t('profiles.envName', { n })));
   const kernel = String(profile.browser || '').replace(/^Google\s+/i, '').trim();
   // Neutral kernel label — avoid "Chrome" product branding in list
-  let kernelLabel = '独立内核';
-  if (/edge/i.test(kernel)) kernelLabel = 'Edge 内核';
-  else if (/chromium|wayfern|donut|testing/i.test(kernel)) kernelLabel = '独立内核';
+  let kernelLabel = t('profiles.kernel.independent');
+  if (/edge/i.test(kernel)) kernelLabel = t('profiles.kernel.edge');
+  else if (/chromium|wayfern|donut|testing/i.test(kernel)) kernelLabel = t('profiles.kernel.independent');
   else if (kernel && !/chrome/i.test(kernel)) kernelLabel = kernel.slice(0, 12);
   label.append(element('small', '', kernelLabel));
   wrap.append(label);
-  wrap.title = '环境 ' + n + ' · ' + kernelLabel;
+  wrap.title = t('profiles.envName', { n }) + ' · ' + kernelLabel;
   return wrap;
 }
 
@@ -673,7 +781,7 @@ function openThemedSelect(select, button, focusIndex = null) {
   const menu = element('div', 'themed-select-menu');
   menu.id = button.getAttribute('aria-controls');
   menu.setAttribute('role', 'listbox');
-  menu.setAttribute('aria-label', select.getAttribute('aria-label') || '选择选项');
+  menu.setAttribute('aria-label', select.getAttribute('aria-label') || tx('选择选项'));
   menu.tabIndex = -1;
   menu.dataset.themedSelectMenu = '1';
   [...select.options].forEach((option, index) => {
@@ -837,7 +945,7 @@ function enhanceMultiSelect(select) {
   list.id = `${controlId}-list`;
   list.setAttribute('role', 'listbox');
   list.setAttribute('aria-multiselectable', 'true');
-  list.setAttribute('aria-label', select.getAttribute('aria-label') || select.labels?.[0]?.textContent?.trim() || '选择多个选项');
+  list.setAttribute('aria-label', select.getAttribute('aria-label') || select.labels?.[0]?.textContent?.trim() || tx('选择多个选项'));
   select.before(wrap);
   wrap.append(select, list);
   select.classList.add('themed-select-native');
@@ -1010,7 +1118,21 @@ try {
     if (typeof switchView === 'function') switchView(activeView);
     if (typeof renderProfiles === 'function') renderProfiles();
     if (typeof renderGroupsPage === 'function') renderGroupsPage();
+    if (typeof renderRpaStore === 'function') renderRpaStore();
+    if (typeof renderSessions === 'function') renderSessions();
+    if (activeView === 'rpa' && typeof refreshRpaPage === 'function') refreshRpaPage().catch(() => {});
+    if (activeView === 'api-mcp' && typeof refreshApiMcpPage === 'function') refreshApiMcpPage();
+    if (typeof fillGroupSelect === 'function') {
+      try {
+        fillGroupSelect($('#batch-assign-group'), UNGROUPED_ID, { includeUngrouped: true });
+        fillGroupSelect($('#batch-add-group'), listGroups()[0]?.id || UNGROUPED_ID);
+        fillGroupSelect($('#profile-create-group'), listGroups()[0]?.id || UNGROUPED_ID);
+      } catch (_) {}
+    }
+    // Re-read engine badge with new locale
+    window.ops?.getInfo?.().then((info) => updateEngineBadge(info)).catch(() => {});
     if (typeof refreshIcons === 'function') refreshIcons();
+    if (typeof syncThemedSelects === 'function') syncThemedSelects();
     document.documentElement.dataset.uiLocale = resolved;
   });
   document.getElementById('ui-locale-select')?.addEventListener('change', (event) => {
@@ -1039,31 +1161,34 @@ function isDirectProxy(value) {
 
 function maskProxy(value) {
   const raw = String(value || '').trim();
-  if (isDirectProxy(raw)) return '本地直连';
+  if (isDirectProxy(raw)) return t('net.localDirect');
   try {
     const parsed = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? new URL(raw) : null;
-    if (parsed) return parsed.protocol.replace(':', '').toUpperCase() + ' · ' + parsed.hostname + ':' + parsed.port + (parsed.username ? ' · 已认证' : '');
+    if (parsed) return parsed.protocol.replace(':', '').toUpperCase() + ' · ' + parsed.hostname + ':' + parsed.port + (parsed.username ? ' · ' + t('net.auth') : '');
   } catch (_) {}
   const parts = raw.split(':');
-  return parts.length >= 4 ? 'SOCKS5 · ' + parts[0] + ':' + parts[1] + ' · 已认证' : raw;
+  return parts.length >= 4 ? 'SOCKS5 · ' + parts[0] + ':' + parts[1] + ' · ' + t('net.auth') : raw;
 }
 
 function networkModeBadge(proxy) {
   const wrap = document.createElement('div');
   wrap.className = 'network-mode-cell network-mode-cell-compact';
   if (isDirectProxy(proxy)) {
-    const badge = element('span', 'net-badge net-badge-direct', '直连');
-    badge.title = '本地直连';
+    const badge = element('span', 'net-badge net-badge-direct', t('net.direct'));
+    badge.title = t('net.localDirect');
     wrap.append(badge);
   } else {
-    const badge = element('span', 'net-badge net-badge-proxy', '代理');
+    const badge = element('span', 'net-badge net-badge-proxy', t('net.proxy'));
     badge.title = maskProxy(proxy);
     wrap.append(badge);
   }
   return wrap;
 }
 function countryFlag(code) { const value = String(code || '').toUpperCase(); return /^[A-Z]{2}$/.test(value) ? String.fromCodePoint(...[...value].map((char) => 127397 + char.charCodeAt(0))) : '🌐'; }
-function countryName(code) { try { return new Intl.DisplayNames(['zh-CN'], { type: 'region' }).of(String(code || '').toUpperCase()) || code; } catch (_) { return code || '未知国家'; } }
+function countryName(code) {
+  const locale = window.OpenBrowserI18n?.getLocale?.() === 'zh-CN' ? 'zh-CN' : (window.OpenBrowserI18n?.getLocale?.() || 'en');
+  try { return new Intl.DisplayNames([locale], { type: 'region' }).of(String(code || '').toUpperCase()) || code; } catch (_) { return code || ''; }
+}
 function parseEditorProxy(value) {
   const raw = String(value || '').trim();
   if (!raw || /^(direct|offline|none)$/i.test(raw)) return { mode: 'direct', type: 'socks5', host: '', port: '', username: '', password: '' };
@@ -1085,11 +1210,11 @@ function serializeEditorProxy(strict = true) {
   const username = $('#editor-proxy-user').value; const password = $('#editor-proxy-password').value;
   if (!host && !$('#editor-proxy-port').value.trim() && !username && !password) return 'Direct';
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
-    if (strict) throw new Error('请填写有效的代理主机和端口');
+    if (strict) throw new Error(tx('请填写有效的代理主机和端口'));
     return protocol.toUpperCase() + ' · 待完善';
   }
   if ((username && !password) || (!username && password)) {
-    if (strict) throw new Error('代理账号和密码必须同时填写');
+    if (strict) throw new Error(tx('代理账号和密码必须同时填写'));
     return protocol + '://' + host + ':' + port;
   }
   const auth = username ? encodeURIComponent(username) + ':' + encodeURIComponent(password) + '@' : '';
@@ -1100,14 +1225,14 @@ function editorResolution() {
   const selected = $('#editor-resolution').value;
   if (selected !== 'custom') { const [width, height] = selected.split('x').map(Number); return { width, height }; }
   const width = Number($('#editor-width').value); const height = Number($('#editor-height').value);
-  if (!Number.isInteger(width) || width < 640 || width > 7680 || !Number.isInteger(height) || height < 480 || height > 4320) throw new Error('请填写有效的窗口宽度和高度');
+  if (!Number.isInteger(width) || width < 640 || width > 7680 || !Number.isInteger(height) || height < 480 || height > 4320) throw new Error(tx('请填写有效的窗口宽度和高度'));
   return { width, height };
 }
 
 function editorCookies() {
   const raw = $('#editor-cookies').value.trim(); if (!raw) return '';
-  let values; try { values = JSON.parse(raw); } catch (_) { throw new Error('Cookie JSON 格式错误'); }
-  if (!Array.isArray(values) || values.some((item) => !item || typeof item !== 'object' || typeof item.name !== 'string' || typeof item.value !== 'string')) throw new Error('Cookie 必须是包含 name 和 value 的 JSON 数组');
+  let values; try { values = JSON.parse(raw); } catch (_) { throw new Error(tx('Cookie JSON 格式错误')); }
+  if (!Array.isArray(values) || values.some((item) => !item || typeof item !== 'object' || typeof item.name !== 'string' || typeof item.value !== 'string')) throw new Error(tx('Cookie 必须是包含 name 和 value 的 JSON 数组'));
   return JSON.stringify(values);
 }
 
@@ -1166,12 +1291,12 @@ function editorDraft(strict = true) {
   };
   if (strict && privacy.timezoneMode === 'custom' && privacy.timezone) {
     try { new Intl.DateTimeFormat('en-US', { timeZone: privacy.timezone }).format(); }
-    catch (_) { throw new Error('自定义时区无效，请使用 Asia/Shanghai 这类 IANA 时区名称'); }
+    catch (_) { throw new Error(tx('自定义时区无效，请使用 Asia/Shanghai 这类 IANA 时区名称')); }
   }
   if (strict && privacy.geoMode === 'custom') {
     const latitude = Number(privacy.latitude); const longitude = Number(privacy.longitude);
     if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
-      throw new Error('自定义地理位置经纬度无效');
+      throw new Error(tx('自定义地理位置经纬度无效'));
     }
     privacy.latitude = latitude; privacy.longitude = longitude;
   }
@@ -1293,17 +1418,17 @@ function renderEditorSummary() {
   if (!editingProfileId) return;
   const draft = editorDraft(false); const privacy = draft.privacy; const summary = $('#editor-summary'); summary.replaceChildren();
   const labels = {
-    webrtc: { proxy: '仅代理连接', disabled: '禁用非代理 UDP', real: '真实网络' }, timezoneMode: { ip: '基于出口 IP', real: '系统真实', custom: privacy.timezone || '自定义' },
+    webrtc: { proxy: tx('仅代理连接'), disabled: tx('禁用非代理 UDP'), real: tx('真实网络') }, timezoneMode: { ip: '基于出口 IP', real: '系统真实', custom: privacy.timezone || '自定义' },
     geoMode: { ip: '基于出口 IP', disabled: '禁止访问', custom: '自定义坐标' }, canvas: { real: '真实', blocked: '禁止读取' }, webgl: { real: '真实', blocked: '禁用' },
     audio: { real: '真实', muted: '静音输出' }, media: { real: '按网站询问', blocked: '禁止访问' }, speech: { real: '真实', blocked: '禁用' }
   };
   const values = [
-    ['浏览器', 'Google Chrome'], ['分组', groupNameOf(draft)], ['User-Agent', draft.userAgent || 'Chrome 默认'], ['网络', maskProxy(draft.proxy)], ['WebRTC', labels.webrtc[privacy.webrtc]],
-    ['时区', labels.timezoneMode[privacy.timezoneMode]], ['地理位置', labels.geoMode[privacy.geoMode]], ['语言', draft.language], ['界面语言', privacy.uiLanguage === 'profile' ? '跟随语言' : privacy.uiLanguage],
-    ['分辨率', draft.width + ' × ' + draft.height], ['字体', privacy.fontMode === 'custom' ? privacy.fontSize + 'px' : '默认'], ['Canvas', labels.canvas[privacy.canvas]],
-    ['WebGL', labels.webgl[privacy.webgl]], ['WebGPU', privacy.webgpu === 'blocked' ? '禁用' : '真实'], ['AudioContext', labels.audio[privacy.audio]], ['媒体设备', labels.media[privacy.media]], ['ClientRects', '真实'],
+    [tx('浏览器'), 'Google Chrome'], [tx('分组'), groupNameOf(draft)], ['User-Agent', draft.userAgent || 'Chrome 默认'], [tx('网络'), maskProxy(draft.proxy)], ['WebRTC', labels.webrtc[privacy.webrtc]],
+    [tx('时区'), labels.timezoneMode[privacy.timezoneMode]], [tx('地理位置'), labels.geoMode[privacy.geoMode]], [tx('语言'), draft.language], [tx('界面语言'), privacy.uiLanguage === 'profile' ? '跟随语言' : privacy.uiLanguage],
+    [tx('分辨率'), draft.width + ' × ' + draft.height], [tx('字体'), privacy.fontMode === 'custom' ? privacy.fontSize + 'px' : '默认'], ['Canvas', labels.canvas[privacy.canvas]],
+    ['WebGL', labels.webgl[privacy.webgl]], ['WebGPU', privacy.webgpu === 'blocked' ? '禁用' : '真实'], ['AudioContext', labels.audio[privacy.audio]], [tx('媒体设备'), labels.media[privacy.media]], ['ClientRects', '真实'],
     ['SpeechVoices', labels.speech[privacy.speech]], ['CPU', (navigator.hardwareConcurrency || '未知') + ' 核'], ['RAM', navigator.deviceMemory ? navigator.deviceMemory + ' GB' : '由系统管理'], ['Do Not Track', privacy.dnt ? '启用' : '默认'],
-    ['每次打开刷新指纹', privacy.refreshFingerprintOnStart ? '开启' : '关闭']
+    [tx('每次打开刷新指纹'), privacy.refreshFingerprintOnStart ? '开启' : '关闭']
   ];
   for (const [name, value] of values) { const row = document.createElement('div'); row.append(element('dt', '', name), element('dd', '', value || '默认')); summary.append(row); }
   const auditTarget = $('#editor-audit');
@@ -1311,7 +1436,7 @@ function renderEditorSummary() {
     const report = window.EnvironmentAudit.build(draft, { systemTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone });
     auditTarget.replaceChildren();
     const head = element('div', 'audit-head');
-    head.append(element('strong', '', '环境一致性检查'), element('span', report.status, report.warnings ? `${report.warnings} 项需确认` : '配置一致'));
+    head.append(element('strong', '', tx('环境一致性检查')), element('span', report.status, report.warnings ? `${report.warnings} 项需确认` : '配置一致'));
     auditTarget.append(head);
     for (const check of report.checks) {
       const row = element('div', `audit-row ${check.state}`);
@@ -1368,7 +1493,7 @@ function openProfileEditor(id) {
   editorSet('#editor-bypass-list', profile.proxyMeta.bypassList || '');
   if ($('#editor-proxy-result')) {
     $('#editor-proxy-result').className = 'proxy-test-result';
-    $('#editor-proxy-result').textContent = profile.exitIp ? '上次出口：' + profile.exitIp + ' · ' + countryName(profile.exitCountryCode) : '尚未检测';
+    $('#editor-proxy-result').textContent = profile.exitIp ? tx('上次出口：') + profile.exitIp + ' · ' + countryName(profile.exitCountryCode) : tx('尚未检测');
   }
   const privacy = profile.privacy;
   editorSet('#editor-webrtc', privacy.webrtc);
@@ -1459,18 +1584,18 @@ function openProfileEditor(id) {
 async function testEditorProxy() {
   const output = $('#editor-proxy-result');
   try {
-    const draft = editorDraft(true); if (/^Direct$/i.test(draft.proxy)) throw new Error('本地直连无需代理检测');
-    output.className = 'proxy-test-result'; output.textContent = '正在检测代理出口...'; const result = await window.ops.testProfileProxy(draft);
+    const draft = editorDraft(true); if (/^Direct$/i.test(draft.proxy)) throw new Error(tx('本地直连无需代理检测'));
+    output.className = 'proxy-test-result'; output.textContent = tx('正在检测代理出口...'); const result = await window.ops.testProfileProxy(draft);
     editorNetworkResult = result;
-    output.className = 'proxy-test-result success'; output.textContent = '连接成功 · ' + result.ip + ' · ' + countryFlag(result.countryCode) + ' ' + countryName(result.countryCode);
-  } catch (error) { output.className = 'proxy-test-result error'; output.textContent = '检测失败 · ' + error.message; }
+    output.className = 'proxy-test-result success'; output.textContent = tx('连接成功 · ') + result.ip + ' · ' + countryFlag(result.countryCode) + ' ' + countryName(result.countryCode);
+  } catch (error) { output.className = 'proxy-test-result error'; output.textContent = tx('检测失败 · ') + error.message; }
 }
 
 function useSystemEditorDefaults() {
   editorSet('#editor-user-agent', ''); editorSet('#editor-timezone-mode', 'real'); editorSet('#editor-timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || ''); editorSet('#editor-geo-mode', 'disabled'); editorSet('#editor-ui-language', 'system');
   editorSet('#editor-resolution', 'custom'); editorSet('#editor-width', Math.max(640, screen.availWidth || 1280)); editorSet('#editor-height', Math.max(480, screen.availHeight || 820));
   editorSet('#editor-webrtc', 'real'); editorSet('#editor-canvas', 'real'); editorSet('#editor-webgl', 'real'); editorSet('#editor-webgpu', 'real'); editorSet('#editor-audio', 'real'); editorSet('#editor-media', 'real'); editorSet('#editor-speech', 'real');
-  updateEditorVisibility(); renderEditorSummary(); toast('已读取本机安全默认值');
+  updateEditorVisibility(); renderEditorSummary(); toast(tx('已读取本机安全默认值'));
   refreshUaMetaPreview().catch(() => {});
 }
 
@@ -1482,7 +1607,7 @@ function editorOsToUaKey(osLabel) {
 }
 
 async function applyBuiltUa(payload) {
-  if (!window.ops?.buildUa) throw new Error('UA 生成接口不可用，请重启应用');
+  if (!window.ops?.buildUa) throw new Error(tx('UA 生成接口不可用，请重启应用'));
   const ua = await window.ops.buildUa(payload);
   editorSet('#editor-user-agent', ua.userAgent || '');
   // sync OS selector with generated UA platform
@@ -1517,7 +1642,7 @@ async function refreshUaMetaPreview() {
     const el = document.getElementById('editor-ua-meta');
     if (el) {
       el.hidden = false;
-      el.textContent = '留空：启动时按环境 ID 自动生成 UA + Client Hints（各环境互不相同）';
+      el.textContent = tx('留空：启动时按环境 ID 自动生成 UA + Client Hints（各环境互不相同）');
     }
     return;
   }
@@ -1537,7 +1662,7 @@ document.getElementById('editor-ua-generate')?.addEventListener('click', async (
       os: editorOsToUaKey($('#editor-os')?.value),
       chromeMajor: Number($('#editor-ua-chrome-major')?.value) || 131,
     });
-    toast('已按系统生成 UA + Client Hints');
+    toast(tx('已按系统生成 UA + Client Hints'));
   } catch (e) { toast(e.message); }
 });
 document.getElementById('editor-ua-random')?.addEventListener('click', async () => {
@@ -1546,14 +1671,14 @@ document.getElementById('editor-ua-random')?.addEventListener('click', async () 
       random: true,
       chromeMajor: Number($('#editor-ua-chrome-major')?.value) || undefined,
     });
-    toast('已随机生成 UA');
+    toast(tx('已随机生成 UA'));
   } catch (e) { toast(e.message); }
 });
 document.getElementById('editor-ua-clear')?.addEventListener('click', () => {
   editorSet('#editor-user-agent', '');
   refreshUaMetaPreview().catch(() => {});
   renderEditorSummary();
-  toast('已改为自动生成');
+  toast(tx('已改为自动生成'));
 });
 document.getElementById('editor-user-agent')?.addEventListener('input', () => {
   clearTimeout(window.__uaPreviewTimer);
@@ -1630,12 +1755,12 @@ function renderGroupsPage() {
     const row = document.createElement('tr');
     const n = countProfilesInGroup('ungrouped');
     const colorCell = document.createElement('td');
-    colorCell.append(buildSquareMark('—', { color: '#94a3b8', title: '未分组', size: UI_MARK_SIZE, className: 'group-mark' }));
+    colorCell.append(buildSquareMark('—', { color: '#94a3b8', title: t('groups.ungrouped'), size: UI_MARK_SIZE, className: 'group-mark' }));
     row.append(
       colorCell,
-      element('td', '', '未分组'),
+      element('td', '', t('groups.ungrouped')),
       element('td', '', String(n)),
-      element('td', '', '系统保留'),
+      element('td', '', t('groups.default')),
       element('td', '', '—')
     );
     table.append(row);
@@ -1657,20 +1782,21 @@ function renderGroupsPage() {
     nameCell.append(nameWrap);
     const n = countProfilesInGroup(g.id);
     const actions = element('div', 'actions');
-    const edit = element('button', 'mini edit', '编辑'); edit.dataset.groupEdit = g.id;
-    const view = element('button', 'mini blue', '查看环境'); view.dataset.groupView = g.id;
-    const del = element('button', 'mini', '删除'); del.dataset.groupDelete = g.id;
+    const edit = element('button', 'mini edit', t('action.edit')); edit.dataset.groupEdit = g.id;
+    const view = element('button', 'mini blue', t('action.use')); view.dataset.groupView = g.id;
+    const del = element('button', 'mini', t('action.delete')); del.dataset.groupDelete = g.id;
     actions.append(view, edit, del);
     const actionCell = document.createElement('td'); actionCell.append(actions);
     row.append(colorCell, nameCell, element('td', '', String(n)), element('td', '', (g.createdAt || '').replace('T', ' ').slice(0, 16) || '—'), actionCell);
     table.append(row);
   }
   if (empty) empty.hidden = true;
+  afterUiRender(document.getElementById('view-groups') || document);
 }
 
 function openGroupDialog(group = null) {
   $('#group-edit-id').value = group?.id || '';
-  $('#group-dialog-title').textContent = group ? '编辑分组' : '新建分组';
+  $('#group-dialog-title').textContent = group ? tx('编辑分组') : tx('新建分组');
   $('#group-name').value = group?.name || '';
   $('#group-note').value = group?.note || '';
   const color = group?.color || GROUP_COLORS[listGroups().length % GROUP_COLORS.length];
@@ -1696,17 +1822,17 @@ function openGroupDialog(group = null) {
 function saveGroupFromDialog() {
   const id = $('#group-edit-id').value.trim();
   const name = $('#group-name').value.trim();
-  if (!name) throw new Error('请输入分组名称');
+  if (!name) throw new Error(tx('请输入分组名称'));
   const color = $('#group-color').value.trim();
-  if (!/^#[0-9a-fA-F]{6}$/.test(color)) throw new Error('颜色必须是 #RRGGBB 格式');
+  if (!/^#[0-9a-fA-F]{6}$/.test(color)) throw new Error(tx('颜色必须是 #RRGGBB 格式'));
   const note = $('#group-note').value.trim();
   if (id) {
     const idx = ui.groups.findIndex((g) => g.id === id);
-    if (idx < 0) throw new Error('分组不存在');
-    if (ui.groups.some((g) => g.id !== id && g.name === name)) throw new Error('已有同名分组');
+    if (idx < 0) throw new Error(tx('分组不存在'));
+    if (ui.groups.some((g) => g.id !== id && g.name === name)) throw new Error(tx('已有同名分组'));
     ui.groups[idx] = normalizeGroup({ ...ui.groups[idx], name, color, note }, idx);
   } else {
-    if (ui.groups.some((g) => g.name === name)) throw new Error('已有同名分组');
+    if (ui.groups.some((g) => g.name === name)) throw new Error(tx('已有同名分组'));
     ui.groups.push(normalizeGroup({
       id: createGroupId(),
       name,
@@ -1728,7 +1854,7 @@ function deleteGroup(id) {
   const g = findGroup(id);
   if (!g) return;
   const n = countProfilesInGroup(id);
-  if (!confirm(`删除分组「${g.name}」？\n其中 ${n} 个环境将变为「未分组」。`)) return;
+  if (!confirm(tx(`删除分组「${g.name}」？\n其中 ${n} 个环境将变为「未分组」。`))) return;
   ui.profiles = ui.profiles.map((p) => (p.groupId === id ? { ...p, groupId: UNGROUPED_ID } : p));
   ui.groups = ui.groups.filter((item) => item.id !== id);
   if (activeGroupFilter === id) activeGroupFilter = 'all';
@@ -1736,20 +1862,20 @@ function deleteGroup(id) {
   window.ops.syncProfiles(ui.profiles).catch(() => {});
   renderGroupsPage();
   renderProfiles();
-  toast('已删除分组');
+  toast(tx('已删除分组'));
   log('Group', '删除分组 ' + g.name);
 }
 
 async function assignSelectedToGroup(groupId) {
   const ids = [...selectedProfiles];
-  if (!ids.length) throw new Error('请先勾选环境');
+  if (!ids.length) throw new Error(tx('请先勾选环境'));
   const gid = groupId === 'ungrouped' ? UNGROUPED_ID : groupId;
-  if (gid && !findGroup(gid)) throw new Error('分组不存在');
+  if (gid && !findGroup(gid)) throw new Error(tx('分组不存在'));
   ui.profiles = ui.profiles.map((p) => (ids.includes(p.id) ? { ...p, groupId: gid } : p));
   save();
   engineProfiles = await window.ops.syncProfiles(ui.profiles);
   renderProfiles();
-  toast(`已将 ${ids.length} 个环境移到「${gid ? groupNameOf({ groupId: gid }) : '未分组'}」`);
+  toast(tx(`已将 ${ids.length} 个环境移到「${gid ? groupNameOf({ groupId: gid }) : '未分组'}」`));
   log('Group', `批量移动 ${ids.length} 个环境 → ${gid || '未分组'}`);
 }
 
@@ -1779,13 +1905,13 @@ function renderProxies() {
     check.dataset.proxySelect = item.id;
     checkCell.append(check);
     const host = `${item.host}:${item.port}`;
-    const auth = item.authenticated ? '是' : '否';
+    const auth = item.authenticated ? t('common.confirm') : t('common.cancel');
     const exit = item.lastIp ? `${item.lastIp}${item.lastCountryCode ? ' · ' + item.lastCountryCode : ''}` : '—';
     const actions = element('div', 'actions');
-    const edit = element('button', 'mini edit', '编辑'); edit.dataset.proxyEdit = item.id;
-    const test = element('button', 'mini blue', '检测'); test.dataset.proxyTest = item.id;
-    const use = element('button', 'mini', '填入新建'); use.dataset.proxyUse = item.id;
-    const del = element('button', 'mini', '删除'); del.dataset.proxyDelete = item.id;
+    const edit = element('button', 'mini edit', t('action.edit')); edit.dataset.proxyEdit = item.id;
+    const test = element('button', 'mini blue', t('action.check')); test.dataset.proxyTest = item.id;
+    const use = element('button', 'mini', t('action.use')); use.dataset.proxyUse = item.id;
+    const del = element('button', 'mini', t('action.delete')); del.dataset.proxyDelete = item.id;
     actions.append(edit, test, use, del);
     const actionCell = document.createElement('td'); actionCell.append(actions);
     const proto = String(item.protocol || 'proxy').toUpperCase();
@@ -1819,7 +1945,7 @@ function renderProxies() {
     table.append(row);
   }
   if (empty) empty.hidden = list.length !== 0;
-  if (countEl) countEl.textContent = `共 ${proxyLibrary.length} 条` + (q ? ` · 筛选 ${list.length}` : '');
+  if (countEl) countEl.textContent = t('rpa.store.count', { n: proxyLibrary.length }).replace('templates', tx('条')) + (q ? ` · ${t('profiles.search').split('/')[0].trim()} ${list.length}` : '');
   const selectAll = $('#proxy-select-all');
   if (selectAll) {
     const ids = list.map((i) => i.id);
@@ -1838,11 +1964,12 @@ async function refreshProxies() {
     toast('加载代理库失败：' + error.message);
   }
   renderProxies();
+  afterUiRender(document.getElementById('view-proxies') || document);
 }
 
 function openProxyDialog(item = null) {
   $('#proxy-edit-id').value = item?.id || '';
-  $('#proxy-dialog-title').textContent = item ? '编辑代理' : '新建代理';
+  $('#proxy-dialog-title').textContent = item ? tx('编辑代理') : tx('新建代理');
   $('#proxy-name').value = item?.name || '';
   $('#proxy-protocol').value = item?.protocol || 'socks5';
   $('#proxy-ip-channel').value = item?.ipChannel || 'ip-api';
@@ -1854,7 +1981,7 @@ function openProxyDialog(item = null) {
   $('#proxy-remark').value = item?.remark || '';
   const result = $('#proxy-dialog-result');
   result.className = 'proxy-test-result';
-  result.textContent = item?.lastIp ? `上次出口：${item.lastIp}` : '保存前可先检测';
+  result.textContent = item?.lastIp ? tx(`上次出口：${item.lastIp}`) : tx('保存前可先检测');
   syncThemedSelects($('#proxy-dialog'));
   $('#proxy-dialog').showModal();
 }
@@ -1895,10 +2022,10 @@ function renderGroupFilterChips() {
     btn.append(dot, text, badge);
     return btn;
   };
-  host.append(mk('all', '全部', ui.profiles.length));
-  host.append(mk('ungrouped', '未分组', countProfilesInGroup('ungrouped')));
+  host.append(mk('all', t('groups.all'), ui.profiles.length));
+  host.append(mk('ungrouped', t('groups.ungrouped'), countProfilesInGroup('ungrouped')));
   for (const g of listGroups()) {
-    host.append(mk(g.id, g.name, countProfilesInGroup(g.id)));
+    host.append(mk(g.id, localizeSystemLabel(g.name), countProfilesInGroup(g.id)));
   }
 }
 
@@ -1966,11 +2093,11 @@ function renderProfiles() {
       line.title = (network.ip || '') + (code ? ' · ' + countryName(code) : '');
       networkInfo.append(line);
     } else {
-      networkInfo.append(element('span', 'network-pending', isDirectProxy(profile.proxy) ? '本机' : '未测'));
+      networkInfo.append(element('span', 'network-pending', isDirectProxy(profile.proxy) ? t('net.localHost') : t('net.untested')));
     }
     if (!isDirectProxy(profile.proxy)) {
-      const inspect = element('button', 'network-check', '测');
-      inspect.title = network?.ip ? '重新检测出口' : '检测出口';
+      const inspect = element('button', 'network-check', t('action.check'));
+      inspect.title = network?.ip ? t('action.recheck') : t('action.checkExit');
       inspect.dataset.proxyCheck = profile.id;
       networkInfo.append(inspect);
     }
@@ -1978,20 +2105,40 @@ function renderProfiles() {
     const extensionCell = element('td', 'col-ext', String(info.assignedExtensions?.length || 0));
     const statusCell = document.createElement('td');
     statusCell.className = 'col-status';
-    const status = element('span', `status status-compact ${info.running ? 'running' : ''}`, info.running ? '运行' : '停止');
-    if (info.running && info.port) status.title = '运行中 · CDP ' + info.port;
+    const status = element('span', `status status-compact ${info.running ? 'running' : ''}`, info.running ? t('status.run') : t('status.stop'));
+    if (info.running && info.port) status.title = t('status.runningCdp', { port: info.port });
     statusCell.append(status);
     const actionCell = document.createElement('td');
     actionCell.className = 'col-actions';
     const actions = element('div', 'actions');
-    const toggle = element('button', 'mini', info.running ? '停止' : '启动'); toggle.dataset.action = info.running ? 'stop' : 'start'; toggle.dataset.id = profile.id;
-    const sync = element('button', 'mini blue', '同步'); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running; sync.title = '同步选择';
-    const edit = element('button', 'mini edit', '编辑'); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
+    const toggle = element('button', 'mini', info.running ? t('action.stop') : t('action.start')); toggle.dataset.action = info.running ? 'stop' : 'start'; toggle.dataset.id = profile.id;
+    const sync = element('button', 'mini blue', t('action.sync')); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running; sync.title = t('profiles.syncSelect');
+    const edit = element('button', 'mini edit', t('action.edit')); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
     actions.append(toggle, sync, edit); actionCell.append(actions);
     row.append(selectCell, idCell, nameCell, groupCell, browserCell, proxyCell, networkCell, extensionCell, statusCell, actionCell); table.append(row);
   }
   $('#profile-empty').hidden = filtered.length !== 0;
   $('#profile-total').textContent = String(filtered.length);
+  const totalLabel = document.querySelector('#profile-pagination .profile-total');
+  if (totalLabel) {
+    // Keep strong#profile-total as number; wrap prefix via data-i18n or rebuild
+    const strong = totalLabel.querySelector('#profile-total');
+    const num = String(filtered.length);
+    if (strong) {
+      totalLabel.replaceChildren(document.createTextNode(t('profiles.totalLabel')), strong);
+      strong.textContent = num;
+    } else {
+      totalLabel.textContent = t('profiles.totalLabel') + num;
+    }
+  }
+  const pageSize = $('#profile-page-size');
+  if (pageSize) {
+    const prev = pageSize.value;
+    [...pageSize.options].forEach((opt) => {
+      opt.textContent = t('profiles.perPageOpt', { n: opt.value });
+    });
+    pageSize.value = prev || String(profilePageSize);
+  }
   $('#profile-page').value = String(profilePage);
   $('#profile-page').max = String(totalPages);
   $('#profile-pages').textContent = String(totalPages);
@@ -2004,6 +2151,8 @@ function renderProfiles() {
   selectAll.checked = pageIds.length > 0 && selectedOnPage === pageIds.length;
   selectAll.indeterminate = selectedOnPage > 0 && selectedOnPage < pageIds.length;
   updateProfileSelectionUi();
+  // Translate any remaining Chinese chrome text that was just injected
+  afterUiRender(document.getElementById('view-profiles') || document);
 }
 
 function visibleProfilePageIds() {
@@ -2023,23 +2172,23 @@ async function startProfile(id) {
   const profile = ui.profiles.find((item) => item.id === id); if (!profile) return;
   const payload = {
     ...profile,
-    group_name: groupNameOf(profile) === '未分组' ? '' : groupNameOf(profile),
+    group_name: groupNameRaw(profile) || '',
   };
   try {
     const result = await window.ops.startProfile(payload);
     log('Browser', `${displayProfileNumber(profile)} 已启动 · ${result.browser} · CDP ${result.port || 'pending'}`);
-    toast(`${displayProfileNumber(profile)} 已启动`);
+    toast(tx(`${displayProfileNumber(profile)} 已启动`));
     await refreshStatus();
     await refreshSessions();
   } catch (error) {
     log('Error', error.message);
-    toast(`启动失败：${error.message}`);
+    toast(tx(`启动失败：${error.message}`));
   }
 }
 
 async function stopProfile(id) {
   try { await window.ops.stopProfile(id); const profile = ui.profiles.find((item) => item.id === id); log('Browser', `${profile?.name || id} 已停止`); await refreshStatus(); await refreshSessions(); }
-  catch (error) { log('Error', error.message); toast(`停止失败：${error.message}`); }
+  catch (error) { log('Error', error.message); toast(tx(`停止失败：${error.message}`)); }
 }
 
 async function checkProfileProxy(id) {
@@ -2058,7 +2207,7 @@ function createExtensionIcon(item) {
   const label = extensionIcon(item.name || 'OB');
   const icon = buildSquareMark(label, {
     color: item.builtIn || item.source === 'builtin' ? '#245cff' : '#a78bfa',
-    title: item.name || '扩展',
+    title: item.name || tx('扩展'),
     size: UI_MARK_SIZE,
     className: 'extension-icon',
   });
@@ -2087,7 +2236,7 @@ function renderAppCenterTabs() {
   $$('#app-center-tabs button').forEach((button) => button.classList.toggle('active', button.dataset.appTab === appCenterTab));
   const counts = appCenterData.counts || {};
   const countsEl = $('#extension-counts');
-  if (countsEl) countsEl.textContent = `自带 ${counts.builtin || 0} · 推荐 ${counts.recommended || 0} · 本地 ${counts.local || counts.installed || 0}`;
+  if (countsEl) countsEl.textContent = tx(`自带 ${counts.builtin || 0} · 推荐 ${counts.recommended || 0} · 本地 ${counts.local || counts.installed || 0}`);
 }
 
 function renderExtensions() {
@@ -2102,18 +2251,18 @@ function renderExtensions() {
       const card = element('article', 'extension-card recommended');
       const top = element('div', 'extension-top');
       top.append(createExtensionIcon(app));
-      if (app.installed) top.append(element('span', 'status running', '已安装'));
+      if (app.installed) top.append(element('span', 'status running', tx('已安装')));
       card.append(top, element('h3', '', app.name), element('p', '', app.description || 'Chrome Web Store'));
       const meta = element('div', 'extension-meta');
       meta.append(element('span', '', app.category || 'app'), element('span', '', app.installed ? `已启用环境 ${app.assigned_profiles || 0}` : '商店安装'));
       card.append(meta);
       const actions = element('div', 'card-actions');
       if (app.installed && app.extension_id) {
-        const assign = element('button', 'primary', '批量分配');
+        const assign = element('button', 'primary', tx('批量分配'));
         assign.dataset.extensionAssign = app.extension_id;
         actions.append(assign);
       } else {
-        const install = element('button', 'primary', '安装');
+        const install = element('button', 'primary', tx('安装'));
         install.dataset.storeInstall = app.store_url || app.store_id;
         actions.append(install);
       }
@@ -2121,7 +2270,7 @@ function renderExtensions() {
       grid.append(card);
     }
     $('#extension-empty').hidden = list.length !== 0;
-    if (!list.length) $('#extension-empty').textContent = query ? '没有匹配的推荐应用' : '暂无推荐应用';
+    if (!list.length) $('#extension-empty').textContent = query ? tx('没有匹配的推荐应用') : tx('暂无推荐应用');
     return;
   }
 
@@ -2154,7 +2303,7 @@ function renderExtensions() {
     toggle.checked = extension.enabledAll;
     toggle.dataset.extensionToggle = extension.id;
     toggle.indeterminate = !extension.enabledAll && Number(extension.assignedProfiles) > 0;
-    toggleLabel.title = extension.enabledAll ? '全部环境已启用' : toggle.indeterminate ? '部分环境已启用' : '全部环境已停用';
+    toggleLabel.title = extension.enabledAll ? tx('全部环境已启用') : toggle.indeterminate ? tx('部分环境已启用') : tx('全部环境已停用');
     toggleLabel.append(toggle, element('span', 'extension-toggle-slider'));
     top.append(createExtensionIcon(extension), toggleLabel);
     card.append(top, element('h3', '', extension.name), element('p', '', extension.description || 'Local unpacked Chrome extension'));
@@ -2165,11 +2314,11 @@ function renderExtensions() {
     );
     card.append(meta);
     const actions = element('div', 'card-actions');
-    const assign = element('button', 'primary', '批量分配');
+    const assign = element('button', 'primary', tx('批量分配'));
     assign.dataset.extensionAssign = extension.id;
     actions.append(assign);
     if (!extension.builtIn) {
-      const remove = element('button', 'outline', '移除');
+      const remove = element('button', 'outline', tx('移除'));
       remove.dataset.extensionRemove = extension.id;
       actions.append(remove);
     }
@@ -2177,7 +2326,7 @@ function renderExtensions() {
     grid.append(card);
   }
   $('#extension-empty').hidden = visible.length !== 0;
-  if (!visible.length) $('#extension-empty').textContent = appCenterTab === 'builtin' ? '暂无自带应用' : '尚未添加扩展';
+  if (!visible.length) $('#extension-empty').textContent = appCenterTab === 'builtin' ? tx('暂无自带应用') : tx('尚未添加扩展');
 }
 
 async function refreshExtensions() {
@@ -2245,11 +2394,12 @@ async function hydrateAppCenterIcons() {
     }
   }
   if (changed) renderExtensions();
+  afterUiRender(document.getElementById('view-extensions') || document);
 }
 
 function openAssign(id) {
   currentExtension = extensions.find((item) => item.id === id); if (!currentExtension) return;
-  $('#assign-extension-name').textContent = `${currentExtension.name} · 运行中的环境需重启后生效`;
+  $('#assign-extension-name').textContent = tx(`${currentExtension.name} · 运行中的环境需重启后生效`);
   const list = $('#assign-profile-list'); list.replaceChildren();
   const assigned = new Set(currentExtension.assignedProfileIds || []);
   for (const profile of ui.profiles) { const label = element('label', 'assign-item'); const input = document.createElement('input'); input.type = 'checkbox'; input.value = profile.id; input.checked = assigned.has(profile.id); label.append(input, element('span', '', '环境 ' + displayProfileNumber(profile))); list.append(label); }
@@ -2257,7 +2407,7 @@ function openAssign(id) {
 }
 
 async function applyAssignment(enabled) {
-  const ids = $$('#assign-profile-list input:checked').map((input) => input.value); if (!ids.length) return toast('请先选择环境');
+  const ids = $$('#assign-profile-list input:checked').map((input) => input.value); if (!ids.length) return toast(tx('请先选择环境'));
   const result = await window.ops.assignExtension(currentExtension.id, ids, enabled); $('#assign-dialog').close(); await refreshExtensions(); await refreshStatus();
   log('Extension', `${currentExtension.name} ${enabled ? '添加到' : '移出'} ${ids.length} 个环境`);
   toast(result.restartRequired?.length ? `已保存；${result.restartRequired.length} 个运行环境需重启` : '批量分配已生效');
@@ -2271,40 +2421,41 @@ function orderedSelectedSessionIds() {
 
 function populateSyncGroups() {
   const select = $('#sync-group'); const current = select.value || 'all'; const groups = [...new Set(sessions.map((item) => String(item.profile?.tag || '未分组')))].sort();
-  select.replaceChildren(); const all = document.createElement('option'); all.value = 'all'; all.textContent = '全部分组'; select.append(all);
+  select.replaceChildren(); const all = document.createElement('option'); all.value = 'all'; all.textContent = tx('全部分组'); select.append(all);
   for (const group of groups) { const option = document.createElement('option'); option.value = group; option.textContent = group; select.append(option); }
   select.value = [...select.options].some((option) => option.value === current) ? current : 'all';
 }
 
 function renderSessions() {
-  populateSyncGroups(); const group = $('#sync-group').value || 'all'; const visible = group === 'all' ? sessions : sessions.filter((item) => String(item.profile?.tag || '未分组') === group);
+  populateSyncGroups(); const group = $('#sync-group').value || 'all'; const visible = group === 'all' ? sessions : sessions.filter((item) => String(item.profile?.tag || t('groups.ungrouped')) === group);
   const table = $('#session-table'); table.replaceChildren();
   for (const value of visible) {
     const selected = selectedSessions.has(value.id);
-    const role = syncState.active && syncState.master === value.id ? '主控窗口' : syncState.active && syncState.selected.includes(value.id) ? '被控窗口' : selected && preferredMasterId === value.id ? '预设主控' : selected ? '已选择' : '待同步';
+    const role = syncState.active && syncState.master === value.id ? t('tag.master') : syncState.active && syncState.selected.includes(value.id) ? t('tag.workgroup') : selected && preferredMasterId === value.id ? t('tag.master') : selected ? t('action.use') : t('status.stopped');
     const row = document.createElement('tr');
     if (selected) row.classList.add('selected-row');
     if ((syncState.active && syncState.master === value.id) || (!syncState.active && preferredMasterId === value.id && selected)) row.classList.add('master-row');
     const selectCell = document.createElement('td'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selected; checkbox.disabled = syncState.active; checkbox.dataset.sessionSelect = value.id; selectCell.append(checkbox);
     const statusCell = document.createElement('td'); statusCell.append(element('span', 'sync-role', role));
     const actionCell = document.createElement('td'); actionCell.className = 'sync-actions';
-    const master = element('button', 'sync-show', preferredMasterId === value.id ? '主控' : '设为主控'); master.dataset.masterSelect = value.id; master.disabled = syncState.active || !selected;
-    const show = element('button', 'sync-show', '显示窗口'); show.dataset.showWindow = value.id; actionCell.append(master, show);
+    const master = element('button', 'sync-show', preferredMasterId === value.id ? t('tag.master') : t('action.use')); master.dataset.masterSelect = value.id; master.disabled = syncState.active || !selected;
+    const show = element('button', 'sync-show', t('action.preview')); show.dataset.showWindow = value.id; actionCell.append(master, show);
     const profile = value.profile || { id: value.id, number: value.id };
     const number = displayProfileNumber(profile);
     const idCell = document.createElement('td');
     idCell.append(buildEnvBadge(profile, UI_MARK_SIZE));
     const nameCell = document.createElement('td');
-    nameCell.append(element('strong', '', (profile.title && String(profile.title) !== String(number)) ? profile.title : ('环境 ' + number)));
+    nameCell.append(element('strong', '', (profile.title && String(profile.title) !== String(number)) ? profile.title : (t('profiles.envName', { n: number }))));
     const browserCell = document.createElement('td');
     browserCell.append(buildEnvBrowserCell(profile));
     row.append(selectCell, idCell, nameCell, browserCell, element('td', '', String(value.tabs.length)), statusCell, actionCell); table.append(row);
   }
   $('#session-empty').style.display = visible.length ? 'none' : 'block';
-  $('#selected-count').textContent = '已选 ' + selectedSessions.size;
-  $('#sync-selected').textContent = '已选择 ' + selectedSessions.size + ' 列';
+  $('#selected-count').textContent = t('profiles.selected', { n: selectedSessions.size });
+  $('#sync-selected').textContent = t('profiles.selected', { n: selectedSessions.size });
   const allBox = $('#select-all-sessions'); allBox.checked = visible.length > 0 && visible.every((item) => selectedSessions.has(item.id)); allBox.indeterminate = visible.some((item) => selectedSessions.has(item.id)) && !allBox.checked;
   renderSyncState(); renderTabInventory();
+  afterUiRender(document.getElementById('view-sync') || document);
 }
 
 function renderSyncState() {
@@ -2313,10 +2464,11 @@ function renderSyncState() {
   $('#restart-sync').disabled = selectedSessions.size < 2;
   $('#select-all-sessions').disabled = syncState.active; $('#sync-group').disabled = syncState.active;
   const health = $('#sync-health');
-  if (!syncState.active) { health.className = 'sync-health idle'; health.textContent = '同步未启动'; }
-  else if (syncHealth.recovering) { health.className = 'sync-health warning'; health.textContent = '正在恢复输入桥'; }
-  else if (syncHealth.queueDepth > 24 || syncHealth.lastLatencyMs > 800) { health.className = 'sync-health warning'; health.textContent = `同步繁忙 · 队列 ${syncHealth.queueDepth}`; }
-  else { health.className = 'sync-health healthy'; health.textContent = `同步正常 · ${syncHealth.lastLatencyMs || 0}ms`; }
+  if (!health) return;
+  if (!syncState.active) { health.className = 'sync-health idle'; health.textContent = t('sync.idle'); }
+  else if (syncHealth.recovering) { health.className = 'sync-health warning'; health.textContent = t('sync.recovering'); }
+  else if (syncHealth.queueDepth > 24 || syncHealth.lastLatencyMs > 800) { health.className = 'sync-health warning'; health.textContent = tx(`同步繁忙 · 队列 ${syncHealth.queueDepth}`); }
+  else { health.className = 'sync-health healthy'; health.textContent = tx(`同步正常 · ${syncHealth.lastLatencyMs || 0}ms`); }
 }
 
 function pushSyncSelection() {
@@ -2328,7 +2480,7 @@ function pushSyncSelection() {
 
 function renderTabInventory() {
   const target = $('#tab-inventory'); target.replaceChildren();
-  for (const value of sessions.filter((item) => selectedSessions.has(item.id))) { const group = element('div', 'tab-group'); group.append(element('strong', '', '环境 ' + displayProfileNumber(value.profile || { id: value.id }) + ' · ' + value.tabs.length + ' tabs')); for (const tab of value.tabs.slice(0, 6)) group.append(element('span', '', `${tab.title || 'Untitled'} — ${tab.url}`)); target.append(group); }
+  for (const value of sessions.filter((item) => selectedSessions.has(item.id))) { const group = element('div', 'tab-group'); group.append(element('strong', '', `${t('profiles.envName', { n: displayProfileNumber(value.profile || { id: value.id }) })} · ${value.tabs.length} ${t('common.tabs')}`)); for (const tab of value.tabs.slice(0, 6)) group.append(element('span', '', `${tab.title || 'Untitled'} — ${tab.url}`)); target.append(group); }
 }
 
 async function refreshSessions() {
@@ -2479,7 +2631,7 @@ function installBatchUpdateNetworkMode() {
     if (fields) fields.hidden = direct;
     if (textarea) textarea.disabled = direct;
     form.querySelectorAll('[data-proxy-for="batch-proxy-list"]').forEach((item) => { item.hidden = direct; });
-    if (submit) submit.textContent = direct ? '应用本地直连' : '检测并应用代理';
+    if (submit) submit.textContent = direct ? tx('应用本地直连') : tx('检测并应用代理');
   };
   form.querySelectorAll('input[name="batch-update-network"]').forEach((input) => {
     input.addEventListener('change', sync);
@@ -2538,7 +2690,7 @@ function renderLogs() {
   const target = $('#log-list');
   target.replaceChildren();
   if (!ui.logs.length) {
-    target.append(element('div', 'log-empty', '暂无操作记录'));
+    target.append(element('div', 'log-empty', tx('暂无操作记录')));
     return;
   }
   for (const item of ui.logs) {
@@ -2562,44 +2714,75 @@ function themePopoverViewport() {
   return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
 }
 
+/** Header uses backdrop-filter which makes position:fixed relative to header in Chromium.
+ *  Portal the menu to <body> so fixed coords match getBoundingClientRect (viewport). */
+function ensureThemePopoverPortaled() {
+  const popover = $('#theme-popover');
+  if (!popover) return null;
+  if (popover.parentElement !== document.body) {
+    document.body.appendChild(popover);
+  }
+  return popover;
+}
+
 function positionThemePopover() {
   const trigger = $('#theme-trigger');
-  const popover = $('#theme-popover');
+  const popover = ensureThemePopoverPortaled() || $('#theme-popover');
   if (!trigger || !popover || popover.hidden) return;
+
   const rect = trigger.getBoundingClientRect();
   const vp = themePopoverViewport();
-  const pad = 8;
+  const pad = 10;
+  // Leave room for macOS traffic lights (left) and Windows caption buttons (right).
+  const safeRight = 10;
   const gap = 8;
-  const maxW = Math.max(160, vp.width - pad * 2);
-  // Preferred rem-based width, but never wider than the live viewport.
-  const preferred = Math.min(340, Math.max(240, maxW));
+  const maxW = Math.max(200, Math.min(vp.width - pad - safeRight, vp.width - pad * 2));
+  // Native / English labels need more width than the old 300px fixed box.
+  const preferred = Math.min(360, Math.max(280, maxW));
   const width = Math.min(preferred, maxW);
 
+  popover.style.position = 'fixed';
+  popover.style.zIndex = '2147483000';
   popover.style.boxSizing = 'border-box';
   popover.style.width = `${Math.round(width)}px`;
   popover.style.maxWidth = `${Math.round(maxW)}px`;
+  popover.style.minWidth = `${Math.min(240, maxW)}px`;
   popover.style.right = 'auto';
   popover.style.bottom = 'auto';
+  popover.style.margin = '0';
+  popover.style.overflowX = 'hidden';
+  popover.style.overflowY = 'auto';
 
   // Measure after width is applied so height reflects wrapped content.
-  const measuredW = Math.min(popover.offsetWidth || width, maxW);
+  const measuredW = Math.min(Math.max(popover.offsetWidth || width, width * 0.9), maxW);
   const measuredH = popover.offsetHeight || 280;
-  const maxH = Math.max(120, vp.height - pad * 2);
+  const maxH = Math.max(160, vp.height - pad * 2);
   popover.style.maxHeight = `${Math.round(maxH)}px`;
 
-  // Align to trigger's right edge; clamp fully inside the visual viewport.
+  // Prefer align to trigger right edge (menu hangs left under the Theme button).
   let left = rect.right - measuredW;
-  left = Math.min(left, vp.left + vp.width - measuredW - pad);
-  left = Math.max(vp.left + pad, left);
+  // Clamp fully inside the visual viewport.
+  const maxLeft = vp.left + vp.width - measuredW - pad;
+  const minLeft = vp.left + pad;
+  left = Math.min(Math.max(left, minLeft), maxLeft);
 
   let top = rect.bottom + gap;
-  const spaceBelow = vp.top + vp.height - pad - top;
+  const spaceBelow = (vp.top + vp.height - pad) - top;
   const spaceAbove = rect.top - gap - (vp.top + pad);
-  if (measuredH > spaceBelow && spaceAbove > spaceBelow) {
-    top = Math.max(vp.top + pad, rect.top - Math.min(measuredH, maxH) - gap);
+  const useH = Math.min(measuredH, maxH);
+  if (useH > spaceBelow && spaceAbove > spaceBelow) {
+    top = Math.max(vp.top + pad, rect.top - useH - gap);
   } else {
-    top = Math.min(top, vp.top + vp.height - Math.min(measuredH, maxH) - pad);
+    top = Math.min(top, vp.top + vp.height - useH - pad);
     top = Math.max(vp.top + pad, top);
+  }
+
+  // Final hard clamp (guards float rounding + titlebar overlays).
+  if (left + measuredW > vp.left + vp.width - 4) {
+    left = Math.max(minLeft, vp.left + vp.width - measuredW - 4);
+  }
+  if (top + useH > vp.top + vp.height - 4) {
+    top = Math.max(vp.top + pad, vp.top + vp.height - useH - 4);
   }
 
   popover.style.left = `${Math.round(left)}px`;
@@ -2607,16 +2790,20 @@ function positionThemePopover() {
 }
 
 function setThemePopoverOpen(open) {
-  const popover = $('#theme-popover');
   const trigger = $('#theme-trigger');
+  const popover = ensureThemePopoverPortaled() || $('#theme-popover');
   if (!popover || !trigger) return;
   popover.hidden = !open;
   trigger.setAttribute('aria-expanded', String(open));
   if (open) {
-    // next frame so display:none is cleared before measuring
+    // next frames: portal + paint, then measure (appearance row may show for native theme)
     requestAnimationFrame(() => {
       positionThemePopover();
-      requestAnimationFrame(positionThemePopover);
+      requestAnimationFrame(() => {
+        positionThemePopover();
+        // appearance panel toggle can change height after theme click
+        setTimeout(positionThemePopover, 0);
+      });
     });
   }
 }
@@ -2739,7 +2926,7 @@ document.addEventListener('close', (event) => {
 document.addEventListener('change', async (event) => {
   if (event.target.dataset.extensionToggle) {
     const input = event.target; input.disabled = true;
-    try { toast(input.checked ? '正在批量启用扩展并重启运行环境...' : '正在批量停用扩展并重启运行环境...'); const result = await window.ops.toggleExtensionAll(input.dataset.extensionToggle, input.checked); await refreshExtensions(); await refreshStatus(); await refreshSessions(); toast(`已${input.checked ? '启用' : '停用'}，影响 ${result.affected} 个环境，重启 ${result.restarted} 个`); }
+    try { toast(input.checked ? '正在批量启用扩展并重启运行环境...' : '正在批量停用扩展并重启运行环境...'); const result = await window.ops.toggleExtensionAll(input.dataset.extensionToggle, input.checked); await refreshExtensions(); await refreshStatus(); await refreshSessions(); toast(tx(`已${input.checked ? '启用' : '停用'}，影响 ${result.affected} 个环境，重启 ${result.restarted} 个`)); }
     catch (error) { input.checked = !input.checked; toast(error.message); } finally { input.disabled = false; }
   }
   if (event.target.dataset.profileSelect) { event.target.checked ? selectedProfiles.add(event.target.dataset.profileSelect) : selectedProfiles.delete(event.target.dataset.profileSelect); updateProfileSelectionUi(); }
@@ -2816,8 +3003,8 @@ document.getElementById('group-form')?.addEventListener('submit', (event) => {
   try {
     saveGroupFromDialog();
     $('#group-dialog').close();
-    toast('分组已保存');
-    log('Group', '保存分组');
+    toast(tx('分组已保存'));
+    log('Group', tx('保存分组'));
   } catch (error) { toast(error.message); }
 });
 document.getElementById('batch-assign-group-btn')?.addEventListener('click', async () => {
@@ -2878,7 +3065,7 @@ const onEditorFormChange = (event) => {
   if (event.target.matches(editorProxySelector)) {
     editorNetworkResult = null;
     $('#editor-proxy-result').className = 'proxy-test-result';
-    $('#editor-proxy-result').textContent = editorSelectedNetwork() === 'direct' ? '本地直连' : '设置已更改，请重新检测';
+    $('#editor-proxy-result').textContent = editorSelectedNetwork() === 'direct' ? tx('本地直连') : tx('设置已更改，请重新检测');
   }
   updateEditorVisibility(); renderEditorSummary();
 };
@@ -2895,17 +3082,17 @@ function applyPlatformPresetToStartUrl() {
   const type = sel.value;
   if (type === 'blank') {
     urlInput.value = '';
-    urlInput.placeholder = '空白页 — 启动不打开站点';
+    urlInput.placeholder = tx('空白页 — 启动不打开站点');
     return;
   }
   if (type === 'other') {
-    urlInput.placeholder = '手填任意 URL，例如 https://www.example.com';
+    urlInput.placeholder = tx('手填任意 URL，例如 https://www.example.com');
     // do not clear custom URL when switching to other
     return;
   }
   if (preset != null && preset !== '') {
     urlInput.value = preset;
-    urlInput.placeholder = '选择平台后自动填入，也可手动修改';
+    urlInput.placeholder = tx('选择平台后自动填入，也可手动修改');
   }
 }
 document.getElementById('editor-platform-type')?.addEventListener('change', () => {
@@ -2924,7 +3111,7 @@ document.getElementById('editor-cookie-export')?.addEventListener('click', () =>
     a.download = `cookies-${editingProfileId || 'profile'}.json`;
     a.click();
     URL.revokeObjectURL(a.href);
-    toast('Cookie 已导出');
+    toast(tx('Cookie 已导出'));
   } catch (error) { toast('导出失败：' + error.message); }
 });
 document.getElementById('editor-cookie-import-file')?.addEventListener('click', () => {
@@ -2937,14 +3124,14 @@ document.getElementById('editor-cookie-file')?.addEventListener('change', async 
   try {
     const text = await file.text();
     const data = JSON.parse(text);
-    if (!Array.isArray(data)) throw new Error('Cookie 必须是 JSON 数组');
+    if (!Array.isArray(data)) throw new Error(tx('Cookie 必须是 JSON 数组'));
     editorSet('#editor-cookies', JSON.stringify(data, null, 2));
     toast('已导入 ' + data.length + ' 条 Cookie（保存环境后生效）');
   } catch (error) { toast('导入失败：' + error.message); }
 });
 document.getElementById('editor-clear-cache-cookie')?.addEventListener('click', async () => {
-  if (!editingProfileId) return toast('未打开环境');
-  if (!confirm('清除该环境的缓存及 Cookie？需先关闭窗口。')) return;
+  if (!editingProfileId) return toast(tx('未打开环境'));
+  if (!confirm(tx('清除该环境的缓存及 Cookie？需先关闭窗口。'))) return;
   try {
     await window.ops.clearProfileCacheCookies(editingProfileId);
     editorSet('#editor-cookies', '');
@@ -2953,13 +3140,13 @@ document.getElementById('editor-clear-cache-cookie')?.addEventListener('click', 
       ui.profiles[idx] = { ...ui.profiles[idx], cookies: '', updatedAt: new Date().toISOString() };
       save();
     }
-    toast('缓存及 Cookie 已清除');
+    toast(tx('缓存及 Cookie 已清除'));
   } catch (error) { toast(error.message); }
 });
 $('#profile-editor-form').addEventListener('submit', async (event) => {
-  event.preventDefault(); const index = ui.profiles.findIndex((item) => item.id === editingProfileId); if (index < 0) return toast('环境不存在');
+  event.preventDefault(); const index = ui.profiles.findIndex((item) => item.id === editingProfileId); if (index < 0) return toast(tx('环境不存在'));
   try {
-    const previous = ui.profiles[index]; const draft = editorDraft(true); if (!draft.name) throw new Error('环境名称不能为空');
+    const previous = ui.profiles[index]; const draft = editorDraft(true); if (!draft.name) throw new Error(tx('环境名称不能为空'));
     const switchedToDirect = editorSelectedNetwork() !== 'direct' && isDirectProxy(draft.proxy);
     if (draft.proxy !== previous.proxy && !editorNetworkResult) { delete draft.exitIp; delete draft.exitCountryCode; delete draft.exitTimezone; delete draft.exitLatitude; delete draft.exitLongitude; delete draft.exitCheckedAt; }
     draft.updatedAt = new Date().toISOString();
@@ -2987,10 +3174,10 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
   if (networkMode === 'proxy') {
     try { proxies = proxyLines('#batch-add-proxies', '#batch-add-proxy-type'); }
     catch (error) { return toast('代理格式错误：' + error.message); }
-    if (!proxies.length) return toast('代理模式请填写代理列表');
+    if (!proxies.length) return toast(tx('代理模式请填写代理列表'));
   }
-  if (!Number.isInteger(count) || count < 1 || count > 200) return toast('新增数量必须为 1-200');
-  if (proxies.length && proxies.length !== count) return toast('代理数量必须等于新增环境数量，每个环境对应一条代理');
+  if (!Number.isInteger(count) || count < 1 || count > 200) return toast(tx('新增数量必须为 1-200'));
+  if (proxies.length && proxies.length !== count) return toast(tx('代理数量必须等于新增环境数量，每个环境对应一条代理'));
   const used = new Set(ui.profiles.map((item) => item.id)); const created = [];
   while (created.length < count) {
     const number = start + created.length; const id = createInternalProfileId(number, used); used.add(id);
@@ -3013,10 +3200,10 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
 });
 $('#delete-selected').addEventListener('click', async () => {
   pendingDeleteProfiles = ui.profiles.filter((item) => selectedProfiles.has(item.id)).map((item) => item.id);
-  if (!pendingDeleteProfiles.length) return toast('请先勾选要删除的环境');
+  if (!pendingDeleteProfiles.length) return toast(tx('请先勾选要删除的环境'));
   try {
     const status = await window.ops.profileStatus(); const running = status.filter((item) => item.running && pendingDeleteProfiles.includes(item.id)).length;
-    $('#batch-delete-summary').textContent = '已选择 ' + pendingDeleteProfiles.length + ' 个环境，其中 ' + running + ' 个正在运行。'; $('#batch-delete-dialog').showModal();
+    $('#batch-delete-summary').textContent = tx('已选择 ') + pendingDeleteProfiles.length + ' 个环境，其中 ' + running + ' 个正在运行。'; $('#batch-delete-dialog').showModal();
   } catch (error) { toast(error.message); }
 });
 $('#batch-delete-form').addEventListener('submit', async (event) => {
@@ -3030,23 +3217,23 @@ $('#batch-delete-form').addEventListener('submit', async (event) => {
     await refreshStatus(); await refreshSessions(); await refreshExtensions(); renderProfiles(); log('Batch', '批量删除 ' + result.deleted + ' 个环境'); toast('已删除 ' + result.deleted + ' 个环境');
   } catch (error) { toast('批量删除失败：' + error.message); } finally { if (submitter) submitter.disabled = false; }
 });
-$('#start-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast('请先选择环境'); for (const id of selectedProfiles) await startProfile(id); });
-$('#stop-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast('请先选择环境'); for (const id of selectedProfiles) await stopProfile(id); });
+$('#start-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast(tx('请先选择环境')); for (const id of selectedProfiles) await startProfile(id); });
+$('#stop-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast(tx('请先选择环境')); for (const id of selectedProfiles) await stopProfile(id); });
 $('#add-extension').addEventListener('click', () => $('#add-app-dialog').showModal());
 $('#close-add-app').addEventListener('click', () => $('#add-app-dialog').close());
 $('#cancel-add-app').addEventListener('click', () => $('#add-app-dialog').close());
 $('#choose-extension-folder').addEventListener('click', async () => {
   try {
     const result = await window.ops.addExtensionFolder();
-    if (!result.canceled) { await refreshExtensions(); await refreshStatus(); await refreshSessions(); $('#add-app-dialog').close(); log('Extension', `添加 ${result.extension.name}，默认分配 ${result.assigned || 0} 个环境，重启 ${result.restarted || 0} 个`); toast(`已添加 ${result.extension.name}，默认启用 ${result.assigned || 0}/${ui.profiles.length}`); }
+    if (!result.canceled) { await refreshExtensions(); await refreshStatus(); await refreshSessions(); $('#add-app-dialog').close(); log('Extension', `添加 ${result.extension.name}，默认分配 ${result.assigned || 0} 个环境，重启 ${result.restarted || 0} 个`); toast(tx(`已添加 ${result.extension.name}，默认启用 ${result.assigned || 0}/${ui.profiles.length}`)); }
   } catch (error) { toast(error.message); }
 });
 $('#add-store-submit').addEventListener('click', async () => {
   const url = $('#chrome-store-url').value.trim();
-  if (!url) return toast('请输入 Chrome 应用商店 URL');
+  if (!url) return toast(tx('请输入 Chrome 应用商店 URL'));
   const all = $('#store-assign-all').checked; const ids = all ? ui.profiles.map((item) => item.id) : [];
   try {
-    toast('正在从 Chrome 应用商店获取扩展...');
+    toast(tx('正在从 Chrome 应用商店获取扩展...'));
     const result = await window.ops.addExtensionStore(url, ids, all);
     await refreshExtensions(); await refreshStatus(); await refreshSessions();
     $('#add-app-dialog').close(); $('#chrome-store-url').value = '';
@@ -3077,8 +3264,8 @@ $('#proxy-select-all')?.addEventListener('change', (event) => {
 });
 $('#proxy-delete-selected')?.addEventListener('click', async () => {
   const ids = [...selectedProxies];
-  if (!ids.length) return toast('请先勾选代理');
-  if (!confirm(`确定删除选中的 ${ids.length} 条代理？`)) return;
+  if (!ids.length) return toast(tx('请先勾选代理'));
+  if (!confirm(tx(`确定删除选中的 ${ids.length} 条代理？`))) return;
   try {
     await window.ops.proxyDelete(ids);
     ids.forEach((id) => selectedProxies.delete(id));
@@ -3089,7 +3276,7 @@ $('#proxy-delete-selected')?.addEventListener('click', async () => {
 });
 $('#proxy-check-selected')?.addEventListener('click', async () => {
   const ids = [...selectedProxies];
-  if (!ids.length) return toast('请先勾选代理');
+  if (!ids.length) return toast(tx('请先勾选代理'));
   toast('正在检测 ' + ids.length + ' 条代理…');
   let ok = 0; let fail = 0;
   for (const id of ids) {
@@ -3097,7 +3284,7 @@ $('#proxy-check-selected')?.addEventListener('click', async () => {
     catch (_) { fail += 1; }
   }
   await refreshProxies();
-  toast(`检测完成：成功 ${ok} · 失败 ${fail}`);
+  toast(tx(`检测完成：成功 ${ok} · 失败 ${fail}`));
 });
 document.addEventListener('change', (event) => {
   const box = event.target.closest('[data-proxy-select]');
@@ -3115,12 +3302,12 @@ document.addEventListener('click', async (event) => {
   const del = event.target.closest('[data-proxy-delete]');
   if (del) {
     const id = del.dataset.proxyDelete;
-    if (!confirm('确定删除该代理？')) return;
+    if (!confirm(tx('确定删除该代理？'))) return;
     try {
       await window.ops.proxyDelete([id]);
       selectedProxies.delete(id);
       await refreshProxies();
-      toast('已删除');
+      toast(tx('已删除'));
     } catch (error) { toast(error.message); }
     return;
   }
@@ -3128,7 +3315,7 @@ document.addEventListener('click', async (event) => {
   if (test) {
     const id = test.dataset.proxyTest;
     try {
-      toast('检测中…');
+      toast(tx('检测中…'));
       const result = await window.ops.proxyCheck({ id });
       await refreshProxies();
       toast('连接成功 · ' + result.ip + (result.countryCode ? ' · ' + result.countryCode : ''));
@@ -3152,7 +3339,7 @@ document.addEventListener('click', async (event) => {
     if (input) input.value = item.raw || `${item.host}:${item.port}`;
     const fields = $('#create-proxy-fields');
     if (fields) fields.hidden = false;
-    toast('已切换为代理模式并填入代理');
+    toast(tx('已切换为代理模式并填入代理'));
   }
 });
 $('#proxy-dialog-test')?.addEventListener('click', async () => {
@@ -3160,14 +3347,14 @@ $('#proxy-dialog-test')?.addEventListener('click', async () => {
   try {
     const draft = readProxyForm();
     output.className = 'proxy-test-result';
-    output.textContent = '正在检测…';
+    output.textContent = tx('正在检测…');
     const result = await window.ops.proxyCheck(draft.id ? { id: draft.id } : { proxy: draft.raw || undefined, ...draft });
     output.className = 'proxy-test-result success';
-    output.textContent = '连接成功 · ' + result.ip + (result.countryCode ? ' · ' + result.countryCode : '');
+    output.textContent = tx('连接成功 · ') + result.ip + (result.countryCode ? ' · ' + result.countryCode : '');
     if (draft.id) await refreshProxies();
   } catch (error) {
     output.className = 'proxy-test-result error';
-    output.textContent = '检测失败 · ' + error.message;
+    output.textContent = tx('检测失败 · ') + error.message;
   }
 });
 $('#proxy-form')?.addEventListener('submit', async (event) => {
@@ -3193,13 +3380,13 @@ document.addEventListener('click', async (event) => {
   const url = install.dataset.storeInstall;
   if (!url) return;
   try {
-    toast('正在从 Chrome 应用商店安装…');
+    toast(tx('正在从 Chrome 应用商店安装…'));
     const ids = ui.profiles.map((item) => item.id);
     const result = await window.ops.addExtensionStore(url.includes('://') ? url : `https://chromewebstore.google.com/detail/${url}`, ids, true);
     await refreshExtensions();
     await refreshStatus();
     await refreshSessions();
-    toast(`已安装 ${result.extension?.name || '扩展'}`);
+    toast(tx(`已安装 ${result.extension?.name || '扩展'}`));
     log('Extension', `推荐安装 ${result.extension?.name || url}`);
   } catch (error) {
     toast('安装失败：' + error.message);
@@ -3257,6 +3444,10 @@ $('#reset-profile-storage').addEventListener('click', resetProfileStorage);
 $('#open-profile-storage').addEventListener('click', async () => { try { await window.ops.openProfileStorage(); } catch (error) { toast(error.message); log('Error', error.message); } });
 
 window.ops.onEvent(async (value) => {
+  if (value?.type === 'app-update-progress') {
+    appUpdateState.progress = value;
+    renderAppUpdateState();
+  }
   if (value.type === 'status') {
     await refreshStatus();
     await refreshSessions();
@@ -3316,7 +3507,12 @@ function updateProfileStorageDisplay(profileRoot) {
 
 function renderRuntimeInfo(info) {
   const runtime = $('#runtime-info'); runtime.replaceChildren();
-  for (const [key, value] of [['App', info.appVersion], ['Chromium', info.chrome], ['Profile root', info.profileRoot]]) {
+  const rows = [
+    [t('system.runtime'), info.appVersion],
+    [t('system.cdp'), info.chrome],
+    [t('system.storage.current'), info.profileRoot],
+  ];
+  for (const [key, value] of rows) {
     const row = document.createElement('div'); const output = element('dd', '', value); output.dataset.runtimeKey = key;
     row.append(element('dt', '', key), output); runtime.append(row);
   }
@@ -3346,16 +3542,18 @@ function updateEngineBadge(info) {
   badge.classList.remove('engine-badge-checking', 'engine-badge-ok', 'engine-badge-missing');
   badge.classList.add(ready ? 'engine-badge-ok' : 'engine-badge-missing');
   const text = badge.querySelector('.engine-badge-text');
-  if (text) text.textContent = ready ? '浏览器就绪' : '未找到浏览器';
+  if (text) text.textContent = ready ? t('header.browserReady') : t('header.browserMissing');
   badge.title = ready
-    ? (names.length ? names.join(' · ') : '已找到可用浏览器')
-    : '未找到可用浏览器，请在本地设置中安装/选择内核';
+    ? (names.length ? names.join(' · ') : t('header.browserReadyTitle'))
+    : t('header.browserMissingTitle');
   badge.setAttribute('aria-label', badge.title);
 }
 
 async function initialize() {
   refreshLocaleChrome();
   const info = await window.ops.getInfo();
+  const appVersion = document.getElementById('app-version');
+  if (appVersion && info?.appVersion) appVersion.textContent = `v${info.appVersion}`;
   updateEngineBadge(info);
   renderRuntimeInfo(info);
   syncState = await window.ops.getSyncState(); preferredMasterId = syncState.master || null; if (syncState.active) selectedSessions = new Set(syncState.selected || []);
@@ -3404,7 +3602,7 @@ $('#batch-import-file').addEventListener('change', async (event) => {
 
 async function applySelectedNetworkMode(mode, { proxies = null, restart = true } = {}) {
   const ids = ui.profiles.filter((profile) => selectedProfiles.has(profile.id)).map((profile) => profile.id);
-  if (!ids.length) throw new Error('请先选择环境');
+  if (!ids.length) throw new Error(tx('请先选择环境'));
   const profiles = ids.map((id) => ui.profiles.find((profile) => profile.id === id));
   const direct = mode === 'direct';
   let list; let verified;
@@ -3413,7 +3611,7 @@ async function applySelectedNetworkMode(mode, { proxies = null, restart = true }
     verified = profiles.map(() => null);
   } else {
     list = proxies;
-    if (!list || list.length !== profiles.length) throw new Error('代理数量必须与所选环境数量一致');
+    if (!list || list.length !== profiles.length) throw new Error(tx('代理数量必须与所选环境数量一致'));
     verified = await verifyProxyAssignments(profiles, list);
   }
   const status = await window.ops.profileStatus();
@@ -3441,7 +3639,7 @@ async function applySelectedNetworkMode(mode, { proxies = null, restart = true }
 }
 
 $('#batch-set-direct')?.addEventListener('click', async () => {
-  if (!selectedProfiles.size) return toast('请先选择环境');
+  if (!selectedProfiles.size) return toast(tx('请先选择环境'));
   try {
     const result = await applySelectedNetworkMode('direct', { restart: true });
     log('Batch', '批量设为本地直连 · ' + result.count);
@@ -3452,12 +3650,12 @@ $('#batch-set-direct')?.addEventListener('click', async () => {
 });
 
 $('#batch-update').addEventListener('click', () => {
-  if (!selectedProfiles.size) return toast('请先选择环境');
+  if (!selectedProfiles.size) return toast(tx('请先选择环境'));
   const proxyRadio = document.querySelector('input[name="batch-update-network"][value="proxy"]');
   if (proxyRadio) proxyRadio.checked = true;
   const hidden = $('#batch-update-network-mode'); if (hidden) hidden.value = 'proxy';
   const fields = $('#batch-update-proxy-fields'); if (fields) fields.hidden = false;
-  const submit = $('#batch-update-submit'); if (submit) submit.textContent = '检测并应用代理';
+  const submit = $('#batch-update-submit'); if (submit) submit.textContent = tx('检测并应用代理');
   $('#batch-update-dialog').showModal();
 });
 $('#batch-update-form').addEventListener('submit', async (event) => {
@@ -3505,6 +3703,8 @@ let rpaStoreActiveCat = '全部';
 let rpaPreviewTemplateId = null;
 
 function showRpaPanel(tab) {
+  setTimeout(() => afterUiRender(document.getElementById('view-rpa') || document), 0);
+
   currentRpaTab = tab || 'flows';
   document.querySelectorAll('[data-rpa-panel]').forEach((el) => {
     el.hidden = el.getAttribute('data-rpa-panel') !== currentRpaTab;
@@ -3588,7 +3788,7 @@ function loadRpaPlanToEditor(plan) {
   rpaSelectedId = plan?.id || null;
   const title = document.getElementById('rpa-editor-title');
   if (!plan) {
-    if (title) title.textContent = '编辑流程';
+    if (title) title.textContent = tx('编辑流程');
     const name = document.getElementById('rpa-plan-name');
     const steps = document.getElementById('rpa-steps-json');
     if (name) name.value = '';
@@ -3619,7 +3819,7 @@ async function refreshRpaStatusBadge() {
   try {
     const st = await window.ops.rpaStatus();
     const el = document.getElementById('rpa-run-status');
-    if (el) el.textContent = st.count ? ('运行中 ' + st.count) : '空闲';
+    if (el) el.textContent = st.count ? (tx('运行中 ') + st.count) : tx('空闲');
   } catch (_) {}
 }
 
@@ -3636,11 +3836,11 @@ async function refreshRpaTasks() {
     const row = document.createElement('tr');
     const cb = document.createElement('input'); cb.type = 'checkbox';
     const td0 = document.createElement('td'); td0.append(cb);
-    const runBtn = element('button', 'outline', '详情');
+    const runBtn = element('button', 'outline', tx('详情'));
     runBtn.onclick = () => {
       appendRpaLog(JSON.stringify(t));
       showRpaPanel('runs');
-      toast('见运行记录/日志');
+      toast(tx('见运行记录/日志'));
     };
     const tdOp = document.createElement('td'); tdOp.append(runBtn);
     row.append(
@@ -3688,6 +3888,12 @@ async function refreshRpaRuns() {
   if (empty) empty.style.display = list.length ? 'none' : 'grid';
 }
 
+function rpaCategoryLabel(cat) {
+  const c = String(cat || '');
+  if (c === '全部' || c === 'All') return t('rpa.cat.all');
+  return c;
+}
+
 function syncRpaStoreCategoryUi(categories) {
   rpaStoreCategories = Array.isArray(categories) && categories.length ? categories : ['全部'];
   const select = document.getElementById('rpa-store-cat');
@@ -3698,7 +3904,7 @@ function syncRpaStoreCategoryUi(categories) {
     for (const c of rpaStoreCategories) {
       const opt = document.createElement('option');
       opt.value = c;
-      opt.textContent = c;
+      opt.textContent = rpaCategoryLabel(c);
       select.append(opt);
     }
     select.value = rpaStoreCategories.includes(prev) ? prev : '全部';
@@ -3709,7 +3915,7 @@ function syncRpaStoreCategoryUi(categories) {
     for (const c of rpaStoreCategories) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.textContent = c;
+      b.textContent = rpaCategoryLabel(c);
       b.dataset.storeCat = c;
       if (c === rpaStoreActiveCat) b.classList.add('active');
       chips.append(b);
@@ -3718,10 +3924,10 @@ function syncRpaStoreCategoryUi(categories) {
 }
 
 function rpaStoreSourceLabel(tpl) {
-  if (tpl.builtin || tpl.source === 'builtin') return '内置';
-  if (tpl.source === 'catalog') return '本地';
-  if (tpl.source === 'import') return '导入';
-  return '我的';
+  if (tpl.builtin || tpl.source === 'builtin') return t('rpa.store.source.builtin');
+  if (tpl.source === 'catalog') return t('rpa.store.source.local');
+  if (tpl.source === 'import') return t('rpa.store.source.import');
+  return t('rpa.store.source.mine');
 }
 
 function rpaStepSummary(steps, max = 12) {
@@ -3744,7 +3950,7 @@ async function refreshRpaStore() {
     rpaStoreTemplates = Array.isArray(result?.list) ? result.list : [];
     syncRpaStoreCategoryUi(result?.categories);
     const meta = document.getElementById('rpa-store-sync-meta');
-    if (meta) meta.textContent = '本地模板库';
+    if (meta) meta.textContent = t('rpa.store.localMeta');
   } catch (error) {
     rpaStoreTemplates = [];
     toast('加载模板商店失败：' + error.message);
@@ -3759,7 +3965,14 @@ function renderRpaStore() {
   if (!grid) return;
   // Server already filtered; keep light client filter for search-as-you-type without refetch lag
   const list = rpaStoreTemplates;
-  if (countEl) countEl.textContent = String(list.length);
+  if (countEl) {
+    const wrap = countEl.parentElement;
+    if (wrap && wrap.classList.contains('rpa-toolbar-right')) {
+      wrap.innerHTML = `${t('rpa.store.countPrefix') || '共 '}<b id="rpa-store-count">${list.length}</b>${t('rpa.store.countMiddle') || ' 个 · '}<span id="rpa-store-sync-meta">${t('rpa.store.localMeta')}</span>`;
+    } else {
+      countEl.textContent = String(list.length);
+    }
+  }
   grid.replaceChildren();
   if (empty) empty.hidden = list.length > 0;
   for (const tpl of list) {
@@ -3778,7 +3991,7 @@ function renderRpaStore() {
       <div class="rpa-store-meta"><span></span><span></span></div>
       <div class="rpa-store-actions"></div>`;
     card.querySelector('h4').textContent = (paid ? '💎 ' : '') + (tpl.name || tpl.id);
-    card.querySelector('p').textContent = tpl.desc || '无说明';
+    card.querySelector('p').textContent = tpl.desc || '';
     const tagBox = card.querySelector('.rpa-store-tags');
     for (const tag of tags) {
       const i = document.createElement('i');
@@ -3791,37 +4004,37 @@ function renderRpaStore() {
       tagBox.append(i);
     }
     const meta = card.querySelectorAll('.rpa-store-meta span');
-    meta[0].textContent = `${tpl.cat || '未分类'} · ${sourceLabel}${paid ? ' · 付费' : ' · 免费'}`;
-    meta[1].textContent = `${stepCount} 步`;
+    meta[0].textContent = `${tpl.cat || '—'} · ${sourceLabel}${paid ? ' · 💎' : ''}`;
+    meta[1].textContent = t('rpa.store.steps', { n: stepCount });
     const actions = card.querySelector('.rpa-store-actions');
     const useBtn = document.createElement('button');
-    useBtn.type = 'button'; useBtn.className = 'primary'; useBtn.textContent = runnable ? '使用' : '不可用';
+    useBtn.type = 'button'; useBtn.className = 'primary'; useBtn.textContent = runnable ? t('action.use') : t('action.unavailable');
     useBtn.disabled = !runnable;
     useBtn.title = runnable
-      ? '创建流程'
-      : (stepCount ? `当前版本未支持：${(tpl.unsupported_steps || []).slice(0, 3).map((item) => item.type).join(', ')}` : '无步骤');
+      ? t('rpa.store.createFlow')
+      : (stepCount ? t('rpa.store.unsupportedPrefix', { items: (tpl.unsupported_steps || []).slice(0, 3).map((item) => item.type).join(', ') }) : t('rpa.store.noSteps'));
     useBtn.onclick = () => installRpaTemplate(tpl.id).catch((e) => toast(e.message));
     const previewBtn = document.createElement('button');
-    previewBtn.type = 'button'; previewBtn.className = 'outline'; previewBtn.textContent = '预览';
+    previewBtn.type = 'button'; previewBtn.className = 'outline'; previewBtn.textContent = t('action.preview');
     previewBtn.onclick = () => openRpaTemplatePreview(tpl);
     const exportBtn = document.createElement('button');
-    exportBtn.type = 'button'; exportBtn.className = 'outline'; exportBtn.textContent = '导出';
+    exportBtn.type = 'button'; exportBtn.className = 'outline'; exportBtn.textContent = t('action.export');
     exportBtn.onclick = async () => {
       try {
         const result = await window.ops.rpaTemplateExport(tpl.id);
         if (result?.canceled) return;
-        toast('已导出 ' + (result.path || ''));
+        toast(t('rpa.store.exported', { path: result.path || '' }));
       } catch (e) { toast(e.message); }
     };
     actions.append(useBtn, previewBtn, exportBtn);
     if (!tpl.builtin && tpl.source !== 'builtin' && tpl.source !== 'catalog') {
       const delBtn = document.createElement('button');
-      delBtn.type = 'button'; delBtn.className = 'outline rpa-btn-danger'; delBtn.textContent = '删除';
+      delBtn.type = 'button'; delBtn.className = 'outline rpa-btn-danger'; delBtn.textContent = t('action.delete');
       delBtn.onclick = async () => {
-        if (!confirm('删除模板「' + (tpl.name || '') + '」？')) return;
+        if (!confirm(t('rpa.store.deleteConfirm', { name: tpl.name || '' }))) return;
         try {
           await window.ops.rpaTemplateDelete(tpl.id);
-          toast('已删除');
+          toast(t('toast.deleted'));
           await refreshRpaStore();
         } catch (e) { toast(e.message); }
       };
@@ -3834,12 +4047,13 @@ function renderRpaStore() {
 async function installRpaTemplate(id) {
   const result = await window.ops.rpaTemplateInstall({ id });
   const plan = result?.plan;
-  if (!plan) throw new Error('安装模板失败');
+  if (!plan) throw new Error(tx('安装模板失败'));
   rpaSelectedId = plan.id;
   showRpaPanel('flows');
   await refreshRpaPage();
   loadRpaPlanToEditor(plan);
-  toast('已从模板创建流程：' + (plan.plan_name || plan.id) + '（' + (plan.steps?.length || 0) + ' 步）');
+  toast(`${t('rpa.store.createFlow')}：${plan.plan_name || plan.id}（${t('rpa.store.steps', { n: plan.steps?.length || 0 })}）`);
+  afterUiRender(document.getElementById('view-rpa') || document);
   return plan;
 }
 
@@ -3849,9 +4063,9 @@ function openRpaTemplatePreview(tpl) {
   const title = document.getElementById('rpa-preview-title');
   const meta = document.getElementById('rpa-preview-meta');
   const steps = document.getElementById('rpa-preview-steps');
-  if (title) title.textContent = tpl.name || '模板预览';
+  if (title) title.textContent = t('rpa.store.previewTitle');
   if (meta) {
-    meta.textContent = `${tpl.cat || ''} · ${rpaStoreSourceLabel(tpl)} · ${Array.isArray(tpl.steps) ? tpl.steps.length : 0} 步 · ${tpl.desc || ''}`;
+    meta.textContent = `${tpl.cat || ''} · ${rpaStoreSourceLabel(tpl)} · ${t('rpa.store.steps', { n: Array.isArray(tpl.steps) ? tpl.steps.length : 0 })} · ${tpl.desc || ''}`;
   }
   if (steps) {
     const summary = rpaStepSummary(tpl.steps || []);
@@ -3889,11 +4103,11 @@ async function saveCustomTemplateFromDialog() {
   try {
     steps = JSON.parse(document.getElementById('rpa-tpl-steps')?.value || '[]');
   } catch (e) {
-    throw new Error('步骤 JSON 无效：' + e.message);
+    throw new Error(tx('步骤 JSON 无效：') + e.message);
   }
-  if (!Array.isArray(steps) || !steps.length) throw new Error('步骤不能为空');
+  if (!Array.isArray(steps) || !steps.length) throw new Error(tx('步骤不能为空'));
   await window.ops.rpaTemplateSaveAs({ name, cat, desc, steps, tags: ['自定义'] });
-  toast('模板已保存到商店');
+  toast(tx('模板已保存到商店'));
   showRpaPanel('store');
   await refreshRpaStore();
 }
@@ -3916,6 +4130,7 @@ async function refreshRpaPage() {
   await refreshRpaTasks();
   await refreshRpaRuns();
   await refreshRpaStore();
+  afterUiRender(document.getElementById('view-rpa') || document);
 }
 
 async function createRpaPlan(name) {
@@ -3928,7 +4143,7 @@ async function createRpaPlan(name) {
   showRpaPanel('flows');
   await refreshRpaPage();
   loadRpaPlanToEditor(plan);
-  toast('已创建流程');
+  toast(tx('已创建流程'));
 }
 
 document.getElementById('rpa-new-plan')?.addEventListener('click', () => createRpaPlan().catch((e) => toast(e.message)));
@@ -4031,8 +4246,8 @@ document.getElementById('rpa-save')?.addEventListener('click', async () => {
   try {
     let steps;
     try { steps = JSON.parse(document.getElementById('rpa-steps-json').value || '[]'); }
-    catch (e) { throw new Error('步骤 JSON 无效：' + e.message); }
-    if (!Array.isArray(steps)) throw new Error('步骤必须是数组');
+    catch (e) { throw new Error(tx('步骤 JSON 无效：') + e.message); }
+    if (!Array.isArray(steps)) throw new Error(tx('步骤必须是数组'));
     const plan = await window.ops.rpaSavePlan({
       id: rpaSelectedId || undefined,
       plan_name: document.getElementById('rpa-plan-name').value.trim() || '未命名流程',
@@ -4041,7 +4256,7 @@ document.getElementById('rpa-save')?.addEventListener('click', async () => {
     });
     rpaSelectedId = plan.id;
     await refreshRpaPage();
-    toast('已保存');
+    toast(tx('已保存'));
     log('自动脚本', '保存流程 ' + plan.plan_name);
   } catch (error) { toast(error.message); }
 });
@@ -4049,13 +4264,13 @@ document.getElementById('rpa-save')?.addEventListener('click', async () => {
 document.getElementById('rpa-delete')?.addEventListener('click', async () => {
   const checked = [...document.querySelectorAll('[data-rpa-plan-check]:checked')].map((el) => el.dataset.rpaPlanCheck);
   const ids = checked.length ? checked : (rpaSelectedId ? [rpaSelectedId] : []);
-  if (!ids.length) return toast('请先选择流程');
-  if (!confirm('确定删除选中的 ' + ids.length + ' 个流程？')) return;
+  if (!ids.length) return toast(tx('请先选择流程'));
+  if (!confirm(tx('确定删除选中的 ') + ids.length + tx(' 个流程？'))) return;
   try {
     for (const id of ids) await window.ops.rpaDeletePlan(id);
     if (ids.includes(rpaSelectedId)) rpaSelectedId = null;
     await refreshRpaPage();
-    toast('已删除');
+    toast(tx('已删除'));
   } catch (error) { toast(error.message); }
 });
 
@@ -4063,9 +4278,9 @@ document.getElementById('rpa-run')?.addEventListener('click', async () => {
   try {
     let steps;
     try { steps = JSON.parse(document.getElementById('rpa-steps-json').value || '[]'); }
-    catch (e) { throw new Error('步骤 JSON 无效：' + e.message); }
+    catch (e) { throw new Error(tx('步骤 JSON 无效：') + e.message); }
     const profileIds = selectedRpaProfileIds();
-    if (!profileIds.length) throw new Error('请选择至少一个已启动的环境');
+    if (!profileIds.length) throw new Error(tx('请选择至少一个已启动的环境'));
     const plan = await window.ops.rpaSavePlan({
       id: rpaSelectedId || undefined,
       plan_name: document.getElementById('rpa-plan-name').value.trim() || '未命名流程',
@@ -4074,7 +4289,7 @@ document.getElementById('rpa-run')?.addEventListener('click', async () => {
     });
     rpaSelectedId = plan.id;
     appendRpaLog('开始运行：' + plan.plan_name + ' → ' + profileIds.join(','));
-    toast('自动脚本运行中…');
+    toast(tx('自动脚本运行中…'));
     const result = await window.ops.rpaRun({ plan_id: plan.id, profile_ids: profileIds });
     appendRpaLog('完成：' + JSON.stringify(result));
     toast(result.success === false ? '自动脚本有失败任务' : '自动脚本完成');
@@ -4093,13 +4308,13 @@ document.getElementById('rpa-stop')?.addEventListener('click', async () => {
     await window.ops.rpaStop();
     appendRpaLog('已请求停止');
     await refreshRpaStatusBadge();
-    toast('已停止');
+    toast(tx('已停止'));
   } catch (error) { toast(error.message); }
 });
 
 document.getElementById('rpa-load-template')?.addEventListener('click', () => {
   const ta = document.getElementById('rpa-steps-json');
-  if (ta) { ta.value = RPA_TEMPLATE; toast('已载入示例'); }
+  if (ta) { ta.value = RPA_TEMPLATE; toast(tx('已载入示例')); }
 });
 document.getElementById('rpa-format-json')?.addEventListener('click', () => {
   try {
@@ -4164,12 +4379,12 @@ async function refreshApiMcpPage() {
     const port = info?.port || paths?.port || 50325;
     const base = (info?.url || ('http://127.0.0.1:' + port + '/')).replace(/\/?$/, '/');
     if (pill) {
-      pill.textContent = info ? '运行中' : '未启动';
+      pill.textContent = info ? tx('运行中') : tx('未启动');
       pill.classList.toggle('off', !info);
     }
     if (urlEl) urlEl.textContent = base.replace(/\/$/, '');
     if (keyEl) keyEl.value = paths?.apiKey || '';
-    if (keyEl && !paths?.apiKey) keyEl.placeholder = '未设置（一般不用管）';
+    if (keyEl && !paths?.apiKey) keyEl.placeholder = tx('未设置（一般不用管）');
     const mcpScript = paths?.mcpScript || '';
     const common = {
       mcpServers: {
@@ -4201,22 +4416,23 @@ async function refreshApiMcpPage() {
     if (curlHint) curlHint.textContent = 'curl -s ' + base + 'api/getVersion';
     setLocalApiStatus(!!info);
   } catch (error) {
-    if (pill) { pill.textContent = '未启动'; pill.classList.add('off'); }
+    if (pill) { pill.textContent = tx('未启动'); pill.classList.add('off'); }
     setLocalApiStatus(false);
   }
+  afterUiRender(document.getElementById('view-api-mcp') || document);
 }
 
 function setLocalApiStatus(running) {
   const hint = document.getElementById('sidebar-api-hint');
   const card = document.getElementById('local-status-card');
-  if (hint) hint.textContent = running ? '本地运行中' : '服务未启动';
+  if (hint) hint.textContent = running ? tx('本地运行中') : tx('服务未启动');
   if (card) card.classList.toggle('is-off', !running);
 }
 
 document.getElementById('api-refresh')?.addEventListener('click', refreshApiMcpPage);
 document.getElementById('api-copy-base')?.addEventListener('click', async () => {
   const url = document.getElementById('api-status-url')?.textContent || '';
-  try { await navigator.clipboard.writeText(url); toast('已复制'); } catch (_) { toast(url); }
+  try { await navigator.clipboard.writeText(url); toast(tx('已复制')); } catch (_) { toast(url); }
 });
 document.getElementById('api-open-version')?.addEventListener('click', async () => {
   const base = (document.getElementById('api-status-url')?.textContent || 'http://127.0.0.1:50325').replace(/\/?$/, '');
@@ -4225,7 +4441,7 @@ document.getElementById('api-open-version')?.addEventListener('click', async () 
     const res = await fetch(base + '/api/getVersion');
     const text = await res.text();
     if (out) out.textContent = text;
-    toast('接口正常');
+    toast(tx('接口正常'));
   } catch (error) {
     if (out) out.textContent = String(error);
     toast('请求失败：' + error.message);
@@ -4233,15 +4449,15 @@ document.getElementById('api-open-version')?.addEventListener('click', async () 
 });
 document.getElementById('api-copy-curl')?.addEventListener('click', async () => {
   const text = document.getElementById('api-curl-hint')?.textContent || '';
-  try { await navigator.clipboard.writeText(text); toast('已复制'); } catch (_) {}
+  try { await navigator.clipboard.writeText(text); toast(tx('已复制')); } catch (_) {}
 });
 document.getElementById('mcp-copy-config')?.addEventListener('click', async () => {
   const text = document.getElementById('mcp-config-json')?.textContent || '';
-  try { await navigator.clipboard.writeText(text); toast('已复制 MCP 配置'); } catch (_) {}
+  try { await navigator.clipboard.writeText(text); toast(tx('已复制 MCP 配置')); } catch (_) {}
 });
 document.getElementById('mcp-copy-cmd')?.addEventListener('click', async () => {
   const text = document.getElementById('mcp-cmd-hint')?.textContent || '';
-  try { await navigator.clipboard.writeText(text); toast('已复制命令'); } catch (_) {}
+  try { await navigator.clipboard.writeText(text); toast(tx('已复制命令')); } catch (_) {}
 });
 document.getElementById('mcp-config-tabs')?.addEventListener('click', (event) => {
   const btn = event.target.closest('button[data-mcp-tab]');
@@ -4288,15 +4504,15 @@ async function refreshKernelPanel() {
     const st = info.kernel || await window.ops.kernelStatus();
     const k = st.kernel;
     if (badge) {
-      badge.textContent = k ? '已安装 · ' + kernelSourceLabel(k.source) : '未安装';
+      badge.textContent = k ? tx('已安装 · ') + kernelSourceLabel(k.source) : tx('未安装');
       badge.style.color = k ? '#15803d' : '#b45309';
     }
     if (pathEl) pathEl.textContent = k?.path || st.kernelsRoot || '—';
     if (verEl) {
       const remote = st.meta?.remoteVersion;
       verEl.textContent = k
-        ? `${k.version || '—'} · ${kernelSourceLabel(k.source)}${remote && remote !== k.version ? ' · 远端 ' + remote : ''}`
-        : '点击下方从 Donut 官方源下载 Wayfern';
+        ? `${k.version || '—'} · ${kernelSourceLabel(k.source)}${remote && remote !== k.version ? tx(' · 远端 ') + remote : ''}`
+        : tx('点击下方从 Donut 官方源下载 Wayfern');
     }
     if (channelEl) {
       channelEl.textContent = st.channel
@@ -4304,7 +4520,7 @@ async function refreshKernelPanel() {
         : 'Donut · Wayfern · https://donutbrowser.com/wayfern.json';
     }
     const selection = info.kernelSelection;
-    if (activePathEl) activePathEl.textContent = selection?.browser?.path || selection?.message || '未选择可执行文件';
+    if (activePathEl) activePathEl.textContent = selection?.browser?.path || selection?.message || tx('未选择可执行文件');
     if (launchModeEl) {
       const mode = selection?.mode;
       launchModeEl.textContent = mode === 'independent'
@@ -4313,7 +4529,7 @@ async function refreshKernelPanel() {
           ? `本机浏览器回退 · ${selection.browser.name}`
           : mode === 'system'
             ? `本机浏览器 · ${selection.browser.name}`
-            : '已阻止启动：需要独立内核';
+            : tx('已阻止启动：需要独立内核');
     }
     if (prefer) prefer.checked = info.preferIndependentKernel !== false;
     if (allow) {
@@ -4321,7 +4537,7 @@ async function refreshKernelPanel() {
       allow.disabled = true;
     }
   } catch (error) {
-    if (badge) badge.textContent = '读取失败';
+    if (badge) badge.textContent = tx('读取失败');
   }
 }
 
@@ -4333,17 +4549,17 @@ document.getElementById('kernel-download')?.addEventListener('click', async (ev)
   try {
     if (btn) btn.disabled = true;
     if (progress) progress.textContent = force
-      ? '强制重新下载（Shift）…'
-      : '正在对接 Donut 官方源下载 Wayfern（可能需要几分钟）…';
+      ? tx('强制重新下载（Shift）…')
+      : tx('正在对接 Donut 官方源下载 Wayfern（可能需要几分钟）…');
     toast(force ? '强制重新下载内核…' : '开始下载 / 更新 Wayfern…');
     // force=false: 已是最新则跳过；Shift+点击强制重装
     const kernel = await window.ops.kernelDownload(force);
-    if (progress) progress.textContent = '内核就绪：' + (kernel?.path || '');
-    toast(`${kernelSourceLabel(kernel?.source)} 已就绪 v${kernel?.version || ''}`);
+    if (progress) progress.textContent = tx('内核就绪：') + (kernel?.path || '');
+    toast(tx(`${kernelSourceLabel(kernel?.source)} 已就绪 v${kernel?.version || ''}`));
     await refreshKernelPanel();
     log('Kernel', `${kernelSourceLabel(kernel?.source)} ${kernel?.version || ''} · ${kernel?.path || ''}`);
   } catch (error) {
-    if (progress) progress.textContent = '下载失败：' + error.message;
+    if (progress) progress.textContent = tx('下载失败：') + error.message;
     toast('下载失败：' + error.message);
   } finally {
     if (btn) btn.disabled = false;
@@ -4352,29 +4568,29 @@ document.getElementById('kernel-download')?.addEventListener('click', async (ev)
 document.getElementById('kernel-check-update')?.addEventListener('click', async () => {
   const progress = document.getElementById('kernel-progress');
   try {
-    if (progress) progress.textContent = '正在查询 Donut 官方 wayfern.json…';
+    if (progress) progress.textContent = tx('正在查询 Donut 官方 wayfern.json…');
     const result = await window.ops.kernelCheckUpdate();
     if (result.error) {
       toast('检查失败：' + result.error);
-      if (progress) progress.textContent = '检查失败：' + result.error;
+      if (progress) progress.textContent = tx('检查失败：') + result.error;
       return;
     }
     const remote = result.remote;
     if (!remote) {
-      toast('未拿到远端版本');
+      toast(tx('未拿到远端版本'));
       return;
     }
     if (result.upToDate) {
-      toast(`已是最新 ${remote.version}（${kernelSourceLabel(remote.source)}）`);
-      if (progress) progress.textContent = `已是最新 ${remote.version} · ${kernelSourceLabel(remote.source)}`;
+      toast(tx(`已是最新 ${remote.version}（${kernelSourceLabel(remote.source)}）`));
+      if (progress) progress.textContent = tx(`已是最新 ${remote.version} · ${kernelSourceLabel(remote.source)}`);
     } else if (result.needsUpdate) {
-      toast(`有新版本：${result.installed?.version || '未安装'} → ${remote.version}，点「下载/更新」安装`);
-      if (progress) progress.textContent = `可更新：${result.installed?.version || '未安装'} → ${remote.version}（${kernelSourceLabel(remote.source)}）`;
+      toast(tx(`有新版本：${result.installed?.version || '未安装'} → ${remote.version}，点「下载/更新」安装`));
+      if (progress) progress.textContent = tx(`可更新：${result.installed?.version || '未安装'} → ${remote.version}（${kernelSourceLabel(remote.source)}）`);
     }
     await refreshKernelPanel();
   } catch (error) {
     toast(error.message);
-    if (progress) progress.textContent = '检查失败：' + error.message;
+    if (progress) progress.textContent = tx('检查失败：') + error.message;
   }
 });
 document.getElementById('kernel-choose')?.addEventListener('click', async () => {
@@ -4385,10 +4601,10 @@ document.getElementById('kernel-choose')?.addEventListener('click', async () => 
     const validation = kernel?.validation;
     const progress = document.getElementById('kernel-progress');
     if (validation?.browser) {
-      toast(`自定义内核验证通过：${validation.browser}`);
-      if (progress) progress.textContent = `兼容性验证通过：${validation.browser}`;
+      toast(tx(`自定义内核验证通过：${validation.browser}`));
+      if (progress) progress.textContent = tx(`兼容性验证通过：${validation.browser}`);
     } else {
-      toast('已设置自定义内核');
+      toast(tx('已设置自定义内核'));
     }
     await refreshKernelPanel();
   } catch (error) { toast(error.message); }
@@ -4396,7 +4612,7 @@ document.getElementById('kernel-choose')?.addEventListener('click', async () => 
 document.getElementById('kernel-prefer-independent')?.addEventListener('change', async (e) => {
   try {
     await window.ops.kernelPolicy({ preferIndependentKernel: e.target.checked });
-    toast(e.target.checked ? '已优先独立内核' : '已允许使用候选列表第一项');
+    toast(e.target.checked ? tx('已优先独立内核') : tx('已允许使用候选列表第一项'));
   } catch (error) { toast(error.message); }
 });
 // System-browser fallback is intentionally not user-configurable: profile
@@ -4493,10 +4709,11 @@ function applyCloudPreset(presetId) {
     $(`#cloud-${prefix}-dir`).value = preset.dir || 'OpenBrowser';
   }
   const hint = $(`#cloud-${prefix}-hint`);
-  if (hint) hint.textContent = preset.hint;
+  if (hint) hint.textContent = tx(preset.hint);
   cloudProviderFieldsVisibility();
   requestAnimationFrame(() => refreshIcons());
-  toast(`已切换到「${preset.label}」一键配置，请填写 WebDAV 桥 URL 与账号后点保存`);
+  toast(tx(`已切换到「${preset.label}」一键配置，请填写 WebDAV 桥 URL 与账号后点保存`));
+  afterUiRender(document.getElementById('view-system') || document);
   // scroll fields into view
   document.getElementById(`cloud-fields-${prefix}`)?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
 }
@@ -4509,7 +4726,7 @@ function readCloudForm() {
     provider: $('#cloud-provider')?.value || 'local',
     restoreMode: $('#cloud-restore-mode')?.value || 'merge',
     passphrase: $('#cloud-passphrase')?.value || '',
-    local: { dir: ($('#cloud-local-dir')?.textContent || '').trim() === '未选择' ? '' : ($('#cloud-local-dir')?.textContent || '').trim() },
+    local: { dir: ($('#cloud-local-dir')?.textContent || '').trim() === tx('未选择') ? '' : ($('#cloud-local-dir')?.textContent || '').trim() },
     webdav: {
       url: ($('#cloud-webdav-url')?.value || '').trim(),
       username: ($('#cloud-webdav-user')?.value || '').trim(),
@@ -4541,7 +4758,7 @@ function applyCloudForm(cloud) {
   }
   if ($('#cloud-restore-mode')) $('#cloud-restore-mode').value = c.restoreMode || 'merge';
   if ($('#cloud-passphrase')) $('#cloud-passphrase').value = c.passphrase || '';
-  if ($('#cloud-local-dir')) $('#cloud-local-dir').textContent = c.local?.dir || '未选择';
+  if ($('#cloud-local-dir')) $('#cloud-local-dir').textContent = c.local?.dir || tx('未选择');
   if ($('#cloud-webdav-url')) $('#cloud-webdav-url').value = c.webdav?.url || '';
   if ($('#cloud-webdav-user')) $('#cloud-webdav-user').value = c.webdav?.username || '';
   if ($('#cloud-webdav-pass')) $('#cloud-webdav-pass').value = c.webdav?.password || '';
@@ -4556,7 +4773,7 @@ function applyCloudForm(cloud) {
   writeBridgeFields('quark', c.quark || {});
   writeBridgeFields('baidu', c.baidu || {});
   const badge = $('#cloud-sync-badge');
-  if (badge) badge.textContent = c.enabled ? (c.lastSyncAt ? '已同步' : '已启用') : '未配置';
+  if (badge) badge.textContent = c.enabled ? (c.lastSyncAt ? tx('已同步') : tx('已启用')) : tx('未配置');
   const status = $('#cloud-sync-status');
   if (status) {
     const modeLabel = ({ merge: '智能合并', 'local-wins': '仅新增', overwrite: '覆盖' })[c.restoreMode || 'merge'] || '智能合并';
@@ -4565,7 +4782,7 @@ function applyCloudForm(cloud) {
       onedrive: '微软云', quark: '夸克云', baidu: '百度云',
     })[c.provider || 'local'] || (c.provider || '本地');
     status.textContent = c.lastError
-      ? ('上次错误：' + c.lastError)
+      ? (tx('上次错误：') + c.lastError)
       : (c.lastSyncAt
         ? (`上次同步：${c.lastSyncAt} · ${providerLabel} · 恢复策略：${modeLabel}`)
         : `尚未同步。当前：${providerLabel} · 恢复策略：${modeLabel}（默认不会删除本地独有环境）。`);
@@ -4580,8 +4797,9 @@ async function refreshCloudPanel() {
     applyCloudForm(cloud);
   } catch (error) {
     const status = $('#cloud-sync-status');
-    if (status) status.textContent = '读取云配置失败：' + error.message;
+    if (status) status.textContent = tx('读取云配置失败：') + error.message;
   }
+  afterUiRender(document.getElementById('view-system') || document);
 }
 
 function formatMergeStats(stats) {
@@ -4614,9 +4832,9 @@ function cloudEnabledProfiles(ids) {
 
 async function pushProfilesToCloud(ids) {
   const enabled = cloudEnabledProfiles(ids);
-  if (!enabled.length) throw new Error('所选环境均未开启云备份。请到「编辑 → 偏好设置」开启。');
+  if (!enabled.length) throw new Error(tx('所选环境均未开启云备份。请到「编辑 → 偏好设置」开启。'));
   const cloud = readCloudForm();
-  if (!cloud.enabled) throw new Error('请先在「本地设置 → 云同步」启用云同步服务并保存配置');
+  if (!cloud.enabled) throw new Error(tx('请先在「本地设置 → 云同步」启用云同步服务并保存配置'));
   await window.ops.cloudSetConfig(cloud);
   const list = enabled.map((p) => p.id);
   toast('正在推送 ' + list.length + ' 个环境…');
@@ -4634,9 +4852,9 @@ async function pushProfilesToCloud(ids) {
 
 async function pullProfilesFromCloud(ids) {
   const list = (ids || []).filter(Boolean);
-  if (!list.length) throw new Error('请先选择环境');
+  if (!list.length) throw new Error(tx('请先选择环境'));
   const cloud = readCloudForm();
-  if (!cloud.enabled) throw new Error('请先在「本地设置 → 云同步」启用云同步服务并保存配置');
+  if (!cloud.enabled) throw new Error(tx('请先在「本地设置 → 云同步」启用云同步服务并保存配置'));
   const mode = cloud.restoreMode || 'merge';
   await window.ops.cloudSetConfig(cloud);
   toast('正在拉取 ' + list.length + ' 个环境…');
@@ -4670,14 +4888,14 @@ $('#cloud-save-cfg')?.addEventListener('click', async () => {
   try {
     const cloud = await window.ops.cloudSetConfig(readCloudForm());
     applyCloudForm(cloud);
-    toast('云备份配置已保存');
+    toast(tx('云备份配置已保存'));
   } catch (error) { toast(error.message); }
 });
 $('#cloud-backup-now')?.addEventListener('click', async () => {
   try {
     const cloud = readCloudForm();
     await window.ops.cloudSetConfig(cloud);
-    toast('正在全量备份…');
+    toast(tx('正在全量备份…'));
     const result = await window.ops.cloudBackup({
       profiles: ui.profiles,
       groups: ui.groups || [],
@@ -4699,7 +4917,7 @@ $('#cloud-restore-now')?.addEventListener('click', async () => {
   if (!confirm(warn)) return;
   try {
     await window.ops.cloudSetConfig(cloud);
-    toast('正在恢复…');
+    toast(tx('正在恢复…'));
     const result = await window.ops.cloudRestore({
       cloud,
       mode,
@@ -4718,7 +4936,7 @@ $('#cloud-export-file')?.addEventListener('click', async () => {
     const cloud = readCloudForm();
     const result = await window.ops.cloudExportFile({ profiles: ui.profiles, groups: ui.groups || [], cloud });
     if (result?.canceled) return;
-    toast('已导出备份文件');
+    toast(tx('已导出备份文件'));
   } catch (error) { toast(error.message); }
 });
 $('#cloud-import-file')?.addEventListener('click', async () => {
@@ -4743,12 +4961,12 @@ $('#cloud-import-file')?.addEventListener('click', async () => {
 });
 document.getElementById('editor-cloud-push-one')?.addEventListener('click', async () => {
   try {
-    if (!editingProfileId) throw new Error('未打开环境');
+    if (!editingProfileId) throw new Error(tx('未打开环境'));
     // ensure current form flags saved conceptually: require cloudBackup checked
-    if (!$('#editor-cloud-backup')?.checked) throw new Error('请先勾选「云备份」并保存环境');
+    if (!$('#editor-cloud-backup')?.checked) throw new Error(tx('请先勾选「云备份」并保存环境'));
     // stamp draft cloud on and push current saved profile
     const idx = ui.profiles.findIndex((p) => p.id === editingProfileId);
-    if (idx < 0) throw new Error('环境不存在');
+    if (idx < 0) throw new Error(tx('环境不存在'));
     // apply current editor draft flags without full save
     ui.profiles[idx] = { ...ui.profiles[idx], ...editorDraft(false), updatedAt: new Date().toISOString() };
     save();
@@ -4758,7 +4976,7 @@ document.getElementById('editor-cloud-push-one')?.addEventListener('click', asyn
 });
 document.getElementById('editor-cloud-pull-one')?.addEventListener('click', async () => {
   try {
-    if (!editingProfileId) throw new Error('未打开环境');
+    if (!editingProfileId) throw new Error(tx('未打开环境'));
     await pullProfilesFromCloud([editingProfileId]);
     openProfileEditor(editingProfileId);
   } catch (error) { toast(error.message); }
@@ -4775,9 +4993,9 @@ $('#cloud-pull-selected')?.addEventListener('click', async () => {
   try {
     // pull merge from full remote pack (all remote profiles), not homepage selection
     const cloud = readCloudForm();
-    if (!cloud.enabled) throw new Error('请先启用云同步服务');
+    if (!cloud.enabled) throw new Error(tx('请先启用云同步服务'));
     await window.ops.cloudSetConfig(cloud);
-    toast('正在按策略从云端恢复…');
+    toast(tx('正在按策略从云端恢复…'));
     const result = await window.ops.cloudRestore({
       cloud,
       mode: cloud.restoreMode || 'merge',
@@ -4793,12 +5011,28 @@ $('#cloud-pull-selected')?.addEventListener('click', async () => {
 // hook system view
 const _switchViewKernel = switchView;
 switchView = function(view) {
-  _switchViewKernel(view);
+  _switchViewKernel.apply(this, arguments);
+  // Re-translate static + dynamic chrome for every page (API/MCP, guide, settings, store…)
+  try {
+    const root = document.getElementById('view-' + view) || document;
+    afterUiRender(root);
+    // guide + system + api are mostly static HTML — full document pass catches options/labels
+    if (view === 'system' || view === 'api-mcp' || view === 'rpa' || view === 'rpa-guide' || view === 'logs') {
+      afterUiRender(document);
+    }
+  } catch (_) {}
   if (view === 'system') {
     refreshLocaleChrome();
-    refreshKernelPanel();
-    refreshApiMcpPage().catch(() => setLocalApiStatus(false));
-    refreshCloudPanel().catch(() => {});
+    try { refreshKernelPanel?.(); } catch (_) {}
+    try { refreshApiMcpPage?.().catch(() => setLocalApiStatus?.(false)); } catch (_) {}
+    try { refreshCloudPanel?.().catch(() => {}); } catch (_) {}
+  }
+  if (view === 'api-mcp') {
+    try { refreshApiMcpPage?.().catch(() => {}); } catch (_) {}
+    afterUiRender(document.getElementById('view-api-mcp') || document);
+  }
+  if (view === 'rpa-guide') {
+    afterUiRender(document.getElementById('view-rpa-guide') || document);
   }
 };
 
@@ -4806,13 +5040,13 @@ window.ops.onEvent((value) => {
   if (value?.type === 'kernel-progress') {
     const progress = document.getElementById('kernel-progress');
     if (!progress) return;
-    if (value.phase === 'download' && value.percent != null) progress.textContent = `下载中 ${value.percent}% (${Math.round((value.received||0)/1048576)}MB) · ${value.version || ''}`;
+    if (value.phase === 'download' && value.percent != null) progress.textContent = tx(`下载中 ${value.percent}% (${Math.round((value.received||0)/1048576)}MB) · ${value.version || ''}`);
     else if (value.message) progress.textContent = value.message;
   }
   if (value?.type === 'kernel-error') {
     const progress = document.getElementById('kernel-progress');
-    if (progress) progress.textContent = value.message || '内核准备失败';
-    toast(value.message || '内核准备失败');
+    if (progress) progress.textContent = value.message || tx('内核准备失败');
+    toast(value.message || tx('内核准备失败'));
     refreshKernelPanel().catch(() => {});
   }
   if (value?.type === 'kernel-ready') refreshKernelPanel().catch(() => {});

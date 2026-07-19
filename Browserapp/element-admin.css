@@ -1145,15 +1145,22 @@ html[data-ui-theme="element-admin"] .theme-trigger-dot {
   box-shadow: none;
 }
 html[data-ui-theme="element-admin"] {
-  --theme-menu-width: 20rem;
-  --theme-menu-pad: 0.625rem;
+  --theme-menu-width: 22.5rem;
+  --theme-menu-pad: 0.75rem;
   --theme-option-icon: 2.75rem;
-  --theme-option-gap: 0.65rem;
-  --theme-option-min-h: 3.75rem;
+  --theme-option-gap: 0.75rem;
+  --theme-option-min-h: 3.5rem;
+}
+/* Header backdrop-filter must not clip the theme menu (menu is portaled to body). */
+html[data-ui-theme="element-admin"] .content > header,
+html[data-ui-theme="element-admin"] .header-right,
+html[data-ui-theme="element-admin"] .theme-picker {
+  overflow: visible !important;
 }
 html[data-ui-theme="element-admin"] .theme-popover {
-  width: min(var(--theme-menu-width), calc(100vw - 1rem));
-  max-width: calc(100vw - 1rem);
+  width: min(var(--theme-menu-width), calc(100vw - 1.25rem)) !important;
+  max-width: calc(100vw - 1.25rem) !important;
+  min-width: min(17.5rem, calc(100vw - 1.25rem));
   padding: var(--theme-menu-pad);
   border: 0.5px solid var(--desk-separator-strong);
   border-radius: 12px !important;
@@ -1161,7 +1168,38 @@ html[data-ui-theme="element-admin"] .theme-popover {
   color: var(--desk-text);
   box-shadow: var(--desk-shadow-menu);
   backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  /* body portal: always viewport-fixed */
+  position: fixed !important;
+  z-index: 2147483000 !important;
+  box-sizing: border-box !important;
 }
+html[data-ui-theme="element-admin"] .theme-option {
+  grid-template-columns: var(--theme-option-icon) minmax(0, 1fr) !important;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+html[data-ui-theme="element-admin"] .theme-option > span {
+  min-width: 0;
+  overflow: hidden;
+}
+html[data-ui-theme="element-admin"] .theme-option strong,
+html[data-ui-theme="element-admin"] .theme-option small {
+  min-width: 0;
+  max-width: 100%;
+}
+html[data-ui-theme="element-admin"] .theme-option.active::after {
+  /* keep checkmark inside card, don't push text out */
+  right: 0.65rem;
+}
+html[data-ui-theme="element-admin"] .theme-appearance {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  box-sizing: border-box;
+  width: 100%;
+}
+
 html[data-platform="windows"][data-ui-theme="element-admin"] .theme-popover,
 html[data-platform="other"][data-ui-theme="element-admin"] .theme-popover {
   backdrop-filter: none;
