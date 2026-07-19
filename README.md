@@ -38,7 +38,11 @@ OpenBrowser supports a multilingual UI and can switch languages from local setti
 - **窗口同步 / Window sync**：通过 CDP 组织多窗口点击、滚动、输入、标签页和窗口操作同步，适合本地测试和批量验证。 / Use CDP to synchronize clicks, scrolling, typing, tabs, and window actions across multiple environments.
 - **本地 RPA / Local RPA**：内置流程、任务、模板和运行记录，用 CDP 执行打开页面、等待、点击、输入、截图等自动化步骤。 / Built-in flows, tasks, templates, and run history for CDP-driven automation such as navigation, waiting, clicking, typing, and screenshots.
 - **Local API 与 MCP / Local API and MCP**：默认在回环地址提供本机 HTTP API，并支持 stdio MCP 接入外部自动化工具。 / Exposes a loopback-only local HTTP API and supports stdio MCP integration for external automation tools.
-- **独立内核策略 / Independent kernel policy**：管理独立 Chromium/Chrome for Testing 内核，避免默认回退到系统浏览器，减少系统 Profile 污染。 / Manages independent Chromium / Chrome for Testing kernels and avoids falling back to the system browser.
+- **独立内核策略 / Independent kernel policy**：独立内核优先使用 Donut Browser 官方 `wayfern.json` 更新源，拉取 Wayfern 反检测 Chromium；若当前平台没有可用包，则回退到 Google Chrome for Testing 官方发布；同时也支持自定义内核路径。OpenBrowser 只镜像公开更新源，不重新分发这些内核二进制。 / The independent kernel first uses Donut Browser's official `wayfern.json` feed to fetch Wayfern anti-detect Chromium; if no package is available for the current OS/arch, it falls back to the official Google Chrome for Testing build. Custom kernel paths are also supported. OpenBrowser mirrors the public update feed only and does not redistribute these binaries.
+
+## 浏览器内核来源 / Browser kernel source
+
+OpenBrowser 的独立浏览器内核默认来自 Donut Browser 官方更新源 `https://donutbrowser.com/wayfern.json`，对应下载 Wayfern 反检测 Chromium。当前平台若没有可用包，会自动回退到 Google Chrome for Testing 官方版本；用户也可以手动选择自定义内核。 / OpenBrowser's independent browser kernel defaults to Donut Browser's official update feed at `https://donutbrowser.com/wayfern.json`, which points to Wayfern anti-detect Chromium. If no package is available for the current platform, it falls back to the official Google Chrome for Testing build, and users can also select a custom kernel path.
 - **云同步与备份 / Cloud sync and backup**：支持本地、WebDAV、GitHub、谷歌云、微软云、夸克云、百度云等备份入口；云同步仅在用户主动配置或操作时访问外部服务。 / Supports local, WebDAV, GitHub, Google Cloud, Microsoft Cloud, Quark, and Baidu backup paths; cloud sync only reaches external services when the user enables it.
 
 ## 适用场景 / Use cases
