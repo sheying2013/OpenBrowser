@@ -63,13 +63,17 @@ function writeText(file, content) {
 }
 
 function nsisPath(value) {
-  return String(value).replace(/\\/g, '/').replace(/"/g, '$\"');
+  return String(value).replace(/"/g, '$\\"');
+}
+
+function nsisGlob(value) {
+  return nsisPath(path.join(value, '*'));
 }
 
 function packageWindowsInstaller(packageRoot) {
   const output = path.join(distRoot, `OpenBrowser-Windows-${packageArch}.exe`);
   const script = path.join(distRoot, 'OpenBrowser-Windows-installer.nsi');
-  const installSource = nsisPath(path.join(packageRoot, '*.*'));
+  const installSource = nsisGlob(packageRoot);
   const installDir = '$LOCALAPPDATA\\OpenBrowser';
   writeText(script, [
     '!include "MUI2.nsh"',
