@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>OpenBrowser</title>
-  <script src="i18n.js?v=20260719-i18n"></script>
+  <script src="i18n.js?v=20260719-i18n-v4-pages"></script>
   <link rel="icon" type="image/png" href="assets/logo.png?v=openbrowser-flat3-t">
   <link rel="stylesheet" href="styles.css?v=20260719-nav-fix">
-  <link rel="stylesheet" href="themes.css?v=20260719-nav-fix">
+  <link rel="stylesheet" href="themes.css?v=20260719-native-popover">
   <link rel="stylesheet" href="environment-audit.css?v=20260719-readable-scale">
-  <link rel="stylesheet" href="ui-shell.css?v=20260719-nav-fix">
+  <link rel="stylesheet" href="ui-shell.css?v=20260719-native-popover">
   <link rel="stylesheet" href="pixel-workstation.css?v=20260719-nav-fix">
-  <link rel="stylesheet" href="element-admin.css?v=20260719-theme-scale">
+  <link rel="stylesheet" href="element-admin.css?v=20260719-native-popover">
 </head>
 <body>
   <div class="app-shell">
@@ -38,6 +38,13 @@
         <button class="nav" data-view="logs"><i data-lucide="scroll-text"></i><span data-i18n="nav.logs">操作日志</span></button>
         <button class="nav" data-view="system"><i data-lucide="settings-2"></i><span data-i18n="nav.system">本地设置</span></button>
       </nav>
+      <div class="sidebar-footer">
+        <a id="github-link" href="https://github.com/lyu0805/OpenBrowser" data-i18n-title="footer.githubTitle" aria-label="GitHub" rel="noreferrer">
+          <i data-lucide="github" aria-hidden="true"></i>
+          <span data-i18n="footer.github">GitHub</span>
+        </a>
+        <span class="app-version" id="app-version">v1.0.0</span>
+      </div>
     </aside>
 
     <div class="content">
@@ -88,7 +95,7 @@
             <table class="profile-table-compact"><thead><tr><th class="col-check"><input type="checkbox" id="select-all-profiles"></th><th class="col-num" data-i18n="profiles.col.num">编号</th><th class="col-name" data-i18n="profiles.col.name">环境名称</th><th class="col-group" data-i18n="profiles.col.group">分组</th><th class="col-browser" data-i18n="profiles.col.browser">内核</th><th class="col-network" data-i18n="profiles.col.network">网络</th><th class="col-exit" data-i18n="profiles.col.exit">出口</th><th class="col-ext" data-i18n="profiles.col.ext">扩展</th><th class="col-status" data-i18n="profiles.col.status">状态</th><th class="col-actions" data-i18n="profiles.col.actions">操作</th></tr></thead><tbody id="profile-table"></tbody></table>
             <div class="empty" id="profile-empty" hidden data-i18n="profiles.empty">暂无环境</div>
           </div>
-          <div class="profile-pagination toolbar-pagination" id="profile-pagination"><span class="profile-total">&#24635;&#25968;&#65306;<strong id="profile-total">0</strong></span><div class="profile-page-nav"><button type="button" id="profile-prev" aria-label="&#19978;&#19968;&#39029;">&#8249;</button><label><input id="profile-page" type="number" min="1" value="1" aria-label="&#24403;&#21069;&#39029;"> / <span id="profile-pages">1</span></label><button type="button" id="profile-next" aria-label="&#19979;&#19968;&#39029;">&#8250;</button></div><label class="profile-page-size"><select id="profile-page-size" aria-label="&#27599;&#39029;&#25968;&#37327;"><option value="10">10&#26465;/&#39029;</option><option value="20">20&#26465;/&#39029;</option><option value="50">50&#26465;/&#39029;</option><option value="100">100&#26465;/&#39029;</option></select></label></div>
+          <div class="profile-pagination toolbar-pagination" id="profile-pagination"><span class="profile-total"><span data-i18n="profiles.totalLabel">总数：</span><strong id="profile-total">0</strong></span><div class="profile-page-nav"><button type="button" id="profile-prev" aria-label="&#19978;&#19968;&#39029;">&#8249;</button><label><input id="profile-page" type="number" min="1" value="1" aria-label="&#24403;&#21069;&#39029;"> / <span id="profile-pages">1</span></label><button type="button" id="profile-next" aria-label="&#19979;&#19968;&#39029;">&#8250;</button></div><label class="profile-page-size"><select id="profile-page-size" aria-label="&#27599;&#39029;&#25968;&#37327;"><option value="10">10&#26465;/&#39029;</option><option value="20">20&#26465;/&#39029;</option><option value="50">50&#26465;/&#39029;</option><option value="100">100&#26465;/&#39029;</option></select></label></div>
 
         </section>
 
@@ -443,7 +450,7 @@
         <section class="view" id="view-sync">
           <div class="sync-layout">
             <div class="sync-main">
-              <div class="sync-toolbar"><select id="sync-group"><option>&#20840;&#37096;&#36816;&#34892;&#29615;&#22659;</option></select><div class="sync-toolbar-actions"><button class="primary sync-command" id="start-sync"><i data-lucide="play"></i><span>&#21551;&#21160;&#21516;&#27493; (Ctrl+Alt+A)</span></button><button class="danger-sync sync-command" id="stop-sync" hidden><i data-lucide="square"></i><span>&#20572;&#27490;&#21516;&#27493; (Ctrl+Alt+D)</span></button><button class="outline sync-command" id="restart-sync" disabled><i data-lucide="refresh-cw"></i><span>&#37325;&#21551;&#21516;&#27493; (Ctrl+Alt+R)</span></button><button class="outline sync-command" id="refresh-sessions"><i data-lucide="rotate-cw"></i><span>&#210刷&#26032;&#20250;&#35805;</span></button><button class="outline sync-command sync-settings-button" id="sync-settings-button" type="button" title="&#21516;&#27493;&#35774;&#32622;"><i data-lucide="settings-2"></i><span>&#35774;&#32622;</span></button></div><div class="sync-toolbar-status"><span class="sync-selected" id="sync-selected">&#24050;&#36873;&#25321; 0 &#21015;</span><span class="sync-health idle" id="sync-health">&#21516;&#27493;&#26410;&#21551;&#21160;</span></div></div>
+              <div class="sync-toolbar"><select id="sync-group"><option>&#20840;&#37096;&#36816;&#34892;&#29615;&#22659;</option></select><div class="sync-toolbar-actions"><button class="primary sync-command" id="start-sync"><i data-lucide="play"></i><span>&#21551;&#21160;&#21516;&#27493; (Ctrl+Alt+A)</span></button><button class="danger-sync sync-command" id="stop-sync" hidden><i data-lucide="square"></i><span>&#20572;&#27490;&#21516;&#27493; (Ctrl+Alt+D)</span></button><button class="outline sync-command" id="restart-sync" disabled><i data-lucide="refresh-cw"></i><span>&#37325;&#21551;&#21516;&#27493; (Ctrl+Alt+R)</span></button><button class="outline sync-command" id="refresh-sessions"><i data-lucide="rotate-cw"></i><span>刷新会话</span></button><button class="outline sync-command sync-settings-button" id="sync-settings-button" type="button" title="&#21516;&#27493;&#35774;&#32622;"><i data-lucide="settings-2"></i><span>&#35774;&#32622;</span></button></div><div class="sync-toolbar-status"><span class="sync-selected" id="sync-selected">&#24050;&#36873;&#25321; 0 &#21015;</span><span class="sync-health idle" id="sync-health">&#21516;&#27493;&#26410;&#21551;&#21160;</span></div></div>
               <div class="table-card sync-table"><table><thead><tr><th><input type="checkbox" id="select-all-sessions"></th><th>&#29615;&#22659;&#32534;&#21495;</th><th>&#29615;&#22659;&#21517;&#31216;</th><th>&#20869;&#26680;</th><th>&#26631;&#31614;&#39029;</th><th>&#29366;&#24577;</th><th>&#25805;&#20316;</th></tr></thead><tbody id="session-table"></tbody></table><div class="sync-empty" id="session-empty"><div><i data-lucide="browser"></i></div><strong>暂无已打开的浏览器环境</strong><span>请先在“环境管理”启动至少两个 profile</span></div></div>
             </div>
             <aside class="console">
@@ -577,15 +584,15 @@
 
           <!-- 模板商店 -->
           <div class="rpa-panel" data-rpa-panel="store" hidden>
-            <div class="rpa-banner">模板商店：内置可运行流程，支持自定义创建、导入和导出。「使用」会创建可编辑流程，可直接运行。</div>
+            <div class="rpa-banner" data-i18n="rpa.store.banner">模板商店：内置可运行流程，支持自定义创建、导入和导出。「使用」会创建可编辑流程，可直接运行。</div>
             <div class="rpa-toolbar">
-              <button class="primary" type="button" id="rpa-store-custom"><i data-lucide="plus"></i>定制模板</button>
-              <button class="outline" type="button" id="rpa-store-import">导入 JSON</button>
-              <button class="outline" type="button" id="rpa-store-export-all">导出我的模板</button>
-              <label class="rpa-search"><input id="rpa-store-search" placeholder="关键字搜索"></label>
+              <button class="primary" type="button" id="rpa-store-custom"><i data-lucide="plus"></i><span data-i18n="rpa.store.custom">定制模板</span></button>
+              <button class="outline" type="button" id="rpa-store-import" data-i18n="rpa.store.import">导入 JSON</button>
+              <button class="outline" type="button" id="rpa-store-export-all" data-i18n="rpa.store.exportMine">导出我的模板</button>
+              <label class="rpa-search"><input id="rpa-store-search" placeholder="关键字搜索" data-i18n-placeholder="rpa.store.search"></label>
               <select class="rpa-select" id="rpa-store-cat"><option value="全部">全部</option></select>
               <select class="rpa-select" id="rpa-store-sort">
-                <option value="use_num">本机使用次数</option>
+                <option value="use_num" data-i18n="rpa.store.sort.use">本机使用次数</option>
                 <option value="updated_time">最近更新</option>
                 <option value="name">名称</option>
               </select>
@@ -805,6 +812,20 @@
     </div>
   </div>
   <p class="local-status-desc" data-i18n="system.controlDesc">本机控制服务运行状态。</p>
+</article>
+<article class="storage-settings-card" id="app-update-card">
+  <div class="storage-settings-head">
+    <div>
+      <h3 data-i18n="system.update.title">检查更新</h3>
+      <p data-i18n="system.update.desc">从 GitHub Releases 检查当前平台的最新 OpenBrowser 封装版本。</p>
+    </div>
+    <span id="app-update-version">—</span>
+  </div>
+  <div class="storage-actions" style="margin-top:12px">
+    <button class="outline" type="button" id="app-check-update"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="system.update.check">检查更新</span></button>
+    <button class="primary" type="button" id="app-download-update" hidden><i data-lucide="download" aria-hidden="true"></i><span data-i18n="system.update.download">下载更新</span></button>
+  </div>
+  <p class="storage-warning" id="app-update-status" role="status" data-i18n="system.update.idle">尚未检查更新。</p>
 </article>
 <article class="storage-settings-card" id="cloud-backup-card">
   <div class="storage-settings-head">
@@ -1076,6 +1097,6 @@
   </form></dialog><dialog id="add-app-dialog"><div class="dialog-head"><div><h2>&#28155;&#21152;&#24212;&#29992;</h2><p>&#20174;&#26412;&#22320;&#30446;&#24405;&#25110; Chrome &#24212;&#29992;&#21830;&#24215;&#28155;&#21152;</p></div><button id="close-add-app">&times;</button></div><div class="store-source-tabs"><button class="outline" id="choose-extension-folder">&#23433;&#35013;&#21253;&#30446;&#24405;</button><button class="primary" type="button">Chrome &#24212;&#29992;&#21830;&#24215;</button></div><label>Chrome &#24212;&#29992;&#21830;&#24215; URL<input id="chrome-store-url" placeholder="https://chromewebstore.google.com/detail/.../extension-id"></label><label class="assign-item"><input id="store-assign-all" type="checkbox" checked> &#28155;&#21152;&#21040;&#25152;&#26377;&#29615;&#22659;&#24182;&#37325;&#21551;&#27491;&#22312;&#36816;&#34892;&#30340;&#29615;&#22659;</label><p class="store-note">&#21482;&#25509;&#21463; Chrome Web Store &#38142;&#25509;&#65307;&#19979;&#36733;&#21518;&#20250;&#26657;&#39564; CRX &#26684;&#24335;&#21644;&#25991;&#20214;&#36335;&#24452;&#12290;</p><div class="dialog-actions"><button class="outline" id="cancel-add-app">&#21462;&#28040;</button><button class="primary" id="add-store-submit">&#30830;&#23450;&#28155;&#21152;</button></div></dialog><div class="toast" id="toast"></div>
   <script src="environment-audit.js?v=20260719-environment-audit"></script>
   <script src="assets/vendor/lucide.min.js"></script>
-  <script src="renderer.js?v=20260719-theme-scale"></script>
+  <script src="renderer.js?v=20260719-native-popover"></script>
 </body>
 </html>

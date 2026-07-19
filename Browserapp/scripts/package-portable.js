@@ -11,7 +11,6 @@ const {
 } = require('./resolve-host-dist');
 
 const appRoot = path.resolve(__dirname, '..');
-const skipZip = process.argv.includes('--skip-zip');
 const packageArch = resolvePackageArch();
 const hostDist = (() => {
   try {
@@ -62,6 +61,56 @@ function writeText(file, content) {
   fs.writeFileSync(file, content, 'utf8');
 }
 
+function nsisPath(value) {
+  return String(value).replace(/\\/g, '/').replace(/"/g, '$\"');
+}
+
+function packageWindowsInstaller(packageRoot) {
+  const output = path.join(distRoot, `OpenBrowser-Windows-${packageArch}.exe`);
+  const script = path.join(distRoot, 'OpenBrowser-Windows-installer.nsi');
+  const installSource = nsisPath(path.join(packageRoot, '*.*'));
+  const installDir = '$LOCALAPPDATA\\OpenBrowser';
+  writeText(script, [
+    '!include "MUI2.nsh"',
+    'Name "OpenBrowser"',
+    `OutFile "${nsisPath(output)}"`,
+    `InstallDir "${installDir}"`,
+    'RequestExecutionLevel user',
+    'Unicode true',
+    'SetCompressor /SOLID lzma',
+    '!define MUI_ABORTWARNING',
+    '!insertmacro MUI_PAGE_WELCOME',
+    '!insertmacro MUI_PAGE_DIRECTORY',
+    '!insertmacro MUI_PAGE_INSTFILES',
+    '!insertmacro MUI_PAGE_FINISH',
+    '!insertmacro MUI_LANGUAGE "English"',
+    'Section "OpenBrowser" SEC_MAIN',
+    '  SetOutPath "$INSTDIR"',
+    `  File /r "${installSource}"`,
+    '  CreateDirectory "$SMPROGRAMS\\OpenBrowser"',
+    '  CreateShortCut "$SMPROGRAMS\\OpenBrowser\\OpenBrowser.lnk" "$INSTDIR\\runtime\\OpenBrowser.exe" "" "$INSTDIR\\runtime\\OpenBrowser.exe" 0',
+    '  CreateShortCut "$DESKTOP\\OpenBrowser.lnk" "$INSTDIR\\runtime\\OpenBrowser.exe" "" "$INSTDIR\\runtime\\OpenBrowser.exe" 0',
+    '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
+    'SectionEnd',
+    'Section "Uninstall"',
+    '  Delete "$SMPROGRAMS\\OpenBrowser\\OpenBrowser.lnk"',
+    '  RMDir "$SMPROGRAMS\\OpenBrowser"',
+    '  Delete "$DESKTOP\\OpenBrowser.lnk"',
+    '  RMDir /r "$INSTDIR"',
+    'SectionEnd',
+    '',
+  ].join('\r\n'));
+  try {
+    run('makensis', ['/V2', script]);
+  } catch (error) {
+    removeIfExists(script);
+    throw new Error(`NSIS 安装程序生成失败。请安装 NSIS 并确保 makensis 在 PATH 中：${error.message}`);
+  }
+  removeIfExists(script);
+  if (!fs.existsSync(output)) throw new Error('NSIS 未生成 Windows 安装程序：' + output);
+  console.log('Windows 安装程序：' + output);
+}
+
 function packageWindows() {
   if (!hostDist) throw new Error('缺少应用运行环境。请执行 npm install --force --include=dev。');
   const hostExe = findHostWindowsExe(hostDist);
@@ -81,7 +130,7 @@ function packageWindows() {
   run(process.execPath, [path.join(__dirname, 'brand-exe.mjs'), mainExe, path.join(appRoot, 'assets', 'logo.ico')]);
 
   fs.mkdirSync(resourceApp, { recursive: true });
-  const excluded = new Set(['node_modules', 'dist', '.git']);
+  const excluded = new Set(['node_modules', 'dist', '.git', 'CODE_OVERVIEW.md']);
   for (const entry of fs.readdirSync(appRoot)) {
     if (excluded.has(entry)) continue;
     copyRecursive(path.join(appRoot, entry), path.join(resourceApp, entry));
@@ -122,12 +171,11 @@ function packageWindows() {
     '',
   ].join('\r\n'));
 
-  if (!skipZip) {
-    const zip = path.join(distRoot, `OpenBrowser-Windows-${packageArch}.zip`);
-    removeIfExists(zip);
-    run('powershell', ['-NoProfile', '-Command', `Compress-Archive -LiteralPath '${packageRoot.replace(/'/g, "''")}' -DestinationPath '${zip.replace(/'/g, "''")}' -CompressionLevel Optimal`]);
-    console.log('便携版压缩包：' + zip);
-  }
+  const zip = path.join(distRoot, `OpenBrowser-Windows-${packageArch}.zip`);
+  removeIfExists(zip);
+  run('powershell', ['-NoProfile', '-Command', `Compress-Archive -LiteralPath '${packageRoot.replace(/'/g, "''")}' -DestinationPath '${zip.replace(/'/g, "''")}' -CompressionLevel Optimal`]);
+  console.log('便携版压缩包：' + zip);
+  packageWindowsInstaller(packageRoot);
   console.log('便携版目录：' + packageRoot);
 }
 
@@ -181,7 +229,7 @@ function packageMac() {
 
   removeIfExists(resourceApp);
   fs.mkdirSync(resourceApp, { recursive: true });
-  const excluded = new Set(['node_modules', 'dist', '.git']);
+  const excluded = new Set(['node_modules', 'dist', '.git', 'CODE_OVERVIEW.md']);
   for (const entry of fs.readdirSync(appRoot)) {
     if (excluded.has(entry)) continue;
     copyRecursive(path.join(appRoot, entry), path.join(resourceApp, entry));
@@ -217,12 +265,10 @@ function packageMac() {
     '',
   ].join('\n'));
 
-  if (!skipZip) {
-    const zip = path.join(distRoot, `OpenBrowser-macOS-${packageArch}.zip`);
-    removeIfExists(zip);
-    run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', packageRoot, zip]);
-    console.log('macOS 压缩包：' + zip);
-  }
+  const dmg = path.join(distRoot, `OpenBrowser-macOS-${packageArch}.dmg`);
+  removeIfExists(dmg);
+  run('hdiutil', ['create', '-volname', 'OpenBrowser', '-srcfolder', packageRoot, '-ov', '-format', 'UDZO', dmg]);
+  console.log('macOS 安装映像：' + dmg);
   console.log('macOS 打包目录：' + packageRoot);
   console.log('主机：' + os.platform() + ' ' + os.arch());
 }

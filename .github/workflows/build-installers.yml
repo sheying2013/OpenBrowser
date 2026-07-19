@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   macos-x86_64:
@@ -42,7 +42,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenBrowser-macOS-x86_64
-          path: Browserapp/dist/OpenBrowser-macOS-x86_64.zip
+          path: Browserapp/dist/OpenBrowser-macOS-x86_64.dmg
           if-no-files-found: error
 
   macos-arm64:
@@ -77,7 +77,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenBrowser-macOS-arm64
-          path: Browserapp/dist/OpenBrowser-macOS-arm64.zip
+          path: Browserapp/dist/OpenBrowser-macOS-arm64.dmg
           if-no-files-found: error
 
   windows-x86_64:
@@ -99,6 +99,8 @@ jobs:
           cache-dependency-path: Browserapp/package-lock.json
       - name: Install dependencies
         run: npm ci --include=dev
+      - name: Install NSIS
+        run: choco install nsis --no-progress --yes
       - name: Run self-tests
         run: |
           npm run selftest
@@ -112,5 +114,27 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenBrowser-Windows-x86_64
-          path: Browserapp/dist/OpenBrowser-Windows-x86_64.zip
+          path: |
+            Browserapp/dist/OpenBrowser-Windows-x86_64.exe
+            Browserapp/dist/OpenBrowser-Windows-x86_64.zip
           if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos-x86_64, macos-arm64, windows-x86_64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: OpenBrowser-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/*
+          fail_on_unmatched_files: true
