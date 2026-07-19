@@ -3,13 +3,13 @@ const path = require('path');
 const { BrowserEngine } = require('./engine');
 const cdp = require('./cdp');
 
-const root = path.resolve(__dirname, '..', 'functional-v2-selftest-data');
+const root = path.resolve(__dirname, '..', 'functional-selftest-data');
 const fakeApp = { getPath(name) { if (name === 'userData') return root; throw new Error(`Unsupported path: ${name}`); } };
 const engine = new BrowserEngine(fakeApp);
 
 const server = http.createServer((_request, response) => {
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  response.end('<!doctype html><meta charset="utf-8"><title>OpenBrowser V2 Selftest</title><input id="text" autofocus><h1>CDP Selftest</h1>');
+  response.end('<!doctype html><meta charset="utf-8"><title>OpenBrowser Selftest</title><input id="text" autofocus><h1>CDP Selftest</h1>');
 });
 
 function listen() {

@@ -15,7 +15,7 @@ jobs:
     runs-on: macos-13
     defaults:
       run:
-        working-directory: local-functional-v2-app
+        working-directory: local-functional-app
     env:
       OPENBROWSER_PACKAGE_ARCH: x86_64
     steps:
@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: local-functional-v2-app/package-lock.json
+          cache-dependency-path: local-functional-app/package-lock.json
       - name: Install dependencies
         run: npm ci --include=dev
       - name: Run self-tests
@@ -42,7 +42,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenBrowser-macOS-x86_64
-          path: local-functional-v2-app/dist/OpenBrowser-macOS-x86_64.zip
+          path: local-functional-app/dist/OpenBrowser-macOS-x86_64.zip
           if-no-files-found: error
 
   macos-arm64:
@@ -50,7 +50,7 @@ jobs:
     runs-on: macos-14
     defaults:
       run:
-        working-directory: local-functional-v2-app
+        working-directory: local-functional-app
     env:
       OPENBROWSER_PACKAGE_ARCH: arm64
     steps:
@@ -61,7 +61,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: local-functional-v2-app/package-lock.json
+          cache-dependency-path: local-functional-app/package-lock.json
       - name: Install dependencies
         run: npm ci --include=dev
       - name: Run self-tests
@@ -77,7 +77,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenBrowser-macOS-arm64
-          path: local-functional-v2-app/dist/OpenBrowser-macOS-arm64.zip
+          path: local-functional-app/dist/OpenBrowser-macOS-arm64.zip
           if-no-files-found: error
 
   windows-x86_64:
@@ -85,7 +85,7 @@ jobs:
     runs-on: windows-2022
     defaults:
       run:
-        working-directory: local-functional-v2-app
+        working-directory: local-functional-app
     env:
       OPENBROWSER_PACKAGE_ARCH: x86_64
     steps:
@@ -96,7 +96,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: local-functional-v2-app/package-lock.json
+          cache-dependency-path: local-functional-app/package-lock.json
       - name: Install dependencies
         run: npm ci --include=dev
       - name: Run self-tests
@@ -112,5 +112,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenBrowser-Windows-x86_64
-          path: local-functional-v2-app/dist/OpenBrowser-Windows-x86_64.zip
+          path: local-functional-app/dist/OpenBrowser-Windows-x86_64.zip
           if-no-files-found: error

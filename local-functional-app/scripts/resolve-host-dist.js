@@ -13,7 +13,7 @@ function resolveHostDist(appRoot) {
   for (const dist of candidates) {
     if (fs.existsSync(dist) && fs.readdirSync(dist).length > 0) return dist;
   }
-  throw new Error('缺少应用运行环境。请在 local-functional-v2-app 目录执行 npm install --force --include=dev。');
+  throw new Error('缺少应用运行环境。请在 local-functional-app 目录执行 npm install --force --include=dev。');
 }
 
 function findHostAppBundle(distRoot) {
