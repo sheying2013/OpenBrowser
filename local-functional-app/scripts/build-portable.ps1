@@ -9,7 +9,7 @@ if (-not (Test-Path -LiteralPath $hostDist)) {
   $hostDist = Join-Path $appRoot 'node_modules\electron\dist'
 }
 if (-not (Test-Path -LiteralPath $hostDist)) {
-  throw '缺少应用运行环境。请在 local-functional-v2-app 目录执行 npm install --force --include=dev。'
+  throw '缺少应用运行环境。请在 local-functional-app 目录执行 npm install --force --include=dev。'
 }
 $hostExe = Get-ChildItem -LiteralPath $hostDist -Filter *.exe | Select-Object -First 1
 if (-not $hostExe) {

@@ -2,7 +2,7 @@ node_modules/
 dist/
 output/
 .playwright-cli/
-functional-v2-selftest-data/
+functional-selftest-data/
 extension-pipe-selftest-data/
 *.log
 .DS_Store
