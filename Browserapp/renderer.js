@@ -171,10 +171,7 @@ function defaultGroups() {
 }
 
 const defaultProfiles = () => [
-  { id: 'env-001', number: 1, name: '1', browser: 'Google Chrome', language: 'zh-CN', networkMode: 'direct', proxy: 'Direct', tag: '主控', groupId: 'grp-default', os: 'Windows', location: 'Local' },
-  { id: 'env-002', number: 2, name: '2', browser: 'Google Chrome', language: 'en-US', networkMode: 'direct', proxy: 'Direct', tag: '工作组', groupId: 'grp-default', os: 'Windows', location: 'Local' },
-  { id: 'env-003', number: 3, name: '3', browser: 'Google Chrome', language: 'en-US', networkMode: 'direct', proxy: 'Direct', tag: '工作组', groupId: 'grp-default', os: 'Windows', location: 'Local' },
-  { id: 'env-004', number: 4, name: '4', browser: 'Google Chrome', language: 'en-US', networkMode: 'direct', proxy: 'Direct', tag: '代理', groupId: 'grp-default', os: 'Windows', location: 'Local' }
+  { id: 'env-001', number: 1, name: '1', browser: 'Google Chrome', language: 'zh-CN', networkMode: 'direct', proxy: 'Direct', tag: '', groupId: 'grp-default', os: 'Windows', location: 'Local' },
 ];
 
 function positiveProfileNumber(value) {
