@@ -3176,7 +3176,9 @@ $('#profile-form').addEventListener('submit', async (event) => {
 $$('[data-editor-tab]').forEach((button) => button.addEventListener('click', () => setEditorTab(button.dataset.editorTab)));
 $('#editor-back').addEventListener('click', () => { editingProfileId = null; editorNetworkResult = null; switchView('profiles'); });
 $('#editor-cancel').addEventListener('click', () => { editingProfileId = null; editorNetworkResult = null; switchView('profiles'); });
-$('#editor-test-proxy').addEventListener('click', testEditorProxy);
+$('#editor-test-proxy')?.addEventListener('click', testEditorProxy);
+$('#editor-apply-proxy-fp')?.addEventListener('click', applyEditorProxyFingerprint);
+$('#editor-refresh-proxy')?.addEventListener('click', refreshEditorProxy);
 $('#editor-system-defaults').addEventListener('click', useSystemEditorDefaults);
 const editorProxySelector = '#editor-proxy-type,#editor-proxy-host,#editor-proxy-port,#editor-proxy-user,#editor-proxy-password,input[name="editor-network"]';
 const onEditorFormChange = (event) => {
@@ -5190,6 +5192,4 @@ window.ops.onEvent((value) => {
   }
 });
 
-$('#editor-test-proxy')?.addEventListener('click', testEditorProxy);
-$('#editor-apply-proxy-fp')?.addEventListener('click', applyEditorProxyFingerprint);
-$('#editor-refresh-proxy')?.addEventListener('click', refreshEditorProxy);
+
