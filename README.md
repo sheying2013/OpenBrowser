@@ -152,7 +152,6 @@ OpenBrowser 的本地 API 默认只监听回环地址；如设置 `OPENBROWSER_A
 
 ## 维护文档
 
-- 代码概要：[`Browserapp/CODE_OVERVIEW.md`](./Browserapp/CODE_OVERVIEW.md)
 - 自动化模块：[`Browserapp/automation/README.md`](./Browserapp/automation/README.md)
 - 使用免责声明：[`DISCLAIMER.md`](./DISCLAIMER.md)
 
