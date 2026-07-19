@@ -110,8 +110,6 @@ OpenBrowser/
 
 ## 数据与安全
 
-请勿提交或公开：`.env` / Token、Cookie / 密码 / 代理账号、Profile 与日志、内核与安装包。
-
 本地 API 默认只监听回环地址；设置了 `OPENBROWSER_API_KEY` 时请求需带 `api-key` 头。第三方组件见 [`THIRD-PARTY-NOTICES.md`](./Browserapp/THIRD-PARTY-NOTICES.md)。
 
 ## 文档
