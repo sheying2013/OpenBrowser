@@ -6,6 +6,8 @@ functional-selftest-data/
 extension-pipe-selftest-data/
 *.log
 .DS_Store
+.codex-local/
+CODE_OVERVIEW.md
 .env
 .env.*
 !.env.example
