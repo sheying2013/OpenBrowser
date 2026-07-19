@@ -110,8 +110,6 @@ Source and docs only — no profiles, cookies, proxy credentials, kernel binarie
 
 ## Data & security
 
-Do not commit: `.env` / tokens, cookies / passwords / proxy credentials, profiles and logs, kernels and packages.
-
 Local API binds to loopback by default; send `api-key` when `OPENBROWSER_API_KEY` is set. Third-party notices: [`THIRD-PARTY-NOTICES.md`](./Browserapp/THIRD-PARTY-NOTICES.md).
 
 ## Docs
