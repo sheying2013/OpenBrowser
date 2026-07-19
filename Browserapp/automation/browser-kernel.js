@@ -35,6 +35,9 @@ const CFT_META = 'https://googlechromelabs.github.io/chrome-for-testing/last-kno
 const SOURCE_WAYFERN = 'donut-wayfern';
 const SOURCE_CFT = 'chrome-for-testing';
 const SOURCE_CUSTOM = 'custom';
+/** Bundled / userData OpenBrowser 148 independent kernel. Default on macOS x64. */
+const SOURCE_OPENBROWSER = 'openbrowser-148';
+const OPENBROWSER_KERNEL_VERSION = '148.0.7778.165';
 const MAX_META_BYTES = 2 * 1024 * 1024;
 const MAX_KERNEL_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_REDIRECTS = 6;
@@ -187,6 +190,83 @@ function chromeForTestingBinaryRelative(platform) {
   }
   if (platform === 'win64') return path.join('chrome-win64', 'chrome.exe');
   return path.join('chrome-linux64', 'chrome');
+}
+
+/** Relative path of the OpenBrowser 148 launcher (shell wrapper → OpenBrowser.bin). */
+function openBrowserKernelBinaryRelative() {
+  return path.join(
+    'openbrowser',
+    'chrome_148',
+    'openbrowser_148',
+    'OpenBrowser.app',
+    'Contents',
+    'MacOS',
+    'OpenBrowser'
+  );
+}
+
+function isMacX64Host() {
+  return process.platform === 'darwin' && process.arch === 'x64';
+}
+
+/**
+ * openbrowser-148 is a macOS Intel (x86_64) kernel only.
+ * Never package it for other platforms; never auto-select it at runtime elsewhere.
+ * @param {string} [platform=process.platform]
+ * @param {string} [arch=process.arch] node arch (x64/arm64) or package arch (x86_64/arm64)
+ */
+function isOpenBrowser148SupportedHost(platform = process.platform, arch = process.arch) {
+  const p = String(platform || '').toLowerCase();
+  const a = String(arch || '').toLowerCase();
+  const isX64 = a === 'x64' || a === 'x86_64' || a === 'amd64';
+  return p === 'darwin' && isX64;
+}
+
+/**
+ * Locate OpenBrowser 148 kernel under kernelsRoot or optional resource roots.
+ * Layout: kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser
+ * Returns null on non-macOS-x64 hosts so a stray kernels tree cannot be selected.
+ */
+function findOpenBrowserKernelBinary(kernelsRoot, extraRoots = []) {
+  if (!isOpenBrowser148SupportedHost()) return null;
+  const rel = openBrowserKernelBinaryRelative();
+  const roots = [];
+  const push = (r) => {
+    if (!r) return;
+    const s = String(r).trim();
+    if (s && !roots.includes(s)) roots.push(s);
+  };
+  push(kernelsRoot);
+  for (const r of extraRoots || []) push(r);
+  try {
+    push(process.env.OPENBROWSER_KERNEL_ROOT);
+  } catch (_) {}
+
+  const candidates = [];
+  for (const root of roots) {
+    // root is .../kernels  →  root/openbrowser/chrome_148/...
+    candidates.push(path.join(root, rel));
+    // root is .../kernels/openbrowser  →  root/chrome_148/...
+    candidates.push(path.join(root, 'chrome_148', 'openbrowser_148', 'OpenBrowser.app', 'Contents', 'MacOS', 'OpenBrowser'));
+    // root is app/source dir  →  root/kernels/openbrowser/...
+    candidates.push(path.join(root, 'kernels', rel));
+    // root is process.resourcesPath with nested kernels
+    candidates.push(path.join(root, 'app', 'kernels', rel));
+  }
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return path.resolve(candidate);
+    } catch (_) {}
+  }
+  return null;
+}
+
+function kernelDisplayName(source) {
+  if (source === SOURCE_OPENBROWSER) return 'OpenBrowser 148';
+  if (source === SOURCE_WAYFERN) return 'Wayfern (Donut)';
+  if (source === SOURCE_CUSTOM) return 'Custom Chromium';
+  if (source === SOURCE_CFT) return 'Chrome for Testing';
+  return 'Independent Chromium';
 }
 
 function compareVersions(a, b) {
@@ -508,6 +588,10 @@ class BrowserKernelManager {
     this.metaFile = path.join(this.kernelsRoot, 'kernel-meta.json');
     this.onProgress = options.onProgress || (() => {});
     this.installPromise = null;
+    // Optional extra roots (e.g. process.resourcesPath) for bundled mac x64 kernel seed
+    this.resourceRoots = Array.isArray(options.resourceRoots)
+      ? options.resourceRoots.filter(Boolean)
+      : (options.resourceRoot ? [options.resourceRoot] : []);
     this.meta = {
       version: null,
       platform: donutPlatformKey(),
@@ -528,6 +612,7 @@ class BrowserKernelManager {
     if (installed && (this.meta.binary !== installed.path || this.meta.source !== installed.source)) {
       this.meta.binary = installed.path;
       this.meta.source = installed.source;
+      if (installed.version) this.meta.version = installed.version;
       this.meta.updatedAt = new Date().toISOString();
       await this.saveMeta();
     }
@@ -540,19 +625,42 @@ class BrowserKernelManager {
   }
 
   resolveInstalled() {
+    // macOS x64 default only: OpenBrowser 148 under kernels/openbrowser/ (wrapper binary).
+    // Other hosts must never auto-select this kernel even if a stray tree exists.
+    if (isOpenBrowser148SupportedHost()) {
+      const openBrowserBin = findOpenBrowserKernelBinary(this.kernelsRoot, this.resourceRoots);
+      if (openBrowserBin) {
+        const trustedOb = this.safeCustomBinary(openBrowserBin);
+        if (trustedOb) {
+          return {
+            name: kernelDisplayName(SOURCE_OPENBROWSER),
+            path: trustedOb,
+            version: this.meta.version || OPENBROWSER_KERNEL_VERSION,
+            independent: true,
+            source: SOURCE_OPENBROWSER,
+          };
+        }
+      }
+    }
+
     if (this.meta.binary && fs.existsSync(this.meta.binary)) {
       const src = this.meta.source || SOURCE_WAYFERN;
-      const trusted = src === SOURCE_CUSTOM
-        ? this.safeCustomBinary(this.meta.binary)
-        : safeInstalledBinary(this.meta.binary, this.kernelsRoot);
-      if (trusted) {
-        return {
-          name: src === SOURCE_WAYFERN ? 'Wayfern (Donut)' : src === SOURCE_CUSTOM ? 'Custom Chromium' : 'Chrome for Testing',
-          path: trusted,
-          version: this.meta.version || 'unknown',
-          independent: true,
-          source: src,
-        };
+      // Refuse stale openbrowser-148 meta on non-mac-x64 hosts.
+      if (src === SOURCE_OPENBROWSER && !isOpenBrowser148SupportedHost()) {
+        // fall through to Wayfern/CfT/custom
+      } else {
+        const trusted = (src === SOURCE_CUSTOM || src === SOURCE_OPENBROWSER)
+          ? this.safeCustomBinary(this.meta.binary)
+          : safeInstalledBinary(this.meta.binary, this.kernelsRoot);
+        if (trusted) {
+          return {
+            name: kernelDisplayName(src),
+            path: trusted,
+            version: this.meta.version || 'unknown',
+            independent: true,
+            source: src,
+          };
+        }
       }
     }
 
@@ -590,7 +698,7 @@ class BrowserKernelManager {
         const trusted = safeInstalledBinary(found, wayfernDir);
         if (trusted) {
           return {
-            name: 'Wayfern (Donut)',
+            name: kernelDisplayName(SOURCE_WAYFERN),
             path: trusted,
             version: this.meta.version || 'unknown',
             independent: true,
@@ -606,7 +714,7 @@ class BrowserKernelManager {
     const trustedCft = safeInstalledBinary(cft, this.kernelsRoot);
     if (trustedCft) {
       return {
-        name: 'Chrome for Testing',
+        name: kernelDisplayName(SOURCE_CFT),
         path: trustedCft,
         version: this.meta.version || 'unknown',
         independent: true,
@@ -617,7 +725,13 @@ class BrowserKernelManager {
     const custom = path.join(this.kernelsRoot, 'custom', 'chrome');
     const trustedCustom = this.safeCustomBinary(custom);
     if (trustedCustom) {
-      return { name: 'Custom Chromium', path: trustedCustom, version: 'custom', independent: true, source: SOURCE_CUSTOM };
+      return {
+        name: kernelDisplayName(SOURCE_CUSTOM),
+        path: trustedCustom,
+        version: this.meta.version || 'custom',
+        independent: true,
+        source: SOURCE_CUSTOM,
+      };
     }
     return null;
   }
@@ -636,6 +750,9 @@ class BrowserKernelManager {
 
   status() {
     const installed = this.resolveInstalled();
+    // Channel label only claims openbrowser-148 default on the supported host.
+    const openBrowserDefault = isOpenBrowser148SupportedHost()
+      && (!installed || installed.source === SOURCE_OPENBROWSER);
     return {
       platform: donutPlatformKey(),
       cftPlatform: cftPlatformKey(),
@@ -643,13 +760,22 @@ class BrowserKernelManager {
       installed: Boolean(installed),
       kernel: installed,
       meta: this.meta,
-      channel: {
-        name: 'Donut Browser / Wayfern',
-        metaUrl: WAYFERN_META,
-        site: 'https://donutbrowser.com',
-        engineSite: 'https://wayfern.com',
-      },
-      note: '独立内核默认对接 Donut 官方 Wayfern 更新源（donutbrowser.com/wayfern.json）。引擎由 Wayfern 分发，使用即表示同意其服务条款。',
+      channel: openBrowserDefault
+        ? {
+          name: 'OpenBrowser 148 (macOS x86 默认)',
+          metaUrl: null,
+          site: null,
+          engineSite: null,
+        }
+        : {
+          name: 'Donut Browser / Wayfern',
+          metaUrl: WAYFERN_META,
+          site: 'https://donutbrowser.com',
+          engineSite: 'https://wayfern.com',
+        },
+      note: openBrowserDefault
+        ? 'macOS x86 默认使用 OpenBrowser 148 独立内核（kernels/openbrowser/）。无需从 Donut 下载 Wayfern。'
+        : '独立内核默认对接 Donut 官方 Wayfern 更新源（donutbrowser.com/wayfern.json）。引擎由 Wayfern 分发，使用即表示同意其服务条款。',
     };
   }
 
@@ -707,6 +833,65 @@ class BrowserKernelManager {
   async ensureLatestInternal(force = false) {
     await this.loadMeta();
     const existing = this.resolveInstalled();
+
+    // macOS x86 default kernel: never auto-replace OpenBrowser 148 with Wayfern/CfT
+    // unless the caller force-downloads (manual "下载/更新" with force).
+    if (existing && existing.source === SOURCE_OPENBROWSER && !force) {
+      this.meta.binary = existing.path;
+      this.meta.version = existing.version || OPENBROWSER_KERNEL_VERSION;
+      this.meta.source = SOURCE_OPENBROWSER;
+      this.meta.platform = donutPlatformKey();
+      this.meta.downloadUrl = null;
+      this.meta.updatedAt = new Date().toISOString();
+      await this.saveMeta();
+      this.onProgress({
+        phase: 'done',
+        message: `使用 OpenBrowser 148 默认内核 ${existing.version || OPENBROWSER_KERNEL_VERSION}`,
+        version: existing.version || OPENBROWSER_KERNEL_VERSION,
+        binary: existing.path,
+      });
+      return existing;
+    }
+
+    // macOS x86 with no kernel yet: do not silently download Wayfern/CfT as default.
+    // Prefer in-repo / resourceRoots kernels/openbrowser (source-tree testing).
+    // Never seed openbrowser-148 on other platforms.
+    if (!existing && isOpenBrowser148SupportedHost() && !force) {
+      const seed = findOpenBrowserKernelBinary(this.kernelsRoot, this.resourceRoots);
+      if (seed) {
+        const trusted = this.safeCustomBinary(seed);
+        if (trusted) {
+          this.meta.binary = trusted;
+          this.meta.version = OPENBROWSER_KERNEL_VERSION;
+          this.meta.source = SOURCE_OPENBROWSER;
+          this.meta.platform = donutPlatformKey();
+          this.meta.downloadUrl = null;
+          this.meta.updatedAt = new Date().toISOString();
+          await this.saveMeta();
+          this.onProgress({
+            phase: 'done',
+            message: `使用源码/资源树 OpenBrowser 148 内核 ${OPENBROWSER_KERNEL_VERSION}`,
+            version: OPENBROWSER_KERNEL_VERSION,
+            binary: trusted,
+          });
+          return {
+            name: kernelDisplayName(SOURCE_OPENBROWSER),
+            path: trusted,
+            version: OPENBROWSER_KERNEL_VERSION,
+            independent: true,
+            source: SOURCE_OPENBROWSER,
+          };
+        }
+      }
+      throw new Error(
+        'macOS x86 默认内核 OpenBrowser 148 未安装。请将内核放到：'
+        + path.join(this.kernelsRoot, 'openbrowser')
+        + ' 或源码目录 Browserapp/kernels/openbrowser，'
+        + '或设置环境变量 OPENBROWSER_KERNEL_ROOT，'
+        + '或在本地设置中选择自定义内核。'
+      );
+    }
+
     let release;
     try {
       release = await this.fetchOfficialRelease();
@@ -908,9 +1093,11 @@ class BrowserKernelManager {
 
   async setCustomBinary(binaryPath) {
     const probe = await this.probeBrowserBinary(binaryPath);
+    const isOpenBrowser = /[/\\]openbrowser[/\\]chrome_148[/\\]/i.test(probe.path)
+      || path.basename(path.dirname(probe.path)) === 'MacOS' && /OpenBrowser$/i.test(path.basename(probe.path));
     this.meta.binary = probe.path;
-    this.meta.version = probe.version;
-    this.meta.source = SOURCE_CUSTOM;
+    this.meta.version = probe.version || (isOpenBrowser ? OPENBROWSER_KERNEL_VERSION : probe.version);
+    this.meta.source = isOpenBrowser ? SOURCE_OPENBROWSER : SOURCE_CUSTOM;
     this.meta.updatedAt = new Date().toISOString();
     this.meta.platform = donutPlatformKey();
     this.meta.downloadUrl = null;
@@ -922,6 +1109,20 @@ class BrowserKernelManager {
   async checkUpdate() {
     await this.loadMeta();
     const installed = this.resolveInstalled();
+    // OpenBrowser 148 is the pinned default on mac x64 — not auto-updated via Wayfern feed
+    if (installed?.source === SOURCE_OPENBROWSER) {
+      return {
+        installed,
+        remote: {
+          version: installed.version || OPENBROWSER_KERNEL_VERSION,
+          source: SOURCE_OPENBROWSER,
+          url: null,
+          platform: donutPlatformKey(),
+        },
+        needsUpdate: false,
+        upToDate: true,
+      };
+    }
     try {
       const release = await this.fetchOfficialRelease();
       this.meta.remoteVersion = release.version;
@@ -947,10 +1148,17 @@ module.exports = {
   donutPlatformKey,
   cftPlatformKey,
   chromeBinaryRelative: chromeForTestingBinaryRelative,
+  openBrowserKernelBinaryRelative,
+  findOpenBrowserKernelBinary,
+  isMacX64Host,
+  isOpenBrowser148SupportedHost,
   WAYFERN_META,
   CFT_META,
   SOURCE_WAYFERN,
   SOURCE_CFT,
+  SOURCE_CUSTOM,
+  SOURCE_OPENBROWSER,
+  OPENBROWSER_KERNEL_VERSION,
   compareVersions,
   validateArchiveMemberName,
   safeInstalledBinary,

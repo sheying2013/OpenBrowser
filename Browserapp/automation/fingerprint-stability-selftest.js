@@ -51,6 +51,15 @@ function main() {
   const off = resolveStabilityPolicy({ stabilityMode: 'off' }, { host: 'www.amazon.com' });
   assert.strictEqual(off.active, false);
 
+  // Worker script must re-evaluate host at runtime (not only launch-time active flag)
+  const workerSrc = buildWorkerInjectionScript(buildFingerprint({
+    id: 'prof_worker_stability',
+    name: 'ws',
+    privacy: { stabilityMode: 'auto', canvas: 'noise', webgl: 'noise' },
+  }));
+  assert.ok(workerSrc.includes('stabilityActiveNow'), 'worker inject must include host-aware stability');
+  assert.ok(workerSrc.includes('hosts'), 'worker CFG must ship host list');
+
   const custom = resolveStabilityPolicy({
     stabilityMode: 'auto',
     stabilityHosts: ['risk.test'],

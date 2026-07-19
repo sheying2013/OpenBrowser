@@ -56,9 +56,9 @@ internal sealed class ProfileMarker : Form
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
-        BackColor = Color.FromArgb(18, 58, 140);
-        ClientSize = new Size(86, 24);
-        Font = new Font("Microsoft YaHei UI", 8.25f, FontStyle.Bold, GraphicsUnit.Point);
+        BackColor = Color.FromArgb(36, 92, 255);
+        ClientSize = new Size(40, 40);
+        Font = new Font("Microsoft YaHei UI", 14f, FontStyle.Bold, GraphicsUnit.Point);
         timer = new Timer { Interval = 120 };
         timer.Tick += delegate { FollowBrowser(); };
         Shown += delegate { FollowBrowser(); timer.Start(); };
@@ -128,9 +128,9 @@ internal sealed class ProfileMarker : Form
             return;
         }
 
-        int x = rect.Left + 91;
-        int y = rect.Top + 38;
-        SetWindowPos(Handle, HWND_TOP, x, y, 86, 24, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSENDCHANGING);
+        int x = rect.Left + 12;
+        int y = rect.Top + 12;
+        SetWindowPos(Handle, HWND_TOP, x, y, 40, 40, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSENDCHANGING);
     }
 
     [STAThread]

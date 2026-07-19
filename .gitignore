@@ -16,7 +16,12 @@ CODE_OVERVIEW.md
 profiles/
 user-data/
 browser-data/
+# UserData / 下载的内核一律忽略；源码树内「仅 macOS x86_64 默认内核」例外见下
 kernels/
+# openbrowser-148：仅 macOS x86_64 默认独立内核（GitHub 仅该产物打包打入；arm64/Windows 打包排除）
+!Browserapp/kernels/
+!Browserapp/kernels/openbrowser/
+!Browserapp/kernels/openbrowser/**
 runtime/
 chromium/
 chrome-for-testing/
@@ -30,6 +35,12 @@ chrome-for-testing/
 *.pkg
 *.zip
 *.app/
+# 源码内 openbrowser-148 的 OpenBrowser.app 必须可提交，否则 GitHub macOS x86_64 打包没有默认内核
+!Browserapp/kernels/openbrowser/
+!Browserapp/kernels/openbrowser/**
+!Browserapp/kernels/openbrowser/**/
+!Browserapp/kernels/openbrowser/**/OpenBrowser.app/
+!Browserapp/kernels/openbrowser/**/OpenBrowser.app/**
 **/node_modules/
 **/dist/
 

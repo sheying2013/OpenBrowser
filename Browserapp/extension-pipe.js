@@ -61,7 +61,23 @@ async function closeInstaller(value) {
 }
 
 async function reconcileOnConnection(connection, desired, managedPaths = []) {
-  const current = await connection.command('Extensions.getExtensions');
+  // OpenBrowser 148 kernels may lack Chrome Extensions.* CDP domain.
+  // Probe first; if unavailable, keep browser alive and rely on --load-extension only.
+  let current;
+  try {
+    current = await connection.command('Extensions.getExtensions');
+  } catch (error) {
+    const msg = String(error && error.message || error || '');
+    if (/not available|unknown method|was not found|not found|unsupported/i.test(msg)) {
+      return {
+        installed: desired.map((item) => ({ ...item, chromeExtensionId: null })),
+        extensions: [],
+        skipped: true,
+        reason: msg,
+      };
+    }
+    throw error;
+  }
   const wanted = new Map(desired.map((item) => [item.path.toLowerCase(), item]));
   const managed = managedPaths.map((item) => item.toLowerCase());
   for (const extension of current.extensions || []) {

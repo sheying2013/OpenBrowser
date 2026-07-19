@@ -10,11 +10,17 @@ const { reconcileOnConnection, portConnection } = require('./extension-pipe');
 const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
 const { resolveProfileLanguage, localeFromCountryCode } = require('./automation/locale-from-country');
 const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
+const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = require('./automation/env-icon');
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
 const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
 const { acquireProfileLock, releaseProfileLock, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = require('./automation/isolation');
 const { BrowserKernelManager } = require('./automation/browser-kernel');
 const { ensureStartPageServer, getStartPageServer } = require('./automation/start-page-server');
+const {
+  isOpenBrowser148,
+  writeOpenBrowserKernelInit,
+  fingerprintForNativeKernelInject,
+} = require('./automation/kernel-init-sync');
 
 const KERNEL_POLICY_VERSION = 2;
 
@@ -65,8 +71,26 @@ class BrowserEngine {
     const profileDataRootCheck = validateDataRootIsolationSecure(profileDataRoot);
     if (!profileDataRootCheck.ok) throw new Error(profileDataRootCheck.message);
     this.profileDataRootPath = profileDataRootCheck.root;
+    // Source-tree + packaged discovery for OpenBrowser 148 kernel.
+    // Layout: Browserapp/kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/...
+    // Env override: OPENBROWSER_KERNEL_ROOT = dir that contains openbrowser/ chrome_148 ...
+    const resourceRoots = [];
+    try {
+      if (typeof process !== 'undefined' && process.resourcesPath) resourceRoots.push(process.resourcesPath);
+    } catch (_) {}
+    try {
+      resourceRoots.push(__dirname);
+      resourceRoots.push(path.join(__dirname, 'kernels'));
+      resourceRoots.push(path.join(__dirname, 'resources'));
+      resourceRoots.push(path.join(__dirname, '..', 'resources'));
+    } catch (_) {}
+    try {
+      const envRoot = String(process.env.OPENBROWSER_KERNEL_ROOT || '').trim();
+      if (envRoot) resourceRoots.push(envRoot);
+    } catch (_) {}
     this.kernelManager = new BrowserKernelManager(app.getPath('userData'), {
       onProgress: (p) => this.emit({ type: 'kernel-progress', ...p }),
+      resourceRoots,
     });
     this.preferIndependentKernel = options.preferIndependentKernel !== false;
     // A fingerprint environment must never launch the user's installed browser.
@@ -125,6 +149,16 @@ class BrowserEngine {
       const saved = JSON.parse(await fsp.readFile(this.stateFile, 'utf8'));
       for (const extension of saved.extensions || []) if (fs.existsSync(extension.path)) this.extensions.set(extension.id, extension);
       for (const [profileId, ids] of Object.entries(saved.assignments || {})) this.assignments.set(profileId, new Set(ids));
+      // Profiles (incl. cookies / proxy auth / platform secrets) live in main-process state,
+      // not renderer localStorage, so XSS cannot dump them from the UI store.
+      if (Array.isArray(saved.profiles)) {
+        for (const raw of saved.profiles.slice(0, 1000)) {
+          try {
+            const profile = this.sanitizeProfile(raw);
+            this.profiles.set(profile.id, profile);
+          } catch (_) {}
+        }
+      }
       if (typeof saved.preferIndependentKernel === 'boolean') this.preferIndependentKernel = saved.preferIndependentKernel;
       if (saved.kernelPolicyVersion !== KERNEL_POLICY_VERSION || saved.allowSystemBrowserFallback === true) {
         // Prior releases enabled fallback by default. Do not silently launch a
@@ -159,6 +193,7 @@ class BrowserEngine {
     await fsp.writeFile(this.stateFile, JSON.stringify({
       extensions: [...this.extensions.values()],
       assignments,
+      profiles: [...this.profiles.values()],
       kernelPolicyVersion: KERNEL_POLICY_VERSION,
       preferIndependentKernel: this.preferIndependentKernel,
       allowSystemBrowserFallback: this.allowSystemBrowserFallback,
@@ -388,22 +423,67 @@ class BrowserEngine {
     const existingIds = [...this.profiles.keys()];
     const globallyEnabled = existingIds.length ? [...this.extensions.keys()].filter((extensionId) => existingIds.every((profileId) => (this.assignments.get(profileId) || new Set()).has(extensionId))) : [];
     let assignmentsChanged = false;
+    const incomingIds = new Set();
     for (const value of values) {
-      const profile = this.sanitizeProfile(value); const previous = this.profiles.get(profile.id); const isNew = !previous;
-      if (previous && previous.proxy !== profile.proxy) this.networkInfo.delete(profile.id);
-      this.profiles.set(profile.id, profile);
-      const hasSavedAssignment = this.assignments.has(profile.id);
+      const profile = this.sanitizeProfile(value);
+      const previous = this.profiles.get(profile.id);
+      const isNew = !previous;
+      // UI may send redacted proxy (no auth) after localStorage reload. Prefer previous
+      // authenticated form only when host:port match and incoming lacks credentials.
+      let merged = profile;
+      if (previous) {
+        const nextProxy = String(profile.proxy || '');
+        const prevProxy = String(previous.proxy || '');
+        const nextHasAuth = /:\/\/[^/@]+@/.test(nextProxy) || nextProxy.split(':').length >= 4;
+        const prevHasAuth = /:\/\/[^/@]+@/.test(prevProxy) || prevProxy.split(':').length >= 4;
+        if (!nextHasAuth && prevHasAuth) {
+          try {
+            const prev = parseProxy(prevProxy);
+            const bare = parseProxy(nextProxy);
+            if (prev && bare && prev.host === bare.host && prev.port === bare.port) {
+              merged = this.sanitizeProfile({ ...profile, proxy: prevProxy });
+            }
+          } catch (_) {}
+        }
+        // Restore cookies/platform secrets only when UI clearly redacted ALL of them
+        // (post-localStorage load) while engine still holds values — not when user
+        // intentionally cleared a single field in the editor.
+        const uiLooksRedacted = !String(profile.cookies || '').trim()
+          && !String(profile.platform?.password || '').trim()
+          && !String(profile.platform?.totpSecret || '').trim()
+          && (
+            String(previous.cookies || '').trim()
+            || String(previous.platform?.password || '').trim()
+            || String(previous.platform?.totpSecret || '').trim()
+          );
+        if (uiLooksRedacted) {
+          merged = this.sanitizeProfile({
+            ...merged,
+            cookies: previous.cookies || '',
+            platform: {
+              ...(merged.platform || {}),
+              password: previous.platform?.password || '',
+              totpSecret: previous.platform?.totpSecret || '',
+            },
+          });
+        }
+      }
+      if (previous && previous.proxy !== merged.proxy) this.networkInfo.delete(profile.id);
+      this.profiles.set(merged.id, merged);
+      incomingIds.add(merged.id);
+      const hasSavedAssignment = this.assignments.has(merged.id);
       if (isNew || !hasSavedAssignment) {
-        const assigned = this.assignments.get(profile.id) || new Set();
+        const assigned = this.assignments.get(merged.id) || new Set();
         for (const extensionId of globallyEnabled) assigned.add(extensionId);
         // The bundled marker is part of the environment contract.
         for (const [extensionId, extension] of this.extensions) {
           if (extension.builtIn) assigned.add(extensionId);
         }
-        this.assignments.set(profile.id, assigned); assignmentsChanged = true;
+        this.assignments.set(merged.id, assigned); assignmentsChanged = true;
       }
     }
-    if (assignmentsChanged) this.persist().catch((error) => this.emit({ type: 'sync-error', action: 'persist-profiles', message: error.message }));
+    // Do not drop unknown engine profiles here — deleteProfiles is the explicit path.
+    this.persist().catch((error) => this.emit({ type: 'sync-error', action: 'persist-profiles', message: error.message }));
     return this.status();
   }
 
@@ -683,6 +763,28 @@ class BrowserEngine {
     return fp;
   }
 
+  async applyFingerprintToSession(connection, sessionId, item, fingerprint, targetInfo = {}) {
+    const profile = item?.profile || {};
+    const network = this.networkInfo.get(profile.id) || {};
+    const enriched = {
+      ...profile,
+      exitTimezone: profile.exitTimezone || network.timezone || '',
+      exitLatitude: profile.exitLatitude ?? network.latitude,
+      exitLongitude: profile.exitLongitude ?? network.longitude,
+    };
+    const baseFp = fingerprint || item.fingerprint || buildFingerprint(enriched);
+    const injectFp = item.nativeKernelFingerprint
+      ? fingerprintForNativeKernelInject(baseFp)
+      : baseFp;
+    // session-scoped CDP calls for targets attached with flatten:true
+    const sessionCall = async (method, params = {}, timeout = 8000) => connection.command(method, params, { sessionId, timeout });
+    await applyFingerprintToTab(sessionCall, null, injectFp, enriched);
+    if (!item.fpAppliedTargets) item.fpAppliedTargets = new Set();
+    if (targetInfo?.targetId) item.fpAppliedTargets.add(targetInfo.targetId);
+    item.fingerprint = baseFp;
+    return injectFp;
+  }
+
   async startWorkerFingerprintInjection(item, fingerprint) {
     const source = buildWorkerInjectionScript(fingerprint);
     const browserWs = await cdp.browserSocket(item.port);
@@ -704,16 +806,26 @@ class BrowserEngine {
       (async () => {
         try {
           if (targetInfo.type === 'page' || targetInfo.type === 'iframe') {
+            // Nested attach so workers/iframes under this page also pause for inject.
             await connection.command('Target.setAutoAttach', {
               autoAttach: true,
               waitForDebuggerOnStart: true,
               flatten: true,
             }, { sessionId });
+            // Critical: inject fingerprint BEFORE resuming the page/iframe target.
+            // Polling in startRunningWatch is only a fallback, not the primary path.
+            await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, targetInfo);
           } else if (workerTypes.has(targetInfo.type) && !internalUrl.test(String(targetInfo.url || ''))) {
             await connection.command('Runtime.evaluate', { expression: source }, { sessionId, timeout: 10000 });
           }
         } catch (error) {
           report(error, targetInfo);
+          this.emit({
+            type: 'fingerprint-injection-failed',
+            id: item.profile?.id,
+            targetType: targetInfo.type || '',
+            message: error.message,
+          });
         } finally {
           if (waitingForDebugger) {
             await connection.command('Runtime.runIfWaitingForDebugger', {}, { sessionId })
@@ -911,12 +1023,22 @@ class BrowserEngine {
 
   async keepDefaultTab(port, startUrl) {
     const values = await cdp.tabs(port); if (!values.length) return;
-    const expected = String(startUrl || '');
+    const expected = String(startUrl || '').trim();
     let keep = values.find((tab) => this.isStartPageUrl(tab.url)) || values[0];
-    if (!this.isStartPageUrl(keep.url) && expected) {
-      await cdp.call(keep.webSocketDebuggerUrl, 'Page.navigate', { url: expected });
+    // Always force-navigate to OpenBrowser start page when provided (148 kernel may open NTP/about:blank).
+    if (expected) {
+      try {
+        const href = String(keep.url || '');
+        if (!this.isStartPageUrl(href) || !href.includes(expected.split('?')[0])) {
+          await cdp.call(keep.webSocketDebuggerUrl, 'Page.navigate', { url: expected });
+        }
+      } catch (_) {
+        try { await cdp.call(keep.webSocketDebuggerUrl, 'Page.navigate', { url: expected }); } catch (__) {}
+      }
     }
-    for (const tab of values) if (tab.id !== keep.id) await cdp.closeTab(port, tab.id).catch(() => {});
+    const after = await cdp.tabs(port).catch(() => values);
+    keep = after.find((tab) => this.isStartPageUrl(tab.url)) || after[0] || keep;
+    for (const tab of after) if (tab.id !== keep.id) await cdp.closeTab(port, tab.id).catch(() => {});
     await cdp.activateTab(port, keep.id).catch(() => {});
   }
 
@@ -1090,7 +1212,10 @@ class BrowserEngine {
           // New tabs must receive the same fingerprint inject as the launch tab
           if (item.fingerprint && item.profile && !item.fpEnsureBusy) {
             item.fpEnsureBusy = true;
-            this.applyRuntimeSettings(item.port, item.profile, item.fingerprint, {
+            const reFp = item.nativeKernelFingerprint
+              ? fingerprintForNativeKernelInject(item.fingerprint)
+              : item.fingerprint;
+            this.applyRuntimeSettings(item.port, item.profile, reFp, {
               appliedTargetIds: item.fpAppliedTargets || new Set(),
               trackOn: item,
             }).catch((error) => {
@@ -1150,14 +1275,34 @@ class BrowserEngine {
     }
   }
 
-  async waitForPort(root, timeout = 12000) {
+  async waitForPort(root, timeout = 30000, child = null) {
     const file = path.join(root, 'DevToolsActivePort');
     const started = Date.now();
+    // Do not delete DevToolsActivePort here — cleared before spawn; post-spawn delete races Chromium.
     while (Date.now() - started < timeout) {
-      try { const content = await fsp.readFile(file, 'utf8'); const port = Number(content.split(/\r?\n/)[0]); if (Number.isInteger(port) && port > 0) return port; } catch (_) {}
-      await new Promise((resolve) => setTimeout(resolve, 180));
+      if (child && child.exitCode !== null && child.exitCode !== undefined) {
+        throw new Error(`Browser exited before CDP was ready (code ${child.exitCode}${child.signalCode ? ', signal ' + child.signalCode : ''})`);
+      }
+      try {
+        const content = await fsp.readFile(file, 'utf8');
+        const port = Number(content.split(/\r?\n/)[0]);
+        if (Number.isInteger(port) && port > 0) {
+          try {
+            await cdp.json(`http://127.0.0.1:${port}/json/version`);
+            return port;
+          } catch (_) {
+            // file present but endpoint not live yet (or stale)
+          }
+        }
+      } catch (_) {}
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    throw new Error('Browser started but CDP port was not ready');
+    let hint = '';
+    try {
+      if (child && child.exitCode !== null) hint = ` childExit=${child.exitCode}`;
+      else if (child && child.pid) hint = ` childPid=${child.pid} still running`;
+    } catch (_) {}
+    throw new Error('Browser started but CDP port was not ready' + hint);
   }
 
   async start(raw) {
@@ -1239,6 +1384,38 @@ class BrowserEngine {
     for (const flag of chromeArgsForFingerprint(fingerprint, profile)) {
       if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) args.push(flag);
     }
+    // openbrowser-148: write profile/init.json so Framework native FP matches buildFingerprint
+    let runtimeFingerprint = fingerprint;
+    let kernelWindowName = null;
+    if (isOpenBrowser148(browser)) {
+      try {
+        const written = await writeOpenBrowserKernelInit(root, {
+          fingerprint,
+          profile,
+          browserPath: browser.path,
+          resourceRoots: [
+            path.join(__dirname, 'kernels'),
+            __dirname,
+            path.join(this.app.getPath('userData'), 'kernels'),
+          ],
+        });
+        kernelWindowName = written.windowName;
+        runtimeFingerprint = fingerprintForNativeKernelInject(fingerprint);
+        this.emit({
+          type: 'kernel-init-synced',
+          id: profile.id,
+          windowName: written.windowName,
+          path: written.path,
+        });
+      } catch (error) {
+        this.emit({
+          type: 'sync-error',
+          action: 'kernel-init-sync',
+          id: profile.id,
+          message: '内核 init 指纹同步失败：' + error.message,
+        });
+      }
+    }
     if (!profile.advanced.allowSignin) args.push('--disable-sync');
     if (profile.privacy.webgpu === 'blocked') args.push('--disable-features=WebGPU');
     if (profile.advanced.blockImages) args.push('--blink-settings=imagesEnabled=false');
@@ -1279,19 +1456,53 @@ class BrowserEngine {
       if (existing >= 0) args[existing] = args[existing] + ',' + [...new Set(disabledFeatures)].join(',');
       else args.push(`--disable-features=${[...new Set(disabledFeatures)].join(',')}`);
     }
-    // --load-extension for assigned unpacked apps (Win/macOS)
+    // Per-env marker extension: software logo + environment number (1, 2, …)
+    const envNumber = normalizeEnvNumber(profile.number || profile.name || profile.id || '1');
+    let markerExtensionPath = null;
+    try {
+      markerExtensionPath = await prepareMarkerExtension({
+        profileId: profile.id,
+        envNumber,
+        userDataPath: this.app.getPath('userData'),
+        templateDir: path.join(__dirname, 'bundled-extension'),
+      });
+    } catch (error) {
+      this.emit({ type: 'sync-error', action: 'env-marker-icon', id: profile.id, message: error.message });
+    }
+
+    // --load-extension for assigned unpacked apps + env marker (Win/macOS)
     const loadPaths = extensions.map((entry) => entry.path).filter((p) => p && fs.existsSync(p));
+    if (markerExtensionPath && fs.existsSync(markerExtensionPath) && !loadPaths.includes(markerExtensionPath)) {
+      loadPaths.push(markerExtensionPath);
+    }
     const finalArgs = loadPaths.length ? mergeLoadExtensionArgs(args, loadPaths) : args;
+
+    // macOS: Dock wrapper so process shows logo+number (same brand as app shortcut)
+    let launchBinary = browser.path;
+    try {
+      if (process.platform === 'darwin') {
+        const dockBin = await prepareMacDockWrapper({
+          profileId: profile.id,
+          envNumber,
+          userDataPath: this.app.getPath('userData'),
+          realBinary: browser.path,
+        });
+        if (dockBin && fs.existsSync(dockBin)) launchBinary = dockBin;
+      }
+    } catch (error) {
+      this.emit({ type: 'sync-error', action: 'env-dock-icon', id: profile.id, message: error.message });
+    }
+
     let child;
     let connection;
     let port;
     try {
-      child = spawn(browser.path, finalArgs, {
+      child = spawn(launchBinary, finalArgs, {
         detached: process.platform !== 'win32',
         windowsHide: process.platform === 'win32',
         stdio: 'ignore',
       });
-      port = await this.waitForPort(root);
+      port = await this.waitForPort(root, 30000, child);
       connection = await portConnection(port);
     } catch (error) {
       if (child && child.exitCode === null) await killProcessTree(child.pid, { force: true, expectedExecutable: browser.path, expectedUserDataDir: root }).catch(() => {});
@@ -1301,14 +1512,31 @@ class BrowserEngine {
     }
     if (profile.cookies && profile.advanced.saveCookies) { try { await this.importProfileCookies(connection, profile.cookies); } catch (error) { this.emit({ type: 'sync-error', action: 'import-cookies', id: profile.id, message: 'Cookie 导入失败：' + error.message }); } }
     let reconciled;
-    try { const managedPaths = [...this.extensions.values()].map((item) => item.path).filter(Boolean); reconciled = await reconcileOnConnection(connection, extensions, managedPaths); }
-    catch (error) {
-      await connection.command('Browser.close').catch(() => {});
-      await proxyForwarder?.close().catch(() => {});
-      await releaseProfileLock(root, profileLock);
-      throw error;
+    try {
+      const managedPaths = [...this.extensions.values()].map((item) => item.path).filter(Boolean);
+      reconciled = await reconcileOnConnection(connection, extensions, managedPaths);
+      if (reconciled?.skipped) {
+        this.emit({
+          type: 'sync-error',
+          action: 'extensions-reconcile-skipped',
+          id: profile.id,
+          message: '内核不支持 Extensions CDP，已跳过扩展热装（仍可用 --load-extension）：' + (reconciled.reason || ''),
+        });
+      }
+    } catch (error) {
+      // OpenBrowser 148 kernels may lack Extensions.* CDP — do not kill the browser.
+      const msg = String(error && error.message || error || '');
+      if (/not available|unknown method|was not found|not found|unsupported/i.test(msg)) {
+        reconciled = { installed: extensions, extensions: [], skipped: true, reason: msg };
+        this.emit({ type: 'sync-error', action: 'extensions-reconcile-skipped', id: profile.id, message: msg });
+      } else {
+        await connection.command('Browser.close').catch(() => {});
+        await proxyForwarder?.close().catch(() => {});
+        await releaseProfileLock(root, profileLock);
+        throw error;
+      }
     }
-    const markerProcess = this.startNativeProfileMarker(child.pid, profile.number || profile.name || profile.id);
+    const markerProcess = this.startNativeProfileMarker(child.pid, envNumber);
     const item = {
       child, cdpConnection: connection, proxyForwarder, markerProcess, profileLock,
       pid: child.pid, browser, root, profile, port,
@@ -1316,6 +1544,8 @@ class BrowserEngine {
       extensions: extensions.map((entry) => entry.id),
       loadedExtensions: reconciled.extensions,
       fingerprint,
+      kernelWindowName: kernelWindowName || null,
+      nativeKernelFingerprint: isOpenBrowser148(browser),
     };
     const cleanup = (exitedNormally = false) => {
       if (item.cleanedUp) return;
@@ -1357,11 +1587,29 @@ class BrowserEngine {
       item.startUrl = startUrl;
       if (!restoreSession && startUrl) await this.keepDefaultTab(item.port, startUrl);
       item.fpAppliedTargets = new Set();
-      item.fingerprint = await this.applyRuntimeSettings(item.port, profile, fingerprint, {
+      // openbrowser-148: canvas/webgl/audio noise owned by Framework init; CDP inject skips those surfaces
+      const injectFp = item.nativeKernelFingerprint
+        ? fingerprintForNativeKernelInject(fingerprint)
+        : (runtimeFingerprint || fingerprint);
+      item.fingerprint = await this.applyRuntimeSettings(item.port, profile, injectFp, {
         appliedTargetIds: item.fpAppliedTargets,
         trackOn: item,
       }) || fingerprint;
-      await this.startWorkerFingerprintInjection(item, item.fingerprint).catch((error) => {
+      // Keep reported modes as profile intent (not the stripped inject payload)
+      if (item.nativeKernelFingerprint && fingerprint) {
+        item.fingerprint = {
+          ...item.fingerprint,
+          canvas: fingerprint.canvas,
+          webgl: fingerprint.webgl,
+          audio: fingerprint.audio,
+          clientRects: fingerprint.clientRects,
+          userAgent: fingerprint.userAgent,
+          platform: fingerprint.platform,
+          hardwareConcurrency: fingerprint.hardwareConcurrency,
+          deviceMemory: fingerprint.deviceMemory,
+        };
+      }
+      await this.startWorkerFingerprintInjection(item, injectFp).catch((error) => {
         item.workerFingerprintError = error.message;
         this.emit({ type: 'worker-fingerprint-injection-failed', id: profile.id, message: error.message });
       });
@@ -1620,9 +1868,11 @@ class BrowserEngine {
     const profile = this.sanitizeProfile(raw);
     const refreshUrl = String(profile.proxyMeta?.refreshUrl || '').trim();
     const extractUrl = String(profile.proxyMeta?.apiExtractUrl || '').trim();
-    const url = refreshUrl || extractUrl;
-    if (!url) throw new Error('未配置刷新 URL');
-    const refresh = await invokeProxyRefresh(url);
+    // refreshUrl and apiExtractUrl stay separate: refresh rotates; extract re-reads endpoint.
+    if (!refreshUrl && !extractUrl) throw new Error('未配置刷新 URL 或提取 URL');
+    const refresh = refreshUrl
+      ? await invokeProxyRefresh(refreshUrl)
+      : { ok: true, skipped: true, reason: 'no-refresh-url' };
     let nextProfile = profile;
     let extractError = null;
     if (extractUrl) {
@@ -1656,6 +1906,15 @@ class BrowserEngine {
     const meta = working.proxyMeta || {};
     const hasProxy = working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy));
     const extractUrl = String(meta.apiExtractUrl || '').trim();
+    // Align with refreshProfileProxy: refresh first (rotate IP), then extract current endpoint.
+    if (meta.refreshOnStart && String(meta.refreshUrl || '').trim()) {
+      try {
+        await invokeProxyRefresh(meta.refreshUrl);
+      } catch (error) {
+        this.emit({ type: 'proxy-error', id: working.id, message: '启动前刷新代理失败：' + (error.message || error) });
+        throw new Error('启动前刷新代理失败：' + (error.message || error));
+      }
+    }
     if (extractUrl) {
       try {
         const extracted = await extractProxyFromApi(extractUrl);
@@ -1667,14 +1926,13 @@ class BrowserEngine {
         working = this.sanitizeProfile({ ...working, networkMode: 'proxy', proxy: rawProxy });
       } catch (error) {
         if (!hasProxy) throw new Error('动态代理提取失败：' + (error.message || error));
-      }
-    }
-    if (meta.refreshOnStart && String(meta.refreshUrl || '').trim()) {
-      try {
-        await invokeProxyRefresh(meta.refreshUrl);
-      } catch (error) {
-        this.emit({ type: 'proxy-error', id: working.id, message: '启动前刷新代理失败：' + (error.message || error) });
-        throw new Error('启动前刷新代理失败：' + (error.message || error));
+        this.emit({
+          type: 'proxy-warn',
+          id: working.id,
+          code: 'extract-error',
+          message: '动态代理提取失败，继续使用静态代理：' + (error.message || error),
+          extractError: String(error.message || error),
+        });
       }
     }
     const shouldCheck = meta.checkOnStart || meta.refreshOnStart || Boolean(extractUrl);

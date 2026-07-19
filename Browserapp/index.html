@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>OpenBrowser</title>
   <script src="i18n.js?v=20260719-i18n-v4-pages"></script>
-  <link rel="icon" type="image/png" href="assets/logo.png?v=openbrowser-flat3-t">
+  <link rel="icon" type="image/png" href="assets/logo-pixel.png?v=20260720-pixel">
   <link rel="stylesheet" href="styles.css?v=20260719-nav-fix">
   <link rel="stylesheet" href="themes.css?v=20260719-native-popover">
   <link rel="stylesheet" href="environment-audit.css?v=20260719-readable-scale">
@@ -17,7 +17,7 @@
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand"><div class="logo"><img src="assets/logo.png?v=flat3-t" alt="OpenBrowser"></div><div><strong>OpenBrowser</strong><small data-i18n="app.brand.sub">LOCAL WORKSPACE</small></div></div>
+      <div class="brand"><div class="logo"><img src="assets/logo-pixel.png?v=20260720-pixel" alt="OpenBrowser"></div><div><strong>OpenBrowser</strong><small data-i18n="app.brand.sub">LOCAL WORKSPACE</small></div></div>
       <button class="new-browser" id="quick-create"><i data-lucide="plus" aria-hidden="true"></i><span data-i18n="nav.newBrowser">新建浏览器</span></button>
       <nav>
         <button class="nav active" data-view="profiles"><i data-lucide="layers-3"></i><span data-i18n="nav.profiles">环境管理</span></button>
@@ -43,7 +43,10 @@
           <i data-lucide="github" aria-hidden="true"></i>
           <span data-i18n="footer.github">GitHub</span>
         </a>
-        <span class="app-version" id="app-version">v1.0.0</span>
+        <span class="app-version-wrap" id="app-version-wrap" role="status" title="正在检查版本…">
+          <span class="version-traffic-light" id="version-traffic-light" data-state="checking" aria-hidden="true"></span>
+          <span class="app-version" id="app-version">v1.0.0</span>
+        </span>
       </div>
     </aside>
 
