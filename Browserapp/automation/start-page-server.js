@@ -2,10 +2,12 @@
 
 const http = require('http');
 const https = require('https');
+const tls = require('tls');
+const net = require('net');
 const crypto = require('crypto');
 const { URL } = require('url');
 const { buildStartPageHtml } = require('./start-page-template');
-const { lookupDirectCountry } = require('../proxy-forwarder');
+const { lookupDirectCountry, parseProxy, startAuthenticatedProxy } = require('../proxy-forwarder');
 
 /**
  * OpenBrowser · 原生启动页服务（纯本机）
@@ -21,14 +23,72 @@ const { lookupDirectCountry } = require('../proxy-forwarder');
 
 const DEFAULT_PORT = Number(process.env.OPENBROWSER_START_PAGE_PORT || 50326);
 const PORT_CANDIDATES = [DEFAULT_PORT, 50327, 50328, 50329, 0];
+const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+/** 访问能力探测目标：连通 + 出口地区 + best-effort 解锁信号 */
 const REACHABILITY_TARGETS = {
-  google: 'https://www.google.com/generate_204',
-  youtube: 'https://www.youtube.com/generate_204',
-  tiktok: 'https://www.tiktok.com/favicon.ico',
-  x: 'https://x.com/favicon.ico',
-  chatgpt: 'https://chatgpt.com/favicon.ico',
-  wikipedia: 'https://www.wikipedia.org/favicon.ico',
+  google: {
+    label: 'Google',
+    kind: 'connectivity',
+    url: 'https://www.google.com/generate_204',
+  },
+  youtube: {
+    label: 'YouTube',
+    kind: 'connectivity',
+    url: 'https://www.youtube.com/generate_204',
+    unlockUrl: 'https://www.youtube.com/',
+  },
+  tiktok: {
+    label: 'TikTok',
+    kind: 'connectivity',
+    url: 'https://www.tiktok.com/favicon.ico',
+  },
+  x: {
+    label: 'X / Twitter',
+    kind: 'cf-trace',
+    url: 'https://x.com/cdn-cgi/trace',
+  },
+  chatgpt: {
+    label: 'ChatGPT',
+    kind: 'cf-trace',
+    url: 'https://chatgpt.com/cdn-cgi/trace',
+    unlockUrl: 'https://chatgpt.com/',
+  },
+  wikipedia: {
+    label: 'Wikipedia',
+    kind: 'connectivity',
+    url: 'https://www.wikipedia.org/favicon.ico',
+  },
+  facebook: {
+    label: 'Facebook',
+    kind: 'meta',
+    url: 'https://www.facebook.com/',
+  },
+  instagram: {
+    label: 'Instagram',
+    kind: 'meta',
+    url: 'https://www.instagram.com/',
+  },
+  reddit: {
+    label: 'Reddit',
+    kind: 'reddit',
+    url: 'https://www.reddit.com/',
+  },
 };
+
+const COUNTRY_NAMES = {
+  US: '美国', JP: '日本', GB: '英国', UK: '英国', HK: '香港', TW: '台湾', CN: '中国',
+  SG: '新加坡', KR: '韩国', DE: '德国', FR: '法国', CA: '加拿大', AU: '澳大利亚',
+  NL: '荷兰', IE: '爱尔兰', IN: '印度', BR: '巴西', RU: '俄罗斯', TH: '泰国',
+  VN: '越南', MY: '马来西亚', PH: '菲律宾', ID: '印度尼西亚', MX: '墨西哥',
+  IT: '意大利', ES: '西班牙', SE: '瑞典', CH: '瑞士', AE: '阿联酋', TR: '土耳其',
+};
+
+function countryLabel(code, fallback = '') {
+  const cc = String(code || '').toUpperCase();
+  if (!cc) return fallback || '';
+  return COUNTRY_NAMES[cc] ? `${COUNTRY_NAMES[cc]}（${cc}）` : cc;
+}
 
 async function lookupDirectNetwork() {
   const network = await lookupDirectCountry();
@@ -38,10 +98,155 @@ async function lookupDirectNetwork() {
   };
 }
 
-function probeReachability(url, timeout = 6000) {
+function parseCfTrace(body = '') {
+  const text = String(body || '');
+  const pick = (key) => {
+    const match = text.match(new RegExp(`(?:^|\\n)${key}=([^\\n\\r]+)`, 'i'));
+    return match ? String(match[1]).trim() : '';
+  };
+  const ip = pick('ip');
+  const loc = pick('loc').toUpperCase();
+  const colo = pick('colo');
+  return {
+    ip: ip || '',
+    countryCode: /^[A-Z]{2}$/.test(loc) ? loc : '',
+    colo: colo || '',
+  };
+}
+
+function looksBlocked(body = '', status = 0) {
+  const text = String(body || '');
+  if (status === 403 || status === 451) return true;
+  return /just a moment|attention required|access denied|not available in your (country|region)|unsupported.?country|vpn|proxy detected|sorry, you have been blocked|title>\s*blocked\s*</i.test(text);
+}
+
+function looksUnlockedMeta(body = '', status = 0) {
+  if (status >= 200 && status < 400) {
+    if (looksBlocked(body, status)) return false;
+    // Meta 常见正常页特征；400 错误页不算解锁
+    if (status === 400) return false;
+    return /facebook|instagram|meta/i.test(body) || body.length > 200;
+  }
+  return false;
+}
+
+function classifyUnlock(kind, status, body, cf) {
+  const blocked = looksBlocked(body, status);
+  if (kind === 'cf-trace') {
+    if (cf?.ip || cf?.countryCode) {
+      return blocked ? 'blocked' : 'unlocked';
+    }
+    if (status >= 200 && status < 400 && !blocked) return 'reachable';
+    if (blocked || status === 403 || status === 451) return 'blocked';
+    return status ? 'unreachable' : 'unreachable';
+  }
+  if (kind === 'reddit') {
+    if (blocked || /title>\s*blocked\s*</i.test(String(body || '')) || status === 403) return 'blocked';
+    if (status >= 200 && status < 400) return 'unlocked';
+    return status ? 'unreachable' : 'unreachable';
+  }
+  if (kind === 'meta') {
+    if (blocked || status === 403 || status === 451 || status === 400) return 'blocked';
+    if (looksUnlockedMeta(body, status)) return 'unlocked';
+    if (status >= 200 && status < 400) return 'reachable';
+    return 'unreachable';
+  }
+  // connectivity / default
+  if (status >= 200 && status < 500 && !blocked) return 'reachable';
+  if (blocked) return 'blocked';
+  return 'unreachable';
+}
+
+function readHttpResponse(socket, timeout, maxBody = 65536) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { socket.destroy(); } catch (_) {}
+      reject(new Error('timeout'));
+    }, timeout);
+    const finish = (err, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve(value);
+    };
+    socket.on('data', (chunk) => {
+      chunks.push(chunk);
+      const total = Buffer.concat(chunks);
+      if (total.length > maxBody + 8192) {
+        try { socket.destroy(); } catch (_) {}
+      }
+    });
+    socket.once('error', (error) => finish(error));
+    socket.once('end', () => {
+      try {
+        const response = Buffer.concat(chunks);
+        const marker = response.indexOf('\r\n\r\n');
+        if (marker < 0) return finish(new Error('invalid response'));
+        const header = response.subarray(0, marker).toString('latin1');
+        const status = Number(header.split('\r\n', 1)[0].match(/\s(\d{3})(?:\s|$)/)?.[1] || 0);
+        let body = response.subarray(marker + 4);
+        if (body.length > maxBody) body = body.subarray(0, maxBody);
+        finish(null, { status, header, body: body.toString('utf8') });
+      } catch (error) {
+        finish(error);
+      }
+    });
+  });
+}
+
+async function connectProxyTunnel(bridge, hostname, port, timeout = 8000) {
+  const socket = net.connect({ host: '127.0.0.1', port: bridge.port });
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('proxy connect timeout')), timeout);
+    socket.once('connect', () => { clearTimeout(timer); resolve(); });
+    socket.once('error', (error) => { clearTimeout(timer); reject(error); });
+  });
+  if (bridge.protocol === 'http') {
+    socket.write(`CONNECT ${hostname}:${port} HTTP/1.1\r\nHost: ${hostname}:${port}\r\nConnection: keep-alive\r\n\r\n`);
+    const head = await new Promise((resolve, reject) => {
+      let buf = Buffer.alloc(0);
+      const timer = setTimeout(() => reject(new Error('proxy CONNECT timeout')), timeout);
+      const onData = (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+        const idx = buf.indexOf('\r\n\r\n');
+        if (idx >= 0) {
+          clearTimeout(timer);
+          socket.off('data', onData);
+          socket.pause();
+          const leftover = buf.subarray(idx + 4);
+          resolve({ header: buf.subarray(0, idx).toString('latin1'), leftover });
+        }
+      };
+      socket.on('data', onData);
+      socket.once('error', (error) => { clearTimeout(timer); reject(error); });
+    });
+    const status = Number(head.header.split('\r\n', 1)[0].match(/\s(\d{3})(?:\s|$)/)?.[1] || 0);
+    if (status !== 200) {
+      socket.destroy();
+      throw new Error('proxy CONNECT HTTP ' + status);
+    }
+    if (head.leftover.length) socket.unshift(head.leftover);
+    socket.resume();
+  } else {
+    // local auth bridge for socks is HTTP-facing in OpenBrowser; if not, fail soft
+    socket.destroy();
+    throw new Error('unsupported local bridge protocol for site probe');
+  }
+  return socket;
+}
+
+function probeDirect(url, timeout = 8000, maxBody = 65536) {
   return new Promise((resolve) => {
     let parsed;
-    try { parsed = new URL(url); } catch (error) { resolve({ ok: false, status: 0, error: 'invalid url' }); return; }
+    try { parsed = new URL(url); } catch (error) {
+      resolve({ ok: false, status: 0, error: 'invalid url', body: '' });
+      return;
+    }
     const transport = parsed.protocol === 'https:' ? https : http;
     const request = transport.request({
       protocol: parsed.protocol,
@@ -49,21 +254,157 @@ function probeReachability(url, timeout = 6000) {
       port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
       path: `${parsed.pathname || '/'}${parsed.search || ''}`,
       method: 'GET',
-      headers: { 'User-Agent': 'OpenBrowser/1.0', Accept: '*/*' },
+      headers: {
+        'User-Agent': BROWSER_UA,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'identity',
+        Connection: 'close',
+      },
     }, (response) => {
-      response.resume();
-      response.once('end', () => resolve({ ok: response.statusCode >= 200 && response.statusCode < 500, status: response.statusCode || 0 }));
+      const chunks = [];
+      response.on('data', (chunk) => {
+        if (Buffer.concat(chunks).length < maxBody) chunks.push(chunk);
+      });
+      response.once('end', () => {
+        resolve({
+          ok: response.statusCode >= 200 && response.statusCode < 500,
+          status: response.statusCode || 0,
+          body: Buffer.concat(chunks).toString('utf8'),
+          headers: response.headers || {},
+        });
+      });
     });
     request.setTimeout(timeout, () => request.destroy(new Error('timeout')));
-    request.once('error', (error) => resolve({ ok: false, status: 0, error: error.message }));
+    request.once('error', (error) => resolve({ ok: false, status: 0, error: error.message, body: '' }));
     request.end();
   });
 }
 
-async function lookupReachability(timeout = 6000) {
-  const entries = await Promise.all(Object.entries(REACHABILITY_TARGETS).map(async ([id, url]) => {
-    const result = await probeReachability(url, timeout);
-    return [id, { id, url, ...result }];
+async function probeViaProxy(proxyRaw, url, timeout = 8000, maxBody = 65536) {
+  let config;
+  try { config = parseProxy(proxyRaw); } catch (error) {
+    return { ok: false, status: 0, error: error.message, body: '' };
+  }
+  if (!config) return { ok: false, status: 0, error: 'invalid proxy', body: '' };
+  let bridge;
+  let socket;
+  let secure;
+  try {
+    const parsed = new URL(url);
+    const port = Number(parsed.port) || (parsed.protocol === 'https:' ? 443 : 80);
+    bridge = await startAuthenticatedProxy(config);
+    socket = await connectProxyTunnel(bridge, parsed.hostname, port, timeout);
+    const path = `${parsed.pathname || '/'}${parsed.search || ''}`;
+    const payload = [
+      `GET ${path} HTTP/1.1`,
+      `Host: ${parsed.hostname}`,
+      `User-Agent: ${BROWSER_UA}`,
+      'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language: en-US,en;q=0.9',
+      'Accept-Encoding: identity',
+      'Connection: close',
+      '',
+      '',
+    ].join('\r\n');
+    if (parsed.protocol === 'https:') {
+      secure = tls.connect({
+        socket,
+        servername: parsed.hostname,
+        rejectUnauthorized: false,
+        ALPNProtocols: ['http/1.1'],
+      });
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('tls timeout')), timeout);
+        secure.once('secureConnect', () => { clearTimeout(timer); resolve(); });
+        secure.once('error', (error) => { clearTimeout(timer); reject(error); });
+      });
+      secure.write(payload);
+      const response = await readHttpResponse(secure, timeout, maxBody);
+      return {
+        ok: response.status >= 200 && response.status < 500,
+        status: response.status,
+        body: response.body,
+      };
+    }
+    socket.write(payload);
+    const response = await readHttpResponse(socket, timeout, maxBody);
+    return {
+      ok: response.status >= 200 && response.status < 500,
+      status: response.status,
+      body: response.body,
+    };
+  } catch (error) {
+    return { ok: false, status: 0, error: error.message, body: '' };
+  } finally {
+    try { secure?.destroy(); } catch (_) {}
+    try { socket?.destroy(); } catch (_) {}
+    try { await bridge?.close?.(); } catch (_) {}
+  }
+}
+
+async function probeTarget(target, options = {}) {
+  const timeout = Number(options.timeout) || 8000;
+  const proxyRaw = options.proxy || '';
+  const exitNetwork = options.exitNetwork || null;
+  const primary = await (proxyRaw
+    ? probeViaProxy(proxyRaw, target.url, timeout)
+    : probeDirect(target.url, timeout));
+
+  let unlockProbe = null;
+  if (target.unlockUrl && primary.ok) {
+    unlockProbe = await (proxyRaw
+      ? probeViaProxy(proxyRaw, target.unlockUrl, timeout)
+      : probeDirect(target.unlockUrl, timeout));
+  }
+
+  const bodyForClass = unlockProbe?.body || primary.body || '';
+  const statusForClass = unlockProbe?.status || primary.status || 0;
+  const cf = target.kind === 'cf-trace' ? parseCfTrace(primary.body || '') : null;
+  const unlock = classifyUnlock(
+    target.kind,
+    statusForClass || primary.status || 0,
+    bodyForClass,
+    cf
+  );
+
+  const siteIp = cf?.ip || '';
+  const siteCountryCode = cf?.countryCode || '';
+  const exitIp = exitNetwork?.ip || '';
+  const exitCountryCode = String(exitNetwork?.countryCode || '').toUpperCase();
+  const accessIp = siteIp || exitIp || '';
+  const accessCountryCode = siteCountryCode || exitCountryCode || '';
+
+  return {
+    id: target.id,
+    label: target.label,
+    kind: target.kind,
+    url: target.url,
+    ok: Boolean(primary.ok || (primary.status >= 200 && primary.status < 500)),
+    status: primary.status || 0,
+    error: primary.error || '',
+    unlock,
+    exitIp,
+    exitCountryCode,
+    exitCountry: countryLabel(exitCountryCode, exitNetwork?.country || ''),
+    siteIp,
+    siteCountryCode,
+    siteCountry: countryLabel(siteCountryCode),
+    accessIp,
+    accessCountryCode,
+    accessCountry: countryLabel(accessCountryCode),
+    colo: cf?.colo || '',
+    viaProxy: Boolean(proxyRaw),
+  };
+}
+
+async function lookupReachability(options = {}) {
+  const timeout = Number(options.timeout) || 8000;
+  const proxy = options.proxy || '';
+  const exitNetwork = options.exitNetwork || null;
+  const entries = await Promise.all(Object.entries(REACHABILITY_TARGETS).map(async ([id, meta]) => {
+    const result = await probeTarget({ id, ...meta }, { timeout, proxy, exitNetwork });
+    return [id, result];
   }));
   return Object.fromEntries(entries);
 }
@@ -483,8 +824,45 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
     }
 
     if (pathname === '/api/reachability') {
-      const data = await this.lookupReachability();
-      return this.#json(res, 200, { ok: true, data });
+      let exitNetwork = session?.network || null;
+      let proxy = '';
+      const profile = this.engine?.profiles?.get?.(String(pid));
+      if (this.engine && pid) {
+        exitNetwork = this.engine.networkInfo?.get?.(String(pid)) || exitNetwork;
+        if (!exitNetwork) {
+          try { exitNetwork = await this.#resolveNetwork(pid, false); } catch (_) {}
+        }
+        if (profile) {
+          const isDirect = profile.networkMode === 'direct'
+            || !profile.proxy
+            || /^(direct|offline|none)$/i.test(String(profile.proxy));
+          if (!isDirect) proxy = String(profile.proxy || '');
+        } else if (session?.networkMode === 'proxy' && session?.proxyProtocol && session.proxyProtocol !== 'direct') {
+          // session alone may not hold full proxy URL; leave direct probe
+          proxy = '';
+        }
+      }
+      try {
+        const data = await this.lookupReachability({
+          proxy,
+          exitNetwork: exitNetwork || {
+            ip: session?.exitIp || '',
+            countryCode: session?.countryCode || '',
+            country: '',
+          },
+        });
+        return this.#json(res, 200, {
+          ok: true,
+          data,
+          meta: {
+            exitIp: exitNetwork?.ip || session?.exitIp || '',
+            exitCountryCode: exitNetwork?.countryCode || session?.countryCode || '',
+            viaProxy: Boolean(proxy),
+          },
+        });
+      } catch (error) {
+        return this.#json(res, 500, { ok: false, msg: error.message });
+      }
     }
 
     if (pathname === '/favicon.ico') {
