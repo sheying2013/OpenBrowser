@@ -831,11 +831,13 @@ class BrowserEngine {
     if (!this.needsExitNetworkForLocale(profile)) return null;
     let network = this.networkInfo.get(profile.id);
     if (network?.countryCode || network?.ip) return network;
-    const hasProxy = profile.proxy && !/^(direct|offline|none)$/i.test(String(profile.proxy));
+    const proxyRaw = String(profile.proxy || '');
+    const isDirect = profile.networkMode === 'direct' || !proxyRaw || /^(direct|offline|none)$/i.test(proxyRaw);
     try {
-      if (hasProxy) {
+      if (!isDirect) {
         network = await this.checkProxy(profile, { allowExtract: false });
       } else {
+        // Local direct exit: geo lookup is best-effort for language/timezone only.
         network = await lookupDirectCountry();
         this.networkInfo.set(profile.id, network);
         this.emit({ type: 'status', id: profile.id, running: this.running.has(profile.id), network });
@@ -850,11 +852,10 @@ class BrowserEngine {
       }
       return network;
     } catch (error) {
-      // Direct mode is still valid local exit; only soft-warn so locale can fall back.
-      const prefix = hasProxy
-        ? '出口信息检测失败（语言/时区可能回退）：'
-        : '本地出口信息暂不可用（将使用系统/已保存语言时区）：';
-      this.emit({ type: hasProxy ? 'proxy-error' : 'proxy-warn', id: profile.id, message: prefix + error.message });
+      // Direct start succeeded without proxy; geo API failure must not surface as proxy error.
+      if (!isDirect) {
+        this.emit({ type: 'proxy-error', id: profile.id, message: '出口信息检测失败（语言/时区可能回退）：' + error.message });
+      }
       return this.networkInfo.get(profile.id) || null;
     }
   }
