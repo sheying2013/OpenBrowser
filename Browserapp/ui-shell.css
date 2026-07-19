@@ -314,6 +314,28 @@ dialog[open] > .themed-select-menu {
 .new-browser svg { width: 16px; height: 16px; }
 
 .sidebar nav { min-height: 0; padding: 2px 0 8px; overflow-y: auto; scrollbar-width: thin; }
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding: 10px 8px 0;
+  color: var(--ui-muted);
+  font-size: 10px;
+}
+.sidebar-footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+.sidebar-footer a:hover { color: var(--ui-text); }
+.sidebar-footer a .lucide { width: 14px; height: 14px; }
+.sidebar-footer a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-footer .app-version { flex: 0 0 auto; font-size: 9px; opacity: .78; }
 .sidebar .nav {
   display: flex; align-items: center; gap: 10px; min-height: 38px;
   margin: 2px 0; padding: 0 11px; border-radius: var(--ui-radius-sm) !important;
@@ -421,21 +443,27 @@ dialog[open] > .themed-select-menu {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
-/* fixed so sticky table headers / main paint order never cover the menu.
-   Width/height use rem + vw so page zoom / UI scale / narrow windows all keep the panel on-screen. */
+/* Portaled to document.body by JS so fixed coords are viewport-relative
+   (header backdrop-filter would otherwise create a containing block and clip the menu). */
 .theme-popover {
   position: fixed !important;
-  z-index: 100000 !important;
+  z-index: 2147483000 !important;
   top: auto; right: auto; left: auto; margin: 0 !important;
   box-sizing: border-box !important;
-  width: min(var(--theme-menu-width, 20.5rem), calc(100vw - 1rem)) !important;
-  max-width: calc(100vw - 1rem) !important;
+  width: min(var(--theme-menu-width, 22.5rem), calc(100vw - 1.25rem)) !important;
+  max-width: calc(100vw - 1.25rem) !important;
+  min-width: min(17.5rem, calc(100vw - 1.25rem));
   max-height: min(80vh, calc(100dvh - 1rem));
   overflow-x: hidden;
   overflow-y: auto;
   border-radius: var(--ui-radius) !important;
   box-shadow: var(--ui-shadow);
   backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+}
+.content > header,
+.header-right,
+.theme-picker {
+  overflow: visible !important;
 }
 .theme-option,
 .theme-option > span,

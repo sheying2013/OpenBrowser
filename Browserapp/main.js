@@ -4,6 +4,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const { pathToFileURL } = require('url');
 const { spawn, execFile } = require('child_process');
+const { randomUUID } = require('crypto');
 const cdp = require('./cdp');
 const { BrowserEngine } = require('./engine');
 const { LiveSyncController } = require('./live-sync-v5');
@@ -19,6 +20,158 @@ app.setPath('userData', userDataRoot);
 
 const defaultProfileDataRoot = path.join(app.getPath('userData'), 'browser-profiles-v2');
 const localSettingsFile = path.join(app.getPath('userData'), 'openbrowser-local-settings.json');
+
+const UPDATE_REPOSITORY = 'lyu0805/OpenBrowser';
+const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPOSITORY}/releases/latest`;
+const UPDATE_ASSETS = Object.freeze({
+  'darwin:x64': 'OpenBrowser-macOS-x86_64.dmg',
+  'darwin:arm64': 'OpenBrowser-macOS-arm64.dmg',
+  'win32:x64': 'OpenBrowser-Windows-x86_64.exe',
+});
+const UPDATE_MAX_BYTES = 1024 * 1024 * 1024;
+const UPDATE_TIMEOUT_MS = 20000;
+const UPDATE_ALLOWED_HOSTS = new Set(['github.com', 'objects.githubusercontent.com']);
+
+function updatePlatformKey() {
+  return `${process.platform}:${process.arch}`;
+}
+
+function updateAssetName() {
+  return UPDATE_ASSETS[updatePlatformKey()] || null;
+}
+
+function compareVersions(left, right) {
+  const parse = (value) => {
+    const match = String(value || '').trim().replace(/^v/i, '').match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?/);
+    if (!match) return null;
+    return { numbers: [match[1], match[2], match[3]].map((part) => Number(part || 0)), pre: match[4] ? match[4].split('.') : [] };
+  };
+  const a = parse(left); const b = parse(right);
+  if (!a || !b) return 0;
+  for (let index = 0; index < 3; index += 1) {
+    if (a.numbers[index] !== b.numbers[index]) return a.numbers[index] > b.numbers[index] ? 1 : -1;
+  }
+  if (!a.pre.length && !b.pre.length) return 0;
+  if (!a.pre.length) return 1;
+  if (!b.pre.length) return -1;
+  const length = Math.max(a.pre.length, b.pre.length);
+  for (let index = 0; index < length; index += 1) {
+    if (a.pre[index] == null) return -1;
+    if (b.pre[index] == null) return 1;
+    if (a.pre[index] === b.pre[index]) continue;
+    const aNumber = /^\d+$/.test(a.pre[index]); const bNumber = /^\d+$/.test(b.pre[index]);
+    if (aNumber && bNumber) return Number(a.pre[index]) > Number(b.pre[index]) ? 1 : -1;
+    if (aNumber !== bNumber) return aNumber ? -1 : 1;
+    return a.pre[index] > b.pre[index] ? 1 : -1;
+  }
+  return 0;
+}
+
+function updateUrlIsAllowed(value, assetName) {
+  try {
+    const url = new URL(String(value || ''));
+    return (url.protocol === 'https:' && UPDATE_ALLOWED_HOSTS.has(url.hostname)
+      && decodeURIComponent(url.pathname).endsWith('/' + assetName));
+  } catch (_) {
+    return false;
+  }
+}
+
+async function fetchUpdateRelease() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPDATE_TIMEOUT_MS);
+  try {
+    const response = await fetch(UPDATE_API_URL, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `OpenBrowser/${app.getVersion()}`,
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`GitHub Releases request failed (${response.status})`);
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function checkAppUpdate() {
+  const assetName = updateAssetName();
+  const currentVersion = app.getVersion();
+  if (!assetName) {
+    return { supported: false, repository: UPDATE_REPOSITORY, currentVersion, platform: process.platform, arch: process.arch };
+  }
+  const release = await fetchUpdateRelease();
+  const remoteVersion = String(release.tag_name || release.name || '').replace(/^v/i, '');
+  const asset = Array.isArray(release.assets)
+    ? release.assets.find((item) => item?.name === assetName)
+    : null;
+  if (!remoteVersion) throw new Error('GitHub Release has no version tag');
+  if (!asset || !updateUrlIsAllowed(asset.browser_download_url, assetName)) {
+    throw new Error(`Release is missing the ${assetName} package`);
+  }
+  return {
+    supported: true,
+    repository: UPDATE_REPOSITORY,
+    currentVersion,
+    remoteVersion,
+    upToDate: compareVersions(remoteVersion, currentVersion) <= 0,
+    releaseName: String(release.name || release.tag_name || remoteVersion),
+    releaseUrl: String(release.html_url || `https://github.com/${UPDATE_REPOSITORY}/releases`),
+    platform: process.platform,
+    arch: process.arch,
+    asset: { name: asset.name, size: Number(asset.size) || 0 },
+  };
+}
+
+async function downloadAppUpdate() {
+  const result = await checkAppUpdate();
+  if (!result.supported) throw new Error('This platform is not supported by the published OpenBrowser packages');
+  if (result.upToDate) return { success: false, upToDate: true, version: result.currentVersion, assetName: result.asset.name };
+  const release = await fetchUpdateRelease();
+  const asset = Array.isArray(release.assets) ? release.assets.find((item) => item?.name === result.asset.name) : null;
+  const downloadUrl = asset?.browser_download_url;
+  if (!asset || !updateUrlIsAllowed(downloadUrl, result.asset.name)) throw new Error('The selected update package URL is not trusted');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120000);
+  const extension = path.extname(result.asset.name).toLowerCase();
+  const baseName = path.basename(result.asset.name, extension);
+  const temporaryPath = path.join(app.getPath('downloads'), `${baseName}-${randomUUID()}${extension}`);
+  let received = 0;
+  try {
+    const response = await fetch(downloadUrl, {
+      headers: { Accept: 'application/octet-stream', 'User-Agent': `OpenBrowser/${app.getVersion()}` },
+      signal: controller.signal,
+    });
+    if (!response.ok || !response.body) throw new Error(`Update download failed (${response.status})`);
+    const contentLength = Number(response.headers.get('content-length')) || 0;
+    if (contentLength > UPDATE_MAX_BYTES) throw new Error('Update package is too large');
+    await fsp.mkdir(path.dirname(temporaryPath), { recursive: true });
+    const file = await fsp.open(temporaryPath, 'w');
+    try {
+      const reader = response.body.getReader();
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        received += chunk.value.byteLength;
+        if (received > UPDATE_MAX_BYTES) throw new Error('Update package is too large');
+        await file.write(Buffer.from(chunk.value));
+        emit({ type: 'app-update-progress', received, total: contentLength || result.asset.size || 0, percent: contentLength ? Math.min(100, Math.round(received / contentLength * 100)) : null, version: result.remoteVersion });
+      }
+    } finally {
+      await file.close();
+    }
+    emit({ type: 'app-update-progress', received, total: contentLength || result.asset.size || received, percent: 100, version: result.remoteVersion });
+    const openError = await shell.openPath(temporaryPath);
+    if (openError) shell.showItemInFolder(temporaryPath);
+    return { success: true, path: temporaryPath, version: result.remoteVersion, assetName: result.asset.name };
+  } catch (error) {
+    await fsp.rm(temporaryPath, { force: true }).catch(() => {});
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function normalizeProfileDataRoot(value) {
   const raw = String(value || '').trim();
@@ -913,6 +1066,13 @@ app.whenReady().then(async () => {
     titleBarIntegrated: process.platform === 'darwin' || process.platform === 'win32',
     platform: process.platform,
   }));
+  registerTrustedIpc('app:update-check', () => checkAppUpdate());
+  registerTrustedIpc('app:update-download', () => downloadAppUpdate());
+  registerTrustedIpc('app:open-github', async () => {
+    const url = `https://github.com/${UPDATE_REPOSITORY}`;
+    await shell.openExternal(url);
+    return { success: true, url };
+  });
   registerTrustedIpc('system:set-ui-chrome', (_event, payload) => {
     const win = BrowserWindow.fromWebContents(_event.sender) || mainWindow;
     const themeId = typeof payload === 'string' ? payload : String(payload?.themeId || '');

@@ -2,6 +2,9 @@ const { contextBridge, ipcRenderer } = require(Buffer.from('ZWxlY3Ryb24=', 'base
 
 contextBridge.exposeInMainWorld('ops', Object.freeze({
   getInfo: () => ipcRenderer.invoke('system:info'),
+  checkAppUpdate: () => ipcRenderer.invoke('app:update-check'),
+  downloadAppUpdate: () => ipcRenderer.invoke('app:update-download'),
+  openGithub: () => ipcRenderer.invoke('app:open-github'),
   setUiChrome: (payload) => ipcRenderer.invoke('system:set-ui-chrome', payload),
   kernelStatus: () => ipcRenderer.invoke('kernel:status'),
   kernelDownload: (force) => ipcRenderer.invoke('kernel:download', force),

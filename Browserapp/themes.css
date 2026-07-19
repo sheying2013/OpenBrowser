@@ -65,7 +65,7 @@ input, select, textarea { background: var(--theme-input); border-color: var(--bo
 .theme-picker { position: relative; z-index: 2; }
 /* Theme menu tokens — rem so Electron/page zoom and UI scale stay in sync */
 :root {
-  --theme-menu-width: 20.5rem; /* ~328px @ 16px */
+  --theme-menu-width: 22.5rem; /* ~360px — room for English labels */
   --theme-menu-pad: 0.875rem;
   --theme-option-icon: 3rem; /* 48px */
   --theme-option-gap: 0.75rem;
@@ -79,6 +79,8 @@ input, select, textarea { background: var(--theme-input); border-color: var(--bo
 .theme-trigger:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 #000; }
 .theme-trigger-dot { width: 0.75rem; height: 0.75rem; flex: 0 0 auto; background: #1534b5; border: 2px solid #000; }
 .theme-popover {
+  /* When JS portals to document.body, fixed coords match the viewport
+     (avoids Chromium containing-block from header backdrop-filter). */
   position: fixed; z-index: 100000;
   box-sizing: border-box;
   width: min(var(--theme-menu-width), calc(100vw - 1rem));
@@ -131,7 +133,12 @@ input, select, textarea { background: var(--theme-input); border-color: var(--bo
 }
 .theme-option small {
   color: #555; font-size: 0.6875rem; min-width: 0; line-height: 1.35;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  word-break: break-word;
 }
 .theme-option.active::after {
   content: ""; position: absolute;
