@@ -9,7 +9,7 @@ const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
 const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry } = require('./proxy-forwarder');
 const { resolveProfileLanguage, localeFromCountryCode } = require('./automation/locale-from-country');
-const { mergeLoadExtensionArgs } = require('./automation/protocol/ads-app-center-protocol');
+const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
 const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
 const { acquireProfileLock, releaseProfileLock, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = require('./automation/isolation');
@@ -436,7 +436,7 @@ class BrowserEngine {
     }
   }
 
-  /** Clear cache + cookies on disk for a stopped profile (ixBrowser clear_cache_cookie). */
+  /** Clear cache + cookies on disk for a stopped profile. */
   async clearProfileCacheAndCookies(profileId) {
     const id = assertProfileId(profileId);
     if (this.running.has(id)) throw new Error('请先关闭窗口再清除缓存及 Cookie');
@@ -515,7 +515,7 @@ class BrowserEngine {
 
   resolveStartupUrls(profile) {
     const urls = [];
-    // blank page: no platform URL (ixBrowser blank_page)
+    // blank page: no platform URL
     if (String(profile.platform?.type || '') !== 'blank') {
       const platformUrl = String(profile.platform?.startUrl || '').trim();
       if (platformUrl) urls.push(platformUrl);
@@ -584,10 +584,8 @@ class BrowserEngine {
       .filter(Boolean)
       .slice(0, 200);
     for (const u of customBlock) if (!blocked.includes(u)) blocked.push(u);
-    const speechBlock = profile.privacy.speech === 'blocked'
-      ? `(() => { if(globalThis.speechSynthesis){ try{speechSynthesis.cancel(); Object.defineProperty(speechSynthesis,'getVoices',{value:()=>[]});}catch(_){}} })();`
-      : null;
     // Port scan protection: block common localhost probe ports unless allow-listed
+    // Speech voices: fingerprint injection (speech.mode blocked/noise/real)
     let portScanScript = null;
     if (profile.privacy.portScanProtect) {
       const allow = String(profile.privacy.portScanAllow || '')
@@ -624,10 +622,6 @@ class BrowserEngine {
       if (portScanScript) {
         await cdp.call(tab.webSocketDebuggerUrl, 'Page.addScriptToEvaluateOnNewDocument', { source: portScanScript });
         await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', { expression: portScanScript });
-      }
-      if (speechBlock) {
-        await cdp.call(tab.webSocketDebuggerUrl, 'Page.addScriptToEvaluateOnNewDocument', { source: speechBlock });
-        await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', { expression: speechBlock });
       }
       applied.add(tab.id);
     }
@@ -1220,7 +1214,7 @@ class BrowserEngine {
       if (existing >= 0) args[existing] = args[existing] + ',' + [...new Set(disabledFeatures)].join(',');
       else args.push(`--disable-features=${[...new Set(disabledFeatures)].join(',')}`);
     }
-    // ThirdPartySuite parity: --load-extension for assigned unpacked apps (Win/macOS)
+    // --load-extension for assigned unpacked apps (Win/macOS)
     const loadPaths = extensions.map((entry) => entry.path).filter((p) => p && fs.existsSync(p));
     const finalArgs = loadPaths.length ? mergeLoadExtensionArgs(args, loadPaths) : args;
     let child;

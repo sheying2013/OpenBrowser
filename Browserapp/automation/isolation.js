@@ -7,7 +7,7 @@ const crypto = require('crypto');
 
 /**
  * Multi-open isolation helpers (profile data dirs, locks, audits).
- * Parity target: one environment = one user-data-dir = no cookie/storage bleed.
+ * Goal: one environment = one user-data-dir = no cookie/storage bleed.
  */
 
 function lockPath(profileRoot) {

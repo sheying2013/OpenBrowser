@@ -171,7 +171,7 @@
                     <input id="editor-start-url" type="url" placeholder="选择平台后自动填入，也可手动修改" autocomplete="off">
                   </label>
                 </div>
-                <p class="network-mode-hint">选择预设平台会写入指定地址；选「空白页」则启动不打开站点；「其他平台」可手填任意 URL（对齐 ixBrowser 平台 + 指定地址逻辑）。</p>
+                <p class="network-mode-hint">选择预设平台会写入指定地址；选「空白页」则启动不打开站点；「其他平台」可手填任意 URL。</p>
                 <label>窗口名称<input id="editor-title" maxlength="120" placeholder="例如：Gmail"></label>
                 <div class="form-two">
                   <label>选择分组<select id="editor-group"></select></label>
@@ -316,7 +316,7 @@
                 <h3>偏好设置</h3>
                 <div class="advanced-card">
                   <strong>云备份</strong>
-                  <p class="network-mode-hint">全局网盘在「本地设置 → 云同步」配置；此处仅控制<strong>本环境</strong>是否参与（ixBrowser 同款逻辑）。</p>
+                  <p class="network-mode-hint">全局网盘在「本地设置 → 云同步」配置；此处仅控制<strong>本环境</strong>是否参与。</p>
                   <label class="check-row"><input id="editor-cloud-backup" type="checkbox"> 云备份 — 开启后该环境参与云端同步</label>
                   <label class="check-row"><input id="editor-sync-cookies-close" type="checkbox" checked> 每次关闭浏览器进行 Cookies 备份（多设备切换推荐）</label>
                   <label class="check-row"><input id="editor-sync-idb" type="checkbox"> 同步 IndexedDB（部分站点用其辅助 Cookie）</label>
@@ -335,13 +335,13 @@
                     <label><input type="radio" name="editor-tab-mode" value="restore">打开关闭前的标签页</label>
                   </div>
                   <label>打开指定网址（选填，多行）<textarea id="editor-start-urls" rows="3" placeholder="可与平台「指定地址」叠加，换行分隔"></textarea></label>
-                  <label>屏蔽指定网址（选填，多行或逗号）<textarea id="editor-block-urls" rows="2" placeholder="例如：*.tracker.com&#10;ads.example.com"></textarea></label>
+                  <label>屏蔽指定网址（选填，多行或逗号）<textarea id="editor-block-urls" rows="2" placeholder="例如：*.tracker.com&#10;track.example.com"></textarea></label>
                   <label class="check-row"><input id="editor-multi-open" type="checkbox"> 多开设置 — 允许重复启动同一环境引用</label>
                   <label class="check-row"><input id="editor-show-info-page" type="checkbox" checked> 信息页面 — 展示默认启动信息页</label>
                   <label class="check-row"><input id="editor-show-password-info" type="checkbox"> 显示密码 — 信息页中显示平台登录密码</label>
                 </div>
                 <div class="advanced-card">
-                  <strong>页面与弹窗（ixBrowser 偏好项）</strong>
+                  <strong>页面与弹窗</strong>
                   <div class="pref-toggle-grid">
                     <div class="pref-row"><span>禁止加载图片</span><label class="check-row"><input id="editor-block-images" type="checkbox"> 开启</label></div>
                     <div class="pref-row"><span>禁止播放声音</span><label class="check-row"><input id="editor-block-sound" type="checkbox"> 开启</label></div>

@@ -59,8 +59,8 @@ async function readBody(req) {
 }
 
 /**
- * Local HTTP API for OpenBrowser (ThirdPartySuite Local API–style control plane).
- * Clean-room implementation; response envelope uses {code,msg,data}.
+ * Local HTTP API for OpenBrowser control plane.
+ * Response envelope uses {code,msg,data}.
  */
 class LocalApiServer {
   constructor(options = {}) {
@@ -214,7 +214,7 @@ class LocalApiServer {
       return ok({ list: active });
     }
 
-    // ---- proxy library (ThirdPartySuite-style proxy-list) ----
+    // ---- proxy library ----
     if (pathname === '/api/v2/proxy-list/list' || pathname === '/api/proxy/list') {
       if (!this.proxyStore) return fail('proxy store unavailable');
       const list = this.proxyStore.list(input);

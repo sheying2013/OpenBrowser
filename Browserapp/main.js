@@ -474,8 +474,8 @@ async function tile(ids, cascade = false) {
   if (!entries.length) throw new Error('No selected browser has a CDP session');
   const work = screen.getPrimaryDisplay().workArea;
   if (cascade) {
-    // ThirdPartySuite operateRang range=1: left + vs * index (MacStaticOperate)
-    const { computeCascadeBounds } = require('./automation/protocol/ads-window-sync-protocol');
+    // Cascade layout: left + vs * index
+    const { computeCascadeBounds } = require('./automation/protocol/window-sync-protocol');
     const width = Math.max(760, work.width - 220);
     const height = Math.max(560, work.height - 180);
     const layout = computeCascadeBounds(entries.map((e) => e.id), {
@@ -502,7 +502,7 @@ function isEnvironmentStartUrl(value) {
 }
 
 function environmentStartUrl(entry) {
-  // Prefer live start URL from running session (ixBrowser-style http://127.0.0.1:PORT/?id=...)
+  // Prefer live start URL from running session (http://127.0.0.1:PORT/?id=...)
   if (entry?.item?.startUrl) return entry.item.startUrl;
   if (entry?.id && engine?.running?.get?.(entry.id)?.startUrl) {
     return engine.running.get(entry.id).startUrl;
@@ -1417,18 +1417,20 @@ app.whenReady().then(async () => {
     if (!id) throw new Error('template id required');
     return automation.rpaStore.installTemplate(id, payload || {});
   });
-  registerTrustedIpc('automation:rpa-template-sync-ads', async (_event, payload) => {
+  registerTrustedIpc('automation:rpa-template-sync-remote', async (_event, payload) => {
     if (!automation?.rpaStore) throw new Error('Automation stack is not ready');
-    if (payload?.token || payload?.cookie || payload?.apiKey) {
+    // Remote sync is opt-in only: caller must pass base explicitly (no hard-coded host).
+    if (payload?.token || payload?.cookie || payload?.apiKey || payload?.base) {
       await automation.rpaStore.setConfig({
-        adsToken: payload.token || undefined,
-        adsCookie: payload.cookie || undefined,
-        adsApiKey: payload.apiKey || undefined,
-        adsApiBase: payload.base || undefined,
-        adsLang: payload.lang || 'zh-CN',
+        remoteToken: payload.token || undefined,
+        remoteCookie: payload.cookie || undefined,
+        remoteApiKey: payload.apiKey || undefined,
+        remoteApiBase: payload.base || undefined,
+        remoteApiOrigin: payload.origin || undefined,
+        remoteLang: payload.lang || 'zh-CN',
       });
     }
-    return automation.rpaStore.syncFromAds(payload || {});
+    return automation.rpaStore.syncRemoteTemplates(payload || {});
   });
   registerTrustedIpc('automation:rpa-template-config', async (_event, payload) => {
     if (!automation?.rpaStore) throw new Error('Automation stack is not ready');
@@ -1437,9 +1439,9 @@ app.whenReady().then(async () => {
     }
     return automation.rpaStore.getConfig();
   });
-  registerTrustedIpc('automation:rpa-template-import-ads', async (_event, payload) => {
+  registerTrustedIpc('automation:rpa-template-import-remote', async (_event, payload) => {
     if (!automation?.rpaStore) throw new Error('Automation stack is not ready');
-    return automation.rpaStore.importAdsTemplatePayload(payload || {});
+    return automation.rpaStore.importRemoteTemplatePayload(payload || {});
   });
   registerTrustedIpc('automation:rpa-template-export', async (_event, id) => {
     if (!automation?.rpaStore) throw new Error('Automation stack is not ready');

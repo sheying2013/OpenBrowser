@@ -2,7 +2,7 @@
 
 /**
  * Map ISO 3166-1 alpha-2 country codes → BCP47 browser locale.
- * Used when language mode is "based on exit IP" (ixBrowser-style).
+ * Used when language mode is "based on exit IP".
  */
 const COUNTRY_TO_LOCALE = {
   JP: 'ja-JP',

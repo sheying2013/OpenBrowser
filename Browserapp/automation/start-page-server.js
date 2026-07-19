@@ -7,19 +7,19 @@ const { URL } = require('url');
 const { buildStartPageHtml } = require('./start-page-template');
 
 /**
- * OpenBrowser · 原生启动页服务（纯本机，不依赖 ixBrowser / Ads / 其它客户端）
+ * OpenBrowser · 原生启动页服务（纯本机）
  *
  * 浏览器打开：
    *   http://127.0.0.1:<port>/?pid=<profileId>&token=<random-session-token>
  *
- * 数据来源：
+ * 数据：
  *   1) 主进程启动环境时 registerSession 写入的 profile + network
  *   2) 同端口 /api/session · /api/network 只读本机会话（可选刷新走 engine.checkProxy）
  * 页面 JS 只请求 127.0.0.1，不直接请求第三方。
  */
 
 const DEFAULT_PORT = Number(process.env.OPENBROWSER_START_PAGE_PORT || 50326);
-// 不使用 52826（ixBrowser 占用），只用 OpenBrowser 的端口池
+// OpenBrowser 启动页端口池
 const PORT_CANDIDATES = [DEFAULT_PORT, 50327, 50328, 50329, 0];
 const REACHABILITY_TARGETS = {
   google: 'https://www.google.com/generate_204',

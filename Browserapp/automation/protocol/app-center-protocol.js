@@ -5,9 +5,9 @@ const fsp = require('fs/promises');
 const path = require('path');
 
 /**
- * Pixel-level application center copy protocol (research reconstruction).
+ * Application center copy protocol.
  *
- * Observed ThirdPartySuite paths:
+ * Staging paths:
  *   global store:  source/extension/<appId>/<unique_id>/   (unpacked CRX)
  *   env cache:     <cacheFolder>/<unique_id>/
  *   launch stage:  <extensionCenter>/<unique_id>/          (per-browser copy)
@@ -141,7 +141,7 @@ async function copyApplication(app, paths) {
 }
 
 /**
- * Remove staged apps not in allowed unique_id list (ThirdPartySuite checkApplicationFolder).
+ * Remove staged apps not in allowed unique_id list.
  */
 async function checkApplicationFolder(extensionCenter, allowedUniqueIds = []) {
   if (!(await pathExists(extensionCenter))) return true;
@@ -156,7 +156,7 @@ async function checkApplicationFolder(extensionCenter, allowedUniqueIds = []) {
 }
 
 /**
- * Merge --load-extension paths like ThirdPartySuite mergeBrowserArgs.
+ * Merge --load-extension paths into chrome args.
  */
 function mergeLoadExtensionArgs(existingArgs = [], extensionPaths = []) {
   const args = [...existingArgs];
@@ -187,7 +187,7 @@ async function stageAppsForLaunch(apps, paths) {
       allowed.push(record.unique_id);
       loadPaths.push(staged);
     } catch (error) {
-      // skip broken app like ThirdPartySuite catch per-item
+      // skip broken app; continue staging remaining items
       console.log('copyApplication fail', record.unique_id, error.message);
     }
   }

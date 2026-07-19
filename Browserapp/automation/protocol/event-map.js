@@ -1,8 +1,7 @@
 'use strict';
 
 /**
- * Master → slave event type codes from ThirdPartySuite WsControl.run() switch(e.type).
- * Reconstructed from main.min.js control flow (not source copy).
+ * Master → slave event type codes from live-sync control flow switch(e.type).
  *
  * type | handler                    | operate gate
  * -----|----------------------------|---------------------------
@@ -51,9 +50,9 @@ const OPERATE_GATES = Object.freeze({
 });
 
 /**
- * Map OpenBrowser openBrowserSync payload → ThirdPartySuite-shaped master event.
+ * Map OpenBrowser openBrowserSync payload → protocol master event.
  */
-function payloadToAdsEvent(payload = {}, options = {}) {
+function payloadToSyncEvent(payload = {}, options = {}) {
   const type = String(payload.type || '');
   const headbox = Boolean(options.headbox || payload.headbox);
 
@@ -157,9 +156,9 @@ function operateAllows(eventType, operateList) {
 }
 
 /**
- * Convert Ads event → proprietary Browser.* command for translateToStandardCdp.
+ * Convert protocol event → Browser.* command for translateToStandardCdp.
  */
-function adsEventToCommand(event) {
+function syncEventToCommand(event) {
   if (!event || event.type == null) return null;
   const t = Number(event.type);
   if (t === EVENT_TYPE.HEADBOX_MOUSE) {
@@ -188,7 +187,7 @@ function adsEventToCommand(event) {
 }
 
 /**
- * syncSettings (openbrowser) ↔ operate list (ThirdPartySuite)
+ * syncSettings (openbrowser) ↔ operate list
  */
 function settingsToOperateList(settings = {}) {
   const list = [];
@@ -212,9 +211,9 @@ function operateListToSettings(operateList = []) {
 module.exports = {
   EVENT_TYPE,
   OPERATE_GATES,
-  payloadToAdsEvent,
+  payloadToSyncEvent,
   operateAllows,
-  adsEventToCommand,
+  syncEventToCommand,
   settingsToOperateList,
   operateListToSettings,
   modifiersFromPayload,

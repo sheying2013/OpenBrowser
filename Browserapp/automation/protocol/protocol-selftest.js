@@ -13,7 +13,7 @@ const {
   computeCascadeBounds,
   parseOperateList,
   MOUSE_ACTION,
-} = require('./ads-window-sync-protocol');
+} = require('./window-sync-protocol');
 
 const {
   RPA_PLUS_ACTIONS,
@@ -21,7 +21,7 @@ const {
   normalizeStep,
   isRegistered,
   ACTION_PARAM_SCHEMA,
-} = require('./ads-rpa-registry');
+} = require('./rpa-registry');
 
 const {
   toLocalRecord,
@@ -29,16 +29,16 @@ const {
   checkApplicationFolder,
   mergeLoadExtensionArgs,
   stageAppsForLaunch,
-} = require('./ads-app-center-protocol');
+} = require('./app-center-protocol');
 
-const { EVENT_TYPE, payloadToAdsEvent, settingsToOperateList, operateAllows } = require('./ads-event-map');
+const { EVENT_TYPE, payloadToSyncEvent, settingsToOperateList, operateAllows } = require('./event-map');
 const { planFanoutFromPayload } = require('./sync-fanout');
 const { syncCapabilities, isWindows, isMac, LOCAL_API_PORTS, toFileUrl } = require('./cross-platform');
 
 function pass(name) { console.log('  PASS  ' + name); }
 
 async function main() {
-  console.log('Pixel-protocol selftest (ThirdPartySuite-faithful maps)\n');
+  console.log('Pixel-protocol selftest\n');
 
   // ---- window sync protocol ----
   assert.ok(CUSTOM_BROWSER_METHODS.includes('Browser.click'));
@@ -174,20 +174,20 @@ async function main() {
   await fsp.rm(root, { recursive: true, force: true });
 
   // ---- event map + fanout end-to-end ----
-  const mouseDown = payloadToAdsEvent({ type: 'mouse', phase: 'down', x: 12, y: 34 });
+  const mouseDown = payloadToSyncEvent({ type: 'mouse', phase: 'down', x: 12, y: 34 });
   assert.strictEqual(mouseDown.type, EVENT_TYPE.WEB_MOUSE);
   assert.strictEqual(mouseDown.action, 1);
   pass('payload mouse.down → type=1 action=1');
 
-  const headbox = payloadToAdsEvent({ type: 'mouse', phase: 'move', x: 1, y: 2 }, { headbox: true });
+  const headbox = payloadToSyncEvent({ type: 'mouse', phase: 'move', x: 1, y: 2 }, { headbox: true });
   assert.strictEqual(headbox.type, EVENT_TYPE.HEADBOX_MOUSE);
   pass('payload headbox mouse → type=20');
 
-  const wheel = payloadToAdsEvent({ type: 'wheel', deltaX: 0, deltaY: 80, x: 3, y: 4 });
+  const wheel = payloadToSyncEvent({ type: 'wheel', deltaX: 0, deltaY: 80, x: 3, y: 4 });
   assert.strictEqual(wheel.type, EVENT_TYPE.WEB_WHEEL);
   pass('payload wheel → type=2');
 
-  const key = payloadToAdsEvent({ type: 'key', phase: 'down', key: 'a', code: 'KeyA', keyCode: 65, ctrl: true });
+  const key = payloadToSyncEvent({ type: 'key', phase: 'down', key: 'a', code: 'KeyA', keyCode: 65, ctrl: true });
   assert.strictEqual(key.type, EVENT_TYPE.WEB_KEY);
   assert.ok(key.modifiers & 2);
   pass('payload key → type=3 modifiers');

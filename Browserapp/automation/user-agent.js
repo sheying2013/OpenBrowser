@@ -1,17 +1,17 @@
 'use strict';
 
 /**
- * ThirdPartySuite-style User-Agent + Client Hints (UserAgentMetadata) builder.
+ * User-Agent + Client Hints (UserAgentMetadata) builder.
  *
- * Ads path (main.min.js research):
- *  1) initBrowser.ua  →  chrome arg `--user-agent=...`
- *  2) clientHints     →  staticConfig.UserAgentMetadata
+ * Surfaces:
+ *  1) chrome arg `--user-agent=...`
+ *  2) UserAgentMetadata / clientHints object
  *       { platform, platformVersion, architecture, model, mobile,
  *         wow64, uaFullVersion, bitness }
  *  3) Network/Emulation.setUserAgentOverride({ userAgent, userAgentMetadata })
- *  4) TLS grease: Chrome major <106 disable PermuteTLSExtensions, >105 enable
+ *  4) TLS: Chrome major <106 disable PermuteTLSExtensions, >=106 enable
  *
- * Without ThirdPartyKernel kernel we replicate via CDP + document-start JS inject.
+ * Applied via CDP + document-start JS inject on stock Chromium.
  */
 
 const GREASE_BRANDS = [
@@ -96,7 +96,7 @@ function parseOsFromUa(ua = '') {
 
 /**
  * Build grease brands list similar to real Chrome sec-ch-ua order.
- * Order rotates with major version (simplified Ads/Chromium-compatible).
+ * Order rotates with major version (simplified Chromium-compatible).
  */
 function buildBrands(major) {
   const m = String(Math.max(1, Number(major) || 120));
@@ -142,7 +142,7 @@ function buildUserAgentString(options = {}) {
 
 /**
  * Derive Client Hints / UserAgentMetadata from UA (+ optional overrides).
- * Field names align with Ads clientHints + CDP userAgentMetadata.
+ * Field names align with CDP userAgentMetadata plus common clientHints aliases.
  */
 function buildUserAgentMetadata(ua, overrides = {}) {
   const parsed = parseChromeVersion(ua) || { full: '131.0.0.0', major: 131 };
@@ -182,7 +182,7 @@ function buildUserAgentMetadata(ua, overrides = {}) {
     mobile,
     bitness,
     wow64,
-    // Ads staticConfig.UserAgentMetadata aliases
+    // Common UserAgentMetadata aliases
     uaFullVersion: fullVersion,
     platform_version: platformVersion,
     ua_full_version: fullVersion,
@@ -238,7 +238,7 @@ function buildUaProfile(options = {}) {
     chromeFull: fullForHints,
     os: osKey,
     metadata,
-    // Ads-compatible clientHints object
+    // clientHints object (snake_case aliases used by UI / profile config)
     clientHints: {
       platform: metadata.platform,
       platform_version: metadata.platformVersion,
@@ -253,7 +253,7 @@ function buildUaProfile(options = {}) {
 }
 
 /**
- * Ads setJA3 parity: TLS extension permutation based on Chrome major from UA.
+ * TLS extension permutation flags based on Chrome major from UA.
  */
 function chromeArgsForUa(uaProfile) {
   const args = [];

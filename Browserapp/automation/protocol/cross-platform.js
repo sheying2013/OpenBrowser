@@ -4,7 +4,7 @@ const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 
 /**
- * Cross-platform helpers for Win/macOS/Linux functional parity.
+ * Cross-platform helpers for Win/macOS/Linux.
  */
 
 function platform() {
@@ -15,25 +15,25 @@ function isWindows() { return process.platform === 'win32'; }
 function isMac() { return process.platform === 'darwin'; }
 function isLinux() { return process.platform === 'linux'; }
 
-/** ThirdPartySuite-style native input tool name (for docs/parity; openbrowser uses native-input-mirror on Win) */
+/** Native input tool name (docs; openbrowser uses native-input-mirror on Win) */
 function nativeToolName() {
-  if (isWindows()) return 'ThirdPartySuiteTool.exe / native-input-mirror.exe';
-  if (isMac()) return 'ThirdPartySuiteToolMerge (optional) / CDP-only page sync';
+  if (isWindows()) return 'native-input-mirror.exe';
+  if (isMac()) return 'CDP-only page sync';
   return 'CDP-only';
 }
 
 /**
- * Window sync strategy parity:
- *  - Page content: both platforms use CDP (WsControl / live-sync)
+ * Window sync strategy:
+ *  - Page content: both platforms use CDP (live-sync)
  *  - Chrome chrome:// UI / OS chrome:
- *      Win → native hook (ThirdPartySuiteTool / native-input-mirror)
- *      Mac → primarily CDP + MacStaticOperate (Page.bringToFront / setWindowBounds)
+ *      Win → native hook (native-input-mirror)
+ *      Mac → primarily CDP (Page.bringToFront / setWindowBounds)
  */
 function syncCapabilities() {
   return {
     platform: platform(),
     pageCdpSync: true,
-    headboxPrivateCdp: false, // ThirdPartyKernel only
+    headboxPrivateCdp: false, // custom kernel CDP only
     nativeOsInputMirror: isWindows(),
     windowArrangeCdp: true,
     extensionLoadFlag: true,
@@ -56,7 +56,7 @@ function toFileUrl(filePath) {
 }
 
 /**
- * Kill process tree — parity with ThirdPartySuite taskKillBrowser / taskKillUtils
+ * Kill process tree for a managed browser pid.
  */
 function processIdentity(pid, options = {}) {
   if (isWindows()) return { ok: true, reason: 'windows identity check delegated to taskkill' };
@@ -111,7 +111,7 @@ function killProcessTree(pid, options = {}) {
   });
 }
 
-/** Default Local API port stack observed in ThirdPartySuite */
+/** Default Local API port stack */
 const LOCAL_API_PORTS = Object.freeze([50325, 50725, 60725]);
 
 function defaultApiPort() {

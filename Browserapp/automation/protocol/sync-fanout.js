@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * End-to-end fanout: OpenBrowser payload → Ads event type → Browser.* → standard CDP list.
- * Used by live-sync and selftests for protocol-faithful behavior on Win/macOS.
+ * End-to-end fanout: OpenBrowser payload → event type → Browser.* → standard CDP list.
+ * Used by live-sync and selftests on Win/macOS.
  */
 
-const { payloadToAdsEvent, operateAllows, adsEventToCommand, settingsToOperateList } = require('./ads-event-map');
-const { translateToStandardCdp, parseOperateList } = require('./ads-window-sync-protocol');
+const { payloadToSyncEvent, operateAllows, syncEventToCommand, settingsToOperateList } = require('./event-map');
+const { translateToStandardCdp, parseOperateList } = require('./window-sync-protocol');
 
 function resolveOperateList(options = {}) {
   if (options.operate || options.syncOperateList) {
@@ -17,20 +17,20 @@ function resolveOperateList(options = {}) {
 }
 
 /**
- * @returns {{ skip:boolean, reason?:string, adsEvent?:object, proprietary?:object, standard?:array, delayMs?:number, eventType?:number }}
+ * @returns {{ skip:boolean, reason?:string, syncEvent?:object, proprietary?:object, standard?:array, delayMs?:number, eventType?:number }}
  */
 function planFanoutFromPayload(payload, options = {}) {
   const operateList = resolveOperateList(options);
   const settings = options.syncSettings || {};
-  const adsEvent = payloadToAdsEvent(payload, options);
-  if (!adsEvent) return { skip: true, reason: 'unmapped-payload' };
+  const syncEvent = payloadToSyncEvent(payload, options);
+  if (!syncEvent) return { skip: true, reason: 'unmapped-payload' };
 
-  if (!operateAllows(adsEvent.type, operateList)) {
-    return { skip: true, reason: 'operate-gate', adsEvent, eventType: adsEvent.type, operateList };
+  if (!operateAllows(syncEvent.type, operateList)) {
+    return { skip: true, reason: 'operate-gate', syncEvent, eventType: syncEvent.type, operateList };
   }
 
-  const proprietary = adsEventToCommand(adsEvent);
-  if (!proprietary) return { skip: true, reason: 'no-command', adsEvent, eventType: adsEvent.type };
+  const proprietary = syncEventToCommand(syncEvent);
+  if (!proprietary) return { skip: true, reason: 'no-command', syncEvent, eventType: syncEvent.type };
 
   const delayClick = options.delayClick ?? settings.delayClick;
   const delayInput = options.delayInput ?? settings.delayInput;
@@ -52,8 +52,8 @@ function planFanoutFromPayload(payload, options = {}) {
 
   return {
     skip: false,
-    adsEvent,
-    eventType: adsEvent.type,
+    syncEvent,
+    eventType: syncEvent.type,
     proprietary,
     standard: translateToStandardCdp(proprietary.command, proprietary.params),
     delayMs,

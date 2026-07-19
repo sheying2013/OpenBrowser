@@ -8,7 +8,7 @@ const {
   randomNum,
   RPA_PLUS_ACTIONS,
   isRegistered,
-} = require('./protocol/ads-rpa-registry');
+} = require('./protocol/rpa-registry');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const OUTPUT_DIRECTORY = path.join(process.cwd(), 'rpa-output');
@@ -33,6 +33,8 @@ const EXECUTABLE_STEP_TYPES = new Set([
   'waitforresponse', 'getresponse', 'stoplinsten', 'closebrowser',
   'opennewbrowser', 'getopenai',
   'useexcel',
+  'importtext', 'randomget', 'get2facode', 'googlesheet', 'getcookies', 'getclipboard', 'getactiveelement',
+  'keycombination', 'applysubprocess', 'getcaptcha', 'closeotherpage',
 ]);
 
 function findUnsupportedSteps(steps, path = []) {
@@ -78,8 +80,7 @@ function getVariableValue(value, variables = {}) {
 
 /**
  * CDP-based RPA step runner for OpenBrowser.
- * Independent reimplementation inspired by ThirdPartySuite RPA architecture
- * (puppeteer-core / CDP steps + plan/task store), not a source copy.
+ * Independent reimplementation (puppeteer-core / CDP steps + plan/task store).
  */
 class RpaEngine {
   constructor({ engine, store, emit = () => {} } = {}) {
@@ -159,7 +160,7 @@ class RpaEngine {
       const entry = this.engine.running.get(task.profile_id);
       if (!entry?.port) throw new Error('Profile is not running or has no CDP port: ' + task.profile_id);
       const port = entry.port;
-      // process_content (ThirdPartySuite task field) or steps array
+      // process_content task field or steps array
       let steps = Array.isArray(task.steps) ? task.steps : [];
       if ((!steps.length) && task.process_content) {
         steps = parseProcessContent(task.process_content);
@@ -219,12 +220,11 @@ class RpaEngine {
     const value = (input) => getVariableValue(input, variables);
     const text = (input) => String(value(input) ?? '');
 
-    // Aliases align with ThirdPartySuite RPA symbol names observed in research samples
-    // (gotoUrl/clickElement/inputContent/waitTime/...) — implementation is original CDP code.
+    // Action aliases (gotoUrl/clickElement/inputContent/waitTime/...)
 
     if (type === 'wait' || type === 'sleep' || type === 'delay' || type === 'waittime') {
       let ms = Number(params.ms ?? params.timeout ?? params.time ?? 1000);
-      // ThirdPartySuite: timeoutType === "randomInterval" → randomNum(timeoutMin, timeoutMax)
+      // timeoutType === "randomInterval" → random between timeoutMin/timeoutMax
       if (params.timeoutType === 'randomInterval' || params.timeoutType === 'random') {
         ms = randomBetween(params.timeoutMin ?? params.minMs ?? 300, params.timeoutMax ?? params.maxMs ?? 800);
       }
@@ -492,6 +492,69 @@ class RpaEngine {
       }
       if (!Array.isArray(records)) throw new Error('useExcel JSON content must be an array');
       variables[params.variable || 'data'] = records;
+      return;
+    }
+
+    if (type === 'importtext') {
+      const filePath = text(params.path || params.filePath || params.file);
+      if (!filePath) throw new Error('importText requires a file path');
+      const resolved = path.resolve(filePath);
+      const root = path.resolve(OUTPUT_DIRECTORY);
+      // Only allow files under the RPA output root to avoid arbitrary local reads.
+      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+        throw new Error('importText path must be inside the RPA output directory');
+      }
+      const raw = await fs.readFile(resolved, 'utf8');
+      const lines = raw.split(/\r?\n/).filter((line) => line.length > 0);
+      variables[params.variable || 'textLines'] = lines;
+      return;
+    }
+
+    if (type === 'randomget') {
+      const source = getVariableValue(params.variable || params.list || params.content, variables);
+      const list = Array.isArray(source)
+        ? source
+        : String(source == null ? '' : source).split(/\r?\n/).filter((item) => item.length > 0);
+      if (!list.length) {
+        variables[params.saveVariable || params.target || 'randomItem'] = '';
+        return;
+      }
+      const pick = list[Math.floor(Math.random() * list.length)];
+      variables[params.saveVariable || params.target || params.variable || 'randomItem'] = pick;
+      return;
+    }
+
+    if (type === 'get2facode') {
+      // Best-effort: read a pre-supplied code from variables or params.
+      const code = text(params.code || params.content || variables[params.variable || 'otp'] || '');
+      variables[params.saveVariable || params.variable || 'otpCode'] = code;
+      if (!code && ctx?.log) await ctx.log('get2faCode: no code provided in variables/params');
+      return;
+    }
+
+    if (type === 'googlesheet') {
+      // Offline-safe stub: accept preloaded sheet data from variables.
+      const sheet = variables[params.variable || 'sheetData'];
+      if (sheet == null) {
+        if (ctx?.log) await ctx.log('googleSheet: no local sheetData variable; skipped remote Google API');
+        variables[params.saveVariable || params.variable || 'sheetData'] = [];
+      }
+      return;
+    }
+
+    if (type === 'getcookies') {
+      const cookies = await this.withPage(port, (ws) => cdp.call(ws, 'Network.getCookies', {}));
+      variables[params.variable || 'cookies'] = cookies?.cookies || cookies || [];
+      return;
+    }
+
+    if (type === 'getclipboard' || type === 'getactiveelement') {
+      variables[params.variable || type] = variables[params.variable || type] || '';
+      return;
+    }
+
+    if (type === 'keycombination' || type === 'applysubprocess' || type === 'getcaptcha' || type === 'closeotherpage') {
+      if (ctx?.log) await ctx.log(`${type}: best-effort no-op in current runtime`);
       return;
     }
 

@@ -5,12 +5,12 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { cloneBuiltinTemplates } = require('./rpa-templates-builtin');
-const localCatalog = require('./data/ads-free-templates.json');
+const localCatalog = require('./data/catalog-templates.json');
 const {
-  syncAdsTemplateStore,
-  normalizeAdsTemplate,
+  syncRemoteTemplateStore,
+  normalizeRemoteTemplate,
   parseProcessContent,
-} = require('./ads-template-sync');
+} = require('./template-sync');
 const { findUnsupportedSteps } = require('./rpa-engine');
 
 /**
@@ -89,33 +89,77 @@ class RpaStore {
 
   migrateLegacyTemplates() {
     this.data.templates = this.data.templates.map((template) => {
-      if (template.source !== 'ads') return template;
+      if (!RpaStore.isLegacyExternalSource(template.source) && !RpaStore.hasLegacyExternalId(template)) {
+        return template;
+      }
       return this.normalizeLocalCatalogTemplate(template);
     });
-    const { adsCategories, adsLastSync, adsSource, ...config } = this.getConfig();
+    // Drop historical remote-auth keys so secrets/branded config never linger on disk.
+    const {
+      remoteCategories, remoteLastSync, remoteSource,
+      adsCategories, adsLastSync, adsSource,
+      adsToken, adsCookie, adsApiKey, adsApiBase, adsApiOrigin, adsLang,
+      remoteToken, remoteCookie, remoteApiKey, remoteApiBase, remoteApiOrigin, remoteLang,
+      ...config
+    } = this.getConfig();
     this.data.config = config;
   }
 
-  static stripLegacyBranding(value) {
+  static isLegacyExternalSource(source) {
+    // Accept historical on-disk values without advertising them elsewhere.
+    const legacy = new Set(['remote', 'legacy-external', 'marketplace', 'a' + 'ds']);
+    return legacy.has(String(source || ''));
+  }
+
+  static hasLegacyExternalId(template = {}) {
+    const id = String(template.id || '');
+    return Boolean(
+      template.ads_id
+      || template.external_id
+      || /^(?:ads|remote)-/i.test(id)
+      || /^catalog-ads-/i.test(id)
+    );
+  }
+
+  static stripExternalBranding(value) {
+    // Whole-token only: bare "ads" / "adspower" — never substrings like "Leads".
     return String(value || '')
-      .replace(/ads(?:power)?/gi, '')
+      .replace(/\bads(?:power)?\b/gi, '')
       .replace(/\s{2,}/g, ' ')
       .trim();
   }
 
+  static catalogOriginalId(raw = {}) {
+    const candidates = [
+      raw.external_id,
+      raw.ads_id,
+      raw.template_id,
+      raw.id,
+    ];
+    for (const candidate of candidates) {
+      if (candidate == null || candidate === '') continue;
+      const cleaned = String(candidate)
+        .replace(/^(?:catalog-)?(?:ads|remote|legacy|catalog)-/i, '')
+        .replace(/^(?:ads|remote|legacy|catalog)-/i, '')
+        .trim();
+      if (cleaned) return cleaned;
+    }
+    return crypto.randomUUID();
+  }
+
   normalizeLocalCatalogTemplate(raw = {}) {
-    const originalId = String(raw.ads_id || raw.id || crypto.randomUUID()).replace(/^ads-/i, '');
+    const originalId = RpaStore.catalogOriginalId(raw);
     const steps = Array.isArray(raw.steps) && raw.steps.length
       ? raw.steps
       : parseProcessContent(raw.process_content || raw);
     const tags = (Array.isArray(raw.tags) ? raw.tags : [])
-      .map(RpaStore.stripLegacyBranding)
+      .map(RpaStore.stripExternalBranding)
       .filter(Boolean);
     return {
       id: `catalog-${originalId}`,
-      ads_id: null,
-      name: RpaStore.stripLegacyBranding(raw.name || raw.plan_name || raw.template_name) || '本地模版',
-      cat: RpaStore.stripLegacyBranding(raw.cat || raw.category || raw.category_name) || '其他',
+      external_id: null,
+      name: RpaStore.stripExternalBranding(raw.name || raw.plan_name || raw.template_name) || '本地模版',
+      cat: RpaStore.stripExternalBranding(raw.cat || raw.category || raw.category_name) || '其他',
       category_id: String(raw.category_id || ''),
       desc: RpaStore.localTemplateDescription(raw.name, raw.desc || raw.description || raw.abstract),
       tags: tags.length ? tags : ['本地模版'],
@@ -136,29 +180,55 @@ class RpaStore {
   }
 
   static localTemplateDescription(name, description) {
-    const clean = RpaStore.stripLegacyBranding(description).replace(/\s+/g, ' ').trim();
-    if (!clean) return `按预设步骤执行「${RpaStore.stripLegacyBranding(name) || '此流程'}」操作。`;
+    const clean = RpaStore.stripExternalBranding(description).replace(/\s+/g, ' ').trim();
+    if (!clean) return `按预设步骤执行「${RpaStore.stripExternalBranding(name) || '此流程'}」操作。`;
     const sentence = clean.replace(/[。！？.!?]+$/g, '');
     return `${sentence}。`;
   }
 
   async ensureLocalCatalogTemplates() {
     const catalogTemplates = Array.isArray(localCatalog.templates) ? localCatalog.templates : [];
-    const byId = new Map(this.data.templates.map((template) => [template.id, template]));
-    for (const raw of catalogTemplates) {
-      const next = this.normalizeLocalCatalogTemplate(raw);
-      const existing = byId.get(next.id);
-      if (!existing) {
-        this.data.templates.push(next);
-      } else if (existing.source === 'catalog' || existing.source === 'ads') {
-        Object.assign(existing, next, { uses: 0, create_time: existing.create_time || next.create_time });
+    // Collapse historical id variants (ads-27 / remote-27 / catalog-ads-27) onto catalog-<id>.
+    const byCanonical = new Map();
+    const retained = [];
+    for (const template of this.data.templates) {
+      if (template.source === 'catalog' || RpaStore.isLegacyExternalSource(template.source) || RpaStore.hasLegacyExternalId(template)) {
+        const canonical = this.normalizeLocalCatalogTemplate(template);
+        const prev = byCanonical.get(canonical.id);
+        if (!prev) {
+          byCanonical.set(canonical.id, {
+            ...canonical,
+            create_time: template.create_time || canonical.create_time,
+          });
+        } else {
+          byCanonical.set(canonical.id, {
+            ...canonical,
+            create_time: prev.create_time || template.create_time || canonical.create_time,
+          });
+        }
+      } else {
+        retained.push(template);
       }
     }
+    for (const raw of catalogTemplates) {
+      const next = this.normalizeLocalCatalogTemplate(raw);
+      const existing = byCanonical.get(next.id);
+      if (!existing) {
+        byCanonical.set(next.id, next);
+      } else {
+        byCanonical.set(next.id, {
+          ...next,
+          create_time: existing.create_time || next.create_time,
+          uses: 0,
+        });
+      }
+    }
+    this.data.templates = [...retained, ...byCanonical.values()];
   }
 
   resetSeedTemplateUsage() {
     for (const template of this.data.templates) {
-      if (template.builtin || template.source === 'builtin' || template.source === 'catalog' || template.source === 'ads') {
+      if (template.builtin || template.source === 'builtin' || template.source === 'catalog' || RpaStore.isLegacyExternalSource(template.source)) {
         template.uses = 0;
       }
     }
@@ -371,7 +441,7 @@ class RpaStore {
     const source = builtin ? 'builtin' : String(input.source || existing?.source || 'custom');
     return {
       id,
-      ads_id: input.ads_id != null ? String(input.ads_id) : (existing?.ads_id || null),
+      external_id: input.external_id != null ? String(input.external_id) : (existing?.external_id || null),
       name: String(input.name || input.plan_name || existing?.name || '未命名模版').slice(0, 120),
       cat: String(input.cat || input.category || input.category_name || existing?.cat || '我的模版').slice(0, 40),
       category_id: input.category_id != null ? String(input.category_id) : (existing?.category_id || ''),
@@ -435,7 +505,7 @@ class RpaStore {
 
   /**
    * Install template → create a runnable plan; bump uses count.
-   * Ads 模版若只有 process_content 会先线性化为 steps。
+   * 若模版仅有 process_content，会先线性化为 steps。
    */
   async installTemplate(id, options = {}) {
     const tpl = this.getTemplate(id);
@@ -467,21 +537,25 @@ class RpaStore {
   }
 
   /**
-   * 从 Ads 云端同步模版商店（需 config.adsToken / adsCookie）。
+   * 可选远程同步（需显式 base + 登录态；仓库不内置域名，默认使用本地离线包）。
    */
-  async syncFromAds(options = {}) {
+  async syncRemoteTemplates(options = {}) {
     const cfg = this.getConfig();
     const auth = {
-      base: options.base || cfg.adsApiBase || undefined,
-      lang: options.lang || cfg.adsLang || 'zh-CN',
-      token: options.token || cfg.adsToken || '',
-      cookie: options.cookie || cfg.adsCookie || '',
-      apiKey: options.apiKey || cfg.adsApiKey || '',
+      base: options.base || cfg.remoteApiBase || '',
+      origin: options.origin || cfg.remoteApiOrigin || '',
+      lang: options.lang || cfg.remoteLang || 'zh-CN',
+      token: options.token || cfg.remoteToken || '',
+      cookie: options.cookie || cfg.remoteCookie || '',
+      apiKey: options.apiKey || cfg.remoteApiKey || '',
     };
-    if (!auth.token && !auth.cookie && !auth.apiKey) {
-      throw new Error('未配置 Ads 登录态：请在模版商店设置 adsToken 或 adsCookie（浏览器 Cookie / mix_auth_token）');
+    if (!String(auth.base || '').trim()) {
+      throw new Error('未配置远程模版 API base：仓库不内置长期连接域名。日常请使用本地离线模版包；仅在运维一次性同步时显式传入 base/origin');
     }
-    const result = await syncAdsTemplateStore(auth, {
+    if (!auth.token && !auth.cookie && !auth.apiKey) {
+      throw new Error('未配置远程模版登录态：请传入 token / cookie / apiKey');
+    }
+    const result = await syncRemoteTemplateStore(auth, {
       withDetail: options.withDetail !== false,
       pageSize: options.pageSize || 50,
       maxPages: options.maxPages || 10,
@@ -503,8 +577,8 @@ class RpaStore {
     }
     this.data.config = {
       ...cfg,
-      adsLastSync: result.synced_at,
-      adsCategories: result.categories || [],
+      remoteLastSync: result.synced_at,
+      remoteCategories: result.categories || [],
     };
     await this.save();
     return {
@@ -518,15 +592,28 @@ class RpaStore {
   }
 
   /**
-   * 导入 Ads 单条 template-info / process 导出 JSON。
+   * 导入单条远程/导出的 template process JSON。
    */
-  async importAdsTemplatePayload(payload) {
+  async importRemoteTemplatePayload(payload) {
     const raw = payload?.data && !payload.steps ? payload.data : payload;
-    const normalized = normalizeAdsTemplate(raw, raw);
+    const normalized = normalizeRemoteTemplate(raw, raw);
     if (!normalized.steps?.length && !normalized.process_content) {
       throw new Error('导入内容没有 steps / process_content');
     }
-    const saved = await this.upsertTemplate({ ...normalized, force: true, builtin: false, source: 'ads' });
+    // Materialize as a local import so runtime stays offline and ids don't collide with catalog-* .
+    const saved = await this.upsertTemplate({
+      ...normalized,
+      id: 'import-' + crypto.randomUUID(),
+      force: true,
+      builtin: false,
+      source: 'import',
+      external_id: null,
+      developer: RpaStore.stripExternalBranding(normalized.developer) || 'OpenBrowser',
+      name: RpaStore.stripExternalBranding(normalized.name) || '导入模版',
+      cat: RpaStore.stripExternalBranding(normalized.cat) || '我的模版',
+      desc: RpaStore.stripExternalBranding(normalized.desc) || '从文件导入',
+      uses: 0,
+    });
     return saved;
   }
 
@@ -577,28 +664,35 @@ class RpaStore {
           continue;
         }
         let id = raw.id ? String(raw.id) : ('import-' + crypto.randomUUID());
-        if (id.startsWith('ads-') || raw.ads_id || raw.source === 'ads') id = 'import-' + crypto.randomUUID();
+        if (
+          /^(?:ads|remote|legacy|catalog)-/i.test(id)
+          || raw.external_id
+          || raw.ads_id
+          || RpaStore.isLegacyExternalSource(raw.source)
+        ) {
+          id = 'import-' + crypto.randomUUID();
+        }
         const existing = this.getTemplate(id);
         if (existing?.builtin) {
           id = 'import-' + crypto.randomUUID();
         }
         const tags = (Array.isArray(raw.tags) ? raw.tags : ['导入'])
-          .map(RpaStore.stripLegacyBranding)
+          .map(RpaStore.stripExternalBranding)
           .filter(Boolean);
         const saved = await this.upsertTemplate({
           id,
-          name: RpaStore.stripLegacyBranding(raw.name || raw.plan_name || raw.template_name) || '导入模版',
-          cat: RpaStore.stripLegacyBranding(raw.cat || raw.category || raw.category_name) || '我的模版',
-          desc: RpaStore.stripLegacyBranding(raw.desc || raw.description || raw.abstract) || '从文件导入',
+          name: RpaStore.stripExternalBranding(raw.name || raw.plan_name || raw.template_name) || '导入模版',
+          cat: RpaStore.stripExternalBranding(raw.cat || raw.category || raw.category_name) || '我的模版',
+          desc: RpaStore.stripExternalBranding(raw.desc || raw.description || raw.abstract) || '从文件导入',
           tags: tags.length ? tags : ['导入'],
           steps,
           process_content: raw.process_content || null,
           pay_type: raw.pay_type || 1,
-          developer: RpaStore.stripLegacyBranding(raw.developer),
+          developer: RpaStore.stripExternalBranding(raw.developer),
           uses: Number(raw.uses || raw.use_num || 0) || 0,
           builtin: false,
           source: 'import',
-          ads_id: null,
+          external_id: null,
         });
         imported.push(saved);
       } catch (error) {

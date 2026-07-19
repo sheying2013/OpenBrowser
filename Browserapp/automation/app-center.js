@@ -2,7 +2,7 @@
 
 /**
  * Application Center (应用中心) — self-contained catalog for OpenBrowser.
- * Does NOT embed ThirdPartySuite proprietary bundles or third-party CRX binaries.
+ * Does NOT embed third-party CRX binaries.
  * Recommended apps use public Chrome Web Store IDs / URLs only.
  */
 
@@ -235,7 +235,7 @@ class AppCenter {
   }
 
   /**
-   * Unified application list (ThirdPartySuite-style /api/v1/application/list envelope data).
+   * Unified application list (/api/v1/application/list envelope data).
    * builtin = extensions bundled with OpenBrowser; local = all local; recommended = catalog.
    */
   list(filter = {}) {
