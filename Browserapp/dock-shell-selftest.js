@@ -62,6 +62,14 @@ function main() {
   assert.ok(engineSrc.includes('stopIpcStubForWindow'), 'engine must stop ipc-stub on stop/cleanup');
   assert.ok(engineSrc.includes('expectedExecutables'), 'kill options must use multi executables');
   assert.ok(!/killProcessTree\([^)]*expectedExecutable:\s*(item\.browser|browser)\.path/.test(engineSrc), 'must not pass only browser.path as expectedExecutable');
+  assert.ok(engineSrc.includes('isOpenBrowser148(browser)'), 'Dock shell only for openbrowser-148');
+  assert.ok(engineSrc.includes('ipc-stub\\\\.py') || engineSrc.includes('ipc-stub\\.py'), 'pkill pattern must be anchored');
+  assert.ok(engineSrc.includes('preferredId'), 'keepDefaultTab must retain navigated tab id');
+
+  // --- env-icon: xml escape + no loose pkill ---
+  assert.ok(envIcon.includes('xmlEscape'), 'Info.plist patch must XML-escape display name');
+  assert.ok(envIcon.includes('looksLikeXmlPlist'), 'must not rewrite binary plists as utf8 blindly');
+  assert.ok(envIcon.includes('ipc-stub\\\\.py') || envIcon.includes('ipc-stub\\.py'), 'launcher pkill must be anchored');
 
   // --- ipc-stub still present and install script syncs it ---
   const stub = path.join(__dirname, 'kernels/openbrowser/ipc-stub.py');

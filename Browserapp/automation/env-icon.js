@@ -564,10 +564,16 @@ async function prepareMacDockWrapper({
   } catch (_) {
     plistBody = '';
   }
-  if (plistBody && plistBody.includes('CFBundleIdentifier')) {
+  const looksLikeXmlPlist = plistBody.includes('<?xml') || plistBody.includes('<plist') || plistBody.includes('<key>CFBundleIdentifier</key>');
+  if (plistBody && looksLikeXmlPlist && plistBody.includes('CFBundleIdentifier')) {
+    const xmlEscape = (value) => String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
     const patch = (key, value) => {
       const re = new RegExp(`(<key>${key}<\\/key>\\s*<string>)[^<]*(<\\/string>)`);
-      if (re.test(plistBody)) plistBody = plistBody.replace(re, `$1${value}$2`);
+      if (re.test(plistBody)) plistBody = plistBody.replace(re, `$1${xmlEscape(value)}$2`);
     };
     patch('CFBundleDisplayName', appName);
     patch('CFBundleName', appName);
@@ -747,8 +753,9 @@ fi
 # IPC stub detached (survives exec); next launch re-binds the same sockets
 if [[ -n "\${BROWSER_ID_VAL:-}" ]] && command -v python3 >/dev/null 2>&1 && [[ -f "\$IPC_STUB" ]]; then
   # drop previous stub holders of this window name
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -f "ipc-stub.py \${BROWSER_ID_VAL}" 2>/dev/null || true
+  if command -v pkill >/dev/null 2>&1 && [[ -n "\${BROWSER_ID_VAL:-}" ]]; then
+    # Anchor end so SB123 does not kill SB1234
+    pkill -f "ipc-stub\\.py \${BROWSER_ID_VAL}( |$)" 2>/dev/null || true
   fi
   python3 "\$IPC_STUB" "\$BROWSER_ID_VAL" >>"\$LOG" 2>&1 &
   disown 2>/dev/null || true

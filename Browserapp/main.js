@@ -744,12 +744,20 @@ let syncState = { active: false, master: null, selected: [] };
 const windows = new Set();
 let mainWindow = null;
 
+function trustedAppIndexUrl() {
+  // Canonical UI document: only this exact file:// path may call registerTrustedIpc.
+  // Reject other file:///…/index.html (e.g. /tmp/malicious/index.html) even if loaded in mainWindow.
+  return pathToFileURL(path.join(__dirname, 'index.html')).href;
+}
+
 function assertTrustedIpcSender(event) {
   if (!mainWindow || mainWindow.isDestroyed() || event?.sender !== mainWindow.webContents) {
     throw new Error('untrusted IPC sender');
   }
   const senderUrl = String(event.sender.getURL?.() || '');
-  if (!senderUrl.startsWith('file:') || !senderUrl.endsWith('/index.html')) {
+  const expected = trustedAppIndexUrl();
+  // Exact match, or same path with query/hash (Electron may append ? or # after loadFile).
+  if (senderUrl !== expected && !senderUrl.startsWith(expected + '?') && !senderUrl.startsWith(expected + '#')) {
     throw new Error('untrusted IPC document');
   }
 }
