@@ -1,0 +1,1336 @@
+/**
+ * 系统原生桌面皮肤（macOS HIG + Windows Fluent / WinUI）
+ * - 不再做成网页后台（去掉深色 #001529 侧栏、#409EFF 网页蓝、大卡片阴影堆叠）
+ * - 随 html[data-platform="macos|windows"] 切换系统色、圆角、字体与控件密度
+ * - 语义仍挂在 data-ui-theme="element-admin" 上，兼容已保存主题
+ */
+
+/* ========== shared desktop base ========== */
+html[data-ui-theme="element-admin"] {
+  --desk-accent: #007aff;
+  --desk-accent-hover: #0066d6;
+  --desk-accent-soft: rgba(0, 122, 255, 0.12);
+  --desk-accent-text: #007aff;
+  --desk-bg: #ececec;
+  --desk-sidebar: #e8e8ed;
+  --desk-sidebar-text: #1d1d1f;
+  --desk-sidebar-muted: #6e6e73;
+  --desk-sidebar-active-bg: rgba(0, 0, 0, 0.06);
+  --desk-sidebar-active-text: #000;
+  --desk-header: rgba(246, 246, 246, 0.86);
+  --desk-surface: #ffffff;
+  --desk-surface-2: #f5f5f7;
+  --desk-text: #1d1d1f;
+  --desk-text-secondary: #6e6e73;
+  --desk-separator: rgba(60, 60, 67, 0.18);
+  --desk-separator-strong: rgba(60, 60, 67, 0.29);
+  --desk-control-h: 28px;
+  --desk-radius: 8px;
+  --desk-radius-sm: 6px;
+  --desk-radius-ctl: 6px;
+  --desk-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  --desk-shadow-menu: 0 8px 28px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  --desk-danger: #ff3b30;
+  --desk-success: #34c759;
+  --desk-warning: #ff9f0a;
+  --desk-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+
+  /* bridge app tokens */
+  --blue: var(--desk-accent);
+  --blue2: var(--desk-accent-soft);
+  --border: var(--desk-separator);
+  --muted: var(--desk-text-secondary);
+  --green: var(--desk-success);
+  --theme-bg: var(--desk-bg);
+  --theme-surface: var(--desk-surface);
+  --theme-surface-alt: var(--desk-surface-2);
+  --theme-active: var(--desk-accent-soft);
+  --theme-soft: var(--desk-surface-2);
+  --theme-text: var(--desk-text);
+  --theme-muted: var(--desk-text-secondary);
+  --theme-accent-strong: var(--desk-accent-text);
+  --theme-shadow: rgba(0, 0, 0, 0.08);
+  --theme-glow: none;
+  --theme-input: var(--desk-surface);
+  --theme-table-line: var(--desk-separator);
+  --theme-sidebar-status-bg: rgba(52, 199, 89, 0.12);
+  --theme-sidebar-status-border: rgba(52, 199, 89, 0.28);
+  --theme-sidebar-status-text: #248a3d;
+  --theme-code-bg: #1c1c1e;
+  --theme-code-fg: #f2f2f7;
+  --ui-sidebar-width: 220px;
+  --ui-header-height: 52px;
+  --ui-control-height: var(--desk-control-h);
+  --ui-sidebar: var(--desk-sidebar);
+  --ui-header: var(--desk-header);
+  --ui-surface: var(--desk-surface);
+  --ui-surface-muted: var(--desk-surface-2);
+  --ui-border: var(--desk-separator);
+  --ui-border-strong: var(--desk-separator-strong);
+  --ui-text: var(--desk-text);
+  --ui-muted: var(--desk-text-secondary);
+  --ui-accent: var(--desk-accent);
+  --ui-accent-soft: var(--desk-accent-soft);
+  --ui-danger: var(--desk-danger);
+  --ui-shadow: var(--desk-shadow);
+  --ui-radius: var(--desk-radius);
+  --ui-radius-sm: var(--desk-radius-sm);
+  color-scheme: light;
+}
+
+/* macOS HIG — system blue, vibrancy-like sidebar, compact toolbar */
+html[data-ui-theme="element-admin"][data-platform="macos"] {
+  --desk-accent: #007aff;
+  --desk-accent-hover: #0066d6;
+  --desk-accent-soft: rgba(0, 122, 255, 0.14);
+  --desk-accent-text: #0066d6;
+  --desk-bg: #f5f5f7;
+  --desk-sidebar: rgba(236, 236, 240, 0.92);
+  --desk-sidebar-text: #1d1d1f;
+  --desk-sidebar-muted: #6e6e73;
+  --desk-sidebar-active-bg: rgba(0, 122, 255, 0.14);
+  --desk-sidebar-active-text: #0066d6;
+  --desk-header: rgba(246, 246, 246, 0.78);
+  --desk-control-h: 28px;
+  --desk-radius: 10px;
+  --desk-radius-sm: 8px;
+  --desk-radius-ctl: 6px;
+  --desk-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+  --ui-sidebar-width: 216px;
+  --ui-header-height: 52px;
+}
+
+/* ========== Dark appearance (macOS Dark / Fluent dark) ========== */
+html[data-ui-theme="element-admin"][data-color-mode="dark"] {
+  --desk-accent: #0a84ff;
+  --desk-accent-hover: #409cff;
+  --desk-accent-soft: rgba(10, 132, 255, 0.22);
+  --desk-accent-text: #64b5ff;
+  --desk-bg: #1c1c1e;
+  --desk-sidebar: #2c2c2e;
+  --desk-sidebar-text: #f5f5f7;
+  --desk-sidebar-muted: #98989d;
+  --desk-sidebar-active-bg: rgba(10, 132, 255, 0.28);
+  --desk-sidebar-active-text: #ffffff;
+  --desk-header: #2c2c2e;
+  --desk-surface: #2c2c2e;
+  --desk-surface-2: #3a3a3c;
+  --desk-text: #f5f5f7;
+  --desk-text-secondary: #98989d;
+  --desk-separator: rgba(84, 84, 88, 0.65);
+  --desk-separator-strong: rgba(99, 99, 102, 0.8);
+  --desk-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  --desk-shadow-menu: 0 10px 32px rgba(0, 0, 0, 0.55);
+  --desk-danger: #ff453a;
+  --desk-success: #32d74b;
+  --desk-warning: #ffd60a;
+  --theme-sidebar-status-bg: rgba(50, 215, 75, 0.14);
+  --theme-sidebar-status-border: rgba(50, 215, 75, 0.35);
+  --theme-sidebar-status-text: #32d74b;
+  --theme-code-bg: #000000;
+  --theme-code-fg: #e5e5ea;
+  --theme-input: #3a3a3c;
+  color-scheme: dark;
+}
+
+html[data-ui-theme="element-admin"][data-color-mode="dark"][data-platform="macos"] {
+  --desk-accent: #0a84ff;
+  --desk-accent-hover: #409cff;
+  --desk-accent-soft: rgba(10, 132, 255, 0.24);
+  --desk-accent-text: #6cb6ff;
+  --desk-bg: #1c1c1e;
+  --desk-sidebar: rgba(44, 44, 46, 0.96);
+  --desk-header: rgba(44, 44, 46, 0.92);
+}
+
+html[data-ui-theme="element-admin"][data-color-mode="dark"][data-platform="windows"],
+html[data-ui-theme="element-admin"][data-color-mode="dark"][data-platform="other"] {
+  --desk-accent: #60cdff;
+  --desk-accent-hover: #99e4ff;
+  --desk-accent-soft: rgba(96, 205, 255, 0.16);
+  --desk-accent-text: #60cdff;
+  --desk-bg: #202020;
+  --desk-sidebar: #2c2c2c;
+  --desk-header: #2c2c2c;
+  --desk-surface: #2c2c2c;
+  --desk-surface-2: #383838;
+}
+
+/* Dark surfaces that used hard-coded light colors */
+html[data-ui-theme="element-admin"][data-color-mode="dark"] body {
+  color: var(--desk-text);
+  background: var(--desk-bg);
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .table-card,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .extension-card,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .settings-grid article,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .editor-form,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .profile-summary,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .advanced-card,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .local-status-card,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .rpa-section,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .rpa-panel {
+  background: var(--desk-surface) !important;
+  color: var(--desk-text);
+  border-color: var(--desk-separator) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] th {
+  background: var(--desk-surface-2) !important;
+  color: var(--desk-text-secondary) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] td {
+  color: var(--desk-text) !important;
+  border-bottom-color: var(--desk-separator) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] tbody tr:hover {
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] tbody tr.selected-row {
+  background: var(--desk-accent-soft) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] input,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] select,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] textarea,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .search,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .themed-select-button {
+  background: var(--desk-surface-2) !important;
+  color: var(--desk-text) !important;
+  border-color: var(--desk-separator-strong) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .outline,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .mini,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .action-grid button,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .row-actions button {
+  background: var(--desk-surface-2) !important;
+  color: var(--desk-text) !important;
+  border-color: var(--desk-separator-strong) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .primary {
+  background: var(--desk-accent) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .theme-popover {
+  background: var(--desk-surface) !important;
+  color: var(--desk-text) !important;
+  border-color: var(--desk-separator) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .theme-option {
+  background: var(--desk-surface-2) !important;
+  color: var(--desk-text) !important;
+  border-color: var(--desk-separator) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .theme-option.active {
+  background: var(--desk-accent-soft) !important;
+  border-color: var(--desk-accent) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .theme-option small {
+  color: var(--desk-text-secondary) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .themed-select-menu {
+  background: var(--desk-surface) !important;
+  border-color: var(--desk-separator) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .themed-select-option {
+  color: var(--desk-text) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .themed-select-option:hover,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .themed-select-option:focus-visible {
+  background: var(--desk-accent-soft) !important;
+  color: var(--desk-accent-text) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] dialog {
+  background: var(--desk-surface) !important;
+  color: var(--desk-text) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .toast {
+  background: rgba(58, 58, 60, 0.96);
+  color: #f5f5f7;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .engine-badge-ok {
+  background: rgba(50, 215, 75, 0.14);
+  color: #32d74b;
+  border-color: rgba(50, 215, 75, 0.35);
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .engine-badge-missing {
+  background: rgba(255, 69, 58, 0.14);
+  color: #ff453a;
+  border-color: rgba(255, 69, 58, 0.35);
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] #view-profiles .table-card th.col-actions,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] #view-profiles .table-card td.col-actions {
+  background: var(--desk-surface) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] #view-profiles .table-card thead th.col-actions {
+  background: var(--desk-surface-2) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .group-badge,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .env-browser-pill,
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .net-badge {
+  background: var(--desk-surface-2);
+  border-color: var(--desk-separator);
+  color: var(--desk-text);
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .net-badge-direct {
+  background: rgba(50, 215, 75, 0.16);
+  color: #32d74b;
+  border-color: rgba(50, 215, 75, 0.35);
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .net-badge-proxy {
+  background: rgba(10, 132, 255, 0.18);
+  color: #64b5ff;
+  border-color: rgba(10, 132, 255, 0.35);
+}
+/* Appearance switcher inside theme popover */
+.theme-appearance {
+  display: none;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--desk-separator, var(--ui-border, #e5e5e5));
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.theme-appearance.is-visible { display: flex; }
+.theme-appearance > span {
+  font-size: 12px;
+  color: var(--desk-text-secondary, var(--ui-muted, #6e6e73));
+  font-weight: 600;
+}
+.theme-appearance-seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--desk-surface-2, #f0f0f0);
+  border: 1px solid var(--desk-separator, #e0e0e0);
+  gap: 2px;
+}
+.theme-appearance-seg button {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  color: var(--desk-text-secondary, #6e6e73) !important;
+  box-shadow: none !important;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.theme-appearance-seg button.active {
+  background: var(--desk-surface, #fff) !important;
+  color: var(--desk-accent-text, #007aff) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12) !important;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .theme-appearance-seg {
+  background: #1c1c1e;
+  border-color: var(--desk-separator);
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .theme-appearance-seg button.active {
+  background: #3a3a3c !important;
+  color: #6cb6ff !important;
+}
+
+/* Windows Fluent / WinUI 3 — mica page, accent #0078D4, 8px geometry */
+html[data-ui-theme="element-admin"][data-platform="windows"],
+html[data-ui-theme="element-admin"][data-platform="other"] {
+  --desk-accent: #0078d4;
+  --desk-accent-hover: #106ebe;
+  --desk-accent-soft: rgba(0, 120, 212, 0.12);
+  --desk-accent-text: #0067c0;
+  --desk-bg: #f3f3f3;
+  --desk-sidebar: #f9f9f9;
+  --desk-sidebar-text: #1a1a1a;
+  --desk-sidebar-muted: #5d5d5d;
+  --desk-sidebar-active-bg: rgba(0, 120, 212, 0.1);
+  --desk-sidebar-active-text: #0067c0;
+  --desk-header: #f9f9f9;
+  --desk-control-h: 32px;
+  --desk-radius: 8px;
+  --desk-radius-sm: 4px;
+  --desk-radius-ctl: 4px;
+  --desk-separator: #e5e5e5;
+  --desk-separator-strong: #d1d1d1;
+  --desk-shadow: 0 2px 4px rgba(0, 0, 0, 0.04), 0 0 2px rgba(0, 0, 0, 0.06);
+  --desk-shadow-menu: 0 8px 16px rgba(0, 0, 0, 0.14);
+  --desk-font: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  --ui-sidebar-width: 228px;
+  --ui-header-height: 48px;
+}
+
+/* ========== foundation ========== */
+html[data-ui-theme="element-admin"] body {
+  color: var(--desk-text);
+  font-family: var(--desk-font);
+  font-size: 13px;
+  background: var(--desk-bg);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+html[data-ui-theme="element-admin"] button,
+html[data-ui-theme="element-admin"] input,
+html[data-ui-theme="element-admin"] select,
+html[data-ui-theme="element-admin"] textarea {
+  font: inherit;
+}
+html[data-ui-theme="element-admin"] ::selection {
+  background: var(--desk-accent-soft);
+  color: var(--desk-text);
+}
+html[data-ui-theme="element-admin"] ::-webkit-scrollbar { width: 9px; height: 9px; }
+html[data-ui-theme="element-admin"] ::-webkit-scrollbar-track { background: transparent; }
+html[data-ui-theme="element-admin"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+html[data-ui-theme="element-admin"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.28);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* ========== shell: native app chrome ========== */
+html[data-ui-theme="element-admin"] .app-shell {
+  background: var(--desk-bg);
+}
+html[data-ui-theme="element-admin"] .sidebar {
+  padding: 10px 10px 12px;
+  color: var(--desk-sidebar-text);
+  background: var(--desk-sidebar) !important;
+  border-right: 1px solid var(--desk-separator) !important;
+  box-shadow: none;
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+/* Continuous with fused title bar */
+html[data-ui-theme="element-admin"].titlebar-integrated .sidebar,
+html[data-ui-theme="element-admin"][data-titlebar="integrated"] .sidebar {
+  background: var(--desk-sidebar) !important;
+}
+html[data-ui-theme="element-admin"].titlebar-integrated .content > header,
+html[data-ui-theme="element-admin"][data-titlebar="integrated"] .content > header {
+  background: var(--desk-header) !important;
+  border-bottom: 1px solid var(--desk-separator) !important;
+  box-shadow: none !important;
+}
+/* Windows Fluent: same fused strip + caption clearance as mac logic */
+html[data-ui-theme="element-admin"][data-platform="windows"].titlebar-integrated .sidebar,
+html[data-ui-theme="element-admin"][data-platform="windows"][data-titlebar="integrated"] .sidebar {
+  padding-top: calc(env(titlebar-area-height, 40px) + 10px) !important;
+  background: var(--desk-sidebar) !important;
+}
+html[data-ui-theme="element-admin"][data-platform="windows"].titlebar-integrated .content > header,
+html[data-ui-theme="element-admin"][data-platform="windows"][data-titlebar="integrated"] .content > header {
+  background: var(--desk-header) !important;
+  border-bottom: 1px solid var(--desk-separator) !important;
+  min-height: calc(52px + env(titlebar-area-height, 40px)) !important;
+  padding-top: env(titlebar-area-height, 40px) !important;
+  padding-right: calc(var(--titlebar-caption-pad, 138px) + 10px) !important;
+}
+html[data-platform="windows"][data-ui-theme="element-admin"] .sidebar,
+html[data-platform="other"][data-ui-theme="element-admin"] .sidebar {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--desk-sidebar) !important;
+}
+html[data-ui-theme="element-admin"] .brand {
+  min-height: 68px;
+  padding: 8px 8px 12px;
+  border-bottom: 1px solid var(--desk-separator);
+  background: transparent;
+}
+html[data-ui-theme="element-admin"] .brand .logo {
+  width: 60px;
+  height: 60px;
+  border: 0;
+  border-radius: 0 !important;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+html[data-ui-theme="element-admin"] .brand .logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: none;
+  opacity: 1;
+  pointer-events: none;
+}
+
+/* Sidebar / toolbar Lucide icons — force visible strokes */
+html[data-ui-theme="element-admin"] .sidebar .nav > svg,
+html[data-ui-theme="element-admin"] .sidebar .nav .lucide,
+html[data-ui-theme="element-admin"] .sidebar .nav > i[data-lucide] {
+  width: 18px !important;
+  height: 18px !important;
+  min-width: 18px !important;
+  min-height: 18px !important;
+  color: var(--desk-sidebar-text) !important;
+  stroke: currentColor !important;
+  fill: none !important;
+  stroke-width: 1.75 !important;
+  opacity: 0.88;
+}
+html[data-ui-theme="element-admin"] .sidebar .nav:hover > svg,
+html[data-ui-theme="element-admin"] .sidebar .nav:hover .lucide {
+  color: var(--desk-text) !important;
+  opacity: 1;
+}
+html[data-ui-theme="element-admin"] .sidebar .nav.active > svg,
+html[data-ui-theme="element-admin"] .sidebar .nav.active .lucide {
+  color: var(--desk-sidebar-active-text) !important;
+  stroke: currentColor !important;
+  stroke-width: 2 !important;
+  opacity: 1;
+}
+html[data-ui-theme="element-admin"] .sidebar .nav-expand .nav-chevron,
+html[data-ui-theme="element-admin"] .sidebar .nav-expand .nav-chevron.lucide {
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  color: var(--desk-sidebar-muted) !important;
+  stroke: currentColor !important;
+  opacity: 0.85;
+}
+html[data-ui-theme="element-admin"] .new-browser svg,
+html[data-ui-theme="element-admin"] .new-browser .lucide {
+  width: 15px !important;
+  height: 15px !important;
+  color: #fff !important;
+  stroke: currentColor !important;
+  fill: none !important;
+}
+html[data-ui-theme="element-admin"] button:not(.nav) svg,
+html[data-ui-theme="element-admin"] button:not(.nav) .lucide,
+html[data-ui-theme="element-admin"] .search svg,
+html[data-ui-theme="element-admin"] .search .lucide,
+html[data-ui-theme="element-admin"] .retro-log-title svg {
+  width: 15px !important;
+  height: 15px !important;
+  min-width: 15px !important;
+  color: inherit !important;
+  stroke: currentColor !important;
+  fill: none !important;
+  opacity: 1;
+}
+html[data-ui-theme="element-admin"] .primary svg,
+html[data-ui-theme="element-admin"] .primary .lucide {
+  color: #fff !important;
+  stroke: currentColor !important;
+}
+html[data-ui-theme="element-admin"] .theme-trigger-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50% !important;
+  background: var(--desk-accent) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+html[data-ui-theme="element-admin"] .brand strong {
+  color: var(--desk-text);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+html[data-ui-theme="element-admin"] .brand small {
+  color: var(--desk-sidebar-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+html[data-ui-theme="element-admin"] .new-browser {
+  min-height: var(--desk-control-h);
+  margin: 12px 4px 8px;
+  border: 0 !important;
+  border-radius: var(--desk-radius-ctl) !important;
+  background: var(--desk-accent) !important;
+  color: #fff !important;
+  box-shadow: none !important;
+  font-weight: 500;
+  font-size: 13px;
+}
+html[data-ui-theme="element-admin"] .new-browser:hover {
+  background: var(--desk-accent-hover) !important;
+  filter: none;
+  transform: none;
+}
+html[data-ui-theme="element-admin"] .new-browser:active {
+  opacity: 0.88;
+  transform: none;
+  box-shadow: none !important;
+}
+html[data-ui-theme="element-admin"] .sidebar nav {
+  padding: 4px 0;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+/* sidebar items = NSOutlineView / NavigationView list */
+html[data-ui-theme="element-admin"] .sidebar .nav {
+  min-height: 32px;
+  margin: 1px 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--desk-radius-sm) !important;
+  color: var(--desk-sidebar-text);
+  font-size: 13px;
+  font-weight: 400;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+html[data-ui-theme="element-admin"] .sidebar .nav:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--desk-text);
+  border-color: transparent;
+}
+html[data-ui-theme="element-admin"] .sidebar .nav.active {
+  background: var(--desk-sidebar-active-bg);
+  color: var(--desk-sidebar-active-text);
+  box-shadow: none;
+  font-weight: 500;
+  border-color: transparent;
+}
+html[data-ui-theme="element-admin"] .sidebar .nav.active svg { stroke-width: 2; }
+html[data-ui-theme="element-admin"] .sidebar .nav-label {
+  margin: 14px 10px 4px;
+  color: var(--desk-sidebar-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+html[data-ui-theme="element-admin"] .sidebar .nav-label::before { content: none; }
+html[data-ui-theme="element-admin"] .nav-sub {
+  border-left: 1px solid var(--desk-separator) !important;
+  margin-left: 16px !important;
+  padding-left: 6px !important;
+}
+html[data-ui-theme="element-admin"] .nav-sub .nav {
+  min-height: 28px;
+  font-size: 12px;
+}
+
+/* header = toolbar / title bar area */
+html[data-ui-theme="element-admin"] .content { background: var(--desk-bg); }
+html[data-ui-theme="element-admin"] .content > header {
+  min-height: var(--ui-header-height);
+  padding: 0 16px 0 20px;
+  color: var(--desk-text);
+  background: var(--desk-header) !important;
+  border-bottom: 1px solid var(--desk-separator) !important;
+  box-shadow: none;
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+html[data-platform="windows"][data-ui-theme="element-admin"] .content > header,
+html[data-platform="other"][data-ui-theme="element-admin"] .content > header {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--desk-header) !important;
+}
+html[data-ui-theme="element-admin"] .content > header h1 {
+  color: var(--desk-text);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+html[data-ui-theme="element-admin"] .content > header h1::before { content: none; }
+html[data-ui-theme="element-admin"] .content > header p,
+html[data-ui-theme="element-admin"] .header-right {
+  color: var(--desk-text-secondary);
+  font-size: 12px;
+}
+html[data-ui-theme="element-admin"] .engine-badge-ok {
+  background: rgba(52, 199, 89, 0.14);
+  color: #248a3d;
+  border-color: rgba(52, 199, 89, 0.28);
+}
+html[data-ui-theme="element-admin"] .engine-badge-missing {
+  background: rgba(255, 59, 48, 0.1);
+  color: #d70015;
+  border-color: rgba(255, 59, 48, 0.28);
+}
+html[data-ui-theme="element-admin"] .engine-badge {
+  padding: 2px 8px !important;
+  min-height: 22px !important;
+  height: auto !important;
+  gap: 5px !important;
+  border: 0;
+  border-radius: 999px !important;
+  background: rgba(52, 199, 89, 0.14);
+  color: #248a3d;
+  font-weight: 500;
+  font-size: 11px !important;
+  box-shadow: none;
+}
+html[data-ui-theme="element-admin"] .engine-badge-dot {
+  width: 6px !important;
+  height: 6px !important;
+}
+html[data-ui-theme="element-admin"] .engine-badge-text {
+  font-size: 11px !important;
+}
+html[data-ui-theme="element-admin"] .content > main {
+  background: transparent;
+  padding: 14px 16px 20px;
+}
+
+/* ========== controls: push button / text field ========== */
+html[data-ui-theme="element-admin"] button:not(.nav) { cursor: default; }
+html[data-ui-theme="element-admin"] .primary,
+html[data-ui-theme="element-admin"] .outline,
+html[data-ui-theme="element-admin"] .danger,
+html[data-ui-theme="element-admin"] .mini,
+html[data-ui-theme="element-admin"] .action-grid button,
+html[data-ui-theme="element-admin"] .row-actions button,
+html[data-ui-theme="element-admin"] .editor-back,
+html[data-ui-theme="element-admin"] .rpa-icon-btn {
+  min-height: var(--desk-control-h);
+  padding: 0 12px;
+  border: 1px solid var(--desk-separator-strong) !important;
+  border-radius: var(--desk-radius-ctl) !important;
+  background: var(--desk-surface) !important;
+  color: var(--desk-text) !important;
+  box-shadow: none;
+  font-weight: 400;
+  font-size: 13px;
+  transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+html[data-ui-theme="element-admin"] .outline:hover,
+html[data-ui-theme="element-admin"] .mini:hover,
+html[data-ui-theme="element-admin"] .action-grid button:hover,
+html[data-ui-theme="element-admin"] .row-actions button:hover,
+html[data-ui-theme="element-admin"] .editor-back:hover {
+  background: var(--desk-surface-2) !important;
+  border-color: var(--desk-separator-strong) !important;
+  color: var(--desk-text) !important;
+  filter: none;
+  transform: none;
+}
+html[data-ui-theme="element-admin"] .primary {
+  border-color: transparent !important;
+  background: var(--desk-accent) !important;
+  color: #fff !important;
+}
+html[data-ui-theme="element-admin"] .primary:hover {
+  background: var(--desk-accent-hover) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+  filter: none;
+  transform: none;
+}
+html[data-ui-theme="element-admin"] .danger,
+html[data-ui-theme="element-admin"] .rpa-btn-danger {
+  border-color: rgba(255, 59, 48, 0.35) !important;
+  background: rgba(255, 59, 48, 0.08) !important;
+  color: var(--desk-danger) !important;
+}
+html[data-ui-theme="element-admin"] .danger:hover,
+html[data-ui-theme="element-admin"] .rpa-btn-danger:hover {
+  background: var(--desk-danger) !important;
+  border-color: var(--desk-danger) !important;
+  color: #fff !important;
+}
+html[data-ui-theme="element-admin"] button:not(.nav):active {
+  transform: none;
+  opacity: 0.9;
+  box-shadow: none !important;
+}
+html[data-ui-theme="element-admin"] button:focus-visible,
+html[data-ui-theme="element-admin"] input:focus-visible,
+html[data-ui-theme="element-admin"] select:focus-visible,
+html[data-ui-theme="element-admin"] textarea:focus-visible {
+  outline: 3px solid var(--desk-accent-soft) !important;
+  outline-offset: 1px;
+}
+
+html[data-ui-theme="element-admin"] input,
+html[data-ui-theme="element-admin"] select,
+html[data-ui-theme="element-admin"] textarea,
+html[data-ui-theme="element-admin"] .search,
+html[data-ui-theme="element-admin"] .rpa-input,
+html[data-ui-theme="element-admin"] .rpa-select,
+html[data-ui-theme="element-admin"] .rpa-search input {
+  min-height: var(--desk-control-h);
+  border: 1px solid var(--desk-separator-strong) !important;
+  border-radius: var(--desk-radius-ctl) !important;
+  background: var(--desk-surface) !important;
+  color: var(--desk-text) !important;
+  box-shadow: none;
+  padding: 4px 10px;
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
+html[data-ui-theme="element-admin"] input:hover,
+html[data-ui-theme="element-admin"] select:hover,
+html[data-ui-theme="element-admin"] textarea:hover {
+  border-color: var(--desk-separator-strong) !important;
+}
+html[data-ui-theme="element-admin"] input:focus,
+html[data-ui-theme="element-admin"] select:focus,
+html[data-ui-theme="element-admin"] textarea:focus {
+  border-color: var(--desk-accent) !important;
+  box-shadow: 0 0 0 3px var(--desk-accent-soft);
+}
+html[data-ui-theme="element-admin"] .search {
+  border-radius: var(--desk-radius-ctl) !important;
+  background: var(--desk-surface) !important;
+  height: var(--desk-control-h);
+  min-height: var(--desk-control-h);
+}
+html[data-ui-theme="element-admin"] .search input {
+  border: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  min-height: 0;
+  padding: 0;
+}
+html[data-ui-theme="element-admin"] input[type="checkbox"],
+html[data-ui-theme="element-admin"] input[type="radio"] {
+  accent-color: var(--desk-accent);
+  box-shadow: none;
+}
+
+/* popup button / combo */
+html[data-ui-theme="element-admin"] .themed-select-button {
+  min-height: var(--desk-control-h) !important;
+  border: 1px solid var(--desk-separator-strong) !important;
+  border-radius: var(--desk-radius-ctl) !important;
+  background: var(--desk-surface) !important;
+  color: var(--desk-text) !important;
+  box-shadow: none !important;
+  font-weight: 400;
+  padding: 0 0 0 10px !important;
+}
+html[data-ui-theme="element-admin"] .themed-select-button:hover {
+  background: var(--desk-surface-2) !important;
+}
+html[data-ui-theme="element-admin"] .themed-select-button.open {
+  border-color: var(--desk-accent) !important;
+  background: var(--desk-surface) !important;
+  box-shadow: 0 0 0 3px var(--desk-accent-soft) !important;
+}
+html[data-ui-theme="element-admin"] .themed-select-arrow {
+  border-left: 0 !important;
+  background: transparent !important;
+  color: var(--desk-text-secondary) !important;
+  border-radius: 0 !important;
+  font-size: 10px;
+  width: 22px;
+}
+html[data-ui-theme="element-admin"] .themed-select-button.open .themed-select-arrow {
+  background: transparent !important;
+  color: var(--desk-accent) !important;
+}
+html[data-ui-theme="element-admin"] .themed-select-menu {
+  padding: 4px;
+  border: 0.5px solid var(--desk-separator-strong);
+  border-radius: var(--desk-radius) !important;
+  background: var(--desk-surface);
+  box-shadow: var(--desk-shadow-menu);
+}
+html[data-ui-theme="element-admin"] .themed-select-option {
+  min-height: 28px;
+  border-bottom: 0 !important;
+  border-radius: 5px !important;
+  background: transparent !important;
+  color: var(--desk-text) !important;
+  margin: 1px 0;
+  padding: 4px 10px !important;
+  font-weight: 400 !important;
+  box-shadow: none !important;
+}
+html[data-ui-theme="element-admin"] .themed-select-option:hover,
+html[data-ui-theme="element-admin"] .themed-select-option:focus-visible {
+  background: var(--desk-accent) !important;
+  color: #fff !important;
+}
+html[data-ui-theme="element-admin"] .themed-select-option.selected {
+  background: var(--desk-accent-soft) !important;
+  color: var(--desk-accent-text) !important;
+  font-weight: 500 !important;
+}
+html[data-ui-theme="element-admin"] .themed-select-option.selected:hover {
+  background: var(--desk-accent) !important;
+  color: #fff !important;
+}
+html[data-ui-theme="element-admin"] .themed-select-option:disabled {
+  color: var(--desk-text-secondary) !important;
+  opacity: 0.5;
+  background: transparent !important;
+}
+html[data-ui-theme="element-admin"] .themed-multiselect-list {
+  border: 1px solid var(--desk-separator-strong) !important; border-radius: var(--desk-radius-ctl) !important;
+  background: var(--desk-surface) !important; color: var(--desk-text) !important; box-shadow: none !important;
+}
+html[data-ui-theme="element-admin"] .themed-multiselect-option {
+  min-height: 28px; margin: 1px 0; padding: 4px 8px !important; border-radius: 5px !important;
+  background: transparent !important; color: var(--desk-text) !important; font-weight: 400 !important;
+}
+html[data-ui-theme="element-admin"] .themed-multiselect-option:hover,
+html[data-ui-theme="element-admin"] .themed-multiselect-option:focus-visible { background: var(--desk-accent) !important; color: #fff !important; }
+html[data-ui-theme="element-admin"] .themed-multiselect-option.selected { background: var(--desk-accent-soft) !important; color: var(--desk-accent-text) !important; }
+html[data-ui-theme="element-admin"] .themed-multiselect-option.selected:hover,
+html[data-ui-theme="element-admin"] .themed-multiselect-option.selected:focus-visible { background: var(--desk-accent) !important; color: #fff !important; }
+html[data-ui-theme="element-admin"] .themed-multiselect-check { color: currentColor; }
+
+/* ========== surfaces: grouped list / table ========== */
+html[data-ui-theme="element-admin"] .table-card,
+html[data-ui-theme="element-admin"] .extension-card,
+html[data-ui-theme="element-admin"] .settings-grid article,
+html[data-ui-theme="element-admin"] .editor-form,
+html[data-ui-theme="element-admin"] .profile-summary,
+html[data-ui-theme="element-admin"] .advanced-card,
+html[data-ui-theme="element-admin"] .local-status-card,
+html[data-ui-theme="element-admin"] .storage-path-box,
+html[data-ui-theme="element-admin"] .rpa-section,
+html[data-ui-theme="element-admin"] .rpa-panel,
+html[data-ui-theme="element-admin"] .rpa-editor-pane,
+html[data-ui-theme="element-admin"] .rpa-table-wrap,
+html[data-ui-theme="element-admin"] .rpa-store-card,
+html[data-ui-theme="element-admin"] .rpa-empty-card {
+  border: 1px solid var(--desk-separator) !important;
+  border-radius: var(--desk-radius) !important;
+  background: var(--desk-surface) !important;
+  color: var(--desk-text);
+  box-shadow: var(--desk-shadow) !important;
+  backdrop-filter: none;
+}
+html[data-ui-theme="element-admin"] .table-card { overflow: auto; }
+html[data-ui-theme="element-admin"] table { background: transparent; width: 100%; }
+html[data-ui-theme="element-admin"] th {
+  border-bottom: 1px solid var(--desk-separator) !important;
+  background: transparent !important;
+  color: var(--desk-text-secondary) !important;
+  font-weight: 500 !important;
+  font-size: 11px !important;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+html[data-ui-theme="element-admin"] td {
+  border-bottom: 1px solid var(--desk-separator) !important;
+  color: var(--desk-text) !important;
+  font-size: 13px !important;
+}
+html[data-ui-theme="element-admin"] tbody tr:nth-child(even) { background: transparent; }
+html[data-ui-theme="element-admin"] tbody tr:hover { background: rgba(0, 0, 0, 0.03) !important; }
+html[data-ui-theme="element-admin"] tbody tr.selected-row {
+  background: var(--desk-accent-soft) !important;
+  box-shadow: none !important;
+}
+html[data-platform="macos"][data-ui-theme="element-admin"] tbody tr.selected-row {
+  background: rgba(0, 122, 255, 0.16) !important;
+}
+html[data-platform="windows"][data-ui-theme="element-admin"] tbody tr.selected-row,
+html[data-platform="other"][data-ui-theme="element-admin"] tbody tr.selected-row {
+  background: #cce8ff !important;
+}
+
+html[data-ui-theme="element-admin"] .avatar,
+html[data-ui-theme="element-admin"] .env-badge,
+html[data-ui-theme="element-admin"] .extension-icon {
+  border: 0;
+  border-radius: 0.35rem !important;
+  background: var(--desk-accent);
+  color: #fff;
+  box-shadow: none;
+  font-weight: 600;
+}
+html[data-ui-theme="element-admin"] .env-badge,
+html[data-ui-theme="element-admin"] .ui-mark,
+html[data-ui-theme="element-admin"] .extension-icon,
+html[data-ui-theme="element-admin"] .group-mark,
+html[data-ui-theme="element-admin"] .proxy-mark {
+  width: var(--ui-mark-size, 2.125rem) !important;
+  height: var(--ui-mark-size, 2.125rem) !important;
+  min-width: var(--ui-mark-size, 2.125rem) !important;
+  max-width: var(--ui-mark-size, 2.125rem) !important;
+  min-height: var(--ui-mark-size, 2.125rem) !important;
+  max-height: var(--ui-mark-size, 2.125rem) !important;
+  aspect-ratio: 1 / 1 !important;
+  border-radius: 10px !important;
+  flex: 0 0 var(--ui-mark-size, 2.125rem) !important;
+  font-size: 15px !important;
+  line-height: 1;
+  box-sizing: border-box;
+}
+html[data-ui-theme="element-admin"] .extension-card {
+  max-width: 22rem;
+  min-height: 0 !important;
+}
+html[data-ui-theme="element-admin"] .status::before,
+html[data-ui-theme="element-admin"] .local-status-dot {
+  border-radius: 50% !important;
+  box-shadow: none;
+}
+html[data-ui-theme="element-admin"] .group-chip,
+html[data-ui-theme="element-admin"] .group-badge,
+html[data-ui-theme="element-admin"] .net-badge,
+html[data-ui-theme="element-admin"] .sync-health,
+html[data-ui-theme="element-admin"] .rpa-pill,
+html[data-ui-theme="element-admin"] .rpa-status-pill {
+  border: 0;
+  border-radius: 999px !important;
+  box-shadow: none;
+  background: var(--desk-surface-2);
+  color: var(--desk-text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* tabs = segmented control / tab bar */
+html[data-ui-theme="element-admin"] .tabs,
+html[data-ui-theme="element-admin"] .editor-tabs {
+  border: 0;
+  border-bottom: 1px solid var(--desk-separator);
+  background: transparent;
+  gap: 0;
+  margin-bottom: 12px;
+}
+html[data-ui-theme="element-admin"] .tabs button,
+html[data-ui-theme="element-admin"] .editor-tabs button,
+html[data-ui-theme="element-admin"] .rpa-subtabs button,
+html[data-ui-theme="element-admin"] .rpa-tabs-line button {
+  color: var(--desk-text-secondary);
+  font-weight: 500;
+  border-radius: 0 !important;
+  padding: 0 14px;
+  height: 36px;
+  font-size: 13px;
+}
+html[data-ui-theme="element-admin"] .tabs button.active,
+html[data-ui-theme="element-admin"] .editor-tabs button.active,
+html[data-ui-theme="element-admin"] .rpa-subtabs button.active,
+html[data-ui-theme="element-admin"] .rpa-tabs-line button.active {
+  border-bottom: 2px solid var(--desk-accent);
+  background: transparent;
+  color: var(--desk-accent-text);
+  margin-bottom: -1px;
+}
+html[data-ui-theme="element-admin"] .segmented,
+html[data-ui-theme="element-admin"] .rpa-seg {
+  border: 0;
+  border-radius: 8px !important;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 2px;
+}
+html[data-ui-theme="element-admin"] .segmented label:has(input:checked),
+html[data-ui-theme="element-admin"] .rpa-seg button.active {
+  border: 0;
+  border-radius: 6px !important;
+  background: var(--desk-surface);
+  color: var(--desk-text);
+  box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  font-weight: 500;
+}
+
+/* code / console = monospaced inset */
+html[data-ui-theme="element-admin"] .console,
+html[data-ui-theme="element-admin"] .console-panel,
+html[data-ui-theme="element-admin"] .rpa-log,
+html[data-ui-theme="element-admin"] .rpa-code-block,
+html[data-ui-theme="element-admin"] .api-code-block,
+html[data-ui-theme="element-admin"] .ua-meta-preview {
+  border: 1px solid var(--desk-separator);
+  border-radius: var(--desk-radius) !important;
+  background: #1c1c1e !important;
+  color: #f2f2f7 !important;
+  box-shadow: none;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+html[data-ui-theme="element-admin"] .console-head {
+  border-bottom: 1px solid #38383a;
+  background: #2c2c2e;
+  color: #ebebf5;
+  border-radius: calc(var(--desk-radius) - 1px) calc(var(--desk-radius) - 1px) 0 0;
+}
+html[data-ui-theme="element-admin"] .sync-layout,
+html[data-ui-theme="element-admin"] .environment-editor { gap: 14px; }
+html[data-ui-theme="element-admin"] .profile-editor-head {
+  border-bottom: 1px solid var(--desk-separator);
+  background: var(--desk-surface);
+  color: var(--desk-text);
+  border-radius: var(--desk-radius) var(--desk-radius) 0 0;
+}
+html[data-ui-theme="element-admin"] .profile-editor-head p { color: var(--desk-text-secondary); }
+html[data-ui-theme="element-admin"] .editor-panel h3,
+html[data-ui-theme="element-admin"] .settings-grid h3,
+html[data-ui-theme="element-admin"] .rpa-h2 {
+  padding: 0;
+  border: 0;
+  border-radius: 0 !important;
+  background: transparent;
+  color: var(--desk-text);
+  box-shadow: none;
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+html[data-ui-theme="element-admin"] .editor-actions {
+  border-top: 1px solid var(--desk-separator);
+  background: var(--desk-surface);
+}
+html[data-ui-theme="element-admin"] .network-mode-hint,
+html[data-ui-theme="element-admin"] .help-box,
+html[data-ui-theme="element-admin"] .extension-note,
+html[data-ui-theme="element-admin"] .storage-warning,
+html[data-ui-theme="element-admin"] .delete-warning {
+  border: 0;
+  border-radius: var(--desk-radius-sm) !important;
+  background: var(--desk-accent-soft);
+  color: var(--desk-text);
+  border-left: 3px solid var(--desk-accent);
+}
+
+/* sheets / dialogs */
+html[data-ui-theme="element-admin"] dialog {
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: var(--desk-surface) !important;
+  color: var(--desk-text);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+}
+html[data-platform="windows"][data-ui-theme="element-admin"] dialog,
+html[data-platform="other"][data-ui-theme="element-admin"] dialog {
+  border-radius: 8px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+}
+html[data-ui-theme="element-admin"] dialog::backdrop {
+  background: rgba(0, 0, 0, 0.28) !important;
+  backdrop-filter: blur(2px);
+}
+html[data-platform="windows"][data-ui-theme="element-admin"] dialog::backdrop,
+html[data-platform="other"][data-ui-theme="element-admin"] dialog::backdrop {
+  backdrop-filter: none;
+  background: rgba(0, 0, 0, 0.4) !important;
+}
+html[data-ui-theme="element-admin"] .dialog-head {
+  border-bottom: 1px solid var(--desk-separator);
+  background: transparent;
+  color: var(--desk-text);
+  border-radius: 12px 12px 0 0;
+  font-weight: 600;
+}
+html[data-ui-theme="element-admin"] .dialog-actions {
+  border-top: 1px solid var(--desk-separator);
+  background: transparent;
+}
+html[data-ui-theme="element-admin"] .toast {
+  border: 0;
+  border-radius: 10px !important;
+  background: rgba(30, 30, 30, 0.92);
+  color: #fff;
+  box-shadow: var(--desk-shadow-menu);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+/* theme picker */
+html[data-ui-theme="element-admin"] .theme-trigger {
+  border: 1px solid var(--desk-separator-strong);
+  border-radius: var(--desk-radius-ctl) !important;
+  background: var(--desk-surface);
+  color: var(--desk-text);
+  box-shadow: none;
+  min-height: var(--desk-control-h);
+}
+html[data-ui-theme="element-admin"] .theme-trigger:hover {
+  background: var(--desk-surface-2);
+}
+html[data-ui-theme="element-admin"] .theme-trigger-dot {
+  border: 0;
+  border-radius: 50% !important;
+  background: var(--desk-accent);
+  box-shadow: none;
+}
+html[data-ui-theme="element-admin"] {
+  --theme-menu-width: 20rem;
+  --theme-menu-pad: 0.625rem;
+  --theme-option-icon: 2.75rem;
+  --theme-option-gap: 0.65rem;
+  --theme-option-min-h: 3.75rem;
+}
+html[data-ui-theme="element-admin"] .theme-popover {
+  width: min(var(--theme-menu-width), calc(100vw - 1rem));
+  max-width: calc(100vw - 1rem);
+  padding: var(--theme-menu-pad);
+  border: 0.5px solid var(--desk-separator-strong);
+  border-radius: 12px !important;
+  background: var(--desk-surface);
+  color: var(--desk-text);
+  box-shadow: var(--desk-shadow-menu);
+  backdrop-filter: saturate(180%) blur(24px);
+}
+html[data-platform="windows"][data-ui-theme="element-admin"] .theme-popover,
+html[data-platform="other"][data-ui-theme="element-admin"] .theme-popover {
+  backdrop-filter: none;
+  border-radius: 8px !important;
+}
+html[data-ui-theme="element-admin"] .theme-popover-head span { color: var(--desk-text-secondary); }
+html[data-ui-theme="element-admin"] .theme-grid { gap: 0.4rem; }
+html[data-ui-theme="element-admin"] .theme-option {
+  border: 1px solid var(--desk-separator);
+  border-radius: 8px !important;
+  background: var(--desk-surface);
+  color: var(--desk-text);
+  box-shadow: none;
+}
+html[data-ui-theme="element-admin"] .theme-option:hover {
+  background: var(--desk-surface-2);
+}
+html[data-ui-theme="element-admin"] .theme-option.active {
+  background: var(--desk-accent-soft);
+  border-color: var(--desk-accent);
+  box-shadow: none;
+}
+html[data-ui-theme="element-admin"] .theme-option small { color: var(--desk-text-secondary); }
+html[data-ui-theme="element-admin"] .theme-option.active::after { border-color: var(--desk-accent); }
+
+.theme-option[data-ui-theme-option="element-admin"] > i {
+  border: 1px solid #d2d2d7;
+  border-radius: 8px;
+  background:
+    url("assets/logo-native.svg?v=20260719-native-icon") center / 70% 70% no-repeat,
+    linear-gradient(180deg, #f5f5f7 0%, #e8e8ed 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+  position: relative;
+}
+
+/* logs */
+html[data-ui-theme="element-admin"] #view-logs { font-family: var(--desk-font); }
+html[data-ui-theme="element-admin"] .retro-log-window {
+  min-height: calc(100vh - 122px);
+  overflow: hidden;
+  border: 1px solid var(--desk-separator);
+  border-radius: var(--desk-radius) !important;
+  background: var(--desk-surface);
+  box-shadow: var(--desk-shadow);
+}
+html[data-ui-theme="element-admin"] .retro-log-titlebar {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--desk-separator);
+  background: var(--desk-surface-2);
+  color: var(--desk-text);
+  border-radius: calc(var(--desk-radius) - 1px) calc(var(--desk-radius) - 1px) 0 0;
+}
+html[data-ui-theme="element-admin"] .retro-log-title { display: flex; min-width: 0; align-items: center; gap: 8px; }
+html[data-ui-theme="element-admin"] .retro-log-title strong { font-size: 13px; font-weight: 600; }
+html[data-ui-theme="element-admin"] .retro-log-title span { color: var(--desk-text-secondary); font-size: 11px; font-weight: 400; }
+html[data-ui-theme="element-admin"] .retro-log-titlebar .outline {
+  background: var(--desk-surface);
+  border-radius: var(--desk-radius-ctl) !important;
+}
+html[data-ui-theme="element-admin"] .log-runtime-note {
+  min-height: 28px; padding: 5px 12px; border-bottom: 1px solid var(--desk-separator);
+  background: var(--desk-surface); color: var(--desk-text-secondary);
+}
+html[data-ui-theme="element-admin"] .log-runtime-note svg { width: 13px; height: 13px; color: var(--desk-accent-text); }
+html[data-ui-theme="element-admin"] .retro-log-columns,
+html[data-ui-theme="element-admin"] .log-row {
+  display: grid;
+  grid-template-columns: 112px 132px minmax(0, 1fr);
+}
+html[data-ui-theme="element-admin"] .retro-log-columns {
+  border-bottom: 1px solid var(--desk-separator);
+  background: var(--desk-surface-2);
+  color: var(--desk-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+html[data-ui-theme="element-admin"] .retro-log-columns span,
+html[data-ui-theme="element-admin"] .log-row span {
+  min-width: 0;
+  padding: 8px 12px;
+  border-right: 1px solid var(--desk-separator);
+}
+html[data-ui-theme="element-admin"] .retro-log-columns span:last-child,
+html[data-ui-theme="element-admin"] .log-row span:last-child { border-right: 0; }
+html[data-ui-theme="element-admin"] .log-card {
+  min-height: 420px;
+  max-height: calc(100vh - 218px);
+  overflow: auto;
+  padding: 0;
+  background: var(--desk-surface);
+  color: var(--desk-text);
+}
+html[data-ui-theme="element-admin"] .log-row {
+  border-bottom: 1px solid var(--desk-separator);
+  font-size: 12px;
+  line-height: 1.4;
+}
+html[data-ui-theme="element-admin"] .log-row:nth-child(even) { background: transparent; }
+html[data-ui-theme="element-admin"] .log-row:hover { background: rgba(0, 0, 0, 0.03); }
+html[data-ui-theme="element-admin"] .log-row span:first-child { color: var(--desk-text-secondary); white-space: nowrap; }
+html[data-ui-theme="element-admin"] .log-row span:nth-child(2) { color: var(--desk-accent-text); font-weight: 500; overflow-wrap: anywhere; }
+html[data-ui-theme="element-admin"] .log-row span:last-child { overflow-wrap: anywhere; }
+html[data-ui-theme="element-admin"] .log-empty {
+  display: grid;
+  min-height: 420px;
+  place-items: center;
+  color: var(--desk-text-secondary);
+  font-size: 13px;
+  background: var(--desk-surface);
+}
+
+/* selection bar / chips */
+html[data-ui-theme="element-admin"] .profile-selection-bar {
+  border: 1px solid var(--desk-separator);
+  border-radius: var(--desk-radius) !important;
+  background: var(--desk-surface);
+  box-shadow: var(--desk-shadow);
+}
+html[data-ui-theme="element-admin"] .group-chip-row .group-chip.active,
+html[data-ui-theme="element-admin"] .group-chip.active {
+  background: var(--desk-accent) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+}
+
+html[data-ui-theme="element-admin"] .sidebar-status,
+html[data-ui-theme="element-admin"] .local-status-card {
+  border-radius: var(--desk-radius-sm) !important;
+}
+html[data-ui-theme="element-admin"] .rpa-store-card:hover {
+  border-color: var(--desk-separator-strong) !important;
+  box-shadow: var(--desk-shadow) !important;
+  transform: none;
+}
+html[data-ui-theme="element-admin"] .empty { color: var(--desk-text-secondary); }
+html[data-ui-theme="element-admin"] .toolbar { gap: 8px; }
+html[data-ui-theme="element-admin"] .profile-pagination button {
+  border-radius: var(--desk-radius-ctl) !important;
+}
+
+/* denser list on mac */
+html[data-platform="macos"][data-ui-theme="element-admin"] #view-profiles .table-card th,
+html[data-platform="macos"][data-ui-theme="element-admin"] #view-profiles .table-card td {
+  font-size: 13px !important;
+  padding: 10px 12px !important;
+}
+html[data-platform="windows"][data-ui-theme="element-admin"] #view-profiles .table-card th,
+html[data-platform="windows"][data-ui-theme="element-admin"] #view-profiles .table-card td,
+html[data-platform="other"][data-ui-theme="element-admin"] #view-profiles .table-card th,
+html[data-platform="other"][data-ui-theme="element-admin"] #view-profiles .table-card td {
+  font-size: 13px !important;
+  padding: 12px 14px !important;
+}
+
+@media (max-width: 1250px) {
+  html[data-ui-theme="element-admin"] { --ui-sidebar-width: 200px; }
+  html[data-ui-theme="element-admin"] .brand strong { font-size: 12px; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html[data-ui-theme="element-admin"] .sidebar,
+  html[data-ui-theme="element-admin"] .content > header,
+  html[data-ui-theme="element-admin"] .theme-popover {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <!-- Transparent outside · black disc · large tilted double-oval spiral (vector) -->
+  <circle cx="256" cy="256" r="186" fill="#000000"/>
+  <g transform="translate(256 256) rotate(-38) scale(1.22)">
+    <!-- Outer open oval -->
+    <path
+      d="M -96 22
+         C -96 -48 -48 -88 12 -88
+         C 74 -88 112 -42 112 18
+         C 112 76 68 112 12 112
+         C -22 112 -52 96 -72 68"
+      stroke="#FFFFFF"
+      stroke-width="30"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      fill="none"
+    />
+    <!-- Inner open arc -->
+    <path
+      d="M -42 24
+         C -42 -22 -12 -48 22 -48
+         C 56 -48 74 -20 74 12
+         C 74 40 54 58 28 58"
+      stroke="#FFFFFF"
+      stroke-width="28"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      fill="none"
+    />
+  </g>
+</svg>

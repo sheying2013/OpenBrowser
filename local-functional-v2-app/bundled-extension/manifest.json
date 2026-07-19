@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "OpenBrowser 环境标记",
+  "version": "1.0.0",
+  "description": "标记由 OpenBrowser 打开的浏览器环境。",
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["marker.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

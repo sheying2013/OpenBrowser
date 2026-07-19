@@ -1,0 +1,45 @@
+node_modules/
+dist/
+output/
+.playwright-cli/
+functional-v2-selftest-data/
+extension-pipe-selftest-data/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Local browser data and downloaded runtimes
+profiles/
+user-data/
+browser-data/
+kernels/
+runtime/
+chromium/
+chrome-for-testing/
+**/User Data/
+**/Default/
+
+# Build and platform products
+*.exe
+*.msi
+*.dmg
+*.pkg
+*.zip
+*.app/
+**/node_modules/
+**/dist/
+
+# Ignore accidentally named icon copies from local asset generation
+**/*.iconset/*@example.*
+
+# Local secrets and credentials
+.lan-token
+*.key
+*.pem
+*.p12
+*.pfx
+auth.json
+cookies*.json
+proxy-credentials*

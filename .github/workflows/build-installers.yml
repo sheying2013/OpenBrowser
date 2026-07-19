@@ -1,0 +1,116 @@
+name: Build OpenBrowser installers
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-x86_64:
+    name: macOS x86_64
+    runs-on: macos-13
+    defaults:
+      run:
+        working-directory: local-functional-v2-app
+    env:
+      OPENBROWSER_PACKAGE_ARCH: x86_64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: local-functional-v2-app/package-lock.json
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Run self-tests
+        run: |
+          npm run selftest
+          npm run selftest:automation
+          npm run selftest:protocol
+          npm run selftest:isolation
+          npm run selftest:kernel
+      - name: Package
+        run: npm run package:portable
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenBrowser-macOS-x86_64
+          path: local-functional-v2-app/dist/OpenBrowser-macOS-x86_64.zip
+          if-no-files-found: error
+
+  macos-arm64:
+    name: macOS arm64
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: local-functional-v2-app
+    env:
+      OPENBROWSER_PACKAGE_ARCH: arm64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: local-functional-v2-app/package-lock.json
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Run self-tests
+        run: |
+          npm run selftest
+          npm run selftest:automation
+          npm run selftest:protocol
+          npm run selftest:isolation
+          npm run selftest:kernel
+      - name: Package
+        run: npm run package:portable
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenBrowser-macOS-arm64
+          path: local-functional-v2-app/dist/OpenBrowser-macOS-arm64.zip
+          if-no-files-found: error
+
+  windows-x86_64:
+    name: Windows x86_64
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: local-functional-v2-app
+    env:
+      OPENBROWSER_PACKAGE_ARCH: x86_64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: local-functional-v2-app/package-lock.json
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Run self-tests
+        run: |
+          npm run selftest
+          npm run selftest:automation
+          npm run selftest:protocol
+          npm run selftest:isolation
+          npm run selftest:kernel
+      - name: Package
+        run: npm run package:portable
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenBrowser-Windows-x86_64
+          path: local-functional-v2-app/dist/OpenBrowser-Windows-x86_64.zip
+          if-no-files-found: error
