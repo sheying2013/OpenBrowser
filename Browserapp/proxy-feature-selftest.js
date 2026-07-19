@@ -121,14 +121,16 @@ async function main() {
   // So prepare with extract will try testProxy which needs real network - mock testProxy
   const engine2 = makeEngineStub();
   let tested = [];
-  engine2.testProxy = async (profile) => {
-    tested.push(profile.proxy);
-    if (String(profile.proxy).includes('10.20.30.40')) {
+  engine2.testProxy = async (profile, options = {}) => {
+    const forced = String(options.proxy || options.forcedProxy || '').trim();
+    const target = forced || profile.proxy;
+    tested.push({ target, forced, source: options.proxySource || null, profileProxy: profile.proxy });
+    if (String(target).includes('10.20.30.40')) {
       const err = new Error('primary dead');
       err.errorClass = 'unreachable';
       throw err;
     }
-    if (String(profile.proxy).includes('1081')) {
+    if (String(target).includes('1081')) {
       return {
         ip: '198.51.100.2',
         countryCode: 'US',
@@ -140,8 +142,8 @@ async function main() {
         checkedAt: new Date().toISOString(),
         protocol: 'socks5',
         endpoint: '127.0.0.1:1081',
-        proxySource: 'backup',
-        proxyRaw: profile.proxy,
+        proxySource: options.proxySource || 'backup',
+        proxyRaw: target,
       };
     }
     const err = new Error('fail');
@@ -162,11 +164,58 @@ async function main() {
   });
   // extract replaces primary with 10.20.30.40, that fails, backup 1081 succeeds
   assert.ok(String(failedOver.proxy).includes('1081'), 'backup proxy should be selected, got ' + failedOver.proxy);
-  assert.ok(tested.some((p) => String(p).includes('10.20.30.40')), 'extracted primary should be tested');
-  assert.ok(tested.some((p) => String(p).includes('1081')), 'backup should be tested');
+  assert.ok(tested.some((p) => String(p.target).includes('10.20.30.40')), 'extracted primary should be tested');
+  assert.ok(tested.some((p) => String(p.target).includes('1081') && p.forced), 'backup must be forced-tested, not re-resolved');
+  assert.ok(tested.every((p) => p.forced), 'every candidate must use forced proxy option');
   const net = engine2.networkInfo.get('prof_proxy_feature_4');
   assert.strictEqual(net.ip, '198.51.100.2');
   assert.strictEqual(net.timezone, 'America/New_York');
+
+  // sanitize must NOT copy refreshUrl into apiExtractUrl
+  const noBleed = engine.sanitizeProfile({
+    id: 'prof_proxy_feature_5',
+    name: 'no-bleed',
+    networkMode: 'proxy',
+    proxy: 'socks5://1.1.1.1:1',
+    proxyMeta: { refreshUrl: 'http://example.test/refresh', apiExtractUrl: '' },
+    privacy: {},
+  });
+  assert.strictEqual(noBleed.proxyMeta.apiExtractUrl, '');
+  assert.strictEqual(noBleed.proxyMeta.refreshUrl, 'http://example.test/refresh');
+
+  // refresh surfaces extract error when extract fails but static proxy remains
+  const engine3 = makeEngineStub();
+  engine3.checkProxy = async (profile) => ({
+    ip: '203.0.113.9',
+    countryCode: 'JP',
+    timezone: 'Asia/Tokyo',
+    latitude: 35,
+    longitude: 139,
+    latencyMs: 20,
+    networkType: 'broadband',
+    checkedAt: new Date().toISOString(),
+    protocol: 'socks5',
+    endpoint: '1.1.1.1:1',
+    proxySource: 'primary',
+    proxyRaw: profile.proxy,
+    appliedFingerprint: engine3.fingerprintPatchFromNetwork({
+      ip: '203.0.113.9', countryCode: 'JP', timezone: 'Asia/Tokyo', latitude: 35, longitude: 139,
+    }, profile),
+    profile,
+  });
+  const refreshWithWarn = await engine3.refreshProfileProxy({
+    id: 'prof_proxy_feature_6',
+    name: 'refresh-warn',
+    networkMode: 'proxy',
+    proxy: 'socks5://1.1.1.1:1',
+    proxyMeta: {
+      refreshUrl: `${base}/refresh`,
+      apiExtractUrl: `${base}/missing-extract`,
+    },
+    privacy: {},
+  });
+  assert.ok(refreshWithWarn.extractError, 'extract failure should surface');
+  assert.ok(refreshWithWarn.network?.ip === '203.0.113.9');
 
   // fingerprint patch
   const patch = engine2.fingerprintPatchFromNetwork(net, failedOver);
@@ -215,11 +264,44 @@ async function main() {
   assert.ok(main.includes("registerTrustedIpc('profiles:refresh-proxy'"));
   assert.ok(main.includes("registerTrustedIpc('profiles:apply-proxy-fingerprint'"));
   assert.ok(main.includes("registerTrustedIpc('proxy:check-many'"));
+  assert.ok(renderer.includes('批量检测失败'), 'batch check should surface errors');
+  assert.ok(renderer.includes('result.extractError'), 'refresh UI should surface extract warnings');
+  assert.ok(renderer.includes('exitLatencyMs'), 'profile check should keep latency');
   assert.strictEqual(classifyProxyError(new Error('username or password')), 'auth');
   assert.ok(parseProxy('socks5://a:b@1.2.3.4:1080'));
 
+  // forced proxy option must bypass resolveProfileProxyConfig
+  const engineSrc = fs.readFileSync(path.join(__dirname, 'engine.js'), 'utf8');
+  assert.ok(engineSrc.includes('options.proxy || options.forcedProxy'), 'testProxy must accept forced proxy option');
+  assert.ok(engineSrc.includes("proxySource: index === 0 ? 'primary' : 'backup'"), 'prepare must force-test each candidate');
+  assert.ok(engineSrc.includes('extractError: extractError ? String(extractError.message || extractError) : null'), 'refresh must surface extract errors');
+  assert.ok(!engineSrc.includes("apiExtractUrl: String(proxyMetaValue.apiExtractUrl || proxyMetaValue.refreshUrl || '')"), 'sanitize must not bleed refreshUrl into apiExtractUrl');
+
+  const engine4 = makeEngineStub();
+  let resolveCalled = 0;
+  engine4.resolveProfileProxyConfig = async function () {
+    resolveCalled += 1;
+    throw new Error('resolve should not run for forced proxy');
+  };
+  // Exercise forced branch without network: invalid forced proxy should fail parse before resolve.
+  let forcedParseError = null;
+  try {
+    await engine4.testProxy({
+      id: 'prof_proxy_feature_7',
+      name: 'forced',
+      networkMode: 'proxy',
+      proxy: 'socks5://primary:pw@1.1.1.1:1',
+      privacy: {},
+      proxyMeta: {},
+    }, { proxy: 'not-a-proxy', proxySource: 'backup', allowExtract: false });
+  } catch (error) {
+    forcedParseError = error;
+  }
+  assert.ok(forcedParseError, 'invalid forced proxy should throw');
+  assert.strictEqual(resolveCalled, 0, 'forced proxy must skip resolve even on parse failure');
+
   server.close();
-  console.log('PROXY_FEATURE_SELFTEST_OK extract=1 failover=1 sanitize=1 wiring=1 store=1');
+  console.log('PROXY_FEATURE_SELFTEST_OK extract=1 failover=1 sanitize=1 wiring=1 store=1 refresh=1 forced=1');
 }
 
 main().catch((error) => {
