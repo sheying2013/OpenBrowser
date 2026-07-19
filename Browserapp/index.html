@@ -238,6 +238,30 @@
                     <label class="check-row"><input id="editor-proxy-refresh-start" type="checkbox"> 每次启动先刷新代理</label>
                     <label class="check-row"><input id="editor-proxy-fill-fingerprint" type="checkbox" checked> 检测后自动对齐指纹（时区/语言/定位）</label>
                   </div>
+                  <div class="form-two">
+                    <label class="check-row"><input id="editor-proxy-require-ready" type="checkbox" checked> 启动要求代理就绪</label>
+                    <label>未就绪策略
+                      <select id="editor-proxy-not-ready-policy">
+                        <option value="block">阻断启动</option>
+                        <option value="direct">回退直连</option>
+                        <option value="continue">继续使用当前代理</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="form-two">
+                    <label>TLS 配置档
+                      <select id="editor-proxy-tls-profile">
+                        <option value="auto">自动（按 Chrome 主版本）</option>
+                        <option value="chrome">Chrome 现代</option>
+                        <option value="chrome_legacy">Chrome 旧版</option>
+                        <option value="node">Node 默认</option>
+                        <option value="off">关闭定制</option>
+                      </select>
+                    </label>
+                    <label>TLS Chrome 主版本（可选）
+                      <input id="editor-proxy-tls-chrome-major" type="number" min="80" max="200" placeholder="空=跟随 UA">
+                    </label>
+                  </div>
                   <div class="settings-row"><span>使用系统代理</span>
                     <select id="editor-system-proxy">
                       <option value="global">跟随全局</option>
@@ -311,6 +335,8 @@
                   <label>WebGPU<select id="editor-webgpu"><option value="webgl">基于 WebGL</option><option value="real">真实</option><option value="blocked">禁用</option></select></label>
                   <label>AudioContext<select id="editor-audio"><option value="noise">随机</option><option value="real">真实</option><option value="muted">关闭</option></select></label>
                   <label>媒体设备<select id="editor-media"><option value="noise">随机</option><option value="real">真实</option><option value="blocked">关闭</option></select></label>
+                  <label>设备枚举<select id="editor-media-devices"><option value="">跟随媒体设备</option><option value="noise">随机</option><option value="real">真实</option><option value="empty">空列表</option></select></label>
+                  <label>电池状态<select id="editor-battery"><option value="noise">随机</option><option value="real">真实</option><option value="blocked">关闭</option></select></label>
                   <label>ClientRects<select id="editor-client-rects"><option value="noise">随机</option><option value="real">真实</option></select></label>
                   <label>SpeechVoices<select id="editor-speech"><option value="noise">随机</option><option value="real">真实</option><option value="blocked">关闭</option></select></label>
                   <label>CPU 核心<select id="editor-cores"><option value="">自动</option><option value="0">真实</option><option value="2">2</option><option value="4">4</option><option value="6">6</option><option value="8">8</option><option value="10">10</option><option value="12">12</option><option value="16">16</option></select></label>
@@ -318,6 +344,42 @@
                   <label>设备名称模式<select id="editor-device-name-mode"><option value="noise">随机</option><option value="custom">自定义</option><option value="real">真实</option></select></label>
                   <label>设备名称<input id="editor-device-name" placeholder="自定义设备名"></label>
                   <label>Do Not Track<select id="editor-dnt-mode"><option value="default">默认</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+                </div>
+                <div class="advanced-card" style="margin-top:4px">
+                  <strong>站点稳定性</strong>
+                  <p class="network-mode-hint">高风险站点降低 Canvas/WebGL 噪声漂移；开启后「每次打开刷新指纹」在稳定性模式非关闭时不再生效。</p>
+                  <div class="form-two">
+                    <label>稳定性模式
+                      <select id="editor-stability-mode">
+                        <option value="auto">自动（命中列表时启用）</option>
+                        <option value="force">强制全局</option>
+                        <option value="off">关闭</option>
+                      </select>
+                    </label>
+                    <label>汉明阈值
+                      <input id="editor-stability-hamming" type="number" min="1" max="64" value="12">
+                    </label>
+                  </div>
+                  <div class="form-three">
+                    <label>采样最大宽<input id="editor-stability-max-width" type="number" min="64" max="4096" value="600"></label>
+                    <label>采样最大高<input id="editor-stability-max-height" type="number" min="64" max="4096" value="600"></label>
+                    <label>分块边长<input id="editor-stability-square" type="number" min="2" max="64" value="8"></label>
+                  </div>
+                  <label>高风险主机（可选，逗号/换行；空=内置默认）
+                    <textarea id="editor-stability-hosts" rows="2" placeholder="amazon.com, paypal.com"></textarea>
+                  </label>
+                  <label>跳过稳定性主机（可选）
+                    <textarea id="editor-stability-skip-hosts" rows="2" placeholder="sephora.com"></textarea>
+                  </label>
+                </div>
+                <div class="advanced-card">
+                  <strong>媒体设备标签（可选）</strong>
+                  <p class="network-mode-hint">留空则按环境种子生成；填写后固定设备名。</p>
+                  <div class="form-three">
+                    <label>麦克风<input id="editor-media-label-audio" maxlength="200" placeholder="例如 Built-in Microphone"></label>
+                    <label>摄像头<input id="editor-media-label-video" maxlength="200" placeholder="例如 FaceTime HD Camera"></label>
+                    <label>扬声器<input id="editor-media-label-output" maxlength="200" placeholder="例如 Speakers"></label>
+                  </div>
                 </div>
                 <label class="check-row"><input id="editor-dnt" type="checkbox" hidden> </label>
                 <label class="check-row"><input id="editor-port-scan" type="checkbox"> 端口扫描保护 — 阻止网站探测本机端口</label>

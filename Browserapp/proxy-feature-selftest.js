@@ -245,6 +245,10 @@ async function main() {
     'editor-backup-proxies',
     'editor-proxy-refresh-start',
     'editor-proxy-fill-fingerprint',
+    'editor-proxy-require-ready',
+    'editor-proxy-not-ready-policy',
+    'editor-proxy-tls-profile',
+    'editor-proxy-tls-chrome-major',
     'editor-test-proxy',
     'editor-apply-proxy-fp',
     'editor-refresh-proxy',
@@ -252,6 +256,10 @@ async function main() {
   ]) {
     assert.ok(html.includes(`id="${id}"`), 'missing html id ' + id);
   }
+  assert.ok(renderer.includes("requireReady: $('#editor-proxy-require-ready')"), 'editor draft must collect requireReady');
+  assert.ok(renderer.includes("notReadyPolicy: $('#editor-proxy-not-ready-policy')"), 'editor draft must collect notReadyPolicy');
+  assert.ok(renderer.includes("tlsProfile: $('#editor-proxy-tls-profile')"), 'editor draft must collect tlsProfile');
+  assert.ok(renderer.includes("apiExtractUrl: String(proxyMeta.apiExtractUrl || '')"), 'normalize must not bleed refreshUrl into apiExtractUrl');
   assert.strictEqual((renderer.match(/\$\('#editor-test-proxy'\)\?\.addEventListener\('click', testEditorProxy\);/g) || []).length, 1, 'test proxy listener should be single');
   assert.strictEqual((renderer.match(/\$\('#editor-apply-proxy-fp'\)\?\.addEventListener\('click', applyEditorProxyFingerprint\);/g) || []).length, 1);
   assert.strictEqual((renderer.match(/\$\('#editor-refresh-proxy'\)\?\.addEventListener\('click', refreshEditorProxy\);/g) || []).length, 1);
