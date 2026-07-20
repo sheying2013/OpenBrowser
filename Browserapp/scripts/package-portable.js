@@ -66,7 +66,12 @@ function run(command, args, options = {}) {
 }
 
 function copyRecursive(source, destination) {
-  const stats = fs.statSync(source);
+  const stats = fs.lstatSync(source);
+  if (stats.isSymbolicLink()) {
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.symlinkSync(fs.readlinkSync(source), destination);
+    return;
+  }
   if (stats.isDirectory()) {
     fs.mkdirSync(destination, { recursive: true });
     for (const entry of fs.readdirSync(source)) {
