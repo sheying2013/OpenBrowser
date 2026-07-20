@@ -94,9 +94,20 @@ jobs:
       OPENBROWSER_PACKAGE_VARIANT: with-kernel
       OPENBROWSER_BUNDLE_KERNEL: 'true'
     steps:
+      - name: Enable Windows long paths for git
+        shell: pwsh
+        run: |
+          git config --system core.longpaths true
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force | Out-Null
       - uses: actions/checkout@v4
         with:
           lfs: true
+          sparse-checkout: |
+            /*
+            !/Browserapp/kernels/macos-x64/
+            !/Browserapp/kernels/macos-arm64/
+            !/Browserapp/kernels/openbrowser/
+          sparse-checkout-cone-mode: false
       - name: Prune foreign kernels
         run: rm -rf kernels/macos-x64 kernels/macos-arm64 kernels/openbrowser kernels/wayfern/macos-arm64 kernels/wayfern/macos-x64 || true
       - uses: actions/setup-node@v4
@@ -163,6 +174,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: true
+          sparse-checkout: |
+            /*
+            !/Browserapp/kernels/windows-x64/
+            !/Browserapp/kernels/macos-arm64/
+            !/Browserapp/kernels/wayfern/
+          sparse-checkout-cone-mode: false
       - name: Prune foreign kernels
         run: rm -rf kernels/windows-x64 kernels/macos-arm64 kernels/wayfern || true
       - uses: actions/setup-node@v4
@@ -224,6 +241,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: true
+          sparse-checkout: |
+            /*
+            !/Browserapp/kernels/macos-x64/
+            !/Browserapp/kernels/windows-x64/
+            !/Browserapp/kernels/openbrowser/
+          sparse-checkout-cone-mode: false
       - name: Prune foreign kernels
         run: rm -rf kernels/macos-x64 kernels/windows-x64 kernels/openbrowser || true
       - uses: actions/setup-node@v4
