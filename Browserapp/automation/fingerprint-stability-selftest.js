@@ -317,7 +317,7 @@ async function runProxyPolicies(engineBlock, BrowserEngine) {
   assert.ok(/direct/i.test(direct.proxy));
   assert.ok(events2.some((e) => e.type === 'proxy-fallback'));
 
-  // source integrity: no provenance claims
+  // source integrity: banned external product names must not appear
   const fpSrc = fs.readFileSync(path.join(__dirname, 'fingerprint.js'), 'utf8');
   for (const banned of ['ThirdPartySuite', 'Hubstudio', 'HubStudio', '逆向', '复刻', 'ThirdPartyKernel']) {
     assert.ok(!fpSrc.includes(banned), 'fingerprint.js must not contain ' + banned);

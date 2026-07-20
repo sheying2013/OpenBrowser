@@ -679,11 +679,11 @@ async function prepareMacDockWrapper({
     patch('CFBundleDisplayName', appName);
     patch('CFBundleName', appName);
     patch('CFBundleIconFile', 'app.icns');
-    // Keep CFBundleIdentifier = org.HongKongZiXun.HubStudio (Helpers / Mach rendezvous)
+    // Keep CFBundleIdentifier compatible with kernel Helpers / Mach rendezvous
     // Keep NSPrincipalClass = BrowserCrApplication
     await fsp.writeFile(path.join(contents, 'Info.plist'), plistBody, 'utf8');
   } else {
-    // Minimal fallback still uses real HubStudio id + BrowserCrApplication
+    // Minimal fallback keeps the kernel-required bundle id + BrowserCrApplication
     const fallback = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -826,6 +826,9 @@ init["ipc"] = ipc
 cl = init.get("cmd_line") if isinstance(init.get("cmd_line"), dict) else {}
 cl["remote-debugging-port"] = "0"
 init["cmd_line"] = cl
+# OpenBrowser local automation: enable webdriver/CDP flags in init for managed profiles.
+init["can_webdriver"] = True
+init["allow_remote_debugging"] = True
 if not init.get("token"): init["token"] = "openbrowser-token"
 plain = json.dumps(init, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 out.write_bytes(base64.b64encode(plain))

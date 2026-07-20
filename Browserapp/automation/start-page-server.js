@@ -29,7 +29,7 @@ const DEFAULT_PORT = Number(process.env.OPENBROWSER_START_PAGE_PORT || 50326);
 const PORT_CANDIDATES = [DEFAULT_PORT, 50327, 50328, 50329, 0];
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-/** 访问能力探测目标：连通 + 出口地区 + best-effort 解锁信号 */
+/** 访问能力探测目标：连通 + 出口地区 + best-effort 可用性信号 */
 const REACHABILITY_TARGETS = {
   google: {
     label: 'Google',
@@ -135,7 +135,7 @@ function looksBlocked(body = '', status = 0) {
 function looksUnlockedMeta(body = '', status = 0) {
   if (status >= 200 && status < 400) {
     if (looksBlocked(body, status)) return false;
-    // Meta 常见正常页特征；400 错误页不算解锁
+    // Meta 常见正常页特征；400 错误页不算可用
     if (status === 400) return false;
     return /facebook|instagram|meta/i.test(body) || body.length > 200;
   }

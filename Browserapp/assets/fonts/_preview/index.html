@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>中文像素字体候选对比</title>
+  <style>
+    @font-face { font-family: 'Cand-Ark'; src: url('./fonts/ark-zh_cn.woff2') format('woff2'); font-weight: 400 700; }
+    @font-face { font-family: 'Cand-Ark'; src: url('./fonts/ark-latin.woff2') format('woff2'); unicode-range: U+0000-00FF; }
+    @font-face { font-family: 'Cand-Jelly'; src: url('./fonts/jelly-zh_cn.woff2') format('woff2'); font-weight: 400 700; }
+    @font-face { font-family: 'Cand-Jelly'; src: url('./fonts/jelly-latin.woff2') format('woff2'); unicode-range: U+0000-00FF; }
+    @font-face { font-family: 'Cand-Fusion'; src: url('./fonts/fusion-zh_hans.woff2') format('woff2'); font-weight: 400 700; }
+    @font-face { font-family: 'Cand-Fusion'; src: url('./fonts/fusion-latin.woff2') format('woff2'); unicode-range: U+0000-00FF; }
+    @font-face { font-family: 'Cand-FusionBold'; src: url('./fonts/fusion-bold-zh_hans.woff2') format('woff2'); font-weight: 400 700; }
+    @font-face { font-family: 'Cand-FusionBold'; src: url('./fonts/fusion-bold-latin.woff2') format('woff2'); unicode-range: U+0000-00FF; }
+    @font-face { font-family: 'Cand-Cubic11'; src: url('./fonts/cubic11.woff2') format('woff2'); font-weight: 400 700; }
+
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; padding: 24px;
+      background: #101519; color: #e8f2eb;
+      font-family: system-ui, sans-serif;
+    }
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    .hint { color: #9ab0a4; margin-bottom: 20px; line-height: 1.5; }
+    .grid { display: grid; gap: 16px; }
+    .card {
+      border: 3px solid #05080b; background: #151c21;
+      box-shadow: 5px 5px 0 #5b9599; padding: 16px;
+    }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 12px; align-items: baseline; }
+    .meta strong { font-size: 16px; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border: 2px solid #05080b;
+      background: #5b9599; color: #070f12; font-size: 12px; font-weight: 700;
+    }
+    .badge.warn { background: #b19655; }
+    .badge.ok { background: #6ca77d; }
+    .sample {
+      font-size: 18px; line-height: 1.7;
+      image-rendering: pixelated;
+      -webkit-font-smoothing: none;
+      margin: 8px 0;
+      white-space: pre-wrap;
+    }
+    .sample.sm { font-size: 14px; }
+    .sample.lg { font-size: 24px; }
+    .official { margin-top: 10px; max-width: 100%; border: 2px solid #3c484f; background: #0b0f14; }
+    a { color: #8fd0d4; }
+    code { color: #cfe7d3; }
+  </style>
+</head>
+<body>
+  <h1>中文像素字体候选（可免费商用 / 可打包）</h1>
+  <p class="hint">
+    全部为 SIL OFL 1.1（或同等免费可商用再分发）。当前 App 使用的是 <b>Fusion Pixel</b>（你说丑）。
+    用浏览器打开本页对比后，告诉我编号即可替换。<br>
+    路径：<code>Browserapp/assets/fonts/_preview/index.html</code>
+  </p>
+
+  <div class="grid">
+    <section class="card" id="a">
+      <div class="meta">
+        <strong>A · Ark Pixel 12px Prop（方舟像素）</strong>
+        <span class="badge ok">OFL 1.1</span>
+        <span class="badge">推荐 UI</span>
+        <span class="badge">~0.75MB 简中</span>
+      </div>
+      <div class="sample" style="font-family:'Cand-Ark',sans-serif">OpenBrowser 环境管理 · 新建浏览器 · 代理管理 · 自动脚本</div>
+      <div class="sample sm" style="font-family:'Cand-Ark',sans-serif">侧栏菜单 流程管理 运行记录 本地设置 窗口同步 API & MCP</div>
+      <div class="sample lg" style="font-family:'Cand-Ark',sans-serif">像素工作站 / 浅色像素风 · 0123456789</div>
+      <div>官方预览：</div>
+      <img class="official" src="./ark-12px.png" alt="ark 12px">
+      <p class="hint">正统黑体像素，字库完整（简中 zh_cn）。比 Fusion 更干净。仓库：TakWolf/ark-pixel-font</p>
+    </section>
+
+    <section class="card" id="b">
+      <div class="meta">
+        <strong>B · Jelly Pixel 12px Prop（果冻像素）</strong>
+        <span class="badge ok">OFL 1.1</span>
+        <span class="badge">圆体</span>
+        <span class="badge">很小 ~73KB 简中</span>
+      </div>
+      <div class="sample" style="font-family:'Cand-Jelly',sans-serif">OpenBrowser 环境管理 · 新建浏览器 · 代理管理 · 自动脚本</div>
+      <div class="sample sm" style="font-family:'Cand-Jelly',sans-serif">侧栏菜单 流程管理 运行记录 本地设置 窗口同步 API & MCP</div>
+      <div class="sample lg" style="font-family:'Cand-Jelly',sans-serif">像素工作站 / 浅色像素风 · 0123456789</div>
+      <div>官方预览：</div>
+      <img class="official" src="./jelly-12px.png" alt="jelly 12px">
+      <p class="hint">圆角更软。简中包体积极小，缺字可能比 Ark 多。仓库：TakWolf/jelly-pixel-font</p>
+    </section>
+
+    <section class="card" id="c">
+      <div class="meta">
+        <strong>C · Cubic 11 / 俐方體11號</strong>
+        <span class="badge ok">OFL 1.1</span>
+        <span class="badge">11×11 点阵</span>
+        <span class="badge">~0.4MB woff2</span>
+      </div>
+      <div class="sample" style="font-family:'Cand-Cubic11',sans-serif">OpenBrowser 环境管理 · 新建浏览器 · 代理管理 · 自动脚本</div>
+      <div class="sample sm" style="font-family:'Cand-Cubic11',sans-serif">侧栏菜单 流程管理 运行记录 本地设置 窗口同步 API & MCP</div>
+      <div class="sample lg" style="font-family:'Cand-Cubic11',sans-serif">像素工作站 / 浅色像素风 · 0123456789</div>
+      <div>官方预览：</div>
+      <img class="official" src="./cubic11-hero.png" alt="cubic11">
+      <img class="official" src="./cubic11-compare.png" alt="cubic11 compare">
+      <p class="hint">经典点阵感最强，偏繁体/台港字形，简中也有覆盖。仓库：ACh-K/Cubic-11</p>
+    </section>
+
+    <section class="card" id="d">
+      <div class="meta">
+        <strong>D · Fusion Bold Pixel 12px（缝合粗像素）</strong>
+        <span class="badge ok">OFL 1.1</span>
+        <span class="badge">加粗</span>
+        <span class="badge">~0.9MB</span>
+      </div>
+      <div class="sample" style="font-family:'Cand-FusionBold',sans-serif">OpenBrowser 环境管理 · 新建浏览器 · 代理管理 · 自动脚本</div>
+      <div class="sample sm" style="font-family:'Cand-FusionBold',sans-serif">侧栏菜单 流程管理 运行记录 本地设置 窗口同步 API & MCP</div>
+      <div class="sample lg" style="font-family:'Cand-FusionBold',sans-serif">像素工作站 / 浅色像素风 · 0123456789</div>
+      <div>官方预览：</div>
+      <img class="official" src="./fusion-bold-12px.png" alt="fusion bold">
+      <p class="hint">当前 Fusion 的加粗版，侧栏可能更清晰，但仍是缝合风格。仓库：pixel-font-studio/fusion-bold-pixel-font</p>
+    </section>
+
+    <section class="card" id="e">
+      <div class="meta">
+        <strong>E · Fusion Pixel 12px（当前使用）</strong>
+        <span class="badge warn">当前</span>
+        <span class="badge ok">OFL 1.1</span>
+      </div>
+      <div class="sample" style="font-family:'Cand-Fusion',sans-serif">OpenBrowser 环境管理 · 新建浏览器 · 代理管理 · 自动脚本</div>
+      <div class="sample sm" style="font-family:'Cand-Fusion',sans-serif">侧栏菜单 流程管理 运行记录 本地设置 窗口同步 API & MCP</div>
+      <div class="sample lg" style="font-family:'Cand-Fusion',sans-serif">像素工作站 / 浅色像素风 · 0123456789</div>
+      <div>官方预览：</div>
+      <img class="official" src="./fusion-12px.png" alt="fusion">
+      <p class="hint">你说太丑的那个。缝合多源，字库全但风格不统一。</p>
+    </section>
+  </div>
+
+  <p class="hint" style="margin-top:24px">
+    不可免费商用（未列入）：Zpix 需付费商用。未成熟/无现成 release：Pulse Pixel、Capsule Pixel。<br>
+    回复例如：<b>用 A</b> / <b>用 C</b> / <b>A 侧栏 + C 正文</b>
+  </p>
+</body>
+</html>

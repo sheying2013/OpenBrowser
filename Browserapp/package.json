@@ -14,9 +14,14 @@
     "selftest:kernel": "node automation/kernel-policy-selftest.js",
     "selftest:startup": "node browser-startup-diagnostic-selftest.js",
     "selftest:cloud": "node automation/cloud-sync-security-selftest.js",
+    "log:startup": "node scripts/read-startup-log.js",
+    "log:fingerprint": "node scripts/read-fp-log.js",
     "prepare:bundled-kernel": "node scripts/prepare-bundled-kernel.js",
     "build:native": "node scripts/build-native.js",
-    "package:portable": "node scripts/package-portable.js"
+    "package:portable": "node scripts/package-portable.js",
+    "selftest:theme": "node theme-nes-light-selftest.js",
+    "selftest:retro": "node theme-retro-desktop-selftest.js",
+    "selftest:themes": "node theme-nes-light-selftest.js && node theme-retro-desktop-selftest.js"
   },
   "devDependencies": {
     "desktop-shell": "npm:electron@43.1.1",

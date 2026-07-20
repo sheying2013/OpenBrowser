@@ -1,51 +1,51 @@
-/* NES.css-inspired light pixel retro skin (Press Start-like mono + hard shadows). */
+/* Light twin of the dark pixel skin: same geometry/depth/grid, cream paper + dusty teal. */
 html[data-ui-theme="nes-light"] {
-  /* NES.css classic palette (light) */
-  --blue: #209cee;
-  --blue2: #d0ebff;
-  --border: #212529;
-  --muted: #777777;
-  --green: #92cc41;
-  --theme-bg: #f8f8f8;
-  --theme-surface: #ffffff;
-  --theme-surface-alt: #f0f0f0;
-  --theme-active: #209cee;
-  --theme-soft: #e7f5ff;
-  --theme-text: #212529;
-  --theme-muted: #555555;
-  --theme-accent-strong: #0b7285;
-  --theme-shadow: #212529;
+  --blue: #51787a;
+  --blue2: #ccc1ac;
+  --border: #362f26;
+  --muted: #645b4e;
+  --green: #5e8e6e;
+  /* Kraft / parchment paper — warmer, more fiber-like than cool cream */
+  --theme-bg: #cdc1a9;
+  --theme-surface: #e7ddc8;
+  --theme-surface-alt: #d7ccb4;
+  --theme-active: #51787a;
+  --theme-soft: #dcd1ba;
+  --theme-text: #27231b;
+  --theme-muted: #544b3e;
+  --theme-accent-strong: #3c5153;
+  --theme-shadow: #27221b;
   --theme-glow: none;
-  --theme-input: #ffffff;
-  --theme-table-line: #212529;
-  --theme-sidebar-status-bg: #ebfbee;
-  --theme-sidebar-status-border: #92cc41;
-  --theme-sidebar-status-text: #2b8a3e;
-  --theme-code-bg: #212529;
-  --theme-code-fg: #f8f8f8;
+  --theme-input: #ece3cf;
+  --theme-table-line: #baad94;
+  --theme-sidebar-status-bg: #cfc5ad;
+  --theme-sidebar-status-border: #5e8e6e;
+  --theme-sidebar-status-text: #3d5a44;
+  --theme-code-bg: #2a241c;
+  --theme-code-fg: #cfc5ad;
   --ui-sidebar-width: 200px;
   --ui-header-height: 56px;
   --ui-control-height: 34px;
-  --ui-sidebar: #ffffff;
-  --ui-header: #ffffff;
-  --ui-surface: #ffffff;
-  --ui-surface-muted: #f0f0f0;
-  --ui-border: #212529;
-  --ui-border-strong: #212529;
-  --ui-text: #212529;
-  --ui-muted: #555555;
-  --ui-accent: #209cee;
-  --ui-accent-soft: #d0ebff;
-  --ui-danger: #e76e55;
-  --ui-shadow: 4px 4px 0 #212529;
+  --ui-sidebar: #c2b59c;
+  --ui-header: #d0c4aa;
+  --ui-surface: #e7ddc8;
+  --ui-surface-muted: #d7ccb4;
+  --ui-border: #362f26;
+  --ui-border-strong: #27221b;
+  --ui-text: #27231b;
+  --ui-muted: #544b3e;
+  --ui-accent: #51787a;
+  --ui-accent-soft: #bfb59d;
+  --ui-danger: #aa5a5a;
+  --ui-shadow: 4px 4px 0 #27221b;
   --ui-radius: 0px;
   --ui-radius-sm: 0px;
   --start-progress-height: 8px;
   --start-progress-radius: 0;
-  --start-progress-track: #e7e7e7;
-  --start-progress-fill: #209cee;
-  --start-progress-fill-soft: #74c0fc;
-  --start-progress-label: #0b7285;
+  --start-progress-track: #d7ccb4;
+  --start-progress-fill: #51787a;
+  --start-progress-fill-soft: #83a3a6;
+  --start-progress-label: #3c5153;
   color-scheme: light;
 }
 
@@ -53,17 +53,26 @@ html[data-ui-theme="nes-light"] *,
 html[data-ui-theme="nes-light"] *::before,
 html[data-ui-theme="nes-light"] *::after { border-radius: 0 !important; letter-spacing: 0 !important; }
 html[data-ui-theme="nes-light"] body {
-  color: #212529;
-  font-family: "Courier New", Consolas, "Microsoft YaHei UI", monospace;
-  background-color: #f8f8f8;
+  color: #27231b;
+  /* Ark Pixel CJK + Latin; OS fonts only as missing-glyph fallback */
+  font-family: "Ark Pixel", "Courier New", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
+  /* Kraft paper: warm base + subtle fiber grain + soft grid */
+  background-color: #cdc1a9;
   background-image:
-    linear-gradient(#e7e7e7 1px, transparent 1px),
-    linear-gradient(90deg, #e7e7e7 1px, transparent 1px);
-  background-size: 16px 16px;
+    radial-gradient(ellipse 120% 80% at 10% 0%, rgba(255, 244, 214, 0.22), transparent 55%),
+    radial-gradient(ellipse 90% 70% at 90% 100%, rgba(140, 110, 70, 0.07), transparent 50%),
+    repeating-linear-gradient(0deg, transparent 0 3px, rgba(70, 50, 28, 0.02) 3px 4px),
+    linear-gradient(#beb094 1px, transparent 1px),
+    linear-gradient(90deg, #beb094 1px, transparent 1px);
+  background-size: auto, auto, auto, 16px 16px, 16px 16px;
 }
 html[data-ui-theme="nes-light"] body::after {
-  content: ""; position: fixed; z-index: 1; inset: 0; pointer-events: none; opacity: .05;
-  background: repeating-linear-gradient(0deg, transparent 0 3px, #212529 3px 4px);
+  content: ""; position: fixed; z-index: 1; inset: 0; pointer-events: none; opacity: .03;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 3px, rgba(42, 34, 20, 0.35) 3px 4px),
+    url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.45'/%3E%3C/svg%3E");
+  background-size: auto, 180px 180px;
+  mix-blend-mode: multiply;
 }
 /* Scanline overlay must never cover dropdown menus */
 html[data-ui-theme="nes-light"] .themed-select-menu {
@@ -76,41 +85,46 @@ html[data-ui-theme="nes-light"] button,
 html[data-ui-theme="nes-light"] input,
 html[data-ui-theme="nes-light"] select,
 html[data-ui-theme="nes-light"] textarea { font: inherit; }
-html[data-ui-theme="nes-light"] ::selection { background: #209cee; color: #ffffff; }
-html[data-ui-theme="nes-light"] ::-webkit-scrollbar { width: 14px; height: 14px; }
-html[data-ui-theme="nes-light"] ::-webkit-scrollbar-track { background: #ffffff; border: 3px solid #212529; }
-html[data-ui-theme="nes-light"] ::-webkit-scrollbar-thumb { background: #209cee; border: 3px solid #212529; }
+html[data-ui-theme="nes-light"] ::selection { background: #51787a; color: #e7ddc8; }
+html[data-ui-theme="nes-light"] ::-webkit-scrollbar { width: 12px; height: 12px; }
+html[data-ui-theme="nes-light"] ::-webkit-scrollbar-track { background: #c6baa0; border: 2px solid #362f26; }
+html[data-ui-theme="nes-light"] ::-webkit-scrollbar-thumb { background: #51787a; border: 2px solid #362f26; }
 
 html[data-ui-theme="nes-light"] .app-shell { background: transparent; }
 html[data-ui-theme="nes-light"] .sidebar {
-  padding: 10px 10px 12px; color: #212529; background: #ffffff !important;
-  border-right: 4px solid #212529 !important; box-shadow: 4px 0 0 #209cee !important;
+  padding: 10px 10px 12px; color: #27231b;
+  background:
+    linear-gradient(180deg, rgba(255, 244, 214, 0.22) 0%, transparent 40%),
+    linear-gradient(90deg, #c2b59c 0%, #baad93 100%) !important;
+  border-right: 3px solid #362f26 !important;
+  box-shadow: 6px 0 0 #27221b, 10px 0 18px rgba(60, 45, 25, .09) !important;
   backdrop-filter: none; -webkit-backdrop-filter: none;
+  z-index: 3;
 }
 html[data-ui-theme="nes-light"] .brand {
-  min-height: 68px; padding: 2px 2px 10px; border-bottom: 4px solid #212529;
+  min-height: 68px; padding: 2px 2px 10px; border-bottom: 3px solid #362f26;
   gap: 8px;
 }
 html[data-ui-theme="nes-light"] .brand .logo {
-  width: 64px; height: 64px; border: 4px solid #212529; background: #209cee; box-shadow: 4px 4px 0 #212529;
+  width: 64px; height: 64px; border: 2px solid #362f26; background: #51787a; box-shadow: 2px 2px 0 #5e8e6e;
 }
-html[data-ui-theme="nes-light"] .brand .logo img { content: url("assets/logo-pixel.png?v=20260719"); image-rendering: pixelated; }
-html[data-ui-theme="nes-light"] .brand strong { color: #212529; font-size: 13px; text-transform: uppercase; letter-spacing: 0.02em; }
-html[data-ui-theme="nes-light"] .brand small { color: #209cee; font-size: 9px; font-weight: 700; }
+html[data-ui-theme="nes-light"] .brand .logo img { content: url("assets/logo-pixel.png?v=20260720-pixel"); image-rendering: pixelated; }
+html[data-ui-theme="nes-light"] .brand strong { color: #27231b; font-size: 15px; text-transform: uppercase; letter-spacing: 0.02em; }
+html[data-ui-theme="nes-light"] .brand small { color: #5e8e6e; font-size: 11px; font-weight: 700; }
 html[data-ui-theme="nes-light"] .new-browser {
-  min-height: 38px; margin: 12px 0 10px; border: 4px solid #212529 !important;
-  background: #92cc41 !important; color: #212529 !important; box-shadow: 4px 4px 0 #212529 !important;
-  text-transform: uppercase; font-size: 13px; font-weight: 800;
+  min-height: 40px; margin: 12px 0 10px; border: 2px solid #362f26 !important;
+  background: #5e8e6e !important; color: #27231b !important; box-shadow: 3px 3px 0 #51787a !important;
+  text-transform: uppercase; font-size: 15px; font-weight: 800;
 }
 html[data-ui-theme="nes-light"] .new-browser:active { transform: translate(3px, 3px); box-shadow: none !important; }
 html[data-ui-theme="nes-light"] .sidebar nav {
-  scrollbar-color: #209cee #e7e7e7;
+  scrollbar-color: #51787a #c6baa0;
   gap: 2px;
   display: grid;
 }
 html[data-ui-theme="nes-light"] .sidebar .nav {
-  min-height: 36px; margin: 0; padding: 0 10px; border: 2px solid transparent;
-  color: #212529; font-size: 14px; font-weight: 700; letter-spacing: 0;
+  min-height: 38px; margin: 0; padding: 0 10px; border: 2px solid transparent;
+  color: #1a1814; font-size: 16px; font-weight: 700; letter-spacing: 0;
   gap: 10px;
   display: flex; align-items: center; min-width: 0;
 }
@@ -130,65 +144,85 @@ html[data-ui-theme="nes-light"] .sidebar .new-browser > span[data-i18n] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-html[data-ui-theme="nes-light"] .sidebar .nav:hover { border-color: #212529; background: #fff3bf; color: #212529; }
+html[data-ui-theme="nes-light"] .sidebar .nav:hover { border-color: #27231b; background: #dcd1ba; color: #625637; box-shadow: 2px 2px 0 #362f26; }
 html[data-ui-theme="nes-light"] .sidebar .nav.active {
-  border-color: #212529; background: #209cee; color: #ffffff; box-shadow: 4px 4px 0 #212529;
+  border-color: #27231b; background: #51787a; color: #e7ddc8; box-shadow: 3px 3px 0 #362f26, 5px 5px 0 rgba(95,168,119,.45);
 }
 html[data-ui-theme="nes-light"] .sidebar .nav.active svg { stroke-width: 2.4 !important; }
 html[data-ui-theme="nes-light"] .sidebar .nav-label {
-  margin: 12px 8px 4px; color: #e76e55; font-size: 11px; font-weight: 800;
+  margin: 12px 8px 4px; color: #8c7f5e; font-size: 12px; font-weight: 800;
 }
-html[data-ui-theme="nes-light"] .sidebar .nav-label::before { content: "// "; color: #92cc41; }
+html[data-ui-theme="nes-light"] .sidebar .nav-label::before { content: "// "; color: #5e8e6e; }
 html[data-ui-theme="nes-light"] .nav-sub {
-  border-left: 2px solid #209cee !important;
+  border-left: 2px solid #51787a !important;
   margin-left: 12px !important;
   padding-left: 6px !important;
 }
 html[data-ui-theme="nes-light"] .sidebar .nav-child {
-  min-height: 32px; font-size: 13px; padding-left: 10px;
+  min-height: 34px; font-size: 14px; padding-left: 10px;
 }
 
 html[data-ui-theme="nes-light"] .content { background: transparent; }
 html[data-ui-theme="nes-light"] .content > header {
-  min-height: 76px; padding: 0 24px; color: #212529; background: #ffffff !important;
-  border-bottom: 4px solid #212529 !important; box-shadow: 0 4px 0 #209cee !important;
-  backdrop-filter: none; -webkit-backdrop-filter: none;
+  /* Auto height: long API/MCP subtitles must not clip (mac used to force 52px) */
+  height: auto !important;
+  min-height: 76px;
+  padding: 14px 24px 16px !important;
+  color: #27231b;
+  background: #d0c4aa !important;
+  border-bottom: 1px solid #a9977a !important;
+  box-shadow: none !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  align-items: flex-start !important;
+  overflow: visible !important;
+}
+html[data-ui-theme="nes-light"] .content > header > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding-top: 2px;
 }
 html[data-ui-theme="nes-light"] .content > header h1 {
-  color: #209cee;
+  color: #27231b;
   font-size: 20px;
-  line-height: 1.25;
+  line-height: 1.3;
   text-transform: uppercase;
-  text-shadow: 2px 2px 0 #212529;
+  text-shadow: none;
   letter-spacing: 0.02em;
+  margin: 0 0 6px 0 !important;
 }
-html[data-ui-theme="nes-light"] .content > header h1::before { content: "> "; color: #e76e55; }
+html[data-ui-theme="nes-light"] .content > header h1::before { content: "> "; color: #5e8e6e; }
 html[data-ui-theme="nes-light"] .content > header p {
-  color: #555555 !important;
+  color: #463f34 !important;
   font-size: 12px !important;
-  line-height: 1.4 !important;
+  line-height: 1.55 !important;
   opacity: 1 !important;
-  max-width: min(52vw, 640px);
+  max-width: min(68vw, 820px);
+  margin: 0 !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: unset !important;
+  display: block !important;
 }
-html[data-ui-theme="nes-light"] .header-right { color: #555555; }
+html[data-ui-theme="nes-light"] .header-right { color: #4f4a42; }
 html[data-ui-theme="nes-light"] .tabs button,
 html[data-ui-theme="nes-light"] #view-extensions .tabs button {
-  color: #555555 !important;
+  color: #1d2528 !important;
   font-size: 13px !important;
   font-weight: 700 !important;
 }
 html[data-ui-theme="nes-light"] .tabs button.active {
-  color: #209cee !important;
+  color: #090f11 !important;
 }
 html[data-ui-theme="nes-light"] .engine-badge {
   padding: 2px 8px !important;
   min-height: 22px !important;
   height: auto !important;
   gap: 5px !important;
-  border: 3px solid #212529 !important;
-  background: #ebfbee;
-  color: #2b8a3e;
-  box-shadow: 3px 3px 0 #212529;
+  border: 1px solid #5e8e6e !important;
+  background: #cdded0;
+  color: #5e8e6e;
+  box-shadow: 1px 1px 0 #362f26;
   font-size: 11px !important;
 }
 html[data-ui-theme="nes-light"] .engine-badge-dot {
@@ -209,17 +243,17 @@ html[data-ui-theme="nes-light"] .action-grid button,
 html[data-ui-theme="nes-light"] .row-actions button,
 html[data-ui-theme="nes-light"] .editor-back,
 html[data-ui-theme="nes-light"] .rpa-icon-btn {
-  min-height: 32px; border: 2px solid #212529 !important; background: #ffffff; color: #212529;
-  box-shadow: 3px 3px 0 #212529; font-weight: 700;
+  min-height: 32px; border: 2px solid #362f26 !important; background: #e7ddc8; color: #27231b;
+  box-shadow: 3px 3px 0 #362f26, 5px 5px 0 rgba(28,25,20,.12); font-weight: 700;
 }
-html[data-ui-theme="nes-light"] .primary { background: #92cc41 !important; color: #212529 !important; }
+html[data-ui-theme="nes-light"] .primary { background: #5e8e6e !important; color: #27231b !important; }
 html[data-ui-theme="nes-light"] .danger,
-html[data-ui-theme="nes-light"] .rpa-btn-danger { background: #e76e55 !important; color: #ffffff !important; border-color: #212529 !important; }
+html[data-ui-theme="nes-light"] .rpa-btn-danger { background: #e7c7c3 !important; color: #7c3838 !important; border-color: #7c3838 !important; }
 html[data-ui-theme="nes-light"] button:not(.nav):active { transform: translate(3px, 3px); box-shadow: none !important; }
 html[data-ui-theme="nes-light"] button:focus-visible,
 html[data-ui-theme="nes-light"] input:focus-visible,
 html[data-ui-theme="nes-light"] select:focus-visible,
-html[data-ui-theme="nes-light"] textarea:focus-visible { outline: 3px solid #f7d51d !important; outline-offset: 2px; }
+html[data-ui-theme="nes-light"] textarea:focus-visible { outline: 3px solid #8c7f5e !important; outline-offset: 2px; }
 html[data-ui-theme="nes-light"] input,
 html[data-ui-theme="nes-light"] select,
 html[data-ui-theme="nes-light"] textarea,
@@ -227,45 +261,45 @@ html[data-ui-theme="nes-light"] .search,
 html[data-ui-theme="nes-light"] .rpa-input,
 html[data-ui-theme="nes-light"] .rpa-select,
 html[data-ui-theme="nes-light"] .rpa-search input {
-  border: 2px solid #212529 !important; background: #ffffff !important; color: #212529 !important; box-shadow: inset 2px 2px 0 #adb5bd;
+  border: 2px solid #362f26 !important; background: #e7ddc8 !important; color: #27231b !important; box-shadow: inset 2px 2px 0 #baad94, inset -1px -1px 0 #e7ddc8;
 }
 html[data-ui-theme="nes-light"] .search input { border: 0 !important; box-shadow: none; }
 html[data-ui-theme="nes-light"] input[type="checkbox"],
-html[data-ui-theme="nes-light"] input[type="radio"] { accent-color: #209cee; box-shadow: none; }
+html[data-ui-theme="nes-light"] input[type="radio"] { accent-color: #51787a; box-shadow: none; }
 html[data-ui-theme="nes-light"] .themed-select-button {
-  min-height: 36px; border: 2px solid #212529 !important; background: #ffffff !important;
-  color: #212529 !important; box-shadow: 3px 3px 0 #212529 !important; font-weight: 700;
+  min-height: 36px; border: 2px solid #362f26 !important; background: #e7ddc8 !important;
+  color: #27231b !important; box-shadow: 3px 3px 0 #362f26 !important; font-weight: 700;
 }
-html[data-ui-theme="nes-light"] .themed-select-button.open { background: #e7f5ff !important; }
+html[data-ui-theme="nes-light"] .themed-select-button.open { background: #b0c8c4 !important; }
 html[data-ui-theme="nes-light"] .themed-select-arrow {
-  border-left: 2px solid #212529; background: #209cee; color: #212529; font-size: 12px;
+  border-left: 2px solid #362f26; background: #51787a; color: #27231b; font-size: 12px;
 }
-html[data-ui-theme="nes-light"] .themed-select-button.open .themed-select-arrow { background: #f7d51d; color: #212529; }
+html[data-ui-theme="nes-light"] .themed-select-button.open .themed-select-arrow { background: #8c7f5e; color: #27231b; }
 html[data-ui-theme="nes-light"] .themed-select-menu {
-  padding: 4px; border: 3px solid #212529; background: #ffffff; box-shadow: 5px 5px 0 #209cee;
+  padding: 4px; border: 3px solid #362f26; background: #d0c4aa; box-shadow: 5px 5px 0 #51787a;
 }
 html[data-ui-theme="nes-light"] .themed-select-option {
-  min-height: 34px; border-bottom: 1px solid #212529 !important; background: #ffffff !important;
-  color: #212529 !important; font-family: "Courier New", Consolas, "Microsoft YaHei UI", monospace;
+  min-height: 34px; border-bottom: 1px solid #baad94 !important; background: #d0c4aa !important;
+  color: #27231b !important; font-family: "Ark Pixel", "Courier New", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
 }
 html[data-ui-theme="nes-light"] .themed-select-option:last-child { border-bottom: 0 !important; }
 html[data-ui-theme="nes-light"] .themed-select-option:hover,
-html[data-ui-theme="nes-light"] .themed-select-option:focus-visible { background: #f7d51d !important; color: #212529 !important; }
-html[data-ui-theme="nes-light"] .themed-select-option.selected { background: #209cee !important; color: #212529 !important; font-weight: 800; }
-html[data-ui-theme="nes-light"] .themed-select-option:disabled { color: #777777 !important; background: #e7e7e7 !important; }
+html[data-ui-theme="nes-light"] .themed-select-option:focus-visible { background: #8c7f5e !important; color: #27231b !important; }
+html[data-ui-theme="nes-light"] .themed-select-option.selected { background: #51787a !important; color: #27231b !important; font-weight: 800; }
+html[data-ui-theme="nes-light"] .themed-select-option:disabled { color: #6c685f !important; background: #c6baa0 !important; }
 html[data-ui-theme="nes-light"] .themed-multiselect-list {
-  border: 3px solid #212529 !important; background: #ffffff !important; color: #212529 !important;
-  box-shadow: inset 2px 2px 0 #212529, 4px 4px 0 #209cee !important;
+  border: 3px solid #362f26 !important; background: #d0c4aa !important; color: #27231b !important;
+  box-shadow: inset 2px 2px 0 #362f26, 4px 4px 0 #51787a !important;
 }
 html[data-ui-theme="nes-light"] .themed-multiselect-option {
-  min-height: 34px; border-bottom: 1px solid #212529 !important; border-radius: 0 !important;
-  background: #ffffff !important; color: #212529 !important;
-  font-family: "Courier New", Consolas, "Microsoft YaHei UI", monospace;
+  min-height: 34px; border-bottom: 1px solid #baad94 !important; border-radius: 0 !important;
+  background: #d0c4aa !important; color: #27231b !important;
+  font-family: "Ark Pixel", "Courier New", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
 }
 html[data-ui-theme="nes-light"] .themed-multiselect-option:last-child { border-bottom: 0 !important; }
 html[data-ui-theme="nes-light"] .themed-multiselect-option:hover,
-html[data-ui-theme="nes-light"] .themed-multiselect-option:focus-visible { background: #f7d51d !important; color: #212529 !important; }
-html[data-ui-theme="nes-light"] .themed-multiselect-option.selected { background: #209cee !important; color: #212529 !important; font-weight: 800; }
+html[data-ui-theme="nes-light"] .themed-multiselect-option:focus-visible { background: #8c7f5e !important; color: #27231b !important; }
+html[data-ui-theme="nes-light"] .themed-multiselect-option.selected { background: #51787a !important; color: #27231b !important; font-weight: 800; }
 html[data-ui-theme="nes-light"] .themed-multiselect-check { color: currentColor; }
 
 html[data-ui-theme="nes-light"] .table-card,
@@ -282,18 +316,18 @@ html[data-ui-theme="nes-light"] .rpa-editor-pane,
 html[data-ui-theme="nes-light"] .rpa-table-wrap,
 html[data-ui-theme="nes-light"] .rpa-store-card,
 html[data-ui-theme="nes-light"] .rpa-empty-card {
-  border: 3px solid #212529 !important; background: #ffffff !important; color: #212529; box-shadow: 4px 4px 0 #212529 !important;
+  border: 3px solid #362f26 !important; background: #e7ddc8 !important; color: #27231b; box-shadow: 5px 5px 0 #362f26, 9px 9px 0 rgba(79,143,147,.22) !important;
 }
 html[data-ui-theme="nes-light"] .table-card { overflow: auto; }
-html[data-ui-theme="nes-light"] table { background: #ffffff; }
-html[data-ui-theme="nes-light"] th { border-bottom: 3px solid #212529 !important; border-right: 1px solid #65747a; background: #209cee !important; color: #212529 !important; font-weight: 800 !important; }
-html[data-ui-theme="nes-light"] td { border-bottom: 1px solid #87968f !important; color: #212529 !important; }
-html[data-ui-theme="nes-light"] tbody tr:nth-child(even) { background: #f0f0f0; }
-html[data-ui-theme="nes-light"] tbody tr:hover { background: #fff3bf !important; }
-html[data-ui-theme="nes-light"] tbody tr.selected-row { background: #d0ebff !important; box-shadow: inset 5px 0 #416f73 !important; }
+html[data-ui-theme="nes-light"] table { background: #e7ddc8; }
+html[data-ui-theme="nes-light"] th { border-bottom: 3px solid #362f26 !important; border-right: 1px solid #baad94; background: #51787a !important; color: #27231b !important; font-weight: 800 !important; }
+html[data-ui-theme="nes-light"] td { border-bottom: 1px solid #a69d8c !important; color: #27231b !important; }
+html[data-ui-theme="nes-light"] tbody tr:nth-child(even) { background: #cddcd4; }
+html[data-ui-theme="nes-light"] tbody tr:hover { background: #dcd1ba !important; }
+html[data-ui-theme="nes-light"] tbody tr.selected-row { background: #a3c0bc !important; box-shadow: inset 5px 0 #3c5153 !important; }
 html[data-ui-theme="nes-light"] .avatar,
 html[data-ui-theme="nes-light"] .env-badge,
-html[data-ui-theme="nes-light"] .extension-icon { border: 2px solid #212529; background: #209cee; color: #212529; box-shadow: 2px 2px 0 #212529; image-rendering: pixelated; }
+html[data-ui-theme="nes-light"] .extension-icon { border: 2px solid #362f26; background: #51787a; color: #090f11; box-shadow: 2px 2px 0 #362f26; image-rendering: pixelated; }
 html[data-ui-theme="nes-light"] .env-badge,
 html[data-ui-theme="nes-light"] .ui-mark,
 html[data-ui-theme="nes-light"] .extension-icon,
@@ -311,89 +345,100 @@ html[data-ui-theme="nes-light"] .proxy-mark {
   font-size: 14px !important;
 }
 html[data-ui-theme="nes-light"] .status::before,
-html[data-ui-theme="nes-light"] .local-status-dot { border-radius: 0 !important; box-shadow: 2px 2px 0 #212529; }
+html[data-ui-theme="nes-light"] .local-status-dot { border-radius: 0 !important; box-shadow: 2px 2px 0 #362f26; }
 html[data-ui-theme="nes-light"] .group-chip,
 html[data-ui-theme="nes-light"] .group-badge,
 html[data-ui-theme="nes-light"] .net-badge,
 html[data-ui-theme="nes-light"] .sync-health,
 html[data-ui-theme="nes-light"] .rpa-pill,
-html[data-ui-theme="nes-light"] .rpa-status-pill { border: 2px solid #212529; box-shadow: 2px 2px 0 #212529; }
+html[data-ui-theme="nes-light"] .rpa-status-pill { border: 2px solid #362f26; box-shadow: 2px 2px 0 #362f26; }
 
 html[data-ui-theme="nes-light"] .tabs,
-html[data-ui-theme="nes-light"] .editor-tabs { border: 3px solid #212529; border-width: 3px 0; background: #f7f7f7; }
+html[data-ui-theme="nes-light"] .editor-tabs { border: 3px solid #362f26; border-width: 3px 0; background: #d7ccb4; }
 html[data-ui-theme="nes-light"] .tabs button,
 html[data-ui-theme="nes-light"] .editor-tabs button,
 html[data-ui-theme="nes-light"] .rpa-subtabs button,
-html[data-ui-theme="nes-light"] .rpa-tabs-line button { color: #42535b; font-weight: 700; }
+html[data-ui-theme="nes-light"] .rpa-tabs-line button { color: #3e4a50; font-weight: 700; }
 html[data-ui-theme="nes-light"] .tabs button.active,
 html[data-ui-theme="nes-light"] .editor-tabs button.active,
 html[data-ui-theme="nes-light"] .rpa-subtabs button.active,
-html[data-ui-theme="nes-light"] .rpa-tabs-line button.active { border-bottom: 4px solid #416f73; background: #209cee; color: #212529; }
+html[data-ui-theme="nes-light"] .rpa-tabs-line button.active { border-bottom: 4px solid #3c5153; background: #51787a; color: #090f11; }
 html[data-ui-theme="nes-light"] .segmented,
-html[data-ui-theme="nes-light"] .rpa-seg { border: 2px solid #212529; background: #9caba5; padding: 3px; }
+html[data-ui-theme="nes-light"] .rpa-seg { border: 2px solid #362f26; background: #8c9a95; padding: 3px; }
 html[data-ui-theme="nes-light"] .segmented label:has(input:checked),
-html[data-ui-theme="nes-light"] .rpa-seg button.active { border: 2px solid #212529; background: #f7d51d; color: #212529; box-shadow: 2px 2px 0 #212529; }
+html[data-ui-theme="nes-light"] .rpa-seg button.active { border: 2px solid #362f26; background: #8c7f5e; color: #27231b; box-shadow: 2px 2px 0 #362f26; }
 
+/* Code/console stay terminal-dark; RPA run log follows light paper skin (unified with #view-logs). */
 html[data-ui-theme="nes-light"] .console,
 html[data-ui-theme="nes-light"] .console-panel,
-html[data-ui-theme="nes-light"] .rpa-log,
 html[data-ui-theme="nes-light"] .rpa-code-block,
 html[data-ui-theme="nes-light"] .api-code-block,
-html[data-ui-theme="nes-light"] .ua-meta-preview { border: 3px solid #212529; background: #212529 !important; color: #d7ebe0 !important; box-shadow: 4px 4px 0 #209cee; }
-/* RPA run log: high-contrast console on dark surface. */
+html[data-ui-theme="nes-light"] .ua-meta-preview {
+  border: 3px solid #362f26;
+  background: #25221e !important;
+  color: #cddcd4 !important;
+  box-shadow: 5px 5px 0 #362f26, 8px 8px 0 rgba(79,143,147,.28);
+}
+/* RPA run log = light paper panel, same family as operation log. */
 html[data-ui-theme="nes-light"] .rpa-log {
-  --rpa-log-fg: #e8f7ef !important;
-  --rpa-log-muted: #9ec0bc !important;
-  --rpa-log-line: #334b54 !important;
-  background: #212529 !important;
-  color: #e8f7ef !important;
+  --rpa-log-fg: #362f26 !important;
+  --rpa-log-muted: #5e5a51 !important;
+  --rpa-log-line: #beb094 !important;
+  border: 3px solid #362f26 !important;
+  background: #e7ddc8 !important;
+  color: #27231b !important;
   font-size: 13px !important;
   line-height: 1.55 !important;
   min-height: 150px !important;
   max-height: 280px !important;
   padding: 10px 12px !important;
+  box-shadow: 4px 4px 0 #362f26, 7px 7px 0 rgba(28,25,20,.12) !important;
+  overflow: auto;
 }
 html[data-ui-theme="nes-light"] .rpa-log .log-line {
-  color: #e8f7ef !important;
-  border-bottom-color: #334b54 !important;
+  color: #27231b !important;
+  border-bottom: 1px solid #beb094 !important;
+  padding: 6px 2px !important;
 }
-html[data-ui-theme="nes-light"] .rpa-log .log-time { color: #9ec0bc !important; }
-html[data-ui-theme="nes-light"] .rpa-log .log-msg { color: #e8f7ef !important; font-weight: 600 !important; }
+html[data-ui-theme="nes-light"] .rpa-log .log-time { color: #6c685f !important; }
+html[data-ui-theme="nes-light"] .rpa-log .log-msg { color: #27231b !important; font-weight: 600 !important; }
 html[data-ui-theme="nes-light"] .rpa-log .rpa-muted,
-html[data-ui-theme="nes-light"] .rpa-log .log-empty { color: #9ec0bc !important; }
-html[data-ui-theme="nes-light"] .rpa-log .log-line.level-info .log-level { color: #7ec8ff !important; }
+html[data-ui-theme="nes-light"] .rpa-log .log-empty { color: #5e5a51 !important; }
+html[data-ui-theme="nes-light"] .rpa-log .log-line.level-info .log-level { color: #3c5153 !important; }
 html[data-ui-theme="nes-light"] .rpa-log .log-line.level-error .log-level,
 html[data-ui-theme="nes-light"] .rpa-log .log-line.level-fail .log-level,
 html[data-ui-theme="nes-light"] .rpa-log .log-line.level-error .log-msg,
-html[data-ui-theme="nes-light"] .rpa-log .log-line.level-fail .log-msg { color: #ffb0a8 !important; }
+html[data-ui-theme="nes-light"] .rpa-log .log-line.level-fail .log-msg { color: #7c3838 !important; }
 html[data-ui-theme="nes-light"] .rpa-log .log-line.level-warn .log-level,
 html[data-ui-theme="nes-light"] .rpa-log .log-line.level-warning .log-level,
 html[data-ui-theme="nes-light"] .rpa-log .log-line.level-warn .log-msg,
-html[data-ui-theme="nes-light"] .rpa-log .log-line.level-warning .log-msg { color: #ffd27a !important; }
+html[data-ui-theme="nes-light"] .rpa-log .log-line.level-warning .log-msg { color: #625637 !important; }
 html[data-ui-theme="nes-light"] .rpa-log .log-line.level-ok .log-level,
 html[data-ui-theme="nes-light"] .rpa-log .log-line.level-success .log-level,
 html[data-ui-theme="nes-light"] .rpa-log .log-line.level-ok .log-msg,
-html[data-ui-theme="nes-light"] .rpa-log .log-line.level-success .log-msg { color: #8fe3ad !important; }
-html[data-ui-theme="nes-light"] .console-head { border-bottom: 3px solid #212529; background: #209cee; color: #212529; }
+html[data-ui-theme="nes-light"] .rpa-log .log-line.level-success .log-msg { color: #3d5a44 !important; }
+html[data-ui-theme="nes-light"] .rpa-log .log-line:nth-child(even) { background: #d0c4aa; }
+html[data-ui-theme="nes-light"] .rpa-log .log-line:hover { background: #cddcd8; }
+html[data-ui-theme="nes-light"] .console-head { border-bottom: 3px solid #362f26; background: #51787a; color: #27231b; }
 html[data-ui-theme="nes-light"] .sync-layout,
 html[data-ui-theme="nes-light"] .environment-editor { gap: 18px; }
-html[data-ui-theme="nes-light"] .profile-editor-head { border-bottom: 3px solid #212529; background: #ffffff; color: #ffffff; }
-html[data-ui-theme="nes-light"] .profile-editor-head p { color: #a6b4b7; }
+html[data-ui-theme="nes-light"] .profile-editor-head { border-bottom: 3px solid #362f26; background: #d0c4aa; color: #27231b; }
+html[data-ui-theme="nes-light"] .profile-editor-head p { color: #5e5a51; }
 html[data-ui-theme="nes-light"] .editor-panel h3,
 html[data-ui-theme="nes-light"] .settings-grid h3,
-html[data-ui-theme="nes-light"] .rpa-h2 { padding: 8px 10px; border: 2px solid #212529; background: #f7d51d; color: #212529; box-shadow: 3px 3px 0 #212529; }
-html[data-ui-theme="nes-light"] .editor-actions { border-top: 3px solid #212529; background: #f7f7f7; }
+html[data-ui-theme="nes-light"] .rpa-h2 { padding: 8px 10px; border: 2px solid #362f26; background: #8c7f5e; color: #27231b; box-shadow: 3px 3px 0 #362f26; }
+html[data-ui-theme="nes-light"] .editor-actions { border-top: 3px solid #362f26; background: #d7ccb4; }
 html[data-ui-theme="nes-light"] .network-mode-hint,
 html[data-ui-theme="nes-light"] .help-box,
 html[data-ui-theme="nes-light"] .extension-note,
 html[data-ui-theme="nes-light"] .storage-warning,
-html[data-ui-theme="nes-light"] .delete-warning { border: 2px solid #212529; background: #fff3bf; color: #3d351c; }
+html[data-ui-theme="nes-light"] .delete-warning { border: 2px solid #362f26; background: #dcd1ba; color: #322d1e; }
 
-html[data-ui-theme="nes-light"] dialog { border: 4px solid #212529 !important; background: #ffffff !important; color: #212529; box-shadow: 8px 8px 0 #209cee; }
+html[data-ui-theme="nes-light"] dialog { border: 4px solid #362f26 !important; background: #e7ddc8 !important; color: #27231b; box-shadow: 8px 8px 0 #362f26, 14px 14px 0 rgba(79,143,147,.25); }
 html[data-ui-theme="nes-light"] dialog::backdrop { background: rgba(3, 8, 12, .78) !important; }
-html[data-ui-theme="nes-light"] .dialog-head { border-bottom: 3px solid #212529; background: #209cee; color: #212529; }
-html[data-ui-theme="nes-light"] .dialog-actions { border-top: 3px solid #212529; background: #f7f7f7; }
-html[data-ui-theme="nes-light"] .toast { border: 3px solid #212529; background: #f7d51d; color: #212529; box-shadow: 5px 5px 0 #209cee; }
+html[data-ui-theme="nes-light"] .dialog-head { border-bottom: 3px solid #362f26; background: #51787a; color: #27231b; }
+html[data-ui-theme="nes-light"] .dialog-actions { border-top: 3px solid #362f26; background: #d7ccb4; }
+html[data-ui-theme="nes-light"] .toast { border: 3px solid #362f26; background: #8c7f5e; color: #27231b; box-shadow: 5px 5px 0 #51787a; }
 
 html[data-ui-theme="nes-light"] {
   --theme-menu-width: 20.625rem;
@@ -402,61 +447,62 @@ html[data-ui-theme="nes-light"] {
   --theme-option-gap: 0.75rem;
   --theme-option-min-h: 4.5rem;
 }
-html[data-ui-theme="nes-light"] .theme-trigger { border: 2px solid #212529; background: #ffffff; color: #212529; box-shadow: 3px 3px 0 #209cee; }
-html[data-ui-theme="nes-light"] .theme-trigger-dot { border: 2px solid #212529; background: #92cc41; box-shadow: 2px 2px 0 #209cee; }
+html[data-ui-theme="nes-light"] .theme-trigger { border: 2px solid #362f26; background: #e7ddc8; color: #27231b; box-shadow: 3px 3px 0 #51787a; }
+html[data-ui-theme="nes-light"] .theme-trigger-dot { border: 2px solid #362f26; background: #5e8e6e; box-shadow: 2px 2px 0 #51787a; }
 html[data-ui-theme="nes-light"] .theme-popover {
   width: min(var(--theme-menu-width), calc(100vw - 1rem));
   max-width: calc(100vw - 1rem);
   padding: var(--theme-menu-pad);
-  border: 3px solid #212529; background: #ffffff; color: #ffffff;
-  box-shadow: 6px 6px 0 #209cee; backdrop-filter: none;
+  border: 3px solid #362f26; background: #d0c4aa; color: #27231b;
+  box-shadow: 6px 6px 0 #51787a; backdrop-filter: none;
 }
-html[data-ui-theme="nes-light"] .theme-popover-head span { color: #92cc41; }
+html[data-ui-theme="nes-light"] .theme-popover-head span { color: #5e8e6e; }
 html[data-ui-theme="nes-light"] .theme-grid { gap: 0.55rem; }
-html[data-ui-theme="nes-light"] .theme-option { border: 2px solid #212529; background: #ffffff; color: #212529; box-shadow: 3px 3px 0 #212529; }
-html[data-ui-theme="nes-light"] .theme-option:hover { background: #fff3bf; }
-html[data-ui-theme="nes-light"] .theme-option.active { background: #e7f5ff; box-shadow: 3px 3px 0 #92cc41; }
-html[data-ui-theme="nes-light"] .theme-option small { color: #555555; }
-html[data-ui-theme="nes-light"] .theme-option.active::after { border-color: #416f73; }
+html[data-ui-theme="nes-light"] .theme-option { border: 2px solid #362f26; background: #e7ddc8; color: #27231b; box-shadow: 3px 3px 0 #362f26; }
+html[data-ui-theme="nes-light"] .theme-option:hover { background: #dcd1ba; }
+html[data-ui-theme="nes-light"] .theme-option.active { background: #b0c8c4; box-shadow: 3px 3px 0 #5e8e6e; }
+html[data-ui-theme="nes-light"] .theme-option small { color: #5e5a51; }
+html[data-ui-theme="nes-light"] .theme-option.active::after { border-color: #3c5153; }
 /* Icon art uses % of icon box so it scales with --theme-option-icon / page zoom */
 .theme-option[data-ui-theme-option="nes-light"] > i {
-  border: 2px solid #212529; background-color: #f8f8f8;
-  background-image: linear-gradient(#209cee 0 0), linear-gradient(#92cc41 0 0), linear-gradient(#f7d51d 0 0), linear-gradient(#ffffff 0 0);
+  border: 2px solid #362f26; background-color: #cdc1a9;
+  background-image: linear-gradient(#51787a 0 0), linear-gradient(#5e8e6e 0 0), linear-gradient(#8c7f5e 0 0), linear-gradient(#e7ddc8 0 0);
   background-size: 75% 17%, 17% 17%, 17% 17%, 75% 46%;
   background-position: 12.5% 12.5%, 19% 71%, 65% 71%, 12.5% 29%;
   background-repeat: no-repeat; image-rendering: pixelated;
 }
 
-html[data-ui-theme="nes-light"] #view-logs { font-family: "Courier New", Consolas, monospace; }
-html[data-ui-theme="nes-light"] .retro-log-window { min-height: calc(100vh - 122px); overflow: hidden; border: 4px solid #212529; background: #212529; box-shadow: 6px 6px 0 #209cee; }
-html[data-ui-theme="nes-light"] .retro-log-titlebar { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 9px 6px 12px; border-bottom: 3px solid #212529; background: #209cee; color: #212529; }
+html[data-ui-theme="nes-light"] #view-logs { font-family: "Ark Pixel", "Courier New", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif; }
+html[data-ui-theme="nes-light"] .retro-log-window { min-height: calc(100vh - 122px); overflow: hidden; border: 3px solid #362f26; background: #e7ddc8; box-shadow: 5px 5px 0 #51787a; }
+html[data-ui-theme="nes-light"] .retro-log-titlebar { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 9px 6px 12px; border-bottom: 3px solid #362f26; background: #51787a; color: #e7ddc8; }
 html[data-ui-theme="nes-light"] .retro-log-title { display: flex; min-width: 0; align-items: center; gap: 9px; }
-html[data-ui-theme="nes-light"] .retro-log-title strong { font-size: 13px; }
-html[data-ui-theme="nes-light"] .retro-log-title span { color: #17484c; font-size: 10px; font-weight: 700; }
-html[data-ui-theme="nes-light"] .retro-log-titlebar .outline { background: #f7d51d; }
+html[data-ui-theme="nes-light"] .retro-log-title strong { font-size: 13px; color: #e7ddc8; }
+html[data-ui-theme="nes-light"] .retro-log-title span { color: #cddcd4; font-size: 10px; font-weight: 700; }
+html[data-ui-theme="nes-light"] .retro-log-titlebar .outline { background: #8c7f5e; color: #27231b; }
 html[data-ui-theme="nes-light"] .log-runtime-note {
-  min-height: 28px; padding: 5px 12px; border-bottom: 2px solid #212529; background: #ffffff; color: #a9c2c2;
+  min-height: 28px; padding: 5px 12px; border-bottom: 2px solid #362f26; background: #d0c4aa; color: #4f4a42;
 }
-html[data-ui-theme="nes-light"] .log-runtime-note svg { width: 13px; height: 13px; color: #92cc41; }
+html[data-ui-theme="nes-light"] .log-runtime-note svg { width: 13px; height: 13px; color: #5e8e6e; }
 html[data-ui-theme="nes-light"] .retro-log-columns,
 html[data-ui-theme="nes-light"] .log-row { display: grid; grid-template-columns: 112px 132px minmax(0, 1fr); }
-html[data-ui-theme="nes-light"] .retro-log-columns { border-bottom: 3px solid #212529; background: #27343c; color: #f7d51d; font-size: 10px; font-weight: 800; }
+html[data-ui-theme="nes-light"] .retro-log-columns { border-bottom: 3px solid #362f26; background: #c2b59c; color: #625637; font-size: 10px; font-weight: 800; }
 html[data-ui-theme="nes-light"] .retro-log-columns span,
-html[data-ui-theme="nes-light"] .log-row span { min-width: 0; padding: 9px 12px; border-right: 1px solid #3c515b; }
+html[data-ui-theme="nes-light"] .log-row span { min-width: 0; padding: 9px 12px; border-right: 1px solid #baad94; }
 html[data-ui-theme="nes-light"] .retro-log-columns span:last-child,
 html[data-ui-theme="nes-light"] .log-row span:last-child { border-right: 0; }
-html[data-ui-theme="nes-light"] .log-card { min-height: 420px; max-height: calc(100vh - 218px); overflow: auto; padding: 0; background: #212529; color: #f8f8f8; }
-html[data-ui-theme="nes-light"] .log-row { border-bottom: 1px solid #263942; font-size: 11px; line-height: 1.45; }
-html[data-ui-theme="nes-light"] .log-row:nth-child(even) { background: #0e1a21; }
-html[data-ui-theme="nes-light"] .log-row:hover { background: #163138; }
-html[data-ui-theme="nes-light"] .log-row span:first-child { color: #82969c; white-space: nowrap; }
-html[data-ui-theme="nes-light"] .log-row span:nth-child(2) { color: #209cee; font-weight: 800; overflow-wrap: anywhere; }
+html[data-ui-theme="nes-light"] .log-card { min-height: 420px; max-height: calc(100vh - 218px); overflow: auto; padding: 0; background: #e7ddc8; color: #27231b; }
+html[data-ui-theme="nes-light"] .log-row { border-bottom: 1px solid #beb094; font-size: 11px; line-height: 1.45; }
+html[data-ui-theme="nes-light"] .log-row:nth-child(even) { background: #d0c4aa; }
+html[data-ui-theme="nes-light"] .log-row:hover { background: #cddcd8; }
+html[data-ui-theme="nes-light"] .log-row span:first-child { color: #6c685f; white-space: nowrap; }
+html[data-ui-theme="nes-light"] .log-row span:nth-child(2) { color: #51787a; font-weight: 800; overflow-wrap: anywhere; }
 html[data-ui-theme="nes-light"] .log-row span:last-child { overflow-wrap: anywhere; }
-html[data-ui-theme="nes-light"] .log-empty { display: grid; min-height: 420px; place-items: center; color: #777777; font-size: 12px; background-image: repeating-linear-gradient(0deg, transparent 0 27px, #14232b 27px 28px); }
+html[data-ui-theme="nes-light"] .log-empty { display: grid; min-height: 420px; place-items: center; color: #6c685f; font-size: 12px; background-image: repeating-linear-gradient(0deg, transparent 0 27px, #beb094 27px 28px); }
+
 
 @media (max-width: 1250px) {
   html[data-ui-theme="nes-light"] { --ui-sidebar-width: 188px; }
-  html[data-ui-theme="nes-light"] .brand strong { font-size: 13px; }
+  html[data-ui-theme="nes-light"] .brand strong { font-size: 14px; }
 }
 @media (prefers-reduced-transparency: reduce) {
   html[data-ui-theme="nes-light"] body::after { display: none; }
@@ -467,13 +513,23 @@ html[data-ui-theme="nes-light"][data-platform="macos"] {
   --ui-radius: 7px;
   --ui-radius-sm: 6px;
 }
-html[data-ui-theme="nes-light"][data-platform="macos"] body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif; }
-html[data-ui-theme="nes-light"][data-platform="macos"] .content > header { height: 52px; min-height: 52px; }
-html[data-ui-theme="nes-light"][data-platform="macos"] .content > main { min-height: calc(100vh - 52px); }
+html[data-ui-theme="nes-light"][data-platform="macos"] body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+}
+/* Do NOT lock header height on mac — multi-line page subtitles (API & MCP) need room */
+html[data-ui-theme="nes-light"][data-platform="macos"] .content > header {
+  height: auto !important;
+  min-height: 72px !important;
+  padding-top: 16px !important;
+  padding-bottom: 14px !important;
+}
+html[data-ui-theme="nes-light"][data-platform="macos"] .content > main { min-height: calc(100vh - 72px); }
 /* Fused title bar: continuous chrome color under traffic lights */
 html[data-ui-theme="nes-light"].titlebar-integrated .sidebar,
 html[data-ui-theme="nes-light"][data-titlebar="integrated"] .sidebar {
-  background: #212529 !important;
+  background:
+    linear-gradient(180deg, rgba(255, 244, 214, 0.22) 0%, transparent 40%),
+    linear-gradient(90deg, #c2b59c 0%, #baad93 100%) !important;
   /* Brand + menus start fully below system chrome strip */
   padding-top: 54px !important;
   padding-left: 10px !important;
@@ -486,21 +542,28 @@ html[data-ui-theme="nes-light"][data-titlebar="integrated"] .sidebar .brand {
 }
 html[data-ui-theme="nes-light"].titlebar-integrated .content > header,
 html[data-ui-theme="nes-light"][data-titlebar="integrated"] .content > header {
-  background: #ffffff !important;
+  background: #d0c4aa !important;
+  height: auto !important;
+  overflow: visible !important;
 }
 /* Windows: same “clear the strip” logic; caption buttons are on the right */
 html[data-ui-theme="nes-light"][data-platform="windows"].titlebar-integrated .sidebar,
 html[data-ui-theme="nes-light"][data-platform="windows"][data-titlebar="integrated"] .sidebar {
   padding-top: calc(env(titlebar-area-height, 40px) + 10px) !important;
-  background: #212529 !important;
+  background:
+    linear-gradient(180deg, rgba(255, 244, 214, 0.22) 0%, transparent 40%),
+    linear-gradient(90deg, #c2b59c 0%, #baad93 100%) !important;
 }
 html[data-ui-theme="nes-light"][data-platform="windows"].titlebar-integrated .content > header,
 html[data-ui-theme="nes-light"][data-platform="windows"][data-titlebar="integrated"] .content > header {
-  background: #ffffff !important;
-  border-bottom: 1px solid #212529 !important;
-  min-height: calc(52px + env(titlebar-area-height, 40px)) !important;
-  padding-top: env(titlebar-area-height, 40px) !important;
+  background: #d0c4aa !important;
+  border-bottom: 1px solid #a9977a !important;
+  height: auto !important;
+  min-height: calc(72px + env(titlebar-area-height, 40px)) !important;
+  padding-top: calc(env(titlebar-area-height, 40px) + 12px) !important;
+  padding-bottom: 14px !important;
   padding-right: calc(var(--titlebar-caption-pad, 138px) + 10px) !important;
+  overflow: visible !important;
 }
 html[data-ui-theme="nes-light"][data-platform="macos"] button:focus-visible,
 html[data-ui-theme="nes-light"][data-platform="macos"] input:focus-visible,
@@ -512,12 +575,14 @@ html[data-ui-theme="nes-light"][data-platform="windows"] {
   --ui-radius: 3px;
   --ui-radius-sm: 2px;
 }
-html[data-ui-theme="nes-light"][data-platform="windows"] body { font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+html[data-ui-theme="nes-light"][data-platform="windows"] body {
+  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI Emoji", sans-serif;
+}
 html[data-ui-theme="nes-light"][data-platform="windows"] .sidebar .nav { min-height: 34px; }
 html[data-ui-theme="nes-light"][data-platform="windows"] button:focus-visible,
 html[data-ui-theme="nes-light"][data-platform="windows"] input:focus-visible,
 html[data-ui-theme="nes-light"][data-platform="windows"] textarea:focus-visible,
-html[data-ui-theme="nes-light"][data-platform="windows"] .themed-select-button:focus-visible { outline: 1px solid #47777b !important; outline-offset: 1px; }
+html[data-ui-theme="nes-light"][data-platform="windows"] .themed-select-button:focus-visible { outline: 1px solid #486567 !important; outline-offset: 1px; }
 
 @media (max-width: 1250px) {
   html[data-ui-theme="nes-light"] { --ui-sidebar-width: 186px; }
@@ -550,7 +615,7 @@ html[data-ui-theme="nes-light"] #view-profiles .group-chip b {
   text-align: right;
 }
 html[data-ui-theme="nes-light"] #view-profiles .group-chip.active {
-  box-shadow: inset 2px 0 #5b9296;
+  box-shadow: inset 2px 0 #5a7c7f;
 }
 
 /* Even scale with main ui-shell table rules — no auto layout that clips the right side */
@@ -567,17 +632,17 @@ html[data-ui-theme="nes-light"] #view-profiles .profile-table-compact td {
 }
 html[data-ui-theme="nes-light"] #view-profiles .table-card th.col-actions,
 html[data-ui-theme="nes-light"] #view-profiles .table-card td.col-actions {
-  background: #ffffff !important;
+  background: #e7ddc8 !important;
   box-shadow: -6px 0 10px -8px rgba(5, 9, 13, 0.35);
 }
 html[data-ui-theme="nes-light"] #view-profiles .table-card thead th.col-actions {
-  background: #f7f7f7 !important;
+  background: #d7ccb4 !important;
 }
 html[data-ui-theme="nes-light"] #view-profiles .table-card tbody tr:hover td.col-actions {
-  background: #fff3bf !important;
+  background: #dcd1ba !important;
 }
 html[data-ui-theme="nes-light"] #view-profiles .table-card tbody tr.selected-row td.col-actions {
-  background: #d0ebff !important;
+  background: #a3c0bc !important;
 }
 html[data-ui-theme="nes-light"] #view-profiles .group-badge-compact,
 html[data-ui-theme="nes-light"] #view-profiles .net-badge,
@@ -638,17 +703,8 @@ html[data-ui-theme="nes-light"] #view-groups td {
 
 /* Compact density for the utility pages. Keep controls readable and clickable while
    removing the large marketing-style whitespace from automation, settings and logs. */
-html[data-ui-theme="nes-light"] #view-logs .retro-log-window {
-  min-height: calc(100vh - 92px);
-  border-width: 3px;
-  box-shadow: 4px 4px 0 #209cee;
-}
-html[data-ui-theme="nes-light"] #view-logs .retro-log-titlebar {
-  min-height: 38px;
-  gap: 10px;
-  padding: 4px 7px 4px 9px;
-  border-bottom-width: 2px;
-}
+html[data-ui-theme="nes-light"] #view-logs .retro-log-window { min-height: calc(100vh - 96px); border-width: 3px; background: #e7ddc8; box-shadow: 4px 4px 0 #51787a; }
+html[data-ui-theme="nes-light"] #view-logs .retro-log-titlebar { min-height: 34px; padding: 3px 6px 3px 8px; background: #51787a; color: #e7ddc8; border-bottom-width: 2px; }
 html[data-ui-theme="nes-light"] #view-logs .retro-log-title { gap: 6px; }
 html[data-ui-theme="nes-light"] #view-logs .retro-log-title strong { font-size: 11px; }
 html[data-ui-theme="nes-light"] #view-logs .retro-log-title span { font-size: 9px; }
@@ -656,31 +712,16 @@ html[data-ui-theme="nes-light"] #view-logs .retro-log-titlebar .outline {
   min-height: 28px;
   padding: 0 7px;
   font-size: 10px;
-  box-shadow: 2px 2px 0 #212529;
+  box-shadow: 2px 2px 0 #362f26;
 }
 html[data-ui-theme="nes-light"] #view-logs .retro-log-columns,
-html[data-ui-theme="nes-light"] #view-logs .log-row {
-  grid-template-columns: 86px 104px minmax(0, 1fr);
-}
-html[data-ui-theme="nes-light"] #view-logs .retro-log-columns {
-  border-bottom-width: 2px;
-  font-size: 9px;
-}
+html[data-ui-theme="nes-light"] #view-logs .log-row { border-bottom: 1px solid #beb094; font-size: 10px; line-height: 1.35; }
+html[data-ui-theme="nes-light"] #view-logs .retro-log-columns { background: #c2b59c; color: #625637; font-size: 9px; border-bottom-width: 2px; }
 html[data-ui-theme="nes-light"] #view-logs .retro-log-columns span,
 html[data-ui-theme="nes-light"] #view-logs .log-row span { padding: 5px 8px; }
-html[data-ui-theme="nes-light"] #view-logs .log-card {
-  min-height: 0;
-  max-height: calc(100vh - 164px);
-}
-html[data-ui-theme="nes-light"] #view-logs .log-row {
-  font-size: 10px;
-  line-height: 1.3;
-}
-html[data-ui-theme="nes-light"] #view-logs .log-empty {
-  min-height: 180px;
-  font-size: 10px;
-  background-image: repeating-linear-gradient(0deg, transparent 0 23px, #14232b 23px 24px);
-}
+html[data-ui-theme="nes-light"] #view-logs .log-card { min-height: 360px; max-height: calc(100vh - 180px); background: #e7ddc8; color: #27231b; }
+html[data-ui-theme="nes-light"] #view-logs .log-row { border-bottom: 1px solid #beb094; font-size: 10px; line-height: 1.35; }
+html[data-ui-theme="nes-light"] #view-logs .log-empty { min-height: 360px; color: #6c685f; background-image: repeating-linear-gradient(0deg, transparent 0 23px, #beb094 23px 24px); }
 
 html[data-ui-theme="nes-light"] #view-rpa,
 html[data-ui-theme="nes-light"] #view-rpa-guide {
@@ -691,11 +732,12 @@ html[data-ui-theme="nes-light"] #view-rpa-guide .rpa-panel {
   padding: 12px;
 }
 html[data-ui-theme="nes-light"] #view-rpa .rpa-banner {
-  margin-bottom: 8px;
-  padding: 7px 9px;
-  border-width: 2px;
-  font-size: 10px;
-  line-height: 1.4;
+  border: 2px solid #362f26;
+  background: #dcd1ba;
+  color: #27231b;
+  box-shadow: 3px 3px 0 #362f26;
+  padding: 8px 10px;
+  font-weight: 700;
 }
 html[data-ui-theme="nes-light"] #view-rpa .rpa-toolbar {
   gap: 6px;
@@ -754,13 +796,17 @@ html[data-ui-theme="nes-light"] #view-rpa .rpa-field textarea {
 html[data-ui-theme="nes-light"] #view-rpa .rpa-field textarea { line-height: 1.3; }
 html[data-ui-theme="nes-light"] #view-rpa .rpa-actions { gap: 6px; margin: 7px 0; }
 html[data-ui-theme="nes-light"] #view-rpa .rpa-actions button { min-height: 30px; padding: 4px 8px; font-size: 10px; }
-/* Keep RPA run log readable: do not force 10px dense text. */
+/* Keep RPA run log readable + light-theme unified. */
 html[data-ui-theme="nes-light"] #view-rpa .rpa-log {
-  min-height: 150px;
-  max-height: 280px;
+  min-height: 160px;
+  max-height: 300px;
   padding: 10px 12px;
   font-size: 13px;
   line-height: 1.55;
+  background: #e7ddc8 !important;
+  color: #27231b !important;
+  border: 3px solid #362f26 !important;
+  box-shadow: 4px 4px 0 #362f26, 7px 7px 0 rgba(28,25,20,.12) !important;
 }
 html[data-ui-theme="nes-light"] #view-rpa .rpa-card-grid { gap: 8px; }
 html[data-ui-theme="nes-light"] #view-rpa .rpa-store-card { padding: 10px; }
@@ -791,7 +837,7 @@ html[data-ui-theme="nes-light"] #view-system .settings-grid h3 {
   margin: 0 0 8px;
   padding: 5px 7px;
   font-size: 12px;
-  box-shadow: 2px 2px 0 #212529;
+  box-shadow: 2px 2px 0 #362f26;
 }
 html[data-ui-theme="nes-light"] #view-system .settings-grid dl > div { padding: 5px 0; }
 html[data-ui-theme="nes-light"] #view-system .settings-grid dt,
@@ -852,13 +898,13 @@ html[data-ui-theme="nes-light"] #view-api-mcp .rpa-section {
   margin-bottom: 10px;
   padding: 11px;
   border-width: 3px !important;
-  box-shadow: 3px 3px 0 #212529 !important;
+  box-shadow: 3px 3px 0 #362f26 !important;
 }
 html[data-ui-theme="nes-light"] #view-api-mcp .rpa-h2 {
   margin-bottom: 6px;
   padding: 5px 7px;
   font-size: 13px;
-  box-shadow: 2px 2px 0 #212529;
+  box-shadow: 2px 2px 0 #362f26;
 }
 html[data-ui-theme="nes-light"] #view-api-mcp .rpa-desc {
   margin-bottom: 8px;
@@ -871,7 +917,7 @@ html[data-ui-theme="nes-light"] #view-api-mcp .rpa-seg button {
   min-height: 26px;
   padding: 3px 7px;
   font-size: 9px;
-  box-shadow: 2px 2px 0 #212529;
+  box-shadow: 2px 2px 0 #362f26;
 }
 html[data-ui-theme="nes-light"] #view-api-mcp .rpa-input {
   min-height: 26px;
@@ -918,7 +964,7 @@ html[data-ui-theme="nes-light"] dialog[open] .dialog-head > button {
   min-height: 26px;
   padding: 3px 7px;
   font-size: 9px;
-  box-shadow: 2px 2px 0 #212529;
+  box-shadow: 2px 2px 0 #362f26;
 }
 
 
@@ -926,10 +972,10 @@ html[data-ui-theme="nes-light"] dialog[open] .dialog-head > button {
 html[data-ui-theme="nes-light"] .start-progress {
   --start-progress-height: 8px;
   --start-progress-radius: 0;
-  --start-progress-track: #f7f7f7;
-  --start-progress-fill: #209cee;
-  --start-progress-fill-soft: #74c0fc;
-  --start-progress-label: #0b7285;
+  --start-progress-track: #d7ccb4;
+  --start-progress-fill: #51787a;
+  --start-progress-fill-soft: #91bab4;
+  --start-progress-label: #3c5153;
   max-width: 112px;
   gap: 3px 4px;
 }
@@ -940,27 +986,27 @@ html[data-ui-theme="nes-light"] .start-progress-label {
   text-transform: uppercase;
 }
 html[data-ui-theme="nes-light"] .start-progress-percent {
-  color: #555555;
+  color: #5e5a51;
   font-size: 8px;
   font-weight: 700;
 }
 html[data-ui-theme="nes-light"] .start-progress-track {
-  border: 2px solid #212529;
-  box-shadow: 2px 2px 0 #212529;
+  border: 2px solid #362f26;
+  box-shadow: 2px 2px 0 #362f26;
   background:
     repeating-linear-gradient(
       90deg,
-      #f0f0f0 0 4px,
-      #f7f7f7 4px 8px
+      #cddcd4 0 4px,
+      #d7ccb4 4px 8px
     );
 }
 html[data-ui-theme="nes-light"] .start-progress-fill {
   background:
     repeating-linear-gradient(
       90deg,
-      #0b7285 0 4px,
-      #209cee 4px 8px,
-      #74c0fc 8px 12px
+      #3c5153 0 4px,
+      #51787a 4px 8px,
+      #91bab4 8px 12px
     );
   box-shadow: none;
   image-rendering: pixelated;
@@ -972,14 +1018,200 @@ html[data-ui-theme="nes-light"] .start-progress-shimmer {
   animation-timing-function: steps(10, end);
 }
 html[data-ui-theme="nes-light"] #view-profiles .table-card tbody tr.is-starting {
-  background: #d0ebff !important;
+  background: #a3c0bc !important;
 }
 html[data-ui-theme="nes-light"] #view-profiles .table-card tbody tr.is-starting td.col-actions {
-  background: #d0ebff !important;
+  background: #a3c0bc !important;
 }
 html[data-ui-theme="nes-light"] #view-profiles .table-card .actions .mini.is-starting {
-  border-color: #212529 !important;
-  background: #f7f7f7 !important;
-  color: #0b7285 !important;
-  box-shadow: 2px 2px 0 #212529;
+  border-color: #27231b !important;
+  background: #d7ccb4 !important;
+  color: #3c5153 !important;
+  box-shadow: 2px 2px 0 #362f26;
+}
+
+/* ---- Depth pass (ixBrowser-like layered panels on light pixel skin) ---- */
+html[data-ui-theme="nes-light"] .content > main {
+  position: relative;
+  z-index: 1;
+}
+html[data-ui-theme="nes-light"] .toolbar,
+html[data-ui-theme="nes-light"] .sync-toolbar,
+html[data-ui-theme="nes-light"] .rpa-toolbar {
+  border: 2px solid #362f26;
+  background: #d0c4aa;
+  box-shadow: 3px 3px 0 #362f26;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+}
+html[data-ui-theme="nes-light"] .search {
+  box-shadow: inset 2px 2px 0 #baad94, 2px 2px 0 #362f26 !important;
+}
+html[data-ui-theme="nes-light"] .sidebar .new-browser {
+  box-shadow: 4px 4px 0 #362f26, 7px 7px 0 rgba(79,143,147,.3) !important;
+}
+html[data-ui-theme="nes-light"] .sidebar-footer {
+  margin-top: auto;
+  border-top: 3px solid #362f26;
+  padding-top: 10px;
+}
+html[data-ui-theme="nes-light"] .rpa-editor-head {
+  border: 2px solid #362f26;
+  background: #c2b59c;
+  box-shadow: 2px 2px 0 #362f26;
+  padding: 6px 8px;
+  margin-bottom: 10px;
+}
+html[data-ui-theme="nes-light"] .rpa-muted {
+  color: #5e5a51 !important;
+}
+html[data-ui-theme="nes-light"] #view-rpa .rpa-editor-pane,
+html[data-ui-theme="nes-light"] #view-rpa .rpa-table-wrap {
+  box-shadow: 5px 5px 0 #362f26, 9px 9px 0 rgba(79,143,147,.2) !important;
+}
+html[data-ui-theme="nes-light"] .toast {
+  border: 3px solid #362f26;
+  box-shadow: 5px 5px 0 #362f26, 9px 9px 0 rgba(79,143,147,.25);
+}
+
+/* Secondary text contrast on light paper */
+html[data-ui-theme="nes-light"] .profile-name small,
+html[data-ui-theme="nes-light"] .extension-card p,
+html[data-ui-theme="nes-light"] .extension-meta,
+html[data-ui-theme="nes-light"] .tab-group span,
+html[data-ui-theme="nes-light"] .status,
+html[data-ui-theme="nes-light"] .status-compact,
+html[data-ui-theme="nes-light"] .exit-compact,
+html[data-ui-theme="nes-light"] .network-mode,
+html[data-ui-theme="nes-light"] .env-browser-pill,
+html[data-ui-theme="nes-light"] td .muted,
+html[data-ui-theme="nes-light"] .pager,
+html[data-ui-theme="nes-light"] .pagination,
+html[data-ui-theme="nes-light"] .empty,
+html[data-ui-theme="nes-light"] .sync-empty,
+html[data-ui-theme="nes-light"] .content > header p {
+  color: #3d3830 !important;
+  opacity: 1 !important;
+}
+html[data-ui-theme="nes-light"] th { color: #27231b !important; }
+html[data-ui-theme="nes-light"] td { color: #27231b !important; }
+html[data-ui-theme="nes-light"] .profile-name strong { color: #27231b !important; }
+html[data-ui-theme="nes-light"] #view-rpa-guide,
+html[data-ui-theme="nes-light"] #view-rpa-guide .rpa-guide-page,
+html[data-ui-theme="nes-light"] #view-rpa-guide .rpa-guide-section,
+html[data-ui-theme="nes-light"] #view-rpa-guide .rpa-guide-section p,
+html[data-ui-theme="nes-light"] #view-rpa-guide .rpa-guide-section li,
+html[data-ui-theme="nes-light"] #view-rpa-guide .rpa-guide-page-head p,
+html[data-ui-theme="nes-light"] #view-rpa-guide .rpa-guide-nav a {
+  color: #2a2620 !important;
+  opacity: 1 !important;
+}
+html[data-ui-theme="nes-light"] #view-rpa-guide .rpa-guide-page-head h2,
+html[data-ui-theme="nes-light"] #view-rpa-guide .rpa-guide-section h3,
+html[data-ui-theme="nes-light"] #view-rpa-guide .rpa-guide-section strong {
+  color: #27231b !important;
+}
+html[data-ui-theme="nes-light"] #view-rpa-guide code,
+html[data-ui-theme="nes-light"] #view-rpa-guide .rpa-code-inline,
+html[data-ui-theme="nes-light"] #view-rpa-guide kbd {
+  color: #27231b !important;
+  background: #d7ccb4 !important;
+  border: 1px solid #3d3830;
+  font-weight: 700;
+}
+
+/* Force secondary labels readable (profile sublines, kernel sub, pagination) */
+html[data-ui-theme="nes-light"] .profile-name small,
+html[data-ui-theme="nes-light"] .env-identity small,
+html[data-ui-theme="nes-light"] .env-identity-text small,
+html[data-ui-theme="nes-light"] .env-browser-label small,
+html[data-ui-theme="nes-light"] .group-note,
+html[data-ui-theme="nes-light"] .profile-pagination,
+html[data-ui-theme="nes-light"] .profile-pagination .profile-total,
+html[data-ui-theme="nes-light"] .profile-pagination span,
+html[data-ui-theme="nes-light"] .profile-total,
+html[data-ui-theme="nes-light"] #view-profiles .profile-name small,
+html[data-ui-theme="nes-light"] #view-profiles td,
+html[data-ui-theme="nes-light"] #view-profiles .status-compact,
+html[data-ui-theme="nes-light"] #view-profiles .exit-compact {
+  color: #3d3830 !important;
+  opacity: 1 !important;
+}
+html[data-ui-theme="nes-light"] .profile-name strong,
+html[data-ui-theme="nes-light"] .env-identity strong,
+html[data-ui-theme="nes-light"] .env-browser-label strong,
+html[data-ui-theme="nes-light"] .profile-total strong,
+html[data-ui-theme="nes-light"] #view-profiles .profile-name strong {
+  color: #27231b !important;
+  opacity: 1 !important;
+}
+html[data-ui-theme="nes-light"] #view-profiles th {
+  color: #27231b !important;
+  opacity: 1 !important;
+}
+
+/* Sidebar + brand chrome: pixel typeface (override platform system fonts) */
+html[data-ui-theme="nes-light"] .sidebar,
+html[data-ui-theme="nes-light"] .sidebar *,
+html[data-ui-theme="nes-light"] .brand,
+html[data-ui-theme="nes-light"] .brand *,
+html[data-ui-theme="nes-light"] .new-browser,
+html[data-ui-theme="nes-light"] .new-browser *,
+html[data-ui-theme="nes-light"] .sidebar .nav,
+html[data-ui-theme="nes-light"] .sidebar .nav span,
+html[data-ui-theme="nes-light"] .sidebar .nav-label,
+html[data-ui-theme="nes-light"] .sidebar .nav-child,
+html[data-ui-theme="nes-light"] .sidebar-footer,
+html[data-ui-theme="nes-light"] .sidebar-footer * {
+  /* Ark Pixel (OFL CJK+Latin) first; Pixelify Latin weights; OS CJK last — never mono-only */
+  font-family: "Ark Pixel", "Pixelify Sans", "Courier New", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif !important;
+  -webkit-font-smoothing: none !important;
+  -moz-osx-font-smoothing: unset !important;
+  letter-spacing: 0.02em;
+}
+html[data-ui-theme="nes-light"] .brand strong {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+}
+html[data-ui-theme="nes-light"] .brand small {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+}
+html[data-ui-theme="nes-light"] .new-browser {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  text-transform: none !important;
+}
+html[data-ui-theme="nes-light"] .sidebar .nav {
+  font-size: 16px !important;
+  font-weight: 600 !important;
+}
+html[data-ui-theme="nes-light"] .sidebar .nav-child {
+  font-size: 14px !important;
+}
+html[data-ui-theme="nes-light"] .sidebar .nav-label {
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+/* Platform body fonts must not steal sidebar/brand; OS-specific CJK first after Latin pixel */
+html[data-ui-theme="nes-light"][data-platform="macos"] .sidebar,
+html[data-ui-theme="nes-light"][data-platform="macos"] .sidebar *,
+html[data-ui-theme="nes-light"][data-platform="macos"] .brand,
+html[data-ui-theme="nes-light"][data-platform="macos"] .brand *,
+html[data-ui-theme="nes-light"][data-platform="macos"] .new-browser,
+html[data-ui-theme="nes-light"][data-platform="macos"] .new-browser * {
+  font-family: "Ark Pixel", "Pixelify Sans", "Courier New", Consolas, "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif !important;
+  -webkit-font-smoothing: none !important;
+}
+html[data-ui-theme="nes-light"][data-platform="windows"] .sidebar,
+html[data-ui-theme="nes-light"][data-platform="windows"] .sidebar *,
+html[data-ui-theme="nes-light"][data-platform="windows"] .brand,
+html[data-ui-theme="nes-light"][data-platform="windows"] .brand *,
+html[data-ui-theme="nes-light"][data-platform="windows"] .new-browser,
+html[data-ui-theme="nes-light"][data-platform="windows"] .new-browser * {
+  font-family: "Ark Pixel", "Pixelify Sans", "Courier New", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif !important;
+  -webkit-font-smoothing: none !important;
 }

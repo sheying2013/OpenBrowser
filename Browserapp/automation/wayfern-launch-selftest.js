@@ -42,7 +42,7 @@ async function main() {
       '--no-default-browser-check',
       '--disable-background-mode',
       'about:blank',
-    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    ], { windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout?.resume();
     child.stderr?.resume();
     const port = await waitForDevToolsPort(root, child);

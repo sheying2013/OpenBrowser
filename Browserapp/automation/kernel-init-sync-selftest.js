@@ -66,7 +66,7 @@ async function main() {
 
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'ob-kernel-init-'));
   try {
-    const template = path.join(__dirname, '../kernels/openbrowser/init_template.json');
+    const template = path.join(__dirname, '../kernels/macos-x64/init_template.json');
     const written = await writeOpenBrowserKernelInit(tmp, {
       fingerprint: fp,
       profile,

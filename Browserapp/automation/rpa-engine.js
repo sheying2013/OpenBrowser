@@ -114,6 +114,7 @@ class RpaEngine {
     this.store = store;
     this.emit = emit;
     this.running = new Map();
+    this.profileStarts = new Map();
     this.cancelled = new Set();
   }
 
@@ -183,8 +184,7 @@ class RpaEngine {
     };
 
     try {
-      const entry = this.engine.running.get(task.profile_id);
-      if (!entry?.port) throw new Error('Profile is not running or has no CDP port: ' + task.profile_id);
+      const entry = await this.ensureProfileRunning(task.profile_id, { log });
       const port = entry.port;
       // process_content task field or steps array
       let steps = Array.isArray(task.steps) ? task.steps : [];
@@ -235,6 +235,35 @@ class RpaEngine {
       this.running.delete(taskId);
       this.cancelled.delete(taskId);
     }
+  }
+
+  async ensureProfileRunning(profileId, { log } = {}) {
+    const id = String(profileId || '').trim();
+    if (!id) throw new Error('RPA task missing profile_id');
+    const current = this.engine?.running?.get?.(id);
+    if (current?.port) return current;
+
+    const profile = this.engine?.profiles?.get?.(id);
+    if (!profile) throw new Error('Profile not found for RPA task: ' + id);
+    if (typeof this.engine?.start !== 'function') {
+      throw new Error('Profile is not running and engine.start is unavailable: ' + id);
+    }
+
+    let startPromise = this.profileStarts.get(id);
+    if (!startPromise) {
+      if (log) await log('profile is not running; starting before RPA: ' + id);
+      startPromise = Promise.resolve()
+        .then(() => this.engine.start(profile))
+        .finally(() => this.profileStarts.delete(id));
+      this.profileStarts.set(id, startPromise);
+    } else if (log) {
+      await log('profile start already in progress; waiting before RPA: ' + id);
+    }
+
+    const started = await startPromise;
+    const entry = this.engine.running?.get?.(id) || started;
+    if (!entry?.port) throw new Error('Profile started but has no CDP port: ' + id);
+    return entry;
   }
 
   async executeStep(port, step, ctx) {

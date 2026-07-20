@@ -136,6 +136,7 @@ OpenBrowser/
 
 - 本地 API 默认只监听回环地址。
 - 设置 `OPENBROWSER_API_KEY` 后，请求必须携带 `api-key` 头。
+- 浏览器启动失败会追加写入用户 OpenBrowser 数据目录下的本地 `browser-startup.log`。在 `Browserapp/` 执行 `npm run log:startup` 可直接读取；日志已被 Git 忽略。
 - 第三方组件声明见 [`THIRD-PARTY-NOTICES.md`](./Browserapp/THIRD-PARTY-NOTICES.md)。
 - 云备份集成只有在用户显式配置后才会主动联网。
 

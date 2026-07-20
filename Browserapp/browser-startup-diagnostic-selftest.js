@@ -1,9 +1,13 @@
 'use strict';
 
 const assert = require('assert');
-const { BrowserEngine, appendDiagnosticOutput, formatBrowserStartupError } = require('./engine');
+const fs = require('fs');
+const fsp = require('fs/promises');
+const os = require('os');
+const path = require('path');
+const { BrowserEngine, appendDiagnosticOutput, formatBrowserStartupError, writeBrowserStartupDiagnostic } = require('./engine');
 
-function main() {
+async function main() {
   const output = appendDiagnosticOutput('', 'a'.repeat(20000));
   assert.strictEqual(output.length, 16 * 1024);
   assert.ok(output.endsWith('a'.repeat(100)));
@@ -26,8 +30,28 @@ function main() {
   }, { launchBinary: 'C:\\missing\\wayfern.exe', spawnError: 'spawn ENOENT' });
   assert.match(spawnMessage, /spawn ENOENT/);
 
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'openbrowser-startup-log-'));
+  try {
+    await writeBrowserStartupDiagnostic(root, {
+      type: 'browser-startup-failure',
+      profileId: 'env-001',
+      executable: 'C:\\OpenBrowser\\kernels\\windows-x64\\chrome.exe',
+      stderr: 'WAYFERN - Terms and Conditions',
+    });
+    const logFile = path.join(root, 'logs', 'browser-startup.log');
+    const rows = fs.readFileSync(logFile, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].profileId, 'env-001');
+    assert.match(rows[0].stderr, /Terms and Conditions/);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+
   assert.strictEqual(typeof BrowserEngine.prototype.waitForPort, 'function');
   console.log('browser-startup-diagnostic-selftest: ok');
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

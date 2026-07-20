@@ -16,7 +16,7 @@ const {
 
 function main() {
   // --- executable matching: kernel path vs env Dock shell ---
-  const kernelPath = '/Volumes/ssd1t/claude/OpenBrowser/openbrowser/Browserapp/kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser';
+  const kernelPath = path.join(__dirname, 'kernels/macos-x64/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser');
   const dockCmd = '/Users/x/Library/Application Support/openbrowser/env-apps/id/环境 1.app/Contents/MacOS/OpenBrowser.bin --user-data-dir=/tmp/p --remote-debugging-port=0';
   const kernelCmd = `${kernelPath} --user-data-dir=/tmp/p`;
 
@@ -72,8 +72,8 @@ function main() {
   assert.ok(envIcon.includes('ipc-stub\\\\.py') || envIcon.includes('ipc-stub\\.py'), 'launcher pkill must be anchored');
 
   // --- ipc-stub still present and install script syncs it ---
-  const stub = path.join(__dirname, 'kernels/openbrowser/ipc-stub.py');
-  assert.ok(fs.existsSync(stub), 'ipc-stub.py must ship in kernels/openbrowser');
+  const stub = path.join(__dirname, 'kernels/macos-x64/ipc-stub.py');
+  assert.ok(fs.existsSync(stub), 'ipc-stub.py must ship in kernels/macos-x64');
   const install = fs.readFileSync(path.join(__dirname, 'scripts/install-kernel-macx86.sh'), 'utf8');
   assert.ok(install.includes('ipc-stub.py'), 'install-kernel-macx86 must sync ipc-stub');
 

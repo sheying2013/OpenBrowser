@@ -136,6 +136,7 @@ This repository contains source code and documentation only. It does not include
 
 - The local API binds to loopback by default.
 - If `OPENBROWSER_API_KEY` is set, requests must include the `api-key` header.
+- Browser startup failures are appended to the local-only `browser-startup.log` under the user's OpenBrowser data directory. Inspect it with `npm run log:startup` from `Browserapp/`; logs are ignored by Git.
 - Third-party notices are documented in [`THIRD-PARTY-NOTICES.md`](./Browserapp/THIRD-PARTY-NOTICES.md).
 - Cloud backup integrations only connect outward after explicit user configuration.
 

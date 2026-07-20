@@ -130,7 +130,7 @@ async function main() {
     assert.ok(windowsCandidates.every((item) => item.name === 'Google Chrome' || item.name === 'Microsoft Edge'));
     console.log('  PASS  Windows system-browser choices include Chrome and Edge install locations');
 
-    // Source-tree discovery: Browserapp/kernels/openbrowser (when present)
+    // Source-tree discovery: Browserapp/kernels/macos-x64 (or compat openbrowser/)
     const appRoot = path.join(__dirname, '..');
     const repoKernel = findOpenBrowserKernelBinary(path.join(root, 'kernels'), [appRoot, path.join(appRoot, 'kernels')]);
     if (!isOpenBrowser148SupportedHost()) {
@@ -138,7 +138,12 @@ async function main() {
       console.log('  PASS  non-mac-x64 host never discovers openbrowser-148');
     } else if (repoKernel) {
       assert.ok(fs.existsSync(repoKernel));
-      assert.ok(String(repoKernel).includes(`${path.sep}kernels${path.sep}openbrowser${path.sep}`));
+      const norm = String(repoKernel);
+      assert.ok(
+        norm.includes(`${path.sep}kernels${path.sep}macos-x64${path.sep}`)
+        || norm.includes(`${path.sep}kernels${path.sep}openbrowser${path.sep}`),
+        `unexpected kernel path: ${norm}`
+      );
       console.log('  PASS  source-tree OpenBrowser 148 binary discovered');
     } else {
       console.log('  SKIP  source-tree OpenBrowser 148 not present');
