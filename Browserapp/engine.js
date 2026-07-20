@@ -14,7 +14,7 @@ const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = re
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
 const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
 const { acquireProfileLock, releaseProfileLock, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = require('./automation/isolation');
-const { BrowserKernelManager, ensureKernelReadyForLaunch } = require('./automation/browser-kernel');
+const { BrowserKernelManager, ensureKernelReadyForLaunch, termsAcceptanceArgsForKernel } = require('./automation/browser-kernel');
 const { ensureStartPageServer, getStartPageServer } = require('./automation/start-page-server');
 const {
   isOpenBrowser148,
@@ -1873,6 +1873,13 @@ class BrowserEngine {
       loadPaths.push(markerExtensionPath);
     }
     const finalArgs = loadPaths.length ? mergeLoadExtensionArgs(args, loadPaths) : args;
+    const kernelArgs = termsAcceptanceArgsForKernel(browser);
+    if (kernelArgs.length) {
+      const existing = new Set(finalArgs);
+      for (const arg of kernelArgs) {
+        if (!existing.has(arg)) finalArgs.unshift(arg);
+      }
+    }
 
     // macOS + openbrowser-148 only: Dock wrapper so process shows logo-native+number.
     // Non-148 Chromium has no OpenBrowser.bin layout; do not force a shell (would fail hard).

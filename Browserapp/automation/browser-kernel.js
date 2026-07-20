@@ -284,7 +284,117 @@ function isWayfernKernel(candidate = {}, versionOutput = '') {
   const version = String(versionOutput || candidate.versionOutput || '').toLowerCase();
   return source === SOURCE_WAYFERN
     || /(?:^|\/)wayfern(?:\/|$)/.test(binaryPath)
+    // Flat integrated seeds (no "wayfern" segment in path)
+    || /(?:^|\/)kernels\/(?:windows-x64|macos-arm64)(?:\/|$)/.test(binaryPath)
+    || /(?:^|\/)(?:windows-x64|macos-arm64)\/(?:chrome\.exe|wayfern(?:\.exe)?|chromium(?:\.exe)?)$/.test(binaryPath)
     || /\bwayfern\b/.test(version);
+}
+
+/**
+ * Locate companion library that hosts CDP session policy for integrated kernels.
+ * Windows: chrome.dll next to chrome.exe
+ * macOS arm64: Wayfern Framework inside .app
+ */
+function companionLibraryForKernelBinary(binaryPath = '') {
+  const binary = path.resolve(String(binaryPath || ''));
+  if (!binary || !fs.existsSync(binary)) return null;
+  const dir = path.dirname(binary);
+  const base = path.basename(binary).toLowerCase();
+  if (process.platform === 'win32' || /\.exe$/i.test(binary)) {
+    const dll = path.join(dir, 'chrome.dll');
+    return fs.existsSync(dll) ? dll : null;
+  }
+  // .../Wayfern.app/Contents/MacOS/Wayfern → Frameworks/.../Wayfern Framework
+  if (/\/Contents\/MacOS\//i.test(binary.replace(/\\/g, '/'))) {
+    const contents = path.resolve(dir, '..');
+    const versions = path.join(contents, 'Frameworks', 'Wayfern Framework.framework', 'Versions');
+    if (fs.existsSync(versions)) {
+      let ver = 'Current';
+      try {
+        const names = fs.readdirSync(versions).filter((n) => n !== 'Current');
+        if (names.length) ver = names.sort().reverse()[0];
+      } catch (_) {}
+      const fw = path.join(versions, ver, 'Wayfern Framework');
+      if (fs.existsSync(fw)) return fw;
+      const cur = path.join(versions, 'Current', 'Wayfern Framework');
+      if (fs.existsSync(cur)) return cur;
+    }
+  }
+  // binary is already the framework dylib
+  if (/Wayfern Framework$/i.test(base) || /Chromium Framework$/i.test(base)) return binary;
+  return null;
+}
+
+/** Byte markers that must be present for local CDP session policy on integrated kernels. */
+const INTEGRATED_KERNEL_CDP_MARKERS = Object.freeze({
+  // chrome.dll 149.0.7827.114 (windows-x64 seed)
+  'win-chrome-dll-149': [
+    { fo: 0x37e6551, bytes: Buffer.from('909090909090', 'hex') },
+    { fo: 0x41fddd0, bytes: Buffer.from('b001c3', 'hex') },
+  ],
+  // Wayfern Framework 149.0.7827.114 (macos-arm64 seed)
+  'mac-framework-149': [
+    { fo: 0x2d0c2d4, bytes: Buffer.from('1f2003d5', 'hex') },
+    { fo: 0x3504df8, bytes: Buffer.from('20008052c0035fd6', 'hex') },
+  ],
+});
+
+function readFileSlice(filePath, offset, length) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(length);
+    const n = fs.readSync(fd, buf, 0, length, offset);
+    return n === length ? buf : null;
+  } finally {
+    try { fs.closeSync(fd); } catch (_) {}
+  }
+}
+
+function markersMatch(filePath, markers) {
+  if (!filePath || !fs.existsSync(filePath) || !Array.isArray(markers) || !markers.length) return false;
+  try {
+    const st = fs.statSync(filePath);
+    for (const m of markers) {
+      const fo = Number(m.fo);
+      const expect = Buffer.isBuffer(m.bytes) ? m.bytes : Buffer.from(String(m.bytes || ''), 'hex');
+      if (!Number.isFinite(fo) || fo < 0 || !expect.length) return false;
+      if (st.size < fo + expect.length) return false;
+      const got = readFileSlice(filePath, fo, expect.length);
+      if (!got || !got.equals(expect)) return false;
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * True when the integrated kernel binary is ready for local CDP / RPA.
+ * openbrowser-148 and custom Chromium are treated as ready (no companion markers).
+ * Windows/macOS-arm integrated seeds require companion library markers.
+ */
+function isIntegratedKernelCdpReady(candidate = {}) {
+  const binary = String(candidate.path || candidate.binary || candidate || '').trim();
+  if (!binary || !fs.existsSync(binary)) return false;
+  const source = String(candidate.source || '').toLowerCase();
+  if (source === SOURCE_OPENBROWSER || source === SOURCE_CUSTOM || source === SOURCE_CFT) return true;
+  if (isOpenBrowser148SupportedHost() && /openbrowser_148|kernels[/\\](macos-x64|openbrowser)[/\\]/i.test(binary)) {
+    return true;
+  }
+  if (!isWayfernKernel({ path: binary, source })) {
+    // Unknown independent Chromium — allow (custom-like)
+    return true;
+  }
+  const lib = companionLibraryForKernelBinary(binary);
+  if (!lib) return false;
+  const lower = lib.toLowerCase().replace(/\\/g, '/');
+  if (lower.endsWith('chrome.dll')) {
+    return markersMatch(lib, INTEGRATED_KERNEL_CDP_MARKERS['win-chrome-dll-149']);
+  }
+  if (/wayfern framework$|chromium framework$/i.test(path.basename(lib))) {
+    return markersMatch(lib, INTEGRATED_KERNEL_CDP_MARKERS['mac-framework-149']);
+  }
+  return false;
 }
 
 function termsAcceptanceArgsForKernel(candidate = {}, versionOutput = '') {
@@ -292,10 +402,21 @@ function termsAcceptanceArgsForKernel(candidate = {}, versionOutput = '') {
 }
 
 async function ensureKernelReadyForLaunch(candidate = {}, versionOutput = '') {
+  const binary = String(candidate.path || candidate.binary || candidate || '').trim();
+  if (!binary) throw new Error('内核不可用：缺少内核路径');
+
+  // Integrated Windows/mac-arm seeds must be CDP-ready before spawn (RPA / Local API).
+  if (isWayfernKernel({ ...candidate, path: binary }, versionOutput)
+    && !isIntegratedKernelCdpReady({ ...candidate, path: binary })) {
+    throw new Error(
+      '独立内核未就绪（CDP 会话策略不匹配）。请使用安装包内 kernels/windows-x64 或 kernels/macos-arm64 的完整内核，'
+      + '并删除 userData 下过期的 kernels 副本后重试。'
+      + ` binary=${binary}`
+    );
+  }
+
   const args = termsAcceptanceArgsForKernel(candidate, versionOutput);
   if (!args.length) return false;
-  const binary = String(candidate.path || candidate.binary || candidate || '').trim();
-  if (!binary) throw new Error('内核条款初始化失败：缺少内核路径');
 
   const cacheKey = [path.resolve(binary), process.env.APPDATA || process.env.HOME || ''].join('\0');
   if (acceptedWayfernTerms.has(cacheKey)) return true;
@@ -806,28 +927,48 @@ class BrowserKernelManager {
       }
     }
 
+    // Prefer install-tree / resource integrated seeds that are CDP-ready.
+    // Stale userData kernels (unpatched companion libs) must not win over the package seed.
+    const bundled = findBundledWayfernKernel(this.resourceRoots);
+    if (bundled) {
+      const trustedBundled = safeInstalledBinary(bundled.binary, bundled.root);
+      if (trustedBundled && isIntegratedKernelCdpReady({ path: trustedBundled, source: SOURCE_WAYFERN })) {
+        return {
+          name: kernelDisplayName(SOURCE_WAYFERN),
+          path: trustedBundled,
+          version: bundledKernelVersion(bundled.root),
+          independent: true,
+          source: SOURCE_WAYFERN,
+        };
+      }
+    }
+
     if (this.meta.binary && fs.existsSync(this.meta.binary)) {
       const src = this.meta.source || SOURCE_WAYFERN;
       // Refuse stale openbrowser-148 meta on non-mac-x64 hosts.
       if (src === SOURCE_OPENBROWSER && !isOpenBrowser148SupportedHost()) {
-        // fall through to integrated/CfT/custom
+        // fall through
       } else {
         const trusted = (src === SOURCE_CUSTOM || src === SOURCE_OPENBROWSER)
           ? this.safeCustomBinary(this.meta.binary)
           : safeInstalledBinary(this.meta.binary, this.kernelsRoot);
         if (trusted) {
-          return {
-            name: kernelDisplayName(src),
-            path: trusted,
-            version: this.meta.version || 'unknown',
-            independent: true,
-            source: src,
-          };
+          // Skip userData / meta binaries that fail CDP readiness when a better seed exists.
+          const ready = isIntegratedKernelCdpReady({ path: trusted, source: src });
+          if (ready || src === SOURCE_CUSTOM || src === SOURCE_CFT || src === SOURCE_OPENBROWSER) {
+            return {
+              name: kernelDisplayName(src),
+              path: trusted,
+              version: this.meta.version || 'unknown',
+              independent: true,
+              source: src,
+            };
+          }
         }
       }
     }
 
-    const bundled = findBundledWayfernKernel(this.resourceRoots);
+    // Fall back to bundled even if marker check failed (still better than nothing; launch will re-check).
     if (bundled) {
       const trustedBundled = safeInstalledBinary(bundled.binary, bundled.root);
       if (trustedBundled) {
@@ -859,7 +1000,7 @@ class BrowserKernelManager {
         if (found) foundRoot = wayfernDir;
       }
       const trusted = safeInstalledBinary(found, foundRoot || this.kernelsRoot);
-      if (trusted) {
+      if (trusted && isIntegratedKernelCdpReady({ path: trusted, source: SOURCE_WAYFERN })) {
         return {
           name: kernelDisplayName(SOURCE_WAYFERN),
           path: trusted,
@@ -1325,6 +1466,9 @@ module.exports = {
   SOURCE_OPENBROWSER,
   OPENBROWSER_KERNEL_VERSION,
   isWayfernKernel,
+  companionLibraryForKernelBinary,
+  isIntegratedKernelCdpReady,
+  INTEGRATED_KERNEL_CDP_MARKERS,
   termsAcceptanceArgsForKernel,
   ensureKernelReadyForLaunch,
   compareVersions,
