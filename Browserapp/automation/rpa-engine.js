@@ -3,6 +3,7 @@
 const cdp = require('../cdp');
 const fs = require('fs/promises');
 const path = require('path');
+const os = require('os');
 const {
   parseProcessContent,
   randomNum,
@@ -12,6 +13,8 @@ const {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const OUTPUT_DIRECTORY = path.join(process.cwd(), 'rpa-output');
+const RPA_DIAGNOSTIC_LIMIT = 512 * 1024;
+const PAID_AUTOMATION_GATE = 'Browser automation requires a paid Donut Browser plan.';
 
 function isPathInsideRoot(candidate, root) {
   const child = path.resolve(candidate);
@@ -104,18 +107,66 @@ function getVariableValue(value, variables = {}) {
   return match ? variables[match[1].trim()] : interpolate(value, variables);
 }
 
+function defaultRpaLogPath(userDataPath = null) {
+  if (process.env.OPENBROWSER_RPA_LOG) return String(process.env.OPENBROWSER_RPA_LOG);
+  if (userDataPath) return path.join(userDataPath, 'logs', 'rpa-automation.log');
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'openbrowser', 'logs', 'rpa-automation.log');
+  }
+  if (process.platform === 'win32') {
+    const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(base, 'openbrowser', 'logs', 'rpa-automation.log');
+  }
+  return path.join(os.homedir(), '.config', 'openbrowser', 'logs', 'rpa-automation.log');
+}
+
+function compactError(error) {
+  const message = String(error?.message || error || 'Unknown RPA error');
+  return {
+    name: error?.name || 'Error',
+    message,
+    stack: String(error?.stack || '').split(/\r?\n/).slice(0, 12).join('\n'),
+  };
+}
+
+function formatRpaError(error) {
+  const message = String(error?.message || error || 'Unknown RPA error');
+  if (message.includes(PAID_AUTOMATION_GATE)) {
+    return [
+      '当前浏览器内核拒绝 CDP/RPA 自动化：' + PAID_AUTOMATION_GATE,
+      '请改用支持本地 CDP 自动化的内核，或在本机浏览器回退中手动选择 Chrome/Edge 后再运行自动脚本。',
+    ].join(' ');
+  }
+  return message;
+}
+
 /**
  * CDP-based RPA step runner for OpenBrowser.
  * Independent reimplementation (puppeteer-core / CDP steps + plan/task store).
  */
 class RpaEngine {
-  constructor({ engine, store, emit = () => {} } = {}) {
+  constructor({ engine, store, emit = () => {}, userDataPath = null, rpaLogPath = null } = {}) {
     this.engine = engine;
     this.store = store;
     this.emit = emit;
+    this.rpaLogPath = rpaLogPath || defaultRpaLogPath(userDataPath);
     this.running = new Map();
     this.profileStarts = new Map();
     this.cancelled = new Set();
+  }
+
+  async writeDiagnostic(record) {
+    if (!this.rpaLogPath) return;
+    try {
+      await fs.mkdir(path.dirname(this.rpaLogPath), { recursive: true });
+      const line = JSON.stringify({ at: new Date().toISOString(), ...record }) + '\n';
+      await fs.appendFile(this.rpaLogPath, line, 'utf8');
+      const stat = await fs.stat(this.rpaLogPath);
+      if (stat.size > RPA_DIAGNOSTIC_LIMIT) {
+        const content = await fs.readFile(this.rpaLogPath, 'utf8');
+        await fs.writeFile(this.rpaLogPath, content.slice(-Math.floor(RPA_DIAGNOSTIC_LIMIT / 2)), 'utf8');
+      }
+    } catch (_) {}
   }
 
   getStatus() {
@@ -172,6 +223,13 @@ class RpaEngine {
     this.cancelled.delete(taskId);
     await this.store.updateTask(taskId, { status: 'running', start_time: new Date().toISOString(), process_logs: [] }, { save: false });
     this.emit({ type: 'rpa-task', taskId, status: 'running', profileId: task.profile_id });
+    await this.writeDiagnostic({
+      type: 'rpa-task-start',
+      taskId,
+      planId: task.plan_id || null,
+      profileId: task.profile_id,
+      processName: task.process_name || null,
+    });
 
     const logs = [];
     const log = async (message, level = 'info') => {
@@ -219,18 +277,36 @@ class RpaEngine {
         process_result: result,
         process_logs: logs,
       });
+      await this.writeDiagnostic({
+        type: 'rpa-task-success',
+        taskId,
+        planId: task.plan_id || null,
+        profileId: task.profile_id,
+        steps: steps.length,
+      });
       this.emit({ type: 'rpa-task', taskId, status: 'success', profileId: task.profile_id });
       return { success: true, taskId, result };
     } catch (error) {
       const status = this.cancelled.has(taskId) ? 'cancelled' : 'failed';
+      const message = formatRpaError(error);
+      await log(message, status === 'failed' ? 'error' : 'info').catch(() => {});
+      await this.writeDiagnostic({
+        type: 'rpa-task-' + status,
+        taskId,
+        planId: task.plan_id || null,
+        profileId: task.profile_id,
+        processName: task.process_name || null,
+        error: message,
+        rawError: compactError(error),
+      });
       await this.store.updateTask(taskId, {
         status,
         complete_time: new Date().toISOString(),
-        process_result: { ok: false, error: error.message },
+        process_result: { ok: false, error: message },
         process_logs: logs,
       });
-      this.emit({ type: 'rpa-task', taskId, status, profileId: task.profile_id, message: error.message });
-      return { success: false, taskId, error: error.message, status };
+      this.emit({ type: 'rpa-task', taskId, status, profileId: task.profile_id, message });
+      return { success: false, taskId, error: message, status };
     } finally {
       this.running.delete(taskId);
       this.cancelled.delete(taskId);

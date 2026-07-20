@@ -41,6 +41,7 @@ async function startAutomation(context = {}) {
     engine,
     store: rpaStore,
     emit: (event) => emit(event),
+    userDataPath: app.getPath('userData'),
   });
 
   const syncBridge = new WindowSyncBridge({
