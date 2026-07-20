@@ -184,10 +184,10 @@ async function main() {
   ok('rpa-template save/export/import/delete');
 
   // 3) RPA engine (wait/noop only — no browser)
+  const rpaFakeEngine = createFakeEngine();
+  rpaFakeEngine.running.set('p1', { port: 9222 });
   const rpa = new RpaEngine({
-    engine: {
-      running: new Map([['p1', { port: 9222 }]]),
-    },
+    engine: rpaFakeEngine,
     store,
     emit: () => {},
   });
@@ -201,6 +201,24 @@ async function main() {
   const run = await rpa.runTask(task.id);
   assert.strictEqual(run.success, true, 'rpa wait/noop success: ' + JSON.stringify(run));
   ok('rpa-engine wait/noop task');
+
+  let rpaAutoStartCount = 0;
+  rpa.engine.profiles.set('p3', { id: 'p3', name: 'Env 3', number: 3 });
+  const originalStart = rpa.engine.start.bind(rpa.engine);
+  rpa.engine.start = async (profile) => {
+    if (profile.id === 'p3') rpaAutoStartCount += 1;
+    return originalStart(profile);
+  };
+  const autoStartPlan = await store.upsertPlan({
+    plan_name: 'auto-start-selftest',
+    profile_ids: ['p3'],
+    steps: [{ type: 'noop' }],
+  });
+  const autoStartRun = await rpa.runPlan(autoStartPlan.id);
+  assert.strictEqual(autoStartRun.success, true, 'rpa auto-start plan succeeds');
+  assert.strictEqual(rpa.engine.running.get('p3')?.port, 9203, 'rpa auto-start exposes CDP port');
+  assert.strictEqual(rpaAutoStartCount, 1, 'rpa auto-start starts profile once');
+  ok('rpa-engine auto-starts stopped profile');
 
   const parallelPlan = await store.upsertPlan({
     plan_name: 'parallel-selftest',

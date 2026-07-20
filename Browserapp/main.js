@@ -1243,11 +1243,11 @@ async function fetchChromeStoreIcon(storeId) {
 
 /** Theme chrome colors for fused title bar (shipping-app look). */
 const THEME_CHROME = {
-  'pixel-workstation': { bg: '#0b1117', overlay: '#151f27', symbol: '#eef8f0' },
-  'nes-light': { bg: '#f8f8f8', overlay: '#ffffff', symbol: '#212529' },
+  'pixel-workstation': { bg: '#0c0f13', overlay: '#161c20', symbol: '#d1e5d4' },
+  'nes-light': { bg: '#c2b59c', overlay: '#d0c4aa', symbol: '#27231b' },
   'element-admin': { bg: '#e8e8ed', overlay: '#f5f5f7', symbol: '#1d1d1f' },
   'element-admin-dark': { bg: '#1c1c1e', overlay: '#2c2c2e', symbol: '#f5f5f7' },
-  'retro-desktop': { bg: '#dddddd', overlay: '#eeeeee', symbol: '#000000' },
+  'retro-desktop': { bg: '#d8d8d8', overlay: '#ececec', symbol: '#1c1c1c' },
   default: { bg: '#0b1117', overlay: '#151f27', symbol: '#eef8f0' },
 };
 

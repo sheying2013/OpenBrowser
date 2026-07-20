@@ -1,0 +1,902 @@
+/* Classic macOS 10 / Aqua — rounded metal, soft shadows, no pixel grid.
+   Distinct from Win95 square bevel and from pixel-workstation/nes-light. */
+
+html[data-ui-theme="retro-desktop"] {
+  --aqua-blue: #4a90d9;
+  --aqua-blue-deep: #2f6fad;
+  --aqua-blue-soft: #7eb6e8;
+  --aqua-blue-glow: #a8d0f0;
+  --metal-hi: #f4f4f4;
+  --metal-mid: #e6e6e6;
+  --metal-lo: #cfcfcf;
+  --metal-edge: #9a9a9a;
+  --paper: #fbfbfb;
+  --ink: #1c1c1c;
+  --muted: #5c5c5c;
+  --danger: #c0392b;
+  --ok: #2e8b57;
+  --warn: #b8860b;
+
+  --blue: var(--aqua-blue);
+  --blue2: var(--metal-mid);
+  --border: var(--metal-edge);
+  --green: var(--ok);
+  --theme-bg: #d8d8d8;
+  --theme-surface: var(--paper);
+  --theme-surface-alt: var(--metal-hi);
+  --theme-active: var(--aqua-blue);
+  --theme-soft: #dceaf7;
+  --theme-text: var(--ink);
+  --theme-muted: var(--muted);
+  --theme-accent-strong: var(--aqua-blue-deep);
+  --theme-shadow: rgba(0, 0, 0, 0.18);
+  --theme-glow: none;
+  --theme-input: #ffffff;
+  --theme-table-line: #d0d0d0;
+  --theme-sidebar-status-bg: var(--metal-mid);
+  --theme-sidebar-status-border: var(--metal-edge);
+  --theme-sidebar-status-text: var(--ink);
+  --theme-code-bg: #1e1e1e;
+  --theme-code-fg: #7dff9a;
+  --ui-sidebar-width: 208px;
+  --ui-header-height: 56px;
+  --ui-control-height: 30px;
+  --ui-sidebar: linear-gradient(180deg, #ececec 0%, #dcdcdc 100%);
+  --ui-header: linear-gradient(180deg, #f6f6f6 0%, #e4e4e4 100%);
+  --ui-surface: var(--paper);
+  --ui-surface-muted: var(--metal-hi);
+  --ui-border: #bdbdbd;
+  --ui-border-strong: #8e8e8e;
+  --ui-text: var(--ink);
+  --ui-muted: var(--muted);
+  --ui-accent: var(--aqua-blue);
+  --ui-accent-soft: #dceaf7;
+  --ui-danger: var(--danger);
+  --ui-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  --ui-radius: 10px;
+  --ui-radius-sm: 7px;
+  --start-progress-height: 12px;
+  --start-progress-radius: 999px;
+  --start-progress-track: #ffffff;
+  --start-progress-fill: var(--aqua-blue);
+  --start-progress-fill-soft: var(--aqua-blue-soft);
+  --start-progress-label: var(--ink);
+  --theme-menu-width: 22.5rem;
+  --theme-menu-pad: 0.75rem;
+  --theme-option-icon: 3rem;
+  --theme-option-gap: 0.75rem;
+  --theme-option-min-h: 4.5rem;
+  color-scheme: light;
+}
+
+html[data-ui-theme="retro-desktop"] *,
+html[data-ui-theme="retro-desktop"] *::before,
+html[data-ui-theme="retro-desktop"] *::after {
+  box-sizing: border-box;
+}
+
+html[data-ui-theme="retro-desktop"] body {
+  color: var(--ink);
+  /* Cross-OS stack: no platform-only font as sole CJK fallback */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Lucida Grande", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
+  font-size: 13px;
+  background: #cfcfcf !important;
+  background-image:
+    radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.55), transparent 42%),
+    linear-gradient(180deg, #d8d8d8 0%, #c8c8c8 100%) !important;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+html[data-ui-theme="retro-desktop"] body::after { content: none !important; display: none !important; }
+
+html[data-ui-theme="retro-desktop"] button,
+html[data-ui-theme="retro-desktop"] input,
+html[data-ui-theme="retro-desktop"] select,
+html[data-ui-theme="retro-desktop"] textarea { font: inherit; }
+
+html[data-ui-theme="retro-desktop"] ::selection {
+  background: rgba(74, 144, 217, 0.35);
+  color: var(--ink);
+}
+
+/* Flush shell — no floating gaps */
+html[data-ui-theme="retro-desktop"] .app-shell {
+  background: transparent !important;
+  background-image: none !important;
+  min-height: 100vh;
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  grid-template-columns: var(--ui-sidebar-width) minmax(0, 1fr) !important;
+}
+html[data-ui-theme="retro-desktop"] .sidebar {
+  margin: 0 !important;
+  padding: 14px 12px 12px !important;
+  color: var(--ink);
+  background: linear-gradient(180deg, #efefef 0%, #dedede 55%, #d4d4d4 100%) !important;
+  border: none !important;
+  border-right: 1px solid #a8a8a8 !important;
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.55), 2px 0 10px rgba(0, 0, 0, 0.06) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border-radius: 0 !important;
+}
+html[data-ui-theme="retro-desktop"] .content {
+  margin: 0 !important;
+  padding: 0 !important;
+  min-width: 0;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Brand — soft aqua title strip */
+html[data-ui-theme="retro-desktop"] .brand {
+  min-height: 42px;
+  margin: 0 0 12px 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 48%),
+    linear-gradient(180deg, #6aa8e8 0%, #3f7fc4 100%);
+  color: #fff;
+  gap: 10px;
+  display: flex;
+  align-items: center;
+  box-shadow: 0 2px 6px rgba(40, 80, 130, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+html[data-ui-theme="retro-desktop"] .brand .logo {
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px !important;
+  background: linear-gradient(180deg, #ffffff 0%, #e8e8e8 100%);
+  box-shadow: inset 0 1px 0 #fff, 0 1px 2px rgba(0, 0, 0, 0.15);
+  flex: 0 0 28px;
+  overflow: hidden;
+}
+html[data-ui-theme="retro-desktop"] .brand .logo img {
+  content: url("assets/logo-native.png?v=20260720");
+  image-rendering: auto;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+html[data-ui-theme="retro-desktop"] .brand strong {
+  color: #fff !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  font-family: inherit !important;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
+}
+html[data-ui-theme="retro-desktop"] .brand small {
+  color: rgba(255, 255, 255, 0.86) !important;
+  font-size: 10px !important;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+html[data-ui-theme="retro-desktop"] .new-browser {
+  min-height: 32px !important;
+  margin: 0 0 12px 0 !important;
+  padding: 4px 12px !important;
+  border: 1px solid #7aa8d4 !important;
+  border-radius: 999px !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7) 0%, rgba(255, 255, 255, 0.08) 45%),
+    linear-gradient(180deg, #8fc0ef 0%, #4a90d9 55%, #3577bd 100%) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 5px rgba(40, 90, 150, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.7) !important;
+  text-transform: none !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+}
+html[data-ui-theme="retro-desktop"] .new-browser:hover {
+  filter: brightness(1.04);
+}
+html[data-ui-theme="retro-desktop"] .new-browser:active {
+  background:
+    linear-gradient(180deg, #3d7fc4 0%, #4a90d9 100%) !important;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.22) !important;
+  transform: none !important;
+}
+
+html[data-ui-theme="retro-desktop"] .sidebar nav {
+  gap: 3px;
+  display: grid;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+html[data-ui-theme="retro-desktop"] .sidebar .nav {
+  min-height: 30px;
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid transparent !important;
+  border-radius: 8px !important;
+  color: #222 !important;
+  font-size: 13px;
+  font-weight: 500;
+  gap: 8px;
+  display: flex;
+  align-items: center;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+html[data-ui-theme="retro-desktop"] .sidebar .nav > svg,
+html[data-ui-theme="retro-desktop"] .sidebar .nav .lucide,
+html[data-ui-theme="retro-desktop"] .sidebar .nav > i[data-lucide] {
+  width: 16px !important;
+  height: 16px !important;
+  min-width: 16px !important;
+  flex: 0 0 16px !important;
+  color: #3a3a3a !important;
+  stroke: currentColor !important;
+}
+html[data-ui-theme="retro-desktop"] .sidebar .nav > span {
+  color: inherit !important;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html[data-ui-theme="retro-desktop"] .sidebar .nav:hover {
+  background: rgba(255, 255, 255, 0.55) !important;
+  color: #111 !important;
+  border-color: rgba(0, 0, 0, 0.06) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+}
+html[data-ui-theme="retro-desktop"] .sidebar .nav.active {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 42%),
+    linear-gradient(180deg, #6aa8e8 0%, #3f7fc4 100%) !important;
+  color: #fff !important;
+  border-color: #2f6fad !important;
+  box-shadow: 0 1px 3px rgba(40, 90, 150, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
+}
+html[data-ui-theme="retro-desktop"] .sidebar .nav.active > svg,
+html[data-ui-theme="retro-desktop"] .sidebar .nav.active .lucide,
+html[data-ui-theme="retro-desktop"] .sidebar .nav.active > i[data-lucide],
+html[data-ui-theme="retro-desktop"] .sidebar .nav.active > span {
+  color: #fff !important;
+  stroke: currentColor !important;
+}
+html[data-ui-theme="retro-desktop"] .sidebar .nav-label {
+  margin: 12px 8px 4px;
+  color: #666;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+html[data-ui-theme="retro-desktop"] .sidebar .nav-label::before { content: none; }
+html[data-ui-theme="retro-desktop"] .nav-sub {
+  border-left: 2px solid rgba(0, 0, 0, 0.1) !important;
+  margin-left: 12px !important;
+  padding-left: 6px !important;
+}
+html[data-ui-theme="retro-desktop"] .sidebar-footer {
+  margin-top: auto;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  padding: 10px 6px 2px;
+  color: #222 !important;
+}
+html[data-ui-theme="retro-desktop"] .sidebar-footer a,
+html[data-ui-theme="retro-desktop"] .sidebar-footer .app-version { color: #222 !important; }
+
+/* Header — brushed metal bar */
+html[data-ui-theme="retro-desktop"] .content > header {
+  margin: 0 !important;
+  min-height: 56px !important;
+  height: 56px !important;
+  padding: 0 16px !important;
+  color: var(--ink) !important;
+  background: linear-gradient(180deg, #f8f8f8 0%, #e6e6e6 100%) !important;
+  border: none !important;
+  border-bottom: 1px solid #a8a8a8 !important;
+  box-shadow: inset 0 1px 0 #fff, 0 1px 0 rgba(255, 255, 255, 0.4) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  display: flex;
+  align-items: center;
+}
+html[data-ui-theme="retro-desktop"] .content > header h1 {
+  color: #1a1a1a !important;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  text-transform: none !important;
+  text-shadow: none !important;
+  letter-spacing: 0 !important;
+  font-family: inherit !important;
+  line-height: 1.2;
+}
+html[data-ui-theme="retro-desktop"] .content > header h1::before { content: none !important; }
+html[data-ui-theme="retro-desktop"] .content > header p {
+  color: #5c5c5c !important;
+  font-size: 12px !important;
+  line-height: 1.35 !important;
+  opacity: 1 !important;
+}
+html[data-ui-theme="retro-desktop"] .header-right { color: var(--ink); }
+html[data-ui-theme="retro-desktop"] .content > main {
+  margin: 0 !important;
+  padding: 14px 16px !important;
+  background: transparent !important;
+  background-image: none !important;
+  flex: 1;
+}
+
+/* Aqua pill buttons */
+html[data-ui-theme="retro-desktop"] .primary,
+html[data-ui-theme="retro-desktop"] .outline,
+html[data-ui-theme="retro-desktop"] .danger,
+html[data-ui-theme="retro-desktop"] .mini,
+html[data-ui-theme="retro-desktop"] .action-grid button,
+html[data-ui-theme="retro-desktop"] .row-actions button,
+html[data-ui-theme="retro-desktop"] .editor-back,
+html[data-ui-theme="retro-desktop"] .rpa-icon-btn,
+html[data-ui-theme="retro-desktop"] button:not(.nav):not(.theme-option):not(.tabs button):not(.theme-trigger):not(.nav-expand):not(.nav-child) {
+  min-height: 28px;
+  border: 1px solid #9a9a9a !important;
+  border-radius: 999px !important;
+  background:
+    linear-gradient(180deg, #ffffff 0%, #efefef 48%, #dcdcdc 100%) !important;
+  color: #1c1c1c !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), inset 0 1px 0 #fff !important;
+  font-weight: 600;
+  text-transform: none;
+  padding: 3px 12px;
+}
+html[data-ui-theme="retro-desktop"] .primary {
+  border-color: #3f7fc4 !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.05) 42%),
+    linear-gradient(180deg, #7eb6e8 0%, #4a90d9 55%, #3577bd 100%) !important;
+  color: #fff !important;
+  box-shadow: 0 1px 3px rgba(40, 90, 150, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.55) !important;
+  font-weight: 700 !important;
+}
+html[data-ui-theme="retro-desktop"] .danger,
+html[data-ui-theme="retro-desktop"] .rpa-btn-danger {
+  color: #9b2c2c !important;
+  border-color: #c58a8a !important;
+}
+html[data-ui-theme="retro-desktop"] button:not(.nav):not(.theme-option):active {
+  background: linear-gradient(180deg, #d0d0d0 0%, #e8e8e8 100%) !important;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.18) !important;
+  transform: none !important;
+}
+html[data-ui-theme="retro-desktop"] .primary:active {
+  background: linear-gradient(180deg, #3577bd 0%, #4a90d9 100%) !important;
+}
+
+/* Soft inset fields */
+html[data-ui-theme="retro-desktop"] input,
+html[data-ui-theme="retro-desktop"] select,
+html[data-ui-theme="retro-desktop"] textarea,
+html[data-ui-theme="retro-desktop"] .search,
+html[data-ui-theme="retro-desktop"] .rpa-input,
+html[data-ui-theme="retro-desktop"] .rpa-select,
+html[data-ui-theme="retro-desktop"] .rpa-search input {
+  border: 1px solid #a8a8a8 !important;
+  border-radius: 8px !important;
+  background: #fff !important;
+  color: #1c1c1c !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+  min-height: 28px;
+}
+html[data-ui-theme="retro-desktop"] .search {
+  border: 1px solid #a8a8a8 !important;
+  border-radius: 999px !important;
+  background: #fff !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+}
+html[data-ui-theme="retro-desktop"] .search input {
+  border: 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+html[data-ui-theme="retro-desktop"] input[type="checkbox"],
+html[data-ui-theme="retro-desktop"] input[type="radio"] {
+  accent-color: #4a90d9;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="retro-desktop"] .themed-select-button {
+  min-height: 28px;
+  border: 1px solid #9a9a9a !important;
+  border-radius: 8px !important;
+  background: linear-gradient(180deg, #fff 0%, #ebebeb 100%) !important;
+  color: #1c1c1c !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), inset 0 1px 0 #fff !important;
+}
+html[data-ui-theme="retro-desktop"] .themed-select-menu {
+  border: 1px solid #a0a0a0 !important;
+  border-radius: 10px !important;
+  background: #fff !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18) !important;
+  color: #1c1c1c !important;
+  z-index: 2147483000 !important;
+  position: fixed !important;
+  max-height: min(50vh, 420px) !important;
+  overflow-y: auto !important;
+  padding: 4px !important;
+}
+html[data-ui-theme="retro-desktop"] .themed-select-option {
+  min-height: 26px;
+  background: #fff !important;
+  color: #1c1c1c !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+}
+html[data-ui-theme="retro-desktop"] .themed-select-option:hover,
+html[data-ui-theme="retro-desktop"] .themed-select-option.selected,
+html[data-ui-theme="retro-desktop"] .themed-select-option:focus-visible {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28) 0%, rgba(255, 255, 255, 0) 45%),
+    linear-gradient(180deg, #6aa8e8 0%, #3f7fc4 100%) !important;
+  color: #fff !important;
+}
+html[data-ui-theme="retro-desktop"] .themed-multiselect-list {
+  border: 1px solid #a8a8a8 !important;
+  border-radius: 8px !important;
+  background: #fff !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06) !important;
+}
+html[data-ui-theme="retro-desktop"] .themed-multiselect-option {
+  background: #fff !important;
+  color: #1c1c1c !important;
+  border-radius: 6px !important;
+}
+html[data-ui-theme="retro-desktop"] .themed-multiselect-option:hover,
+html[data-ui-theme="retro-desktop"] .themed-multiselect-option.selected {
+  background: #4a90d9 !important;
+  color: #fff !important;
+}
+
+/* Rounded metal cards / panels */
+html[data-ui-theme="retro-desktop"] .table-card,
+html[data-ui-theme="retro-desktop"] .extension-card,
+html[data-ui-theme="retro-desktop"] .settings-grid article,
+html[data-ui-theme="retro-desktop"] .editor-form,
+html[data-ui-theme="retro-desktop"] .profile-summary,
+html[data-ui-theme="retro-desktop"] .advanced-card,
+html[data-ui-theme="retro-desktop"] .local-status-card,
+html[data-ui-theme="retro-desktop"] .storage-path-box,
+html[data-ui-theme="retro-desktop"] .rpa-section,
+html[data-ui-theme="retro-desktop"] .rpa-panel,
+html[data-ui-theme="retro-desktop"] .rpa-editor-pane,
+html[data-ui-theme="retro-desktop"] .rpa-table-wrap,
+html[data-ui-theme="retro-desktop"] .rpa-store-card,
+html[data-ui-theme="retro-desktop"] .rpa-empty-card {
+  border: 1px solid #b0b0b0 !important;
+  border-radius: 12px !important;
+  background:
+    linear-gradient(180deg, #ffffff 0%, #f4f4f4 100%) !important;
+  color: #1c1c1c !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1), inset 0 1px 0 #fff !important;
+  margin: 0;
+}
+html[data-ui-theme="retro-desktop"] .table-card,
+html[data-ui-theme="retro-desktop"] .rpa-table-wrap {
+  background: #fff !important;
+  overflow: hidden;
+}
+html[data-ui-theme="retro-desktop"] table {
+  background: #fff;
+  width: 100%;
+  border-collapse: collapse;
+}
+html[data-ui-theme="retro-desktop"] th {
+  border-bottom: 1px solid #c8c8c8 !important;
+  border-right: 1px solid #ececec !important;
+  background: linear-gradient(180deg, #f7f7f7 0%, #e9e9e9 100%) !important;
+  color: #1c1c1c !important;
+  font-weight: 700 !important;
+  box-shadow: none !important;
+}
+html[data-ui-theme="retro-desktop"] td {
+  border-bottom: 1px solid #ececec !important;
+  border-right: 0 !important;
+  color: #1c1c1c !important;
+}
+html[data-ui-theme="retro-desktop"] tbody tr:nth-child(even) { background: #fafafa; }
+html[data-ui-theme="retro-desktop"] tbody tr:hover { background: #eef5fc !important; }
+html[data-ui-theme="retro-desktop"] tbody tr.selected-row {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0) 45%),
+    linear-gradient(180deg, #6aa8e8 0%, #3f7fc4 100%) !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+html[data-ui-theme="retro-desktop"] tbody tr.selected-row td { color: #fff !important; }
+
+html[data-ui-theme="retro-desktop"] .avatar,
+html[data-ui-theme="retro-desktop"] .env-badge,
+html[data-ui-theme="retro-desktop"] .extension-icon {
+  border: 1px solid rgba(0, 0, 0, 0.12) !important;
+  border-radius: 10px !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 45%),
+    linear-gradient(180deg, #6aa8e8 0%, #3f7fc4 100%) !important;
+  color: #fff !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15) !important;
+  image-rendering: auto;
+}
+
+html[data-ui-theme="retro-desktop"] .tabs,
+html[data-ui-theme="retro-desktop"] .editor-tabs {
+  border: 0 !important;
+  border-bottom: 1px solid #b8b8b8 !important;
+  background: transparent !important;
+  margin: 0 0 12px 0 !important;
+  padding: 0 !important;
+  gap: 4px;
+}
+html[data-ui-theme="retro-desktop"] .tabs button,
+html[data-ui-theme="retro-desktop"] .editor-tabs button,
+html[data-ui-theme="retro-desktop"] .rpa-subtabs button,
+html[data-ui-theme="retro-desktop"] .rpa-tabs-line button {
+  color: #333 !important;
+  font-weight: 600 !important;
+  border: 1px solid transparent !important;
+  border-radius: 8px 8px 0 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  margin: 0 2px 0 0 !important;
+  padding: 6px 12px !important;
+}
+html[data-ui-theme="retro-desktop"] .tabs button.active,
+html[data-ui-theme="retro-desktop"] .editor-tabs button.active,
+html[data-ui-theme="retro-desktop"] .rpa-subtabs button.active,
+html[data-ui-theme="retro-desktop"] .rpa-tabs-line button.active {
+  border: 1px solid #b0b0b0 !important;
+  border-bottom-color: #f4f4f4 !important;
+  background: linear-gradient(180deg, #fff 0%, #f4f4f4 100%) !important;
+  color: #1c1c1c !important;
+  position: relative;
+  top: 1px;
+  box-shadow: inset 0 1px 0 #fff !important;
+}
+
+html[data-ui-theme="retro-desktop"] .console,
+html[data-ui-theme="retro-desktop"] .console-panel,
+html[data-ui-theme="retro-desktop"] .rpa-code-block,
+html[data-ui-theme="retro-desktop"] .api-code-block,
+html[data-ui-theme="retro-desktop"] .ua-meta-preview {
+  border: 1px solid #555 !important;
+  border-radius: 10px !important;
+  background: #1e1e1e !important;
+  color: #7dff9a !important;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35) !important;
+  font-family: Consolas, "Courier New", monospace;
+}
+
+html[data-ui-theme="retro-desktop"] .rpa-log {
+  --rpa-log-fg: #1c1c1c !important;
+  --rpa-log-muted: #5c5c5c !important;
+  --rpa-log-line: #e8e8e8 !important;
+  border: 1px solid #b0b0b0 !important;
+  border-radius: 10px !important;
+  background: #fff !important;
+  color: #1c1c1c !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  min-height: 150px !important;
+  max-height: 280px !important;
+  padding: 8px 10px !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+  font-family: inherit !important;
+}
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line {
+  color: #1c1c1c !important;
+  border-bottom: 1px solid #ececec !important;
+}
+html[data-ui-theme="retro-desktop"] .rpa-log .log-time { color: #5c5c5c !important; }
+html[data-ui-theme="retro-desktop"] .rpa-log .log-msg { color: #1c1c1c !important; font-weight: 600 !important; }
+html[data-ui-theme="retro-desktop"] .rpa-log .rpa-muted,
+html[data-ui-theme="retro-desktop"] .rpa-log .log-empty { color: #5c5c5c !important; }
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-info .log-level { color: #2f6fad !important; }
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-error .log-level,
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-fail .log-level,
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-error .log-msg,
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-fail .log-msg { color: #c0392b !important; }
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-warn .log-level,
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-warning .log-level,
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-warn .log-msg,
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-warning .log-msg { color: #b8860b !important; }
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-ok .log-level,
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-success .log-level,
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-ok .log-msg,
+html[data-ui-theme="retro-desktop"] .rpa-log .log-line.level-success .log-msg { color: #2e8b57 !important; }
+
+html[data-ui-theme="retro-desktop"] .console-head,
+html[data-ui-theme="retro-desktop"] .profile-editor-head,
+html[data-ui-theme="retro-desktop"] .dialog-head {
+  border-bottom: 1px solid #a8a8a8;
+  border-radius: 12px 12px 0 0 !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 48%),
+    linear-gradient(180deg, #6aa8e8 0%, #3f7fc4 100%);
+  color: #fff;
+}
+html[data-ui-theme="retro-desktop"] .profile-editor-head p { color: rgba(255, 255, 255, 0.85); }
+
+html[data-ui-theme="retro-desktop"] .settings-grid h3,
+html[data-ui-theme="retro-desktop"] .rpa-h2 {
+  padding: 6px 12px;
+  border: 1px solid #b0b0b0;
+  border-radius: 8px !important;
+  background: linear-gradient(180deg, #fff 0%, #ececec 100%);
+  color: #1c1c1c;
+  box-shadow: inset 0 1px 0 #fff;
+  font-size: 13px;
+}
+html[data-ui-theme="retro-desktop"] dialog {
+  border: 1px solid #a0a0a0 !important;
+  border-radius: 14px !important;
+  background: linear-gradient(180deg, #f8f8f8 0%, #eaeaea 100%) !important;
+  color: #1c1c1c;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+}
+html[data-ui-theme="retro-desktop"] dialog::backdrop { background: rgba(30, 30, 30, 0.35) !important; }
+html[data-ui-theme="retro-desktop"] .toast {
+  border: 1px solid #c9b86a;
+  border-radius: 10px !important;
+  background: linear-gradient(180deg, #fff8d6 0%, #ffe9a8 100%);
+  color: #1c1c1c;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+}
+
+html[data-ui-theme="retro-desktop"] .theme-popover {
+  width: min(var(--theme-menu-width), calc(100vw - 1rem));
+  max-width: calc(100vw - 1rem);
+  padding: var(--theme-menu-pad);
+  border: 1px solid #a8a8a8 !important;
+  border-radius: 14px !important;
+  background: linear-gradient(180deg, #fafafa 0%, #ececec 100%) !important;
+  color: #1c1c1c !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2) !important;
+  backdrop-filter: none !important;
+}
+html[data-ui-theme="retro-desktop"] .theme-option {
+  border: 1px solid #b8b8b8 !important;
+  border-radius: 12px !important;
+  background: linear-gradient(180deg, #fff 0%, #f0f0f0 100%) !important;
+  color: #1c1c1c !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), inset 0 1px 0 #fff !important;
+}
+html[data-ui-theme="retro-desktop"] .theme-option:hover { background: #f7f7f7 !important; }
+html[data-ui-theme="retro-desktop"] .theme-option.active {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0) 45%),
+    linear-gradient(180deg, #6aa8e8 0%, #3f7fc4 100%) !important;
+  color: #fff !important;
+  border-color: #2f6fad !important;
+}
+html[data-ui-theme="retro-desktop"] .theme-option small { color: #5c5c5c; }
+html[data-ui-theme="retro-desktop"] .theme-option.active small { color: rgba(255, 255, 255, 0.88); }
+html[data-ui-theme="retro-desktop"] .theme-option.active::after { border-color: #fff; }
+
+.theme-option[data-ui-theme-option="retro-desktop"] > i {
+  border: 1px solid #8e8e8e;
+  border-radius: 8px !important;
+  background:
+    linear-gradient(180deg, #6aa8e8 0%, #3f7fc4 100%) 0 0 / 100% 30% no-repeat,
+    linear-gradient(180deg, #f4f4f4 0%, #dcdcdc 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 1px 2px rgba(0, 0, 0, 0.12);
+  image-rendering: auto;
+}
+
+/* Logs window */
+html[data-ui-theme="retro-desktop"] #view-logs { font-family: inherit; }
+html[data-ui-theme="retro-desktop"] .retro-log-window {
+  min-height: calc(100vh - 120px);
+  overflow: hidden;
+  border: 1px solid #a8a8a8;
+  border-radius: 14px !important;
+  background: linear-gradient(180deg, #f7f7f7 0%, #ececec 100%);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  margin: 0;
+}
+html[data-ui-theme="retro-desktop"] .retro-log-titlebar {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid #2f6fad;
+  border-radius: 14px 14px 0 0 !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 48%),
+    linear-gradient(180deg, #6aa8e8 0%, #3f7fc4 100%);
+  color: #fff;
+}
+html[data-ui-theme="retro-desktop"] .retro-log-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+html[data-ui-theme="retro-desktop"] .retro-log-title strong { font-size: 13px; color: #fff; }
+html[data-ui-theme="retro-desktop"] .retro-log-title span { color: rgba(255, 255, 255, 0.86); font-size: 11px; font-weight: 600; }
+html[data-ui-theme="retro-desktop"] .retro-log-titlebar .outline {
+  background: linear-gradient(180deg, #fff 0%, #e8e8e8 100%) !important;
+  color: #1c1c1c !important;
+  border: 1px solid #9a9a9a !important;
+  border-radius: 999px !important;
+  box-shadow: inset 0 1px 0 #fff !important;
+}
+html[data-ui-theme="retro-desktop"] .log-runtime-note {
+  min-height: 26px;
+  padding: 4px 12px;
+  border-bottom: 1px solid #d0c48a;
+  background: linear-gradient(180deg, #fff8d6 0%, #ffe9a8 100%);
+  color: #1c1c1c;
+}
+html[data-ui-theme="retro-desktop"] .retro-log-columns,
+html[data-ui-theme="retro-desktop"] .log-row {
+  display: grid;
+  grid-template-columns: 112px 132px minmax(0, 1fr);
+}
+html[data-ui-theme="retro-desktop"] .retro-log-columns {
+  border-bottom: 1px solid #c8c8c8;
+  background: linear-gradient(180deg, #f7f7f7 0%, #e9e9e9 100%);
+  color: #1c1c1c;
+  font-size: 11px;
+  font-weight: 700;
+}
+html[data-ui-theme="retro-desktop"] .retro-log-columns span,
+html[data-ui-theme="retro-desktop"] .log-row span {
+  min-width: 0;
+  padding: 7px 10px;
+  border-right: 1px solid #ececec;
+}
+html[data-ui-theme="retro-desktop"] .retro-log-columns span:last-child,
+html[data-ui-theme="retro-desktop"] .log-row span:last-child { border-right: 0; }
+html[data-ui-theme="retro-desktop"] .log-card {
+  min-height: 420px;
+  max-height: calc(100vh - 210px);
+  overflow: auto;
+  padding: 0;
+  background: #fff;
+  color: #1c1c1c;
+  border: 0;
+  border-top: 1px solid #c8c8c8;
+  box-shadow: none;
+  border-radius: 0 0 14px 14px !important;
+}
+html[data-ui-theme="retro-desktop"] .log-row {
+  border-bottom: 1px solid #ececec;
+  font-size: 12px;
+  line-height: 1.4;
+}
+html[data-ui-theme="retro-desktop"] .log-row:nth-child(even) { background: #fafafa; }
+html[data-ui-theme="retro-desktop"] .log-row:hover { background: #eef5fc; }
+html[data-ui-theme="retro-desktop"] .log-row span:first-child { color: #5c5c5c; white-space: nowrap; }
+html[data-ui-theme="retro-desktop"] .log-row span:nth-child(2) { color: #2f6fad; font-weight: 700; overflow-wrap: anywhere; }
+html[data-ui-theme="retro-desktop"] .log-empty {
+  display: grid;
+  min-height: 420px;
+  place-items: center;
+  color: #5c5c5c;
+  background: #fff;
+}
+
+html[data-ui-theme="retro-desktop"] .toolbar,
+html[data-ui-theme="retro-desktop"] .sync-toolbar,
+html[data-ui-theme="retro-desktop"] .rpa-toolbar {
+  border: 1px solid #b0b0b0;
+  border-radius: 12px !important;
+  background: linear-gradient(180deg, #fafafa 0%, #ececec 100%);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08), inset 0 1px 0 #fff;
+  padding: 8px 10px;
+  margin: 0 0 12px 0;
+}
+html[data-ui-theme="retro-desktop"] .rpa-banner {
+  border: 1px solid #c9b86a;
+  border-radius: 10px !important;
+  background: linear-gradient(180deg, #fff8d6 0%, #ffe9a8 100%);
+  color: #1c1c1c;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  padding: 8px 12px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+html[data-ui-theme="retro-desktop"] .start-progress {
+  --start-progress-height: 12px;
+  --start-progress-radius: 999px;
+  --start-progress-track: #fff;
+  --start-progress-fill: #4a90d9;
+  --start-progress-fill-soft: #7eb6e8;
+  --start-progress-label: #1c1c1c;
+  max-width: 130px;
+}
+html[data-ui-theme="retro-desktop"] .start-progress-track {
+  border: 1px solid #a8a8a8;
+  border-radius: 999px !important;
+  background: #fff;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+  height: 12px;
+  overflow: hidden;
+}
+html[data-ui-theme="retro-desktop"] .start-progress-fill {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0) 45%),
+    linear-gradient(90deg, #7eb6e8 0%, #4a90d9 55%, #3577bd 100%);
+  border-radius: 999px !important;
+  transition: width 160ms ease;
+}
+html[data-ui-theme="retro-desktop"] .start-progress-shimmer { display: none; }
+html[data-ui-theme="retro-desktop"] .engine-badge {
+  border: 1px solid #a8a8a8 !important;
+  border-radius: 999px !important;
+  background: linear-gradient(180deg, #fff 0%, #ececec 100%) !important;
+  color: #1c1c1c !important;
+  box-shadow: inset 0 1px 0 #fff !important;
+}
+
+/* Titlebar integrated: continuous metal, no floating gaps */
+html[data-ui-theme="retro-desktop"].titlebar-integrated .sidebar,
+html[data-ui-theme="retro-desktop"][data-titlebar="integrated"] .sidebar {
+  background: linear-gradient(180deg, #efefef 0%, #dedede 55%, #d4d4d4 100%) !important;
+  margin: 0 !important;
+  padding-top: 54px !important;
+  border-right: 1px solid #a8a8a8 !important;
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.55), 2px 0 10px rgba(0, 0, 0, 0.06) !important;
+}
+html[data-ui-theme="retro-desktop"].titlebar-integrated .content > header,
+html[data-ui-theme="retro-desktop"][data-titlebar="integrated"] .content > header {
+  background: linear-gradient(180deg, #f8f8f8 0%, #e6e6e6 100%) !important;
+  color: #1c1c1c !important;
+  margin: 0 !important;
+  border-bottom: 1px solid #a8a8a8 !important;
+}
+html[data-ui-theme="retro-desktop"][data-platform="windows"].titlebar-integrated .sidebar,
+html[data-ui-theme="retro-desktop"][data-platform="windows"][data-titlebar="integrated"] .sidebar {
+  padding-top: calc(env(titlebar-area-height, 40px) + 8px) !important;
+  background: linear-gradient(180deg, #efefef 0%, #dedede 55%, #d4d4d4 100%) !important;
+  margin: 0 !important;
+}
+html[data-ui-theme="retro-desktop"][data-platform="windows"].titlebar-integrated .content > header,
+html[data-ui-theme="retro-desktop"][data-platform="windows"][data-titlebar="integrated"] .content > header {
+  background: linear-gradient(180deg, #f8f8f8 0%, #e6e6e6 100%) !important;
+  min-height: calc(56px + env(titlebar-area-height, 40px)) !important;
+  padding-top: env(titlebar-area-height, 40px) !important;
+  padding-right: calc(var(--titlebar-caption-pad, 138px) + 10px) !important;
+  margin: 0 !important;
+}
+
+html[data-ui-theme="retro-desktop"][data-platform="macos"] body {
+  font-family: -apple-system, BlinkMacSystemFont, "Lucida Grande", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+html[data-ui-theme="retro-desktop"][data-platform="windows"] body {
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI Emoji", Tahoma, sans-serif;
+}
+
+/* Soft Aqua scrollbars */
+html[data-ui-theme="retro-desktop"] ::-webkit-scrollbar { width: 12px; height: 12px; }
+html[data-ui-theme="retro-desktop"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+html[data-ui-theme="retro-desktop"] ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #d8d8d8 0%, #b8b8b8 100%);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+html[data-ui-theme="retro-desktop"] ::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #c8c8c8 0%, #a0a0a0 100%);
+  background-clip: padding-box;
+}

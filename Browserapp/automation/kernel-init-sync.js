@@ -3,7 +3,7 @@
 /**
  * Map OpenBrowser profile fingerprint → openbrowser-148 init.json fields.
  * Written before spawn so the kernel Framework reads the same identity as CDP/JS.
- * Surgical only: never wipe ipc/token when merging into an existing init.
+ * Merge carefully: never wipe ipc/token when updating an existing init.
  */
 
 const fs = require('fs');
@@ -17,7 +17,7 @@ function isOpenBrowser148(browser = {}) {
   if (!browser) return false;
   if (browser.source === SOURCE_OPENBROWSER) return true;
   const p = String(browser.path || '');
-  return /openbrowser_148|kernels[/\\]openbrowser[/\\]/i.test(p);
+  return /openbrowser_148|kernels[/\\](macos-x64|openbrowser)[/\\]/i.test(p);
 }
 
 /** Stable ipc / --browser_id window name (SB + 9 digits). */
@@ -250,6 +250,10 @@ function applySafetyFields(init) {
   };
   init.required_enabled_extension_id_list = [];
   if (!init.token) init.token = 'openbrowser-token';
+  // Local managed profiles keep CDP / automation flags enabled in init.json.
+  init.can_webdriver = true;
+  init.allow_remote_debugging = true;
+  init.is_debug = Number(init.is_debug) === 1 ? 1 : 0;
   return init;
 }
 
@@ -313,7 +317,11 @@ function applyFingerprintFields(init, fields) {
     }
   }
   cl['remote-debugging-port'] = '0';
+  // Keep CDP reachable for Local API / RPA / window sync regardless of template defaults.
+  if (cl['enable-automation'] === undefined) cl['enable-automation'] = '';
   init.cmd_line = cl;
+  init.can_webdriver = true;
+  init.allow_remote_debugging = true;
   if (fields._browserTitle) init.browser_title = String(fields._browserTitle).slice(0, 120);
   applyIpc(init, fields._windowName);
   return init;
@@ -337,12 +345,15 @@ async function resolveInitTemplate(browserPath = '', resourceRoots = []) {
     candidates.push(path.resolve(browserPath, '../../../../../init_template.json'));
   }
   for (const root of resourceRoots || []) {
-    candidates.push(path.join(root, 'kernels/openbrowser/init_template.json'));
+    candidates.push(path.join(root, 'kernels/macos-x64/init_template.json'));
+    candidates.push(path.join(root, 'kernels/openbrowser/init_template.json')); // compat symlink
+    candidates.push(path.join(root, 'macos-x64/init_template.json'));
     candidates.push(path.join(root, 'openbrowser/init_template.json'));
     candidates.push(path.join(root, 'init_template.json'));
   }
   const home = process.env.HOME || '';
   if (home) {
+    candidates.push(path.join(home, 'Library/Application Support/openbrowser/kernels/macos-x64/init_template.json'));
     candidates.push(path.join(home, 'Library/Application Support/openbrowser/kernels/openbrowser/init_template.json'));
   }
   for (const file of candidates) {

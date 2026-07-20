@@ -7,48 +7,82 @@ extension-pipe-selftest-data/
 *.log
 .DS_Store
 .codex-local/
+# Local-only maintainer docs (never publish)
 CODE_OVERVIEW.md
+Browserapp/CODE_OVERVIEW.md
+Browserapp/kernels/README.md
+local-logs/
+Browserapp/local-logs/
+Browserapp/logs/
 .env
 .env.*
 !.env.example
 
-# Local browser data and downloaded runtimes
+# Local browser data and runtime caches
 profiles/
 user-data/
 browser-data/
-# UserData / 下载的内核一律忽略；源码树内「仅 macOS x86_64 默认内核」例外见下
 kernels/
 bundled-kernels/
-# openbrowser-148：仅 macOS x86_64 默认独立内核（GitHub 仅该产物打包打入；arm64/Windows 打包排除）
+
+# Integrated kernel binaries (flat layout under Browserapp/kernels/)
+# Track binaries only — no local docs, backups, or unlock markers.
 !Browserapp/kernels/
-!Browserapp/kernels/openbrowser/
-!Browserapp/kernels/openbrowser/**
+!Browserapp/kernels/meta/
+!Browserapp/kernels/meta/**
+!Browserapp/kernels/macos-x64/
+!Browserapp/kernels/macos-x64/**
+!Browserapp/kernels/windows-x64/
+!Browserapp/kernels/windows-x64/**
+!Browserapp/kernels/macos-arm64/
+!Browserapp/kernels/macos-arm64/**
+# Legacy compat path names are local-only aliases/caches.
+Browserapp/kernels/openbrowser
+Browserapp/kernels/openbrowser/
+Browserapp/kernels/openbrowser/**
+Browserapp/kernels/wayfern/
+Browserapp/kernels/wayfern/**
+
+# Never publish local-only kernel notes / backups / markers
+Browserapp/kernels/README.md
+Browserapp/kernels/**/README.md
+Browserapp/kernels/**/*.orig
+Browserapp/kernels/**/*UNLOCK*
+Browserapp/kernels/**/*unlock*
+Browserapp/kernels/**/*.bak
+Browserapp/kernels/**/OPENBROWSER_*
+
 runtime/
 chromium/
 chrome-for-testing/
 **/User Data/
 **/Default/
 
-# Build and platform products
+# Build products
 *.exe
 *.msi
 *.dmg
 *.pkg
 *.zip
 *.app/
-# 源码内 openbrowser-148 的 OpenBrowser.app 必须可提交，否则 GitHub macOS x86_64 打包没有默认内核
-!Browserapp/kernels/openbrowser/
-!Browserapp/kernels/openbrowser/**
-!Browserapp/kernels/openbrowser/**/
-!Browserapp/kernels/openbrowser/**/OpenBrowser.app/
-!Browserapp/kernels/openbrowser/**/OpenBrowser.app/**
+# Allow kernel executables required for packaging
+!Browserapp/kernels/**/*.app/
+!Browserapp/kernels/**/*.app/**
+!Browserapp/kernels/**/*.exe
+!Browserapp/kernels/**/*.dll
+# Re-ignore local-only markers even inside allowed .app trees
+Browserapp/kernels/**/*.orig
+Browserapp/kernels/**/*UNLOCK*
+Browserapp/kernels/**/*unlock*
+Browserapp/kernels/**/OPENBROWSER_*
+Browserapp/kernels/**/README.md
+/OpenBrowser.app/
+/OpenBrowser.app/**
 **/node_modules/
 **/dist/
 
-# Ignore accidentally named icon copies from local asset generation
 **/*.iconset/*@example.*
 
-# Local secrets and credentials
 .lan-token
 *.key
 *.pem
@@ -58,4 +92,8 @@ auth.json
 cookies*.json
 proxy-credentials*
 
-# Offline RPA catalog dump is intentionally tracked (no secrets).
+# Local-only reverse/maintainer utilities (never publish)
+Browserapp/scripts/patch-wayfern-automation-unlock.js
+Browserapp/scripts/*unlock*
+Browserapp/scripts/*reverse*
+Browserapp/scripts/*crack*

@@ -13,16 +13,16 @@ on:
         type: boolean
         default: false
       target_platform:
-        description: 'Package target; choose one target to avoid running unrelated jobs'
+        description: 'Package target (default all = kernel-integrated only)'
         required: false
         type: choice
         default: all
         options:
           - all
-          - macos-arm64-with-kernel
-          - macos-arm64-without-kernel
+          - macos-arm64
           - macos-x86_64
-          - windows-x86_64-with-kernel
+          - windows-x86_64
+          - macos-arm64-without-kernel
           - windows-x86_64-without-kernel
 
 concurrency:
@@ -35,15 +35,17 @@ permissions:
 env:
   RELEASE_TAG: ${{ inputs.release_tag }}
   GH_TOKEN: ${{ github.token }}
+  # Product default: only kernel-integrated packages unless a job opts out.
+  OPENBROWSER_PACKAGE_VARIANT: with-kernel
+  OPENBROWSER_BUNDLE_KERNEL: 'true'
   RELEASE_NOTES: |
     ## OpenBrowser ${{ inputs.release_tag }}
 
     - 修复若干问题，优化稳定性。
-    - 优化跨平台封装与发行版上传流程。
-    - Windows x64 与 macOS arm64 分别提供“内置内核”和“未内置内核”两种安装包；macOS x86_64 保持单独的内置 OpenBrowser 148 内核版本。所有平台默认不会自动回退到本机浏览器，需在“本地设置”手动选择并开启回退。
+    - 独立内核扁平内置于 `Browserapp/kernels/{macos-x64,windows-x64,macos-arm64}`，运行时不再自动下载。
+    - 默认只发布**内置内核**安装包（`kernels/{macos-x64,windows-x64,macos-arm64}`），运行时不再自动下载。
     - Fixed several issues and improved stability.
-    - Improved cross-platform packaging and release upload flow.
-    - Windows x64 and macOS arm64 each provide bundled-kernel and kernel-free packages; macOS x86_64 remains the separate package with its built-in OpenBrowser 148 kernel. All platforms keep system-browser fallback off by default and require manual selection and enablement in “Local Settings”.
+    - Default release ships **kernel-integrated** packages only; runtime never auto-downloads kernels.
 
 jobs:
   prepare-release:
@@ -81,8 +83,8 @@ jobs:
           fi
 
   macos-arm64-with-kernel:
-    name: macOS arm64 with bundled kernel
-    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'macos-arm64-with-kernel' }}
+    name: macOS arm64 (integrated kernel)
+    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'macos-arm64' || inputs.target_platform == 'macos-arm64-with-kernel' }}
     needs: prepare-release
     runs-on: macos-14
     defaults:
@@ -97,10 +99,12 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
         with:
-          lfs: false
+          lfs: true
           sparse-checkout: |
             /*
-            !/Browserapp/kernels/
+            !/Browserapp/kernels/macos-x64/
+            !/Browserapp/kernels/openbrowser/
+            !/Browserapp/kernels/windows-x64/
           sparse-checkout-cone-mode: false
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -110,10 +114,10 @@ jobs:
           cache-dependency-path: Browserapp/package-lock.json
       - name: Install dependencies
         run: npm ci --include=dev
-      - name: Prepare bundled macOS arm64 kernel
-        run: npm run prepare:bundled-kernel
-      - name: Verify prepared kernel
-        run: test -d bundled-kernels/wayfern
+      - name: Verify integrated macOS arm64 kernel seed
+        run: |
+          test -x kernels/macos-arm64/Wayfern.app/Contents/MacOS/Wayfern
+          npm run prepare:bundled-kernel
       - name: Prepare release notes
         run: printf '%s\n' "$RELEASE_NOTES" > "$RUNNER_TEMP/openbrowser-release-notes.md"
       - name: Run self-tests
@@ -129,14 +133,18 @@ jobs:
         run: |
           set -euo pipefail
           APP="dist/OpenBrowser-macOS-arm64-with-kernel/OpenBrowser.app/Contents/Resources/app"
-          test -d "$APP/bundled-kernels/wayfern"
+          test -x "$APP/kernels/macos-arm64/Wayfern.app/Contents/MacOS/Wayfern"
+          test ! -e "$APP/bundled-kernels"
+          test ! -e "$APP/kernels/macos-x64"
+          test ! -e "$APP/kernels/openbrowser"
+          test ! -e "$APP/kernels/windows-x64"
           test -f "dist/OpenBrowser-macOS-arm64-with-kernel.dmg"
       - name: Upload package to release
         run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-macOS-arm64-with-kernel.dmg"
 
   macos-arm64-without-kernel:
-    name: macOS arm64 without bundled kernel
-    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'macos-arm64-without-kernel' }}
+    name: macOS arm64 without integrated kernel
+    if: ${{ inputs.target_platform == 'macos-arm64-without-kernel' }}
     needs: prepare-release
     runs-on: macos-14
     defaults:
@@ -179,6 +187,10 @@ jobs:
           set -euo pipefail
           APP="dist/OpenBrowser-macOS-arm64-without-kernel/OpenBrowser.app/Contents/Resources/app"
           test ! -e "$APP/bundled-kernels"
+          test ! -e "$APP/kernels/macos-arm64"
+          test ! -e "$APP/kernels/windows-x64"
+          test ! -e "$APP/kernels/macos-x64"
+          test ! -e "$APP/kernels/wayfern"
           test -f "dist/OpenBrowser-macOS-arm64-without-kernel.dmg"
       - name: Upload package to release
         run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-macOS-arm64-without-kernel.dmg"
@@ -198,12 +210,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: true
-      - name: Require bundled runtime tree
+          sparse-checkout: |
+            /*
+            !/Browserapp/kernels/windows-x64/
+            !/Browserapp/kernels/macos-arm64/
+            !/Browserapp/kernels/wayfern/
+          sparse-checkout-cone-mode: false
+      - name: Require integrated macos-x64 kernel
         run: |
           set -euo pipefail
-          test -f "kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
-          chmod +x "kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser" || true
-          chmod +x "kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser.bin" || true
+          BIN="kernels/macos-x64/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
+          if [ ! -f "$BIN" ]; then
+            BIN="kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
+          fi
+          test -f "$BIN"
+          chmod +x "$BIN" || true
+          chmod +x "${BIN}.bin" 2>/dev/null || true
+          npm run prepare:bundled-kernel
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -227,14 +250,17 @@ jobs:
         run: |
           set -euo pipefail
           APP="dist/OpenBrowser-macOS-x86_64/OpenBrowser.app/Contents/Resources/app"
-          test -f "$APP/kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
+          test -f "$APP/kernels/macos-x64/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser" \
+            || test -f "$APP/kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
+          test ! -e "$APP/kernels/windows-x64"
+          test ! -e "$APP/kernels/macos-arm64"
           test -f "dist/OpenBrowser-macOS-x86_64.dmg"
       - name: Upload package to release
         run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-macOS-x86_64.dmg"
 
   windows-x86_64-with-kernel:
-    name: Windows x86_64 with bundled kernel
-    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'windows-x86_64-with-kernel' }}
+    name: Windows x86_64 (integrated kernel)
+    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'windows-x86_64' || inputs.target_platform == 'windows-x86_64-with-kernel' }}
     needs: prepare-release
     runs-on: windows-2022
     defaults:
@@ -248,10 +274,12 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
         with:
-          lfs: false
+          lfs: true
           sparse-checkout: |
             /*
-            !/Browserapp/kernels/
+            !/Browserapp/kernels/macos-x64/
+            !/Browserapp/kernels/openbrowser/
+            !/Browserapp/kernels/macos-arm64/
           sparse-checkout-cone-mode: false
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -261,11 +289,12 @@ jobs:
           cache-dependency-path: Browserapp/package-lock.json
       - name: Install dependencies
         run: npm ci --include=dev
-      - name: Prepare bundled Windows x64 kernel
-        run: npm run prepare:bundled-kernel
-      - name: Verify prepared kernel
+      - name: Verify integrated Windows x64 kernel seed
         shell: bash
-        run: test -d bundled-kernels/wayfern
+        run: |
+          test -f kernels/windows-x64/chrome.exe
+          test -f kernels/windows-x64/chrome.dll
+          npm run prepare:bundled-kernel
       - name: Prepare release notes
         shell: bash
         run: printf '%s\n' "$RELEASE_NOTES" > "$RUNNER_TEMP/openbrowser-release-notes.md"
@@ -286,7 +315,12 @@ jobs:
           set -euo pipefail
           PACKAGE_STEM="OpenBrowser-Windows-x86_64-with-kernel"
           APP="dist/${PACKAGE_STEM}/runtime/resources/app"
-          test -d "$APP/bundled-kernels/wayfern"
+          test -f "$APP/kernels/windows-x64/chrome.exe"
+          test -f "$APP/kernels/windows-x64/chrome.dll"
+          test ! -e "$APP/bundled-kernels"
+          test ! -e "$APP/kernels/macos-x64"
+          test ! -e "$APP/kernels/openbrowser"
+          test ! -e "$APP/kernels/macos-arm64"
           test -f "dist/${PACKAGE_STEM}.exe"
           test -f "dist/${PACKAGE_STEM}.zip"
       - name: Upload package to release
@@ -294,8 +328,8 @@ jobs:
         run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-Windows-x86_64-with-kernel.exe" "dist/OpenBrowser-Windows-x86_64-with-kernel.zip"
 
   windows-x86_64-without-kernel:
-    name: Windows x86_64 without bundled kernel
-    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'windows-x86_64-without-kernel' }}
+    name: Windows x86_64 without integrated kernel
+    if: ${{ inputs.target_platform == 'windows-x86_64-without-kernel' }}
     needs: prepare-release
     runs-on: windows-2022
     defaults:
@@ -342,6 +376,10 @@ jobs:
           set -euo pipefail
           APP="dist/OpenBrowser-Windows-x86_64-without-kernel/runtime/resources/app"
           test ! -e "$APP/bundled-kernels"
+          test ! -e "$APP/kernels/windows-x64"
+          test ! -e "$APP/kernels/macos-arm64"
+          test ! -e "$APP/kernels/macos-x64"
+          test ! -e "$APP/kernels/wayfern"
           test -f "dist/OpenBrowser-Windows-x86_64-without-kernel.exe"
           test -f "dist/OpenBrowser-Windows-x86_64-without-kernel.zip"
       - name: Upload package to release

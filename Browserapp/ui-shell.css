@@ -46,11 +46,11 @@ i[data-lucide] {
 }
 
 html[data-platform="macos"] body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
 }
 
 html[data-platform="windows"] body {
-  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI Emoji", sans-serif;
 }
 
 html, body { color: var(--ui-text); background: var(--ui-sidebar, #0b1117); }

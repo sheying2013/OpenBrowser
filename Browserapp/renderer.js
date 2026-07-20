@@ -5143,25 +5143,22 @@ async function refreshKernelPanel() {
 }
 
 document.getElementById('kernel-refresh')?.addEventListener('click', refreshKernelPanel);
-document.getElementById('kernel-download')?.addEventListener('click', async (ev) => {
+document.getElementById('kernel-download')?.addEventListener('click', async () => {
   const progress = document.getElementById('kernel-progress');
   const btn = document.getElementById('kernel-download');
-  const force = Boolean(ev?.shiftKey);
   try {
     if (btn) btn.disabled = true;
-    if (progress) progress.textContent = force
-      ? tx('强制重新下载（Shift）…')
-      : tx('正在对接 Donut 官方源下载 Wayfern（可能需要几分钟）…');
-    toast(force ? '强制重新下载内核…' : '开始下载 / 更新 Wayfern…');
-    // force=false: 已是最新则跳过；Shift+点击强制重装
-    const kernel = await window.ops.kernelDownload(force);
-    if (progress) progress.textContent = tx('内核就绪：') + (kernel?.path || '');
+    if (progress) progress.textContent = tx('正在定位安装包内置内核…');
+    toast(tx('重新定位内置内核…'));
+    // Runtime network download is disabled — only resolve integrated seeds.
+    const kernel = await window.ops.kernelDownload(false);
+    if (progress) progress.textContent = tx('内置内核就绪：') + (kernel?.path || '');
     toast(tx(`${kernelSourceLabel(kernel?.source)} 已就绪 v${kernel?.version || ''}`));
     await refreshKernelPanel();
     log('Kernel', `${kernelSourceLabel(kernel?.source)} ${kernel?.version || ''} · ${kernel?.path || ''}`);
   } catch (error) {
-    if (progress) progress.textContent = tx('下载失败：') + error.message;
-    toast('下载失败：' + error.message);
+    if (progress) progress.textContent = tx('内置内核不可用：') + error.message;
+    toast(tx('内置内核不可用：') + error.message);
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -5169,29 +5166,27 @@ document.getElementById('kernel-download')?.addEventListener('click', async (ev)
 document.getElementById('kernel-check-update')?.addEventListener('click', async () => {
   const progress = document.getElementById('kernel-progress');
   try {
-    if (progress) progress.textContent = tx('正在查询 Donut 官方 wayfern.json…');
+    if (progress) progress.textContent = tx('读取内置内核版本…');
     const result = await window.ops.kernelCheckUpdate();
     if (result.error) {
-      toast('检查失败：' + result.error);
-      if (progress) progress.textContent = tx('检查失败：') + result.error;
+      toast(tx('内置内核：') + result.error);
+      if (progress) progress.textContent = tx('内置内核：') + result.error;
       return;
     }
     const remote = result.remote;
-    if (!remote) {
-      toast(tx('未拿到远端版本'));
+    const installed = result.installed;
+    if (!installed && !remote) {
+      toast(tx('未找到内置内核'));
       return;
     }
-    if (result.upToDate) {
-      toast(tx(`已是最新 ${remote.version}（${kernelSourceLabel(remote.source)}）`));
-      if (progress) progress.textContent = tx(`已是最新 ${remote.version} · ${kernelSourceLabel(remote.source)}`);
-    } else if (result.needsUpdate) {
-      toast(tx(`有新版本：${result.installed?.version || '未安装'} → ${remote.version}，点「下载/更新」安装`));
-      if (progress) progress.textContent = tx(`可更新：${result.installed?.version || '未安装'} → ${remote.version}（${kernelSourceLabel(remote.source)}）`);
-    }
+    const ver = installed?.version || remote?.version || '';
+    const src = kernelSourceLabel(installed?.source || remote?.source);
+    toast(tx(`内置内核 ${src} v${ver}（不在线更新）`));
+    if (progress) progress.textContent = tx(`内置内核 ${src} · ${ver} · 运行时不自动下载`);
     await refreshKernelPanel();
   } catch (error) {
     toast(error.message);
-    if (progress) progress.textContent = tx('检查失败：') + error.message;
+    if (progress) progress.textContent = tx('读取失败：') + error.message;
   }
 });
 document.getElementById('kernel-choose')?.addEventListener('click', async () => {

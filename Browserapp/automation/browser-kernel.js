@@ -3,17 +3,8 @@
 /**
  * Independent Chromium kernel manager.
  *
- * Primary channel (Donut Browser official):
- *   https://donutbrowser.com/wayfern.json  →  Wayfern anti-detect Chromium
- *   binaries from download.wayfern.com (same feed Donut uses)
- *
- * Fallbacks:
- *   - Chrome for Testing (Google official) if Wayfern has no package for this OS/arch
- *   - User-supplied custom binary
- *
- * Wayfern is a third-party binary distributed by Wayfern/Donut; first use is
- * subject to Wayfern Terms of Service (https://wayfern.com/tos). OpenBrowser
- * obtains it from the official feed for local installation or platform builds.
+ * Runtime policy: resolve integrated seeds under Browserapp/kernels/ only.
+ * Auto-download is disabled. Custom user-selected Chromium binaries remain allowed.
  */
 
 const fs = require('fs');
@@ -27,7 +18,7 @@ const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const { isSystemBrowserExecutable } = require('./isolation');
 
-/** Donut Browser official Wayfern version feed (same URL as Donut src-tauri). */
+/** Optional remote kernel feed URL (unused when integrated seeds are present). */
 const WAYFERN_META = 'https://donutbrowser.com/wayfern.json';
 /** Fallback: Google Chrome for Testing last-known-good. */
 const CFT_META = 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json';
@@ -196,8 +187,10 @@ function chromeForTestingBinaryRelative(platform) {
 
 /** Relative path of the OpenBrowser 148 launcher (shell wrapper → OpenBrowser.bin). */
 function openBrowserKernelBinaryRelative() {
+  // Flat integrated layout: Browserapp/kernels/macos-x64/...
+  // Compat: kernels/openbrowser -> macos-x64 symlink still works via candidates.
   return path.join(
-    'openbrowser',
+    'macos-x64',
     'chrome_148',
     'openbrowser_148',
     'OpenBrowser.app',
@@ -226,12 +219,22 @@ function isOpenBrowser148SupportedHost(platform = process.platform, arch = proce
 
 /**
  * Locate OpenBrowser 148 kernel under kernelsRoot or optional resource roots.
- * Layout: kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser
+ * Preferred layout: kernels/macos-x64/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser
+ * Compat layout:   kernels/openbrowser/... (symlink or legacy tree)
  * Returns null on non-macOS-x64 hosts so a stray kernels tree cannot be selected.
  */
 function findOpenBrowserKernelBinary(kernelsRoot, extraRoots = []) {
   if (!isOpenBrowser148SupportedHost()) return null;
   const rel = openBrowserKernelBinaryRelative();
+  const legacyRel = path.join(
+    'openbrowser',
+    'chrome_148',
+    'openbrowser_148',
+    'OpenBrowser.app',
+    'Contents',
+    'MacOS',
+    'OpenBrowser'
+  );
   const roots = [];
   const push = (r) => {
     if (!r) return;
@@ -246,14 +249,18 @@ function findOpenBrowserKernelBinary(kernelsRoot, extraRoots = []) {
 
   const candidates = [];
   for (const root of roots) {
-    // root is .../kernels  →  root/openbrowser/chrome_148/...
+    // root is .../kernels → flat seed
     candidates.push(path.join(root, rel));
-    // root is .../kernels/openbrowser  →  root/chrome_148/...
+    // legacy kernels/openbrowser/...
+    candidates.push(path.join(root, legacyRel));
+    // root is the seed dir itself (macos-x64 or openbrowser)
     candidates.push(path.join(root, 'chrome_148', 'openbrowser_148', 'OpenBrowser.app', 'Contents', 'MacOS', 'OpenBrowser'));
-    // root is app/source dir  →  root/kernels/openbrowser/...
+    // root is app/source dir
     candidates.push(path.join(root, 'kernels', rel));
-    // root is process.resourcesPath with nested kernels
+    candidates.push(path.join(root, 'kernels', legacyRel));
+    // process.resourcesPath / resources/app
     candidates.push(path.join(root, 'app', 'kernels', rel));
+    candidates.push(path.join(root, 'app', 'kernels', legacyRel));
   }
   for (const candidate of candidates) {
     try {
@@ -265,7 +272,7 @@ function findOpenBrowserKernelBinary(kernelsRoot, extraRoots = []) {
 
 function kernelDisplayName(source) {
   if (source === SOURCE_OPENBROWSER) return 'OpenBrowser 148';
-  if (source === SOURCE_WAYFERN) return 'Wayfern (Donut)';
+  if (source === SOURCE_WAYFERN) return 'Independent kernel';
   if (source === SOURCE_CUSTOM) return 'Custom Chromium';
   if (source === SOURCE_CFT) return 'Chrome for Testing';
   return 'Independent Chromium';
@@ -288,7 +295,7 @@ async function ensureKernelReadyForLaunch(candidate = {}, versionOutput = '') {
   const args = termsAcceptanceArgsForKernel(candidate, versionOutput);
   if (!args.length) return false;
   const binary = String(candidate.path || candidate.binary || candidate || '').trim();
-  if (!binary) throw new Error('Wayfern 条款初始化失败：缺少内核路径');
+  if (!binary) throw new Error('内核条款初始化失败：缺少内核路径');
 
   const cacheKey = [path.resolve(binary), process.env.APPDATA || process.env.HOME || ''].join('\0');
   if (acceptedWayfernTerms.has(cacheKey)) return true;
@@ -302,7 +309,7 @@ async function ensureKernelReadyForLaunch(candidate = {}, versionOutput = '') {
       .map((value) => String(value || '').trim())
       .filter(Boolean)
       .join(' | ');
-    throw new Error('Wayfern 条款初始化失败：' + (output || 'accept-terms command failed'));
+    throw new Error('内核条款初始化失败：' + (output || 'accept-terms command failed'));
   }
 }
 
@@ -327,7 +334,7 @@ function fetchJson(url, redirects = 0) {
       settled = true;
       handler(value);
     };
-    const req = https.get(parsed, { headers: { 'User-Agent': 'OpenBrowser/1.0 (kernel; Donut Wayfern channel)' }, timeout: 30000 }, (res) => {
+    const req = https.get(parsed, { headers: { 'User-Agent': 'OpenBrowser/1.0 (kernel)' }, timeout: 30000 }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         return fetchJson(new URL(res.headers.location, parsed).toString(), redirects + 1)
@@ -382,7 +389,7 @@ function downloadFile(url, dest, onProgress) {
       if (redirects > MAX_REDIRECTS) return fail(new Error('Kernel download redirected too many times'));
       let parsed;
       try { parsed = trustedKernelUrl(value); } catch (error) { return fail(error); }
-      const req = https.get(parsed, { headers: { 'User-Agent': 'OpenBrowser/1.0 (kernel; Donut Wayfern channel)' }, timeout: 60000 }, (res) => {
+      const req = https.get(parsed, { headers: { 'User-Agent': 'OpenBrowser/1.0 (kernel)' }, timeout: 60000 }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
           return doGet(new URL(res.headers.location, parsed).toString(), redirects + 1);
@@ -504,7 +511,7 @@ async function extractTarGz(archivePath, destDir) {
 
 /**
  * macOS: mount DMG, copy first .app into destDir, detach.
- * Mirrors Donut's extract_dmg approach at a high level.
+ * High-level DMG extract helper for macOS kernel archives.
  */
 async function extractDmg(dmgPath, destDir) {
   if (process.platform !== 'darwin') throw new Error('DMG 仅支持 macOS');
@@ -585,7 +592,7 @@ async function findExecutable(root, preferredNames) {
 
 async function resolveWayfernBinary(installDir) {
   if (process.platform === 'darwin') {
-    // Prefer .app → Contents/MacOS/{Wayfern|Chromium}
+    // Prefer .app → Contents/MacOS/{primary|Chromium}
     try {
       const entries = await fsp.readdir(installDir, { withFileTypes: true });
       const app = entries.find((e) => e.isDirectory() && e.name.endsWith('.app'));
@@ -614,32 +621,66 @@ async function resolveWayfernBinary(installDir) {
   return findExecutable(installDir, names.map((n) => n.replace(/\.exe$/i, '')));
 }
 
+/** Platform seed dir names under kernels/ (no cross-arch fallback on macOS). */
+function wayfernSeedDirNames(platform = process.platform, arch = process.arch) {
+  if (platform === 'win32') {
+    // WoA can still run x64 builds under emulation in some setups; prefer native first.
+    return arch === 'arm64' ? ['windows-arm64', 'windows-x64'] : ['windows-x64'];
+  }
+  if (platform === 'darwin') {
+    // arm64 and x64 Mach-O are not interchangeable — never fall back across arch.
+    return arch === 'arm64' ? ['macos-arm64'] : ['macos-x64'];
+  }
+  if (platform === 'linux') {
+    return arch === 'arm64' ? ['linux-arm64'] : ['linux-x64'];
+  }
+  return [];
+}
+
+function isForeignWayfernSeedDir(name, platform = process.platform, arch = process.arch) {
+  const n = String(name || '').toLowerCase();
+  if (!/^(windows|macos|linux)-(x64|arm64)$/.test(n)) return false;
+  const allowed = new Set(wayfernSeedDirNames(platform, arch));
+  return !allowed.has(n);
+}
+
 function findWayfernKernelBinary(root) {
   const base = path.resolve(String(root || ''));
   if (!fs.existsSync(base)) return null;
   const names = process.platform === 'win32'
     ? ['wayfern.exe', 'chromium.exe', 'chrome.exe']
     : ['wayfern', 'chromium', 'chrome', 'Wayfern', 'Chromium'];
-  const walk = (dir, depth) => {
+  const walk = (dir, depth, skipForeignSeeds) => {
     if (depth > 8) return null;
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return null; }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
+      if (entry.isDirectory() && skipForeignSeeds && isForeignWayfernSeedDir(entry.name)) {
+        continue;
+      }
       if (entry.isDirectory() && entry.name.endsWith('.app')) {
         const macos = path.join(full, 'Contents', 'MacOS');
-        const hit = fs.existsSync(macos) ? walk(macos, depth + 1) : null;
+        const hit = fs.existsSync(macos) ? walk(macos, depth + 1, false) : null;
         if (hit) return hit;
       } else if (entry.isFile() && names.some((name) => entry.name.toLowerCase() === name.toLowerCase())) {
         return full;
       } else if (entry.isDirectory() && !['Frameworks', 'Helpers', 'resources', 'locales', 'Resources'].includes(entry.name)) {
-        const hit = walk(full, depth + 1);
+        const hit = walk(full, depth + 1, false);
         if (hit) return hit;
       }
     }
     return null;
   };
-  return walk(base, 0);
+  // Prefer nested platform seeds before a deep walk of the whole tree (avoids
+  // picking the wrong arch seed when multiple seeds exist).
+  for (const seed of wayfernSeedDirNames()) {
+    const seedRoot = path.join(base, seed);
+    if (!fs.existsSync(seedRoot)) continue;
+    const hit = walk(seedRoot, 0, false);
+    if (hit) return hit;
+  }
+  return walk(base, 0, true);
 }
 
 function findBundledWayfernKernel(resourceRoots = []) {
@@ -650,8 +691,20 @@ function findBundledWayfernKernel(resourceRoots = []) {
     if (!roots.includes(value)) roots.push(value);
   };
   for (const root of resourceRoots || []) {
+    // Preferred flat layout: Browserapp/kernels/{windows-x64|macos-arm64}
+    for (const seed of wayfernSeedDirNames()) {
+      addRoot(path.join(root, 'kernels', seed));
+      addRoot(path.join(root, 'app', 'kernels', seed));
+      addRoot(path.join(root, seed));
+    }
+    // Compat: legacy nested platform seed paths (symlink tree)
     addRoot(path.join(root, 'kernels', 'wayfern'));
     addRoot(path.join(root, 'app', 'kernels', 'wayfern'));
+    for (const seed of wayfernSeedDirNames()) {
+      addRoot(path.join(root, 'kernels', 'wayfern', seed));
+      addRoot(path.join(root, 'app', 'kernels', 'wayfern', seed));
+    }
+    // Legacy staging directory (should not ship)
     addRoot(path.join(root, 'bundled-kernels', 'wayfern'));
     addRoot(path.join(root, 'app', 'bundled-kernels', 'wayfern'));
   }
@@ -663,12 +716,20 @@ function findBundledWayfernKernel(resourceRoots = []) {
 }
 
 function bundledKernelVersion(root) {
-  try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'kernel.json'), 'utf8'));
-    return String(manifest.version || '').trim() || 'bundled';
-  } catch (_) {
-    return 'bundled';
+  const tryFiles = [];
+  if (root) {
+    tryFiles.push(path.join(root, 'kernel.json'));
+    // binary may live one level deeper than seed root
+    tryFiles.push(path.join(root, '..', 'kernel.json'));
   }
+  for (const file of tryFiles) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const version = String(manifest.version || '').trim();
+      if (version) return version;
+    } catch (_) {}
+  }
+  return 'bundled';
 }
 
 function archiveKindFromUrl(url) {
@@ -727,7 +788,7 @@ class BrowserKernelManager {
   }
 
   resolveInstalled() {
-    // macOS x64 default only: OpenBrowser 148 under kernels/openbrowser/ (wrapper binary).
+    // macOS x64 default only: OpenBrowser 148 under kernels/macos-x64/ (wrapper binary).
     // Other hosts must never auto-select this kernel even if a stray tree exists.
     if (isOpenBrowser148SupportedHost()) {
       const openBrowserBin = findOpenBrowserKernelBinary(this.kernelsRoot, this.resourceRoots);
@@ -749,7 +810,7 @@ class BrowserKernelManager {
       const src = this.meta.source || SOURCE_WAYFERN;
       // Refuse stale openbrowser-148 meta on non-mac-x64 hosts.
       if (src === SOURCE_OPENBROWSER && !isOpenBrowser148SupportedHost()) {
-        // fall through to Wayfern/CfT/custom
+        // fall through to integrated/CfT/custom
       } else {
         const trusted = (src === SOURCE_CUSTOM || src === SOURCE_OPENBROWSER)
           ? this.safeCustomBinary(this.meta.binary)
@@ -780,49 +841,34 @@ class BrowserKernelManager {
       }
     }
 
-    // Scan Wayfern install dir
-    const wayfernDir = path.join(this.kernelsRoot, 'wayfern');
-    if (fs.existsSync(wayfernDir)) {
-      // sync find: try common layouts quickly
-      const tryNames = process.platform === 'win32'
-        ? ['wayfern.exe', 'chromium.exe', 'chrome.exe']
-        : ['wayfern', 'chromium', 'chrome'];
-      try {
-        const walk = (dir, depth) => {
-          if (depth > 5) return null;
-          let entries;
-          try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return null; }
-          for (const ent of entries) {
-            const full = path.join(dir, ent.name);
-            if (ent.isDirectory() && ent.name.endsWith('.app')) {
-              const macos = path.join(full, 'Contents', 'MacOS');
-              if (fs.existsSync(macos)) {
-                const bins = fs.readdirSync(macos);
-                const pick = bins.find((n) => /Wayfern|Chromium/i.test(n) && !/helper|crash/i.test(n));
-                if (pick) return path.join(macos, pick);
-              }
-            } else if (ent.isFile() && tryNames.some((n) => ent.name.toLowerCase() === n.toLowerCase())) {
-              return full;
-            } else if (ent.isDirectory() && !['Frameworks', 'Helpers', 'resources', 'locales'].includes(ent.name)) {
-              const hit = walk(full, depth + 1);
-              if (hit) return hit;
-            }
-          }
-          return null;
+    // Scan integrated seeds under userData/kernels/{platform} (+ legacy compat paths)
+    try {
+      let found = null;
+      let foundRoot = null;
+      for (const seed of wayfernSeedDirNames()) {
+        const seedRoot = path.join(this.kernelsRoot, seed);
+        found = findWayfernKernelBinary(seedRoot);
+        if (found) { foundRoot = seedRoot; break; }
+        const compat = path.join(this.kernelsRoot, 'wayfern', seed);
+        found = findWayfernKernelBinary(compat);
+        if (found) { foundRoot = compat; break; }
+      }
+      if (!found) {
+        const wayfernDir = path.join(this.kernelsRoot, 'wayfern');
+        found = findWayfernKernelBinary(wayfernDir);
+        if (found) foundRoot = wayfernDir;
+      }
+      const trusted = safeInstalledBinary(found, foundRoot || this.kernelsRoot);
+      if (trusted) {
+        return {
+          name: kernelDisplayName(SOURCE_WAYFERN),
+          path: trusted,
+          version: this.meta.version || bundledKernelVersion(foundRoot || this.kernelsRoot),
+          independent: true,
+          source: SOURCE_WAYFERN,
         };
-        const found = walk(wayfernDir, 0);
-        const trusted = safeInstalledBinary(found, wayfernDir);
-        if (trusted) {
-          return {
-            name: kernelDisplayName(SOURCE_WAYFERN),
-            path: trusted,
-            version: this.meta.version || 'unknown',
-            independent: true,
-            source: SOURCE_WAYFERN,
-          };
-        }
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
 
     // Legacy Chrome for Testing path
     const plat = cftPlatformKey();
@@ -869,6 +915,8 @@ class BrowserKernelManager {
     // Channel label only claims openbrowser-148 default on the supported host.
     const openBrowserDefault = isOpenBrowser148SupportedHost()
       && (!installed || installed.source === SOURCE_OPENBROWSER);
+    const wayfernIntegrated = !openBrowserDefault
+      && Boolean(installed && installed.source === SOURCE_WAYFERN);
     return {
       platform: donutPlatformKey(),
       cftPlatform: cftPlatformKey(),
@@ -876,39 +924,42 @@ class BrowserKernelManager {
       installed: Boolean(installed),
       kernel: installed,
       meta: this.meta,
+      autoDownload: false,
       channel: openBrowserDefault
         ? {
-          name: 'OpenBrowser 148 (macOS x86 默认)',
+          name: 'OpenBrowser 148（macOS x86 内置）',
           metaUrl: null,
           site: null,
           engineSite: null,
         }
         : {
-          name: 'Donut Browser / Wayfern',
-          metaUrl: WAYFERN_META,
-          site: 'https://donutbrowser.com',
-          engineSite: 'https://wayfern.com',
+          name: '独立内核（安装包内置）',
+          metaUrl: null,
+          site: null,
+          engineSite: null,
         },
       note: openBrowserDefault
-        ? 'macOS x86 默认使用 OpenBrowser 148 独立内核（kernels/openbrowser/）。无需从 Donut 下载 Wayfern。'
-        : '独立内核默认对接 Donut 官方 Wayfern 更新源（donutbrowser.com/wayfern.json）。引擎由 Wayfern 分发，使用即表示同意其服务条款。',
+        ? 'macOS x86 使用安装包/源码内置的 OpenBrowser 148（kernels/macos-x64/）。运行时不再自动下载内核。'
+        : wayfernIntegrated
+          ? 'Windows x64 / macOS arm64 使用安装包内置 Wayfern（kernels/windows-x64 或 kernels/macos-arm64）。运行时不再自动下载内核。'
+          : '未发现内置独立内核。请确认安装包包含 kernels/{macos-x64|windows-x64|macos-arm64}/，或在本地设置中选择自定义 Chromium。运行时不会自动下载内核。',
     };
   }
 
   /**
-   * Fetch Donut official feed and resolve download for this platform.
+   * Fetch optional remote kernel feed and resolve download for this platform.
    * @returns {{ version, url, platform, source }}
    */
   async fetchOfficialRelease() {
-    this.onProgress({ phase: 'meta', message: '查询 Donut 官方 Wayfern 版本…' });
+    this.onProgress({ phase: 'meta', message: '查询远程内核版本…' });
     let data;
     try {
       data = await fetchJson(WAYFERN_META);
     } catch (err) {
-      throw new Error('无法访问 Donut 官方内核源：' + (err.message || err));
+      throw new Error('无法访问远程内核源：' + (err.message || err));
     }
     const version = String(data.version || '').trim();
-    if (!version) throw new Error('Donut wayfern.json 缺少 version 字段');
+    if (!version) throw new Error('远程内核元数据缺少 version 字段');
 
     const platform = donutPlatformKey();
     const downloads = data.downloads || {};
@@ -919,7 +970,7 @@ class BrowserKernelManager {
     }
 
     // Platform missing (e.g. macos-x64 null) → Chrome for Testing fallback
-    this.onProgress({ phase: 'meta', message: `Wayfern 暂无 ${platform} 包，回退 Chrome for Testing…` });
+    this.onProgress({ phase: 'meta', message: `当前平台无专用内核包，回退 Chrome for Testing…` });
     const cft = await fetchJson(CFT_META);
     const stable = cft.channels?.Stable;
     if (!stable) throw new Error('无法获取 Chrome for Testing 稳定版信息');
@@ -939,40 +990,33 @@ class BrowserKernelManager {
     };
   }
 
-  async ensureLatest(force = false) {
-    if (!this.installPromise) {
-      this.installPromise = this.ensureLatestInternal(force).finally(() => { this.installPromise = null; });
-    }
-    return this.installPromise;
-  }
-
-  async ensureLatestInternal(force = false) {
+  /**
+   * Resolve integrated / already-local independent kernel only.
+   * Never downloads remote kernels or Chrome for Testing at runtime.
+   * `force` is accepted for API compatibility but does not re-download.
+   */
+  async ensureIntegrated(force = false) {
     await this.loadMeta();
     const existing = this.resolveInstalled();
-
-    // macOS x86 default kernel: never auto-replace OpenBrowser 148 with Wayfern/CfT
-    // unless the caller force-downloads (manual "下载/更新" with force).
-    if (existing && existing.source === SOURCE_OPENBROWSER && !force) {
+    if (existing) {
       this.meta.binary = existing.path;
-      this.meta.version = existing.version || OPENBROWSER_KERNEL_VERSION;
-      this.meta.source = SOURCE_OPENBROWSER;
+      this.meta.version = existing.version || this.meta.version || null;
+      this.meta.source = existing.source || this.meta.source || SOURCE_WAYFERN;
       this.meta.platform = donutPlatformKey();
       this.meta.downloadUrl = null;
       this.meta.updatedAt = new Date().toISOString();
       await this.saveMeta();
       this.onProgress({
         phase: 'done',
-        message: `使用 OpenBrowser 148 默认内核 ${existing.version || OPENBROWSER_KERNEL_VERSION}`,
-        version: existing.version || OPENBROWSER_KERNEL_VERSION,
+        message: `使用内置独立内核 ${existing.version || ''}`.trim(),
+        version: existing.version,
         binary: existing.path,
       });
       return existing;
     }
 
-    // macOS x86 with no kernel yet: do not silently download Wayfern/CfT as default.
-    // Prefer in-repo / resourceRoots kernels/openbrowser (source-tree testing).
-    // Never seed openbrowser-148 on other platforms.
-    if (!existing && isOpenBrowser148SupportedHost() && !force) {
+    // macOS x86: seed openbrowser-148 from resource/source tree when present.
+    if (isOpenBrowser148SupportedHost()) {
       const seed = findOpenBrowserKernelBinary(this.kernelsRoot, this.resourceRoots);
       if (seed) {
         const trusted = this.safeCustomBinary(seed);
@@ -986,7 +1030,7 @@ class BrowserKernelManager {
           await this.saveMeta();
           this.onProgress({
             phase: 'done',
-            message: `使用源码/资源树 OpenBrowser 148 内核 ${OPENBROWSER_KERNEL_VERSION}`,
+            message: `使用内置 OpenBrowser 148 内核 ${OPENBROWSER_KERNEL_VERSION}`,
             version: OPENBROWSER_KERNEL_VERSION,
             binary: trusted,
           });
@@ -1000,57 +1044,56 @@ class BrowserKernelManager {
         }
       }
       throw new Error(
-        'macOS x86 默认内核 OpenBrowser 148 未安装。请将内核放到：'
-        + path.join(this.kernelsRoot, 'openbrowser')
-        + ' 或源码目录 Browserapp/kernels/openbrowser，'
-        + '或设置环境变量 OPENBROWSER_KERNEL_ROOT，'
-        + '或在本地设置中选择自定义内核。'
+        'macOS x86 内置内核 OpenBrowser 148 未找到。请确认安装包/源码包含 kernels/macos-x64，'
+        + '或设置 OPENBROWSER_KERNEL_ROOT，或在本地设置中选择自定义内核。'
+        + (force ? '（运行时已禁用自动下载，force 无效）' : '')
       );
     }
 
-    let release;
-    try {
-      release = await this.fetchOfficialRelease();
-    } catch (err) {
-      if (existing && !force) {
-        this.onProgress({ phase: 'done', message: '离线：使用已安装内核', version: existing.version });
-        return existing;
-      }
-      throw err;
-    }
-
-    this.meta.remoteVersion = release.version;
-
-    if (existing && !force) {
-      // Skip re-download when same channel version already present
-      if (
-        existing.source === release.source
-        && existing.version
-        && compareVersions(existing.version, release.version) >= 0
-      ) {
+    // Windows / macOS arm64: only integrated seeds under kernels/{platform}.
+    const bundled = findBundledWayfernKernel(this.resourceRoots);
+    if (bundled) {
+      const trusted = safeInstalledBinary(bundled.binary, bundled.root);
+      if (trusted) {
+        const version = bundledKernelVersion(bundled.root);
+        this.meta.binary = trusted;
+        this.meta.version = version;
+        this.meta.source = SOURCE_WAYFERN;
+        this.meta.platform = donutPlatformKey();
+        this.meta.downloadUrl = null;
+        this.meta.updatedAt = new Date().toISOString();
+        await this.saveMeta();
+        const resolved = {
+          name: kernelDisplayName(SOURCE_WAYFERN),
+          path: trusted,
+          version,
+          independent: true,
+          source: SOURCE_WAYFERN,
+        };
         this.onProgress({
           phase: 'done',
-          message: `已是最新 ${existing.version}（${release.source === SOURCE_WAYFERN ? 'Donut Wayfern' : 'CfT'}）`,
-          version: existing.version,
-          binary: existing.path,
+          message: `使用内置 Wayfern 内核 ${version}`,
+          version,
+          binary: trusted,
         });
-        await this.saveMeta();
-        return existing;
-      }
-      // Older install → upgrade
-      if (existing.version && compareVersions(release.version, existing.version) > 0) {
-        this.onProgress({
-          phase: 'meta',
-          message: `发现新版本 ${existing.version} → ${release.version}，开始更新…`,
-          version: release.version,
-        });
+        return resolved;
       }
     }
 
-    if (release.source === SOURCE_WAYFERN) {
-      return this.installWayfern(release);
-    }
-    return this.installChromeForTesting(release);
+    throw new Error(
+      '未找到内置独立内核（kernels/windows-x64 或 kernels/macos-arm64）。本版本不再自动下载内核；'
+      + '请使用包含对应平台内核种子的安装包，或在本地设置中选择自定义 Chromium。'
+      + (force ? '（force 不会触发下载）' : '')
+    );
+  }
+
+  /** @deprecated Use ensureIntegrated — runtime download path removed. */
+  async ensureLatest(force = false) {
+    return this.ensureIntegrated(force);
+  }
+
+  async ensureLatestInternal(force = false) {
+    return this.ensureIntegrated(force);
   }
 
   async installWayfern(release) {
@@ -1064,13 +1107,13 @@ class BrowserKernelManager {
 
     this.onProgress({
       phase: 'download',
-      message: `下载 Wayfern ${version}（Donut 官方源）…`,
+      message: `下载独立内核 ${version}…`,
       version,
       url,
     });
     await downloadFile(url, archivePath, (p) => this.onProgress({ phase: 'download', ...p, version }));
 
-    this.onProgress({ phase: 'extract', message: '解压 Wayfern 内核…', version });
+    this.onProgress({ phase: 'extract', message: '解压独立内核…', version });
     await fsp.rm(work, { recursive: true, force: true });
     await fsp.mkdir(work, { recursive: true });
 
@@ -1080,13 +1123,13 @@ class BrowserKernelManager {
       else if (kind === 'tar.gz') await extractTarGz(archivePath, work);
       else await extractZip(archivePath, work);
     } catch (err) {
-      throw new Error('解压 Wayfern 失败：' + (err.message || err));
+      throw new Error('解压独立内核失败：' + (err.message || err));
     }
 
     const binary = await resolveWayfernBinary(work);
     const trustedBinary = safeInstalledBinary(binary, work);
     if (!trustedBinary) {
-      throw new Error('解压后未找到 Wayfern 可执行文件，请检查平台包是否完整');
+      throw new Error('解压后未找到独立内核可执行文件，请检查平台包是否完整');
     }
 
     if (process.platform !== 'win32') {
@@ -1107,7 +1150,7 @@ class BrowserKernelManager {
 
     await fsp.rm(archivePath, { force: true }).catch(() => {});
 
-    this.onProgress({ phase: 'done', message: 'Wayfern 内核就绪（Donut 官方）', version, binary: trustedBinary });
+    this.onProgress({ phase: 'done', message: '独立内核就绪', version, binary: trustedBinary });
     return this.resolveInstalled();
   }
 
@@ -1192,7 +1235,7 @@ class BrowserKernelManager {
         '--no-default-browser-check',
         '--disable-background-mode',
         'about:blank',
-      ], { detached: process.platform !== 'win32', windowsHide: process.platform === 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+      ], { detached: process.platform !== 'win32', windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
       child.stdout?.setEncoding('utf8');
       child.stderr?.setEncoding('utf8');
       child._startupStdout = '';
@@ -1232,40 +1275,35 @@ class BrowserKernelManager {
     return { ...this.resolveInstalled(), validation: probe };
   }
 
-  /** Check remote without downloading. */
+  /**
+   * Kernel update check — integrated builds do not poll remote feeds.
+   * Returns local integrated status only (needsUpdate always false).
+   */
   async checkUpdate() {
     await this.loadMeta();
     const installed = this.resolveInstalled();
-    // OpenBrowser 148 is the pinned default on mac x64 — not auto-updated via Wayfern feed
-    if (installed?.source === SOURCE_OPENBROWSER) {
+    if (!installed) {
       return {
-        installed,
-        remote: {
-          version: installed.version || OPENBROWSER_KERNEL_VERSION,
-          source: SOURCE_OPENBROWSER,
-          url: null,
-          platform: donutPlatformKey(),
-        },
+        installed: null,
+        remote: null,
         needsUpdate: false,
-        upToDate: true,
+        upToDate: false,
+        autoDownload: false,
+        error: '未找到内置独立内核；本版本不从网络自动下载内核。',
       };
     }
-    try {
-      const release = await this.fetchOfficialRelease();
-      this.meta.remoteVersion = release.version;
-      await this.saveMeta();
-      const needsUpdate = !installed
-        || installed.source !== release.source
-        || compareVersions(release.version, installed.version || '0') > 0;
-      return {
-        installed,
-        remote: { version: release.version, source: release.source, url: release.url, platform: release.platform },
-        needsUpdate,
-        upToDate: Boolean(installed) && !needsUpdate,
-      };
-    } catch (error) {
-      return { installed, remote: null, needsUpdate: false, upToDate: Boolean(installed), error: error.message };
-    }
+    return {
+      installed,
+      remote: {
+        version: installed.version || null,
+        source: installed.source || null,
+        url: null,
+        platform: donutPlatformKey(),
+      },
+      needsUpdate: false,
+      upToDate: true,
+      autoDownload: false,
+    };
   }
 }
 
@@ -1294,6 +1332,7 @@ module.exports = {
   safeInstalledBinary,
   findWayfernKernelBinary,
   findBundledWayfernKernel,
+  wayfernSeedDirNames,
   bundledKernelVersion,
   downloadFile,
   extractZip,

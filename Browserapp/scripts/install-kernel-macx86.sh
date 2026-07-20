@@ -1,9 +1,12 @@
 #!/bin/bash
 # Install OpenBrowser 148 as the default independent kernel for macOS x86.
-# Default source: in-repo kernels/openbrowser (copied from working mac x86 package).
+# Default source: in-repo kernels/macos-x64 (OpenBrowser 148).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_KERNEL="${SCRIPT_DIR}/../kernels/openbrowser"
+REPO_KERNEL="${SCRIPT_DIR}/../kernels/macos-x64"
+if [[ ! -x "$REPO_KERNEL/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser" ]]; then
+  REPO_KERNEL="${SCRIPT_DIR}/../kernels/openbrowser"
+fi
 SRC="${1:-}"
 if [[ -z "$SRC" ]]; then
   if [[ -x "$REPO_KERNEL/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser" ]]; then
@@ -13,7 +16,7 @@ if [[ -z "$SRC" ]]; then
   fi
 fi
 UD="${OPENBROWSER_USER_DATA:-$HOME/Library/Application Support/openbrowser}"
-DEST="$UD/kernels/openbrowser"
+DEST="$UD/kernels/macos-x64"
 BIN_REL="chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
 
 if [[ ! -d "$SRC" ]]; then
@@ -44,12 +47,12 @@ elif [[ -x "$SRC/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser" ]];
     --exclude 'analysis' \
     "$SRC/" "$DEST/chrome_148/"
 elif [[ -d "$SRC/chrome_64_148" ]]; then
-  EXIST="$UD/kernels/openbrowser/chrome_148/openbrowser_148"
+  EXIST="$UD/kernels/macos-x64/chrome_148/openbrowser_148"
   if [[ -x "$EXIST/OpenBrowser.app/Contents/MacOS/OpenBrowser" ]]; then
     echo "Keeping existing wrapped OpenBrowser.app at $EXIST"
   else
     echo "ERROR: raw chrome_64_148 needs wrapped openbrowser layout."
-    echo "Use: $REPO_KERNEL  or pass kernels/openbrowser path."
+    echo "Use: $REPO_KERNEL  or pass kernels/macos-x64 path."
     exit 1
   fi
 else
@@ -70,7 +73,7 @@ if [[ -f "$SRC/libskit.dylib" ]]; then
 elif [[ -f "$SRC/chrome_148/libskit.dylib" ]]; then
   cp -f "$SRC/chrome_148/libskit.dylib" "$DEST/libskit.dylib"
 fi
-# Standalone IPC stub (prevents platform start failed / exit 18 without HubStudio env-kit)
+# Standalone IPC stub (prevents platform start failed / exit 18 without companion IPC endpoints)
 if [[ -f "$SRC/ipc-stub.py" ]]; then
   cp -f "$SRC/ipc-stub.py" "$DEST/ipc-stub.py"
   chmod +x "$DEST/ipc-stub.py" 2>/dev/null || true

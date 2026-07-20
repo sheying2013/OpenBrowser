@@ -5,14 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>OpenBrowser</title>
-  <script src="i18n.js?v=20260720-nes-light"></script>
+  <script src="i18n.js?v=20260720-aqua"></script>
   <link rel="icon" type="image/png" href="assets/logo-pixel.png?v=20260720-pixel">
-  <link rel="stylesheet" href="styles.css?v=20260719-nav-fix">
+  <link rel="stylesheet" href="assets/fonts/pixelify-sans.css?v=20260720-ark">
+  <link rel="stylesheet" href="styles.css?v=20260720-pixelfont">
   <link rel="stylesheet" href="themes.css?v=20260720-start-progress">
+  <link rel="stylesheet" href="retro-desktop.css?v=20260720-aqua">
   <link rel="stylesheet" href="environment-audit.css?v=20260719-readable-scale">
   <link rel="stylesheet" href="ui-shell.css?v=20260720-start-progress">
-  <link rel="stylesheet" href="pixel-workstation.css?v=20260720-start-progress">
-  <link rel="stylesheet" href="nes-light.css?v=20260720-nes-light">
+  <link rel="stylesheet" href="pixel-workstation.css?v=20260720-headerfix">
+  <link rel="stylesheet" href="nes-light.css?v=20260720-kraft-desat33">
   <link rel="stylesheet" href="element-admin.css?v=20260720-start-progress">
 </head>
 <body>
@@ -64,9 +66,9 @@
             <div class="theme-popover" id="theme-popover" hidden>
               <div class="theme-popover-head"><strong data-i18n="theme.title">界面皮肤</strong><span id="theme-current" data-i18n="theme.pixel.name">像素工作站</span></div>
               <div class="theme-grid" id="theme-options">
-                <button class="theme-option active" type="button" data-ui-theme-option="pixel-workstation" aria-pressed="true"><i></i><span><strong data-i18n="theme.pixel">像素工作站</strong><small data-i18n="theme.pixel.desc">Pxlkit + RetroUI 整套界面</small></span></button>
-                <button class="theme-option" type="button" data-ui-theme-option="nes-light" aria-pressed="false"><i></i><span><strong data-i18n="theme.nes">NES 像素浅色</strong><small data-i18n="theme.nes.desc">NES.css 浅色像素复古</small></span></button>
-                <button class="theme-option" type="button" data-ui-theme-option="retro-desktop" aria-pressed="false"><i></i><span><strong data-i18n="theme.retro">复古桌面</strong><small data-i18n="theme.retro.desc">完整界面皮肤</small></span></button>
+                <button class="theme-option active" type="button" data-ui-theme-option="pixel-workstation" aria-pressed="true"><i></i><span><strong data-i18n="theme.pixel">像素工作站</strong><small data-i18n="theme.pixel.desc">深色像素界面</small></span></button>
+                <button class="theme-option" type="button" data-ui-theme-option="nes-light" aria-pressed="false"><i></i><span><strong data-i18n="theme.nes">浅色像素风</strong><small data-i18n="theme.nes.desc">浅色像素界面</small></span></button>
+                <button class="theme-option" type="button" data-ui-theme-option="retro-desktop" aria-pressed="false"><i></i><span><strong data-i18n="theme.retro">复古桌面</strong><small data-i18n="theme.retro.desc">经典系统界面</small></span></button>
                 <button class="theme-option" type="button" data-ui-theme-option="element-admin" aria-pressed="false"><i></i><span><strong data-i18n="theme.native">系统原生</strong><small data-i18n="theme.native.desc">macOS HIG · Windows Fluent</small></span></button>
               </div>
               <div class="theme-appearance" id="theme-appearance" hidden>
@@ -1026,22 +1028,22 @@
   <p class="storage-warning" id="cloud-sync-status">尚未同步。单环境是否同步请在「编辑环境 → 偏好设置 → 云备份」中开关，主列表不放同步开关。</p>
 </article>
 <article class="storage-settings-card" id="kernel-settings-card">
-  <div class="storage-settings-head"><div><h3>独立浏览器内核</h3><p>对接 <strong>Donut Browser 官方更新源</strong>，下载 <strong>Wayfern</strong>（引擎级反检测 Chromium）。与 Donut 使用同一 feed：<code>donutbrowser.com/wayfern.json</code>。</p></div><span id="kernel-status-badge">检测中</span></div>
+  <div class="storage-settings-head"><div><h3>独立浏览器内核</h3><p>安装包<strong>直接内置</strong>独立内核，<strong>运行时不再自动下载</strong>。扁平同级：<code>kernels/macos-x64</code> · <code>kernels/windows-x64</code> · <code>kernels/macos-arm64</code>。</p></div><span id="kernel-status-badge">检测中</span></div>
   <div class="storage-path-box"><small>内核路径</small><code id="kernel-path">—</code></div>
   <div class="storage-path-box" style="margin-top:8px"><small>版本 / 来源</small><code id="kernel-version">—</code></div>
   <div class="storage-path-box" style="margin-top:8px"><small>下次启动实际使用</small><code id="kernel-active-path">—</code></div>
   <div class="storage-path-box" style="margin-top:8px"><small>启动策略</small><code id="kernel-launch-mode">—</code></div>
-  <div class="storage-path-box" style="margin-top:8px"><small>官方通道</small><code id="kernel-channel">Donut · Wayfern · https://donutbrowser.com/wayfern.json</code></div>
+  <div class="storage-path-box" style="margin-top:8px"><small>内核通道</small><code id="kernel-channel">安装包内置 · 无在线下载</code></div>
   <div class="storage-actions" style="margin-top:12px">
-    <button class="primary" id="kernel-download" type="button">下载 / 更新 Wayfern</button>
-    <button class="outline" id="kernel-check-update" type="button">检查更新</button>
+    <button class="primary" id="kernel-download" type="button">重新定位内置内核</button>
+    <button class="outline" id="kernel-check-update" type="button">查看内置版本</button>
     <button class="outline" id="kernel-choose" type="button">选择自定义内核</button>
     <button class="outline" id="kernel-refresh" type="button">刷新状态</button>
   </div>
   <label class="check-row" style="margin-top:12px;display:flex;gap:8px;align-items:center"><input id="kernel-prefer-independent" type="checkbox" checked> 优先使用独立内核（推荐）</label>
   <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center"><input id="kernel-allow-system" type="checkbox"> 允许手动回退到本机浏览器（默认关闭）</label>
   <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center">手动选择回退浏览器（Windows 可选 Chrome 或 Edge）<select id="kernel-system-browser"><option value="">未选择</option></select></label>
-  <p class="storage-warning" id="kernel-progress">Windows x64 与 macOS arm64 安装包已内置对应内核。默认不会自动回退到本机浏览器；只有手动选择并开启后才会使用本机浏览器。使用 Wayfern 即同意其服务条款（wayfern.com/tos）。</p>
+  <p class="storage-warning" id="kernel-progress">本版本不再从网络自动下载内核。安装包按平台内置独立内核（kernels/macos-x64 · windows-x64 · macos-arm64）。默认不会自动回退到本机浏览器；只有手动选择并开启后才会使用本机浏览器。</p>
 </article>
 <article><h3>运行时</h3><dl id="runtime-info"></dl></article><article><h3>能力状态</h3><dl><div><dt>真实浏览器进程</dt><dd class="ok">已启用</dd></div><div><dt>独立用户目录</dt><dd class="ok">已启用</dd></div><div><dt>扩展批量加载</dt><dd class="ok">已启用</dd></div><div><dt>Chrome DevTools Protocol</dt><dd class="ok">已启用</dd></div><div><dt>运行模式</dt><dd class="ok">纯本地</dd></div><div><dt>本机接口</dt><dd class="ok">127.0.0.1:50325</dd></div></dl></article><article class="storage-settings-card"><div class="storage-settings-head"><div><h3>环境缓存与数据位置</h3><p>各环境的 Chrome 用户目录、Cookie、缓存、本地存储、IndexedDB 和会话数据都会保存在这里。</p></div><span>本地保存</span></div><div class="storage-path-box"><small>当前目录</small><code id="profile-storage-path">正在读取...</code></div><div class="storage-actions"><button class="primary" id="choose-profile-storage" type="button">选择新目录</button><button class="outline" id="open-profile-storage" type="button">打开目录</button><button class="outline" id="reset-profile-storage" type="button">恢复默认位置</button></div><p class="storage-warning">修改前请先停止所有环境。新位置在环境下次启动时生效；旧目录中的数据不会自动移动或删除。</p></article></div></section>
       </main>

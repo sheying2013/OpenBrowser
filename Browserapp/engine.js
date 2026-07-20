@@ -173,7 +173,7 @@ class BrowserEngine {
     if (!profileDataRootCheck.ok) throw new Error(profileDataRootCheck.message);
     this.profileDataRootPath = profileDataRootCheck.root;
     // Source-tree + packaged discovery for OpenBrowser 148 kernel.
-    // Layout: Browserapp/kernels/openbrowser/chrome_148/openbrowser_148/OpenBrowser.app/...
+    // Layout: Browserapp/kernels/macos-x64/chrome_148/openbrowser_148/OpenBrowser.app/...
     // Env override: OPENBROWSER_KERNEL_ROOT = dir that contains openbrowser/ chrome_148 ...
     const resourceRoots = [];
     try {
@@ -213,7 +213,7 @@ class BrowserEngine {
 
   candidates() {
     const list = [];
-    // 1) Independent kernel (Donut Wayfern / CfT / custom) — first priority
+    // 1) Independent kernel (integrated / custom) — first priority
     const independent = this.kernelManager.resolveInstalled();
     if (independent) list.push({ name: independent.name, path: independent.path, independent: true, version: independent.version, source: independent.source });
 
@@ -296,10 +296,10 @@ class BrowserEngine {
   async ensureKernelBootstrap() {
     if (this.kernelStatus().installed) return this.kernelStatus().kernel;
     if (!this.kernelBootstrapPromise) {
-      this.emit({ type: 'kernel-progress', phase: 'bootstrap', message: '首次启动：正在准备独立浏览器内核…' });
+      this.emit({ type: 'kernel-progress', phase: 'bootstrap', message: '首次启动：正在定位内置独立浏览器内核…' });
       this.kernelBootstrapPromise = this.ensureIndependentKernel(false)
         .catch((error) => {
-          this.emit({ type: 'kernel-error', message: '自动下载独立内核失败：' + error.message });
+          this.emit({ type: 'kernel-error', message: '内置独立内核不可用：' + error.message });
           throw error;
         })
         .finally(() => { this.kernelBootstrapPromise = null; });
@@ -307,8 +307,12 @@ class BrowserEngine {
     return this.kernelBootstrapPromise;
   }
 
+  /**
+   * Resolve the integrated independent kernel only.
+   * Runtime auto-download of Wayfern / Chrome for Testing is permanently disabled.
+   */
   async ensureIndependentKernel(force = false) {
-    const kernel = await this.kernelManager.ensureLatest(force);
+    const kernel = await this.kernelManager.ensureIntegrated(force);
     this.emit({ type: 'kernel-ready', kernel });
     return kernel;
   }
@@ -616,12 +620,12 @@ class BrowserEngine {
     }
     if (this.preferIndependentKernel) {
       if (independent) return { mode: 'independent', browser: independent };
-      return { mode: 'blocked', browser: null, message: '未安装独立浏览器内核。请到「本地设置」下载或选择独立内核。' };
+      return { mode: 'blocked', browser: null, message: '未找到内置独立浏览器内核。请确认安装包包含 kernels/，或在「本地设置」选择自定义内核。' };
     }
     const browser = independent || list[0];
     if (!browser) return { mode: 'blocked', browser: null, message: '未找到可用浏览器内核' };
     if (!browser.independent && (!this.allowSystemBrowserFallback || browser.path !== this.systemBrowserPath)) {
-      return { mode: 'blocked', browser: null, message: '未安装独立浏览器内核。请到「本地设置」下载或选择独立内核。' };
+      return { mode: 'blocked', browser: null, message: '未找到内置独立浏览器内核。请确认安装包包含 kernels/，或在「本地设置」选择自定义内核。' };
     }
     return { mode: browser.independent ? 'independent' : 'system-manual', browser };
   }
@@ -1704,7 +1708,10 @@ class BrowserEngine {
     this.profiles.set(profile.id, profile);
     const extensions = this.assignedExtensions(profile.id);
     this.emitStartProgress(profile.id, 'kernel', 30, '正在准备浏览器内核…');
-    if (!this.kernelStatus().installed && this.preferIndependentKernel) await this.ensureKernelBootstrap();
+    if (!this.kernelStatus().installed && this.preferIndependentKernel) {
+      // Resolve integrated seed only — never download a remote kernel at start time.
+      await this.ensureKernelBootstrap();
+    }
     const browser = this.chooseBrowser(profile);
     const root = this.profileRoot(profile.id);
     const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, root, profile.id, { create: true });
@@ -2558,4 +2565,10 @@ class BrowserEngine {
   async sessions() { const result = []; for (const { id, item } of this.runningWithCdp([...this.running.keys()])) { try { result.push({ id, profile: this.profiles.get(id), port: item.port, browser: item.browser.name, tabs: await cdp.tabs(item.port) }); } catch (error) { result.push({ id, profile: this.profiles.get(id), port: item.port, browser: item.browser.name, tabs: [], error: error.message }); } } return result; }
 }
 
-module.exports = { BrowserEngine, appendDiagnosticOutput, formatBrowserStartupError, systemBrowserCandidatesForPlatform };
+module.exports = {
+  BrowserEngine,
+  appendDiagnosticOutput,
+  formatBrowserStartupError,
+  writeBrowserStartupDiagnostic,
+  systemBrowserCandidatesForPlatform,
+};
