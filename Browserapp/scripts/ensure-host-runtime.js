@@ -29,13 +29,26 @@ function run(command, args, cwd) {
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} exited with code ${result.status}`);
 }
 
+function resolveNpmCommand(args) {
+  if (process.platform !== 'win32') return { command: 'npm', args };
+
+  const nodeRoot = path.dirname(process.execPath);
+  const npmCli = path.join(nodeRoot, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (fs.existsSync(npmCli)) {
+    return { command: process.execPath, args: [npmCli, ...args] };
+  }
+
+  return { command: 'cmd.exe', args: ['/d', '/s', '/c', 'npm', ...args] };
+}
+
 function ensureHostRuntime(appRoot) {
   let root = packageRoot(appRoot);
   if (hasRuntime(root)) return root;
 
   if (!root) {
     console.log('[runtime] installing OpenBrowser dependencies');
-    run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--force', '--include=dev'], appRoot);
+    const npm = resolveNpmCommand(['install', '--force', '--include=dev']);
+    run(npm.command, npm.args, appRoot);
     root = packageRoot(appRoot);
   }
 
@@ -55,4 +68,4 @@ function ensureHostRuntime(appRoot) {
 
 if (require.main === module) ensureHostRuntime(path.resolve(__dirname, '..'));
 
-module.exports = { ensureHostRuntime, hasRuntime };
+module.exports = { ensureHostRuntime, hasRuntime, resolveNpmCommand };

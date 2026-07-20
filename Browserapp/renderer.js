@@ -375,9 +375,34 @@ function normalizeProfileSettings(profile) {
       stabilitySkipHosts: Array.isArray(privacy.stabilitySkipHosts)
         ? privacy.stabilitySkipHosts.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 200)
         : String(privacy.stabilitySkipHosts || '').split(/[\r\n,;\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 200),
-      cores: privacy.cores || '',
-      memory: privacy.memory || '',
-      fingerprint: privacy.fingerprint && typeof privacy.fingerprint === 'object' ? privacy.fingerprint : {},
+      // Preserve 0 (= 真实). Empty = 自动. Never use `||` which turns 0 into 自动.
+      cores: (() => {
+        const raw = privacy.cores ?? privacy.fingerprint?.cores;
+        if (raw === '' || raw === null || raw === undefined) return '';
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : '';
+      })(),
+      memory: (() => {
+        const raw = privacy.memory ?? privacy.fingerprint?.memory;
+        if (raw === '' || raw === null || raw === undefined) return '';
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : '';
+      })(),
+      fingerprint: privacy.fingerprint && typeof privacy.fingerprint === 'object' ? {
+        ...privacy.fingerprint,
+        cores: (() => {
+          const raw = privacy.cores ?? privacy.fingerprint?.cores;
+          if (raw === '' || raw === null || raw === undefined) return privacy.fingerprint.cores ?? null;
+          const n = Number(raw);
+          return Number.isFinite(n) ? n : (privacy.fingerprint.cores ?? null);
+        })(),
+        memory: (() => {
+          const raw = privacy.memory ?? privacy.fingerprint?.memory;
+          if (raw === '' || raw === null || raw === undefined) return privacy.fingerprint.memory ?? null;
+          const n = Number(raw);
+          return Number.isFinite(n) ? n : (privacy.fingerprint.memory ?? null);
+        })(),
+      } : {},
     },
     advanced: {
       saveCookies: advanced.saveCookies !== false,
@@ -721,6 +746,18 @@ let sessionsInitialized = false;
 let preferredMasterId = null;
 let syncHealth = { queueDepth: 0, coalesced: 0, dropped: 0, lastLatencyMs: 0, recovering: false };
 let selectedProfiles = new Set();
+/** @type {Map<string, {phase:string, percent:number, message:string, updatedAt:number}>} */
+const startingProfiles = new Map();
+const START_PROGRESS_PHASES = {
+  prepare: 6,
+  proxy: 18,
+  kernel: 30,
+  configure: 48,
+  spawn: 62,
+  cdp: 76,
+  inject: 88,
+  ready: 100,
+};
 let selectedSessions = new Set();
 let currentExtension = null;
 let syncState = { active: false, master: null, selected: [] };
@@ -845,6 +882,7 @@ const UI_COLOR_MODE_KEY = 'openbrowser-ui-color-mode-v1';
 const UI_THEMES = Object.freeze({
   'retro-desktop': { nameKey: 'theme.retro.name', colorScheme: 'light' },
   'pixel-workstation': { nameKey: 'theme.pixel.name', colorScheme: 'dark' },
+  'nes-light': { nameKey: 'theme.nes.name', colorScheme: 'light' },
   'element-admin': { nameKey: 'theme.native.name', colorScheme: 'light', supportsColorMode: true },
 });
 
@@ -1457,12 +1495,32 @@ function editorDraft(strict = true) {
     stabilitySquare: Number($('#editor-stability-square')?.value) || 8,
     stabilityHosts: ($('#editor-stability-hosts')?.value || '').split(/[\r\n,;\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 800),
     stabilitySkipHosts: ($('#editor-stability-skip-hosts')?.value || '').split(/[\r\n,;\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 200),
-    cores: $('#editor-cores')?.value || '',
-    memory: $('#editor-memory')?.value || '',
+    cores: (() => {
+      const v = $('#editor-cores')?.value;
+      if (v === '' || v == null) return '';
+      const n = Number(v);
+      return Number.isFinite(n) ? n : '';
+    })(),
+    memory: (() => {
+      const v = $('#editor-memory')?.value;
+      if (v === '' || v == null) return '';
+      const n = Number(v);
+      return Number.isFinite(n) ? n : '';
+    })(),
     fingerprint: {
       ...(current.privacy?.fingerprint || {}),
-      cores: $('#editor-cores')?.value || undefined,
-      memory: $('#editor-memory')?.value || undefined,
+      cores: (() => {
+        const v = $('#editor-cores')?.value;
+        if (v === '' || v == null) return undefined;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : undefined;
+      })(),
+      memory: (() => {
+        const v = $('#editor-memory')?.value;
+        if (v === '' || v == null) return undefined;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : undefined;
+      })(),
     },
   };
   if (strict && privacy.timezoneMode === 'custom' && privacy.timezone) {
@@ -1620,7 +1678,25 @@ function renderEditorSummary() {
     [tx('代理未就绪'), draft.proxyMeta?.notReadyPolicy === 'direct' ? '回退直连' : (draft.proxyMeta?.notReadyPolicy === 'continue' ? '继续' : '阻断')],
     [tx('TLS 配置'), draft.proxyMeta?.tlsProfile || 'auto'],
     ['ClientRects', privacy.clientRects === 'real' ? '真实' : '随机'],
-    ['SpeechVoices', labels.speech[privacy.speech]], ['CPU', (navigator.hardwareConcurrency || '未知') + ' 核'], ['RAM', navigator.deviceMemory ? navigator.deviceMemory + ' GB' : '由系统管理'], ['Do Not Track', privacy.dnt ? '启用' : '默认'],
+    ['SpeechVoices', labels.speech[privacy.speech]],
+    // Must read the profile editor value — never the host Electron navigator.
+    ['CPU', (() => {
+      const raw = privacy.cores ?? privacy.fingerprint?.cores;
+      if (raw === '' || raw === null || raw === undefined) return tx('自动');
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return tx('自动');
+      if (n === 0) return tx('真实');
+      return `${n} 核`;
+    })()],
+    ['RAM', (() => {
+      const raw = privacy.memory ?? privacy.fingerprint?.memory;
+      if (raw === '' || raw === null || raw === undefined) return tx('自动');
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return tx('自动');
+      if (n === 0) return tx('真实');
+      return `${n} GB`;
+    })()],
+    ['Do Not Track', privacy.dnt ? '启用' : '默认'],
     [tx('每次打开刷新指纹'), privacy.refreshFingerprintOnStart ? '开启' : '关闭']
   ];
   for (const [name, value] of values) { const row = document.createElement('div'); row.append(element('dt', '', name), element('dd', '', value || '默认')); summary.append(row); }
@@ -1734,8 +1810,17 @@ function openProfileEditor(id) {
   editorSet('#editor-media-label-output', privacy.mediaLabels?.audiooutput || privacy.mediaLabels?.output || '');
   editorSet('#editor-client-rects', privacy.clientRects || 'noise');
   editorSet('#editor-speech', privacy.speech);
-  editorSet('#editor-cores', privacy.cores || '');
-  editorSet('#editor-memory', privacy.memory || '');
+  // Select values are strings; 0 must stay "0" (真实), never fall through to "" (自动).
+  editorSet('#editor-cores', (() => {
+    const raw = privacy.cores ?? privacy.fingerprint?.cores;
+    if (raw === '' || raw === null || raw === undefined) return '';
+    return String(raw);
+  })());
+  editorSet('#editor-memory', (() => {
+    const raw = privacy.memory ?? privacy.fingerprint?.memory;
+    if (raw === '' || raw === null || raw === undefined) return '';
+    return String(raw);
+  })());
   editorSet('#editor-device-name-mode', privacy.deviceNameMode || 'noise');
   editorSet('#editor-device-name', privacy.deviceName || '');
   editorSet('#editor-dnt-mode', privacy.dntMode || (privacy.dnt ? 'on' : 'default'));
@@ -2362,6 +2447,60 @@ function updateProfileSelectionUi() {
   }
 }
 
+function setStartingProgress(id, progress = {}) {
+  if (!id) return;
+  const prev = startingProfiles.get(id) || {};
+  const percentRaw = Number(progress.percent);
+  const percent = Number.isFinite(percentRaw)
+    ? Math.max(0, Math.min(100, Math.round(percentRaw)))
+    : (START_PROGRESS_PHASES[progress.phase] ?? prev.percent ?? 8);
+  startingProfiles.set(id, {
+    phase: progress.phase || prev.phase || 'prepare',
+    percent,
+    message: progress.message || prev.message || t('status.starting'),
+    updatedAt: Date.now(),
+  });
+}
+
+function clearStartingProgress(id) {
+  if (id) startingProfiles.delete(id);
+  else startingProfiles.clear();
+}
+
+function startProgressLabel(progress) {
+  if (!progress) return t('status.starting');
+  const phaseKey = progress.phase ? `status.startPhase.${progress.phase}` : '';
+  const phaseText = phaseKey && t(phaseKey) !== phaseKey ? t(phaseKey) : '';
+  if (phaseText) return phaseText;
+  if (progress.message) return progress.message;
+  return t('status.starting');
+}
+
+function buildStartProgressCell(profileId, progress) {
+  const wrap = element('div', 'start-progress');
+  wrap.dataset.profileId = profileId;
+  wrap.dataset.phase = progress?.phase || 'prepare';
+  wrap.setAttribute('role', 'status');
+  wrap.setAttribute('aria-live', 'polite');
+  const label = element('span', 'start-progress-label', startProgressLabel(progress));
+  const track = element('div', 'start-progress-track');
+  track.setAttribute('role', 'progressbar');
+  track.setAttribute('aria-valuemin', '0');
+  track.setAttribute('aria-valuemax', '100');
+  const percent = Math.max(0, Math.min(100, Number(progress?.percent) || 8));
+  track.setAttribute('aria-valuenow', String(percent));
+  track.setAttribute('aria-label', startProgressLabel(progress));
+  const fill = element('div', 'start-progress-fill');
+  fill.style.width = `${percent}%`;
+  const shimmer = element('span', 'start-progress-shimmer');
+  fill.append(shimmer);
+  track.append(fill);
+  const pct = element('span', 'start-progress-percent', `${percent}%`);
+  wrap.append(label, track, pct);
+  wrap.title = progress?.message || startProgressLabel(progress);
+  return wrap;
+}
+
 function renderProfiles() {
   renderGroupFilterChips();
   const filter = $('#profile-search').value.trim().toLowerCase();
@@ -2417,14 +2556,27 @@ function renderProfiles() {
     const extensionCell = element('td', 'col-ext', String(info.assignedExtensions?.length || 0));
     const statusCell = document.createElement('td');
     statusCell.className = 'col-status';
-    const status = element('span', `status status-compact ${info.running ? 'running' : ''}`, info.running ? t('status.run') : t('status.stop'));
-    if (info.running && info.port) status.title = t('status.runningCdp', { port: info.port });
-    statusCell.append(status);
+    const starting = !info.running && startingProfiles.has(profile.id);
+    if (starting) {
+      statusCell.append(buildStartProgressCell(profile.id, startingProfiles.get(profile.id)));
+      row.classList.add('is-starting');
+    } else {
+      const status = element('span', `status status-compact ${info.running ? 'running' : ''}`, info.running ? t('status.run') : t('status.stop'));
+      if (info.running && info.port) status.title = t('status.runningCdp', { port: info.port });
+      statusCell.append(status);
+    }
     const actionCell = document.createElement('td');
     actionCell.className = 'col-actions';
     const actions = element('div', 'actions');
-    const toggle = element('button', 'mini', info.running ? t('action.stop') : t('action.start')); toggle.dataset.action = info.running ? 'stop' : 'start'; toggle.dataset.id = profile.id;
-    const sync = element('button', 'mini blue', t('action.sync')); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running; sync.title = t('profiles.syncSelect');
+    const toggle = element('button', 'mini', info.running ? t('action.stop') : (starting ? t('status.starting') : t('action.start')));
+    toggle.dataset.action = info.running ? 'stop' : 'start';
+    toggle.dataset.id = profile.id;
+    if (starting) {
+      toggle.disabled = true;
+      toggle.classList.add('is-starting');
+      toggle.title = startProgressLabel(startingProfiles.get(profile.id));
+    }
+    const sync = element('button', 'mini blue', t('action.sync')); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting; sync.title = t('profiles.syncSelect');
     const edit = element('button', 'mini edit', t('action.edit')); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
     actions.append(toggle, sync, edit); actionCell.append(actions);
     row.append(selectCell, idCell, nameCell, groupCell, browserCell, proxyCell, networkCell, extensionCell, statusCell, actionCell); table.append(row);
@@ -2482,12 +2634,16 @@ async function refreshStatus() {
 
 async function startProfile(id) {
   const profile = ui.profiles.find((item) => item.id === id); if (!profile) return;
+  if (profileEngine(id).running || startingProfiles.has(id)) return;
   const payload = {
     ...profile,
     group_name: groupNameRaw(profile) || '',
   };
+  setStartingProgress(id, { phase: 'prepare', percent: 6, message: t('status.starting') });
+  renderProfiles();
   try {
     const result = await window.ops.startProfile(payload);
+    setStartingProgress(id, { phase: 'ready', percent: 100, message: t('status.startPhase.ready') });
     log('Browser', `${displayProfileNumber(profile)} 已启动 · ${result.browser} · CDP ${result.port || 'pending'}`);
     toast(tx(`${displayProfileNumber(profile)} 已启动`));
     await refreshStatus();
@@ -2495,6 +2651,9 @@ async function startProfile(id) {
   } catch (error) {
     log('Error', error.message);
     toast(tx(`启动失败：${error.message}`));
+  } finally {
+    clearStartingProgress(id);
+    await refreshStatus();
   }
 }
 
@@ -3793,15 +3952,32 @@ window.ops.onEvent(async (value) => {
   if (value?.type === 'app-update-status') {
     applyVersionTrafficLight(value);
   }
+  if (value?.type === 'profile-start-progress' && value.id) {
+    if (value.error || value.starting === false) {
+      clearStartingProgress(value.id);
+    } else {
+      setStartingProgress(value.id, value);
+    }
+    renderProfiles();
+  }
   if (value.type === 'status') {
+    // Only terminal status clears the start bar. Intermediate emits (e.g. extensions-reconcile-skipped)
+    // also set running:true and must not wipe progress mid-launch.
+    if (value.id && value.running === false) clearStartingProgress(value.id);
+    if (value.id && value.running === true && !value.action) clearStartingProgress(value.id);
     await refreshStatus();
     await refreshSessions();
-    if (value.running === false && value.id) {
+    if (value.action === 'extensions-reconcile-skipped' && value.message) {
+      // Informative only — openbrowser-148 lacks Extensions CDP; --load-extension still works.
+      log('Browser', value.message);
+    } else if (value.running === false && value.id) {
       const profile = ui.profiles.find((item) => item.id === value.id);
       const num = profile ? displayProfileNumber(profile) : value.id;
       if (value.reason && value.reason !== 'stop') {
         log('Browser', `环境 ${num} 已关闭（窗口退出）`);
       }
+    } else if (value.message && value.action) {
+      log('Browser', value.message);
     }
   }
   if (value.type === 'profile-closed' && value.profile?.id) {
@@ -4196,10 +4372,43 @@ function appendRpaLog(line) {
   const box = document.getElementById('rpa-log-list');
   if (!box) return;
   if (box.querySelector('.rpa-muted') && box.children.length === 1) box.replaceChildren();
+  const raw = String(line || '');
+  const levelMatch = raw.match(/^(error|fail|failed|warn|warning|ok|success|done|info)\s*[:：-]\s*/i);
+  let level = 'info';
+  let message = raw;
+  if (levelMatch) {
+    const token = String(levelMatch[1] || '').toLowerCase();
+    level = /error|fail/.test(token) ? 'error'
+      : /warn/.test(token) ? 'warn'
+        : /ok|success|done/.test(token) ? 'ok'
+          : 'info';
+    message = raw.slice(levelMatch[0].length) || raw;
+  } else if (/\berror\b|错误|失败/i.test(raw)) {
+    level = 'error';
+  } else if (/\bwarn(?:ing)?\b|警告/i.test(raw)) {
+    level = 'warn';
+  } else if (/完成|成功|started|已启动|done|success/i.test(raw)) {
+    level = 'ok';
+  }
+  const levelLabel = level === 'error' ? 'ERROR'
+    : level === 'warn' ? 'WARN'
+      : level === 'ok' ? 'OK'
+        : 'INFO';
   const row = document.createElement('div');
-  row.className = 'log-line';
-  row.textContent = '[' + new Date().toLocaleTimeString() + '] ' + line;
+  row.className = 'log-line level-' + level;
+  const timeEl = document.createElement('span');
+  timeEl.className = 'log-time';
+  timeEl.textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  const levelEl = document.createElement('span');
+  levelEl.className = 'log-level';
+  levelEl.textContent = levelLabel;
+  const msgEl = document.createElement('span');
+  msgEl.className = 'log-msg';
+  msgEl.textContent = message;
+  row.append(timeEl, levelEl, msgEl);
   box.prepend(row);
+  // Keep the newest line visible without forcing the whole page to jump.
+  try { box.scrollTop = 0; } catch (_) {}
 }
 
 async function refreshRpaStatusBadge() {
@@ -4340,7 +4549,7 @@ async function refreshRpaStore() {
     if (meta) meta.textContent = t('rpa.store.localMeta');
   } catch (error) {
     rpaStoreTemplates = [];
-    toast('加载模板商店失败：' + error.message);
+    toast('加载模板仓库失败：' + error.message);
   }
   renderRpaStore();
 }
@@ -4367,7 +4576,6 @@ function renderRpaStore() {
     card.className = 'rpa-store-card';
     card.dataset.templateId = tpl.id;
     const sourceLabel = rpaStoreSourceLabel(tpl);
-    const paid = Number(tpl.pay_type) === 2;
     const stepCount = Array.isArray(tpl.steps) ? tpl.steps.length : 0;
     const runnable = tpl.runnable === true;
     const tags = Array.isArray(tpl.tags) ? tpl.tags.slice(0, 4) : [];
@@ -4377,7 +4585,7 @@ function renderRpaStore() {
       <div class="rpa-store-tags"></div>
       <div class="rpa-store-meta"><span></span><span></span></div>
       <div class="rpa-store-actions"></div>`;
-    card.querySelector('h4').textContent = (paid ? '💎 ' : '') + (tpl.name || tpl.id);
+    card.querySelector('h4').textContent = tpl.name || tpl.id;
     card.querySelector('p').textContent = tpl.desc || '';
     const tagBox = card.querySelector('.rpa-store-tags');
     for (const tag of tags) {
@@ -4391,7 +4599,7 @@ function renderRpaStore() {
       tagBox.append(i);
     }
     const meta = card.querySelectorAll('.rpa-store-meta span');
-    meta[0].textContent = `${tpl.cat || '—'} · ${sourceLabel}${paid ? ' · 💎' : ''}`;
+    meta[0].textContent = `${tpl.cat || '—'} · ${sourceLabel}`;
     meta[1].textContent = t('rpa.store.steps', { n: stepCount });
     const actions = card.querySelector('.rpa-store-actions');
     const useBtn = document.createElement('button');
@@ -4494,7 +4702,7 @@ async function saveCustomTemplateFromDialog() {
   }
   if (!Array.isArray(steps) || !steps.length) throw new Error(tx('步骤不能为空'));
   await window.ops.rpaTemplateSaveAs({ name, cat, desc, steps, tags: ['自定义'] });
-  toast(tx('模板已保存到商店'));
+  toast(tx('模板已保存到仓库'));
   showRpaPanel('store');
   await refreshRpaStore();
 }

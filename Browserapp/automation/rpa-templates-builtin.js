@@ -6,7 +6,7 @@
  * This catalog provides:
  *  - 同类目 / 同类动作节点（gotoUrl / click / inputContent / forTimes …）
  *  - 可直接「使用 → 生成流程 → 运行」的完整 steps
- *  - pay_type: 1=免费 2=付费(仅展示，本地全免费可装)
+ *  - 本地模板仓库全部免费可用
  *
  * Steps are self-contained CDP executable sequences.
  */

@@ -1038,6 +1038,40 @@ html[data-ui-theme="element-admin"] .ua-meta-preview {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 12px;
 }
+/* Keep run-log large and high-contrast on the dark console surface. */
+html[data-ui-theme="element-admin"] .rpa-log {
+  --rpa-log-fg: #f5f5f7 !important;
+  --rpa-log-muted: #b0b0b8 !important;
+  --rpa-log-line: #3a3a3c !important;
+  background: #1c1c1e !important;
+  color: #f5f5f7 !important;
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+  min-height: 150px !important;
+  max-height: 280px !important;
+  padding: 10px 12px !important;
+}
+html[data-ui-theme="element-admin"] .rpa-log .log-line {
+  color: #f5f5f7 !important;
+  border-bottom-color: #3a3a3c !important;
+}
+html[data-ui-theme="element-admin"] .rpa-log .log-time { color: #b0b0b8 !important; }
+html[data-ui-theme="element-admin"] .rpa-log .log-msg { color: #f5f5f7 !important; font-weight: 600 !important; }
+html[data-ui-theme="element-admin"] .rpa-log .rpa-muted,
+html[data-ui-theme="element-admin"] .rpa-log .log-empty { color: #b0b0b8 !important; }
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-info .log-level { color: #64d2ff !important; }
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-error .log-level,
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-fail .log-level,
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-error .log-msg,
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-fail .log-msg { color: #ff8a80 !important; }
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-warn .log-level,
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-warning .log-level,
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-warn .log-msg,
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-warning .log-msg { color: #ffd60a !important; }
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-ok .log-level,
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-success .log-level,
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-ok .log-msg,
+html[data-ui-theme="element-admin"] .rpa-log .log-line.level-success .log-msg { color: #30d158 !important; }
 html[data-ui-theme="element-admin"] .console-head {
   border-bottom: 1px solid #38383a;
   background: #2c2c2e;
@@ -1371,4 +1405,58 @@ html[data-platform="other"][data-ui-theme="element-admin"] #view-profiles .table
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
   }
+}
+
+
+/* Start progress — system native */
+html[data-ui-theme="element-admin"] .start-progress {
+  --start-progress-height: 4px;
+  --start-progress-radius: 999px;
+  --start-progress-track: color-mix(in srgb, var(--desk-separator, rgba(60,60,67,.18)) 80%, transparent);
+  --start-progress-fill: var(--desk-accent, #007aff);
+  --start-progress-fill-soft: color-mix(in srgb, var(--desk-accent, #007aff) 70%, #fff);
+  --start-progress-label: var(--desk-accent-text, var(--desk-accent, #007aff));
+  max-width: 124px;
+  gap: 3px 8px;
+}
+html[data-ui-theme="element-admin"] .start-progress-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+html[data-ui-theme="element-admin"] .start-progress-percent {
+  color: var(--desk-text-secondary, #6e6e73);
+  font-size: 10px;
+  font-weight: 500;
+}
+html[data-ui-theme="element-admin"] .start-progress-track {
+  border: 0;
+  background: var(--start-progress-track);
+  box-shadow: none;
+}
+html[data-ui-theme="element-admin"] .start-progress-fill {
+  background: linear-gradient(90deg, var(--start-progress-fill), var(--start-progress-fill-soft));
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--desk-accent, #007aff) 20%, transparent);
+  transition: width 240ms cubic-bezier(.22,.61,.36,1);
+}
+html[data-ui-theme="element-admin"] .start-progress-shimmer {
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.55) 50%, transparent 100%);
+  animation-duration: 1.15s;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .start-progress {
+  --start-progress-track: rgba(255,255,255,.12);
+  --start-progress-fill: #0a84ff;
+  --start-progress-fill-soft: #64b5ff;
+  --start-progress-label: #64b5ff;
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"] .start-progress-percent {
+  color: rgba(235,235,245,.6);
+}
+html[data-ui-theme="element-admin"] #view-profiles .table-card tbody tr.is-starting {
+  background: var(--desk-accent-soft, rgba(0,122,255,.12));
+}
+html[data-ui-theme="element-admin"] #view-profiles .table-card .actions .mini.is-starting {
+  opacity: .7;
+  background: var(--desk-surface-2, #f5f5f7) !important;
+  color: var(--desk-text-secondary, #6e6e73) !important;
 }

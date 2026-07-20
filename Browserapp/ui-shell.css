@@ -693,7 +693,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 #view-profiles .table-card th.col-status,
-#view-profiles .table-card td.col-status { width: 7%; max-width: none !important; }
+#view-profiles .table-card td.col-status { width: 10%; min-width: 96px; max-width: none !important; }
 #view-profiles .table-card th.col-actions,
 #view-profiles .table-card td.col-actions {
   width: 15.5%;
@@ -1666,3 +1666,89 @@ dialog[open] .dialog-head > button {
 .cloud-preset-row .cloud-preset-btn { display: inline-flex; align-items: center; gap: 6px; }
 .cloud-preset-row .cloud-preset-btn.active { border-color: var(--ui-accent, #1677ff) !important; color: var(--ui-accent, #1677ff) !important; box-shadow: inset 0 0 0 1px var(--ui-accent, #1677ff); }
 .cloud-preset-row .cloud-preset-btn svg { width: 14px; height: 14px; }
+
+
+/* Environment start progress — shared structure; themes own the skin */
+#view-profiles .table-card td.col-status {
+  min-width: 92px;
+  vertical-align: middle;
+}
+.start-progress {
+  --start-progress-height: 6px;
+  --start-progress-radius: 999px;
+  --start-progress-track: color-mix(in srgb, var(--ui-border, #d1d8e5) 70%, transparent);
+  --start-progress-fill: var(--ui-accent, #245cff);
+  --start-progress-fill-soft: color-mix(in srgb, var(--ui-accent, #245cff) 55%, #fff);
+  --start-progress-label: var(--ui-accent, #245cff);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "label percent"
+    "track track";
+  gap: 2px 6px;
+  min-width: 78px;
+  max-width: 120px;
+  align-items: center;
+}
+.start-progress-label {
+  grid-area: label;
+  min-width: 0;
+  color: var(--start-progress-label);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.start-progress-percent {
+  grid-area: percent;
+  color: var(--ui-muted, #7b879b);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.start-progress-track {
+  grid-area: track;
+  position: relative;
+  width: 100%;
+  height: var(--start-progress-height);
+  overflow: hidden;
+  border-radius: var(--start-progress-radius);
+  background: var(--start-progress-track);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ui-border, #cad2e0) 55%, transparent);
+}
+.start-progress-fill {
+  position: relative;
+  height: 100%;
+  width: 8%;
+  min-width: 10%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--start-progress-fill), var(--start-progress-fill-soft));
+  transition: width 220ms ease;
+  overflow: hidden;
+}
+.start-progress-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.45) 48%, transparent 100%);
+  transform: translateX(-120%);
+  animation: openbrowser-start-shimmer 1.05s linear infinite;
+}
+#view-profiles .table-card tbody tr.is-starting {
+  background: color-mix(in srgb, var(--ui-accent-soft, rgba(36,92,255,.08)) 70%, transparent);
+}
+#view-profiles .table-card .actions .mini.is-starting,
+#view-profiles .table-card .actions .mini:disabled.is-starting {
+  opacity: .72;
+  cursor: progress;
+}
+@keyframes openbrowser-start-shimmer {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(120%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .start-progress-fill { transition: none; }
+  .start-progress-shimmer { animation: none; display: none; }
+}

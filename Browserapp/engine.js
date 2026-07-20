@@ -14,13 +14,14 @@ const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = re
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
 const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
 const { acquireProfileLock, releaseProfileLock, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = require('./automation/isolation');
-const { BrowserKernelManager } = require('./automation/browser-kernel');
+const { BrowserKernelManager, ensureKernelReadyForLaunch } = require('./automation/browser-kernel');
 const { ensureStartPageServer, getStartPageServer } = require('./automation/start-page-server');
 const {
   isOpenBrowser148,
   writeOpenBrowserKernelInit,
   fingerprintForNativeKernelInject,
 } = require('./automation/kernel-init-sync');
+const { fpLog, summarizeFp, LIVE_PROBE_EXPRESSION, logPath: fingerprintLogPath } = require('./automation/fingerprint-debug-log');
 
 const KERNEL_POLICY_VERSION = 4;
 
@@ -475,10 +476,19 @@ class BrowserEngine {
         refreshFingerprintOnStart: Boolean(privacyValue.refreshFingerprintOnStart),
         cores,
         memory,
+        // Keep 0 (= real hardware). Do NOT use `cores || nested` — 0 is falsy and was wiped to "auto".
         fingerprint: privacyValue.fingerprint && typeof privacyValue.fingerprint === 'object' ? {
           ...privacyValue.fingerprint,
-          cores: cores || privacyValue.fingerprint.cores,
-          memory: memory || privacyValue.fingerprint.memory,
+          cores: cores === null || cores === undefined
+            ? (privacyValue.fingerprint.cores === 0 || privacyValue.fingerprint.cores === '0'
+              ? 0
+              : (privacyValue.fingerprint.cores ?? null))
+            : cores,
+          memory: memory === null || memory === undefined
+            ? (privacyValue.fingerprint.memory === 0 || privacyValue.fingerprint.memory === '0'
+              ? 0
+              : (privacyValue.fingerprint.memory ?? null))
+            : memory,
         } : { cores, memory },
       },
       advanced: {
@@ -789,6 +799,7 @@ class BrowserEngine {
   }
 
   async applyRuntimeSettings(port, profile, fingerprint = null, options = {}) {
+    const phase = String(options.phase || 'applyRuntimeSettings');
     const tabs = await cdp.tabs(port);
     const network = this.networkInfo.get(profile.id) || {};
     // merge IP-detected geo/tz into profile for fingerprint apply
@@ -837,9 +848,107 @@ class BrowserEngine {
       })();`;
     }
 
+    await fpLog('inject.begin', {
+      phase,
+      profileId: profile.id,
+      port,
+      tabCount: tabs.length,
+      tabUrls: tabs.map((t) => ({ id: t.id, url: String(t.url || '').slice(0, 200) })),
+      intended: summarizeFp(fp),
+      logFile: fingerprintLogPath(),
+    });
+
+    const force = options.force === true;
     for (const tab of tabs) {
-      if (applied.has(tab.id)) continue;
-      await applyFingerprintToTab(cdp.call, tab.webSocketDebuggerUrl, fp, enriched);
+      if (!force && applied.has(tab.id)) {
+        await fpLog('inject.skip-tab', { phase, profileId: profile.id, tabId: tab.id, url: tab.url, reason: 'already-applied' });
+        continue;
+      }
+      try {
+        await applyFingerprintToTab(cdp.call, tab.webSocketDebuggerUrl, fp, enriched);
+        let live = null;
+        try {
+          const probe = await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', {
+            expression: LIVE_PROBE_EXPRESSION,
+            returnByValue: true,
+          }, 8000);
+          live = probe?.result?.value || probe?.value || null;
+        } catch (probeError) {
+          live = { probeError: String(probeError.message || probeError) };
+        }
+        const mismatch = live && !live.probeError ? {
+          ua: Boolean(fp.userAgent && live.userAgent && fp.userAgent !== live.userAgent),
+          platform: Boolean(fp.platform && live.platform && fp.platform !== live.platform),
+          cores: fp.hardwareConcurrency != null && live.hardwareConcurrency != null
+            && Number(fp.hardwareConcurrency) !== Number(live.hardwareConcurrency),
+          memory: fp.deviceMemory != null && live.deviceMemory != null
+            && Number(fp.deviceMemory) !== Number(live.deviceMemory),
+          webglRenderer: Boolean(fp.webgl?.renderer && live.webglRenderer
+            && String(live.webglRenderer) !== String(fp.webgl.renderer)
+            && !String(live.webglRenderer).includes(String(fp.webgl.renderer).slice(0, 24))),
+        } : null;
+        await fpLog('inject.tab-ok', {
+          phase,
+          profileId: profile.id,
+          tabId: tab.id,
+          url: String(tab.url || '').slice(0, 240),
+          intended: summarizeFp(fp),
+          live,
+          mismatch,
+        });
+        // If probe still shows host hardware, re-evaluate inject once more immediately.
+        if (mismatch && (mismatch.cores || mismatch.webglRenderer || mismatch.memory)) {
+          await fpLog('inject.tab-ineffective', {
+            phase,
+            profileId: profile.id,
+            tabId: tab.id,
+            mismatch,
+          });
+          try {
+            await applyFingerprintToTab(cdp.call, tab.webSocketDebuggerUrl, fp, enriched);
+            const probe2 = await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', {
+              expression: LIVE_PROBE_EXPRESSION,
+              returnByValue: true,
+            }, 8000);
+            const live2 = probe2?.result?.value || probe2?.value || null;
+            await fpLog('inject.tab-retry', {
+              phase,
+              profileId: profile.id,
+              tabId: tab.id,
+              live: live2,
+            });
+            const coresOk = !(fp.hardwareConcurrency != null && live2?.hardwareConcurrency != null
+              && Number(fp.hardwareConcurrency) !== Number(live2.hardwareConcurrency));
+            const webglOk = !(fp.webgl?.renderer && live2?.webglRenderer
+              && String(live2.webglRenderer) !== String(fp.webgl.renderer)
+              && /Radeon|GeForce|W6800|GTX |RTX /i.test(String(live2.webglRenderer)));
+            if (coresOk && webglOk) applied.add(tab.id);
+            // else leave unmarked so force/post-startpage can try again
+          } catch (retryError) {
+            await fpLog('inject.tab-retry-fail', {
+              phase,
+              profileId: profile.id,
+              tabId: tab.id,
+              error: String(retryError.message || retryError),
+            });
+          }
+        } else {
+          applied.add(tab.id);
+        }
+      } catch (error) {
+        await fpLog('inject.tab-fail', {
+          phase,
+          profileId: profile.id,
+          tabId: tab.id,
+          url: String(tab.url || '').slice(0, 240),
+          error: String(error.message || error),
+        });
+        // Soft-fail per tab: keep trying other tabs / later phases instead of aborting start.
+        const msg = String(error.message || error || '');
+        if (!/Uncaught|already in effect|cannot be overridden|softInject/i.test(msg)) {
+          throw error;
+        }
+      }
       if (blocked.length) {
         await cdp.call(tab.webSocketDebuggerUrl, 'Network.enable');
         await cdp.call(tab.webSocketDebuggerUrl, 'Network.setBlockedURLs', { urls: blocked });
@@ -848,7 +957,7 @@ class BrowserEngine {
         await cdp.call(tab.webSocketDebuggerUrl, 'Page.addScriptToEvaluateOnNewDocument', { source: portScanScript });
         await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', { expression: portScanScript });
       }
-      applied.add(tab.id);
+      // applied.add only when probe matched (see above)
     }
     // Drop closed targets so Set does not grow forever
     const liveIds = new Set(tabs.map((t) => t.id));
@@ -859,6 +968,7 @@ class BrowserEngine {
       options.trackOn.fpAppliedTargets = applied;
       options.trackOn.fingerprint = fp;
     }
+    await fpLog('inject.end', { phase, profileId: profile.id, applied: applied.size, port });
     return fp;
   }
 
@@ -1128,12 +1238,18 @@ class BrowserEngine {
     // Always force-navigate to OpenBrowser start page when provided (148 kernel may open NTP/about:blank).
     if (expected && keep?.webSocketDebuggerUrl) {
       try {
+        await cdp.call(keep.webSocketDebuggerUrl, 'Page.enable', {}).catch(() => {});
         const href = String(keep.url || '');
-        if (!this.isStartPageUrl(href) || !href.includes(expected.split('?')[0])) {
+        // about:blank launch or wrong page → navigate; already on start page → reload so
+        // document-start fingerprint scripts registered after first paint still run.
+        if (this.isStartPageUrl(href) && href.includes(expected.split('?')[0])) {
+          await cdp.call(keep.webSocketDebuggerUrl, 'Page.reload', { ignoreCache: true }).catch(async () => {
+            await cdp.call(keep.webSocketDebuggerUrl, 'Page.navigate', { url: expected });
+          });
+        } else {
           await cdp.call(keep.webSocketDebuggerUrl, 'Page.navigate', { url: expected });
-          // Brief settle so URL updates before we re-list tabs (avoid closing the navigated tab).
-          await new Promise((resolve) => { const t = setTimeout(resolve, 200); t.unref?.(); });
         }
+        await new Promise((resolve) => { const t = setTimeout(resolve, 400); t.unref?.(); });
       } catch (_) {
         try { await cdp.call(keep.webSocketDebuggerUrl, 'Page.navigate', { url: expected }); } catch (__) {}
       }
@@ -1146,6 +1262,112 @@ class BrowserEngine {
       || keep;
     for (const tab of after) if (tab.id !== keep.id) await cdp.closeTab(port, tab.id).catch(() => {});
     await cdp.activateTab(port, keep.id).catch(() => {});
+  }
+
+  /**
+   * After start-page navigation: inject fingerprint, probe live surfaces, reload once
+   * if still looks like the host machine. Writes diagnostics to fingerprint-inject.log.
+   */
+  async ensureStartPageFingerprint(item, profile, injectFp, startUrl) {
+    const port = item?.port;
+    if (!port) return null;
+    const sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
+    // Give navigation a moment to produce a target URL.
+    for (let i = 0; i < 10; i += 1) {
+      const tabs = await cdp.tabs(port).catch(() => []);
+      if (tabs.some((t) => this.isStartPageUrl(t.url) || /about:blank/i.test(String(t.url || '')))) break;
+      await sleep(100);
+    }
+    await this.applyRuntimeSettings(port, profile, injectFp, {
+      appliedTargetIds: new Set(),
+      trackOn: item,
+      phase: 'post-startpage',
+      force: true,
+    });
+    await sleep(350);
+    // Ask welcome page to repaint fingerprint table from spoofed navigator.
+    // Retry a few times: start-page script may still be booting.
+    for (let repaint = 0; repaint < 3; repaint += 1) {
+      try {
+        const tabsR = await cdp.tabs(port).catch(() => []);
+        for (const tab of tabsR) {
+          if (!tab.webSocketDebuggerUrl) continue;
+          if (!this.isStartPageUrl(tab.url) && !/about:blank/i.test(String(tab.url || ''))) continue;
+          await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', {
+            expression: `(() => { try { if (typeof window.__openbrowserCollectFingerprint === 'function') { window.__openbrowserCollectFingerprint('post-inject-${repaint}'); return 'ok'; } return 'missing'; } catch (e) { return String(e && e.message || e); } })()`,
+            returnByValue: true,
+          }, 3000).catch(() => {});
+        }
+      } catch (_) {}
+      await sleep(200);
+    }
+    const tabs = await cdp.tabs(port).catch(() => []);
+    const page = tabs.find((t) => this.isStartPageUrl(t.url)) || tabs[0];
+    if (!page?.webSocketDebuggerUrl) {
+      await fpLog('probe.no-tab', { profileId: profile.id, port, tabCount: tabs.length });
+      return null;
+    }
+    let live = null;
+    try {
+      const probe = await cdp.call(page.webSocketDebuggerUrl, 'Runtime.evaluate', {
+        expression: LIVE_PROBE_EXPRESSION,
+        returnByValue: true,
+      }, 8000);
+      live = probe?.result?.value || probe?.value || null;
+    } catch (error) {
+      live = { probeError: String(error.message || error) };
+    }
+    const intended = summarizeFp(injectFp);
+    const hostLikeWebgl = Boolean(live?.webglRenderer && /Radeon|GeForce|Intel\(R\)|W6800|RX |GTX |RTX /i.test(String(live.webglRenderer)))
+      && intended?.webglRenderer
+      && String(live.webglRenderer) !== String(intended.webglRenderer);
+    const hostLikeCores = intended?.hardwareConcurrency != null
+      && live?.hardwareConcurrency != null
+      && Number(live.hardwareConcurrency) !== Number(intended.hardwareConcurrency)
+      && Number(live.hardwareConcurrency) >= 12;
+    const bad = hostLikeWebgl || hostLikeCores
+      || (intended?.userAgent && live?.userAgent && intended.userAgent !== live.userAgent);
+    await fpLog('probe.startpage', {
+      profileId: profile.id,
+      port,
+      url: page.url,
+      intended,
+      live,
+      hostLikeWebgl,
+      hostLikeCores,
+      bad,
+    });
+    if (!bad) return live;
+
+    // Hard recovery: re-register document-start script and reload start page.
+    await fpLog('probe.reload-startpage', { profileId: profile.id, reason: { hostLikeWebgl, hostLikeCores } });
+    try {
+      await applyFingerprintToTab(cdp.call, page.webSocketDebuggerUrl, injectFp, profile);
+      await cdp.call(page.webSocketDebuggerUrl, 'Page.enable', {}).catch(() => {});
+      if (startUrl) await cdp.call(page.webSocketDebuggerUrl, 'Page.navigate', { url: startUrl });
+      else await cdp.call(page.webSocketDebuggerUrl, 'Page.reload', { ignoreCache: true });
+      await sleep(600);
+      await this.applyRuntimeSettings(port, profile, injectFp, {
+        appliedTargetIds: new Set(),
+        trackOn: item,
+        phase: 'post-reload',
+        force: true,
+      });
+      const tabs2 = await cdp.tabs(port).catch(() => []);
+      const page2 = tabs2.find((t) => this.isStartPageUrl(t.url)) || tabs2[0];
+      if (page2?.webSocketDebuggerUrl) {
+        const probe2 = await cdp.call(page2.webSocketDebuggerUrl, 'Runtime.evaluate', {
+          expression: LIVE_PROBE_EXPRESSION,
+          returnByValue: true,
+        }, 8000).catch((e) => ({ result: { value: { probeError: String(e.message || e) } } }));
+        const live2 = probe2?.result?.value || probe2?.value || null;
+        await fpLog('probe.after-reload', { profileId: profile.id, live: live2, intended });
+        return live2;
+      }
+    } catch (error) {
+      await fpLog('probe.reload-fail', { profileId: profile.id, error: String(error.message || error) });
+    }
+    return live;
   }
 
   /**
@@ -1175,13 +1397,20 @@ class BrowserEngine {
       || pageNetwork?.timezone
       || (profile.privacy?.timezoneMode === 'custom' ? profile.privacy.timezone : '')
       || '';
-    const uaFromFp = (() => {
+    const fpForStart = (() => {
       try {
-        return buildFingerprint(profile).userAgent;
+        return buildFingerprint({
+          ...profile,
+          kernelVersion: this.kernelStatus()?.kernel?.version || profile.kernelVersion,
+          exitTimezone: timezone,
+          exitLatitude: pageNetwork?.latitude ?? profile.exitLatitude,
+          exitLongitude: pageNetwork?.longitude ?? profile.exitLongitude,
+        });
       } catch (_) {
-        return profile.userAgent || '';
+        return null;
       }
     })();
+    const uaFromFp = fpForStart?.userAgent || profile.userAgent || '';
     try {
       const server = await this.ensureStartPage();
       const url = server.registerSession({
@@ -1191,6 +1420,15 @@ class BrowserEngine {
         exitCountryCode: pageNetwork?.countryCode || profile.exitCountryCode || '',
         userAgent: profile.userAgent || uaFromFp,
         group_name: profile.group_name || profile.groupName || '',
+        privacy: {
+          ...(profile.privacy || {}),
+          // Prefer resolved fingerprint surfaces for welcome-page expected checks
+          fingerprint: {
+            ...(profile.privacy?.fingerprint || {}),
+            hardwareConcurrency: fpForStart?.hardwareConcurrency ?? profile.privacy?.fingerprint?.hardwareConcurrency,
+            deviceMemory: fpForStart?.deviceMemory ?? profile.privacy?.fingerprint?.deviceMemory,
+          },
+        },
       }, {
         timezone,
         network: pageNetwork,
@@ -1199,6 +1437,22 @@ class BrowserEngine {
         browserName,
         extensionCount,
         time: Math.floor(Date.now() / 1000),
+        expectedFingerprint: fpForStart ? {
+          language: (fpForStart.languages && fpForStart.languages[0]) || profile.language || '',
+          userAgent: fpForStart.userAgent || uaFromFp,
+          platform: fpForStart.platform || '',
+          timezone,
+          screenWidth: fpForStart.screen?.width || Number(profile.width) || null,
+          screenHeight: fpForStart.screen?.height || Number(profile.height) || null,
+          webrtc: String(profile.privacy?.webrtc || ''),
+          canvas: String(fpForStart.canvas?.mode || profile.privacy?.canvas || ''),
+          webgl: String(fpForStart.webgl?.mode || profile.privacy?.webgl || ''),
+          webglVendor: fpForStart.webgl?.vendor || '',
+          webglRenderer: fpForStart.webgl?.renderer || '',
+          audio: String(fpForStart.audio?.mode || profile.privacy?.audio || ''),
+          hardwareConcurrency: fpForStart.hardwareConcurrency,
+          deviceMemory: fpForStart.deviceMemory,
+        } : undefined,
       });
       await fsp.writeFile(
         path.join(root, 'openbrowser-start.url.txt'),
@@ -1315,7 +1569,8 @@ class BrowserEngine {
           }
         } else {
           item.watchEmptyTicks = 0;
-          // New tabs must receive the same fingerprint inject as the launch tab
+          // New tabs must receive the same fingerprint inject as the launch tab.
+          // Soft-fail: never throw out of the watch loop (would spam Uncaught).
           if (item.fingerprint && item.profile && !item.fpEnsureBusy) {
             item.fpEnsureBusy = true;
             const reFp = item.nativeKernelFingerprint
@@ -1324,6 +1579,7 @@ class BrowserEngine {
             this.applyRuntimeSettings(item.port, item.profile, reFp, {
               appliedTargetIds: item.fpAppliedTargets || new Set(),
               trackOn: item,
+              phase: 'watch-ensure',
             }).catch((error) => {
               item.cdpError = `fingerprint injection failed: ${error.message}`;
               this.emit({
@@ -1419,6 +1675,18 @@ class BrowserEngine {
     ));
   }
 
+  emitStartProgress(profileId, phase, percent, message = '') {
+    this.emit({
+      type: 'profile-start-progress',
+      id: profileId,
+      phase,
+      percent: Math.max(0, Math.min(100, Math.round(Number(percent) || 0))),
+      message: message || '',
+      starting: true,
+      running: false,
+    });
+  }
+
   async start(raw) {
     // let: language/timezone resolution reassigns profile via applyResolvedLocale
     let profile = this.sanitizeProfile(raw); this.profiles.set(profile.id, profile);
@@ -1426,12 +1694,16 @@ class BrowserEngine {
       if (!profile.advanced.multiOpen) return this.publicRunning(profile.id);
       return this.publicRunning(profile.id);
     }
-    profile = await this.prepareProfileProxyForStart(profile);
+    this.emitStartProgress(profile.id, 'prepare', 6, '正在准备环境…');
+    try {
+      profile = await this.prepareProfileProxyForStart(profile);
     this.profiles.set(profile.id, profile);
+    this.emitStartProgress(profile.id, 'proxy', 18, '正在检测代理与出口…');
     await this.ensureExitNetworkForLocale(profile).catch(() => {});
     profile = this.applyResolvedLocale(profile);
     this.profiles.set(profile.id, profile);
     const extensions = this.assignedExtensions(profile.id);
+    this.emitStartProgress(profile.id, 'kernel', 30, '正在准备浏览器内核…');
     if (!this.kernelStatus().installed && this.preferIndependentKernel) await this.ensureKernelBootstrap();
     const browser = this.chooseBrowser(profile);
     const root = this.profileRoot(profile.id);
@@ -1478,6 +1750,7 @@ class BrowserEngine {
     if (proxyConfig?.authenticated) {
       proxyForwarder = await startAuthenticatedProxy(proxyConfig, (value) => this.emit({ type: 'proxy-error', id: profile.id, code: value.code, message: value.message }));
     }
+    this.emitStartProgress(profile.id, 'configure', 48, '正在配置启动参数…');
     const args = [
       `--user-data-dir=${root}`,
       `--disk-cache-dir=${path.join(root, 'OpenBrowserCache')}`,
@@ -1556,9 +1829,12 @@ class BrowserEngine {
       if (existingBypass >= 0) args[existingBypass] = args[existingBypass] + ';' + bypass;
       else args.push(`--proxy-bypass-list=${bypass}`);
     }
-    // startup URLs: fixed list or info page (skip when restoring session)
+    // Startup URLs: do NOT put the OpenBrowser start page (or first custom URL) on the
+    // CLI. The process would paint and run collectFingerprint before CDP inject.
+    // Spawn on about:blank, inject via CDP, then keepDefaultTab navigates to startUrl.
     if (!restoreSession) {
-      if (startUrl) args.push(startUrl);
+      if (startUrl) args.push('about:blank');
+      else if (customStartUrls.length) args.push('about:blank');
       for (const extra of customStartUrls.slice(1)) args.push(extra);
     }
     if (proxyConfig) {
@@ -1612,9 +1888,11 @@ class BrowserEngine {
     let connection;
     let port;
     try {
+      this.emitStartProgress(profile.id, 'spawn', 62, '正在启动浏览器进程…');
+      await ensureKernelReadyForLaunch(browser);
       child = spawn(launchBinary, finalArgs, {
         detached: process.platform !== 'win32',
-        windowsHide: process.platform === 'win32',
+        windowsHide: false,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       const startupDiagnostic = { launchBinary, profileRoot: root, stdout: '', stderr: '' };
@@ -1624,6 +1902,7 @@ class BrowserEngine {
       child.stdout?.on('data', (chunk) => { startupDiagnostic.stdout = appendDiagnosticOutput(startupDiagnostic.stdout, chunk); });
       child.stderr?.on('data', (chunk) => { startupDiagnostic.stderr = appendDiagnosticOutput(startupDiagnostic.stderr, chunk); });
       child.once('error', (error) => { startupDiagnostic.spawnError = error.message; });
+      this.emitStartProgress(profile.id, 'cdp', 76, '正在等待调试端口…');
       port = await this.waitForPort(root, 30000, child);
       connection = await portConnection(port);
     } catch (error) {
@@ -1656,11 +1935,14 @@ class BrowserEngine {
       const managedPaths = [...this.extensions.values()].map((item) => item.path).filter(Boolean);
       reconciled = await reconcileOnConnection(connection, extensions, managedPaths);
       if (reconciled?.skipped) {
+        // Expected on openbrowser-148: not an error. Extensions still load via --load-extension.
         this.emit({
-          type: 'sync-error',
+          type: 'status',
           action: 'extensions-reconcile-skipped',
           id: profile.id,
-          message: '内核不支持 Extensions CDP，已跳过扩展热装（仍可用 --load-extension）：' + (reconciled.reason || ''),
+          running: true,
+          message: '扩展已通过 --load-extension 加载（当前内核不支持 Extensions CDP 热装）',
+          reason: reconciled.reason || 'Extensions CDP unavailable',
         });
       }
     } catch (error) {
@@ -1668,7 +1950,14 @@ class BrowserEngine {
       const msg = String(error && error.message || error || '');
       if (/not available|unknown method|was not found|not found|unsupported/i.test(msg)) {
         reconciled = { installed: extensions, extensions: [], skipped: true, reason: msg };
-        this.emit({ type: 'sync-error', action: 'extensions-reconcile-skipped', id: profile.id, message: msg });
+        this.emit({
+          type: 'status',
+          action: 'extensions-reconcile-skipped',
+          id: profile.id,
+          running: true,
+          message: '扩展已通过 --load-extension 加载（当前内核不支持 Extensions CDP 热装）',
+          reason: msg,
+        });
       } else {
         await connection.command('Browser.close').catch(() => {});
         await proxyForwarder?.close().catch(() => {});
@@ -1727,20 +2016,47 @@ class BrowserEngine {
     item.startupExtensionGuard = this.suppressStartupExtensionPages(connection, reconciled.installed).catch((error) => this.emit({ type: 'sync-error', action: 'startup-extension-pages', id: profile.id, message: error.message }));
     try {
       item.startUrl = startUrl;
-      if (!restoreSession && startUrl) await this.keepDefaultTab(item.port, startUrl);
       item.fpAppliedTargets = new Set();
-      // openbrowser-148: canvas/webgl/audio noise owned by Framework init; CDP inject skips those surfaces
+      // Fingerprint inject BEFORE keepDefaultTab/start-page navigation so the welcome
+      // page's collectFingerprint() sees spoofed navigator/WebGL (not the host GPU).
+      // openbrowser-148: pixel noise may be native; JS still spoofs WebGL meta strings.
       const injectFp = item.nativeKernelFingerprint
         ? fingerprintForNativeKernelInject(fingerprint)
         : (runtimeFingerprint || fingerprint);
-      item.fingerprint = await this.applyRuntimeSettings(item.port, profile, injectFp, {
-        appliedTargetIds: item.fpAppliedTargets,
-        trackOn: item,
-      }) || fingerprint;
+      await fpLog('start.inject-plan', {
+        profileId: profile.id,
+        port: item.port,
+        launchBinary: item.launchBinary || launchBinary || browser.path,
+        startUrl: startUrl || null,
+        nativeKernel: Boolean(item.nativeKernelFingerprint),
+        fullFp: summarizeFp(fingerprint),
+        injectFp: summarizeFp(injectFp),
+        logFile: fingerprintLogPath(),
+      });
+      this.emitStartProgress(profile.id, 'inject', 88, '正在注入指纹与运行时…');
+      // Pre-inject is best-effort: must NEVER block start-page navigation.
+      try {
+        item.fingerprint = await this.applyRuntimeSettings(item.port, profile, injectFp, {
+          appliedTargetIds: item.fpAppliedTargets,
+          trackOn: item,
+          phase: 'pre-startpage',
+        }) || fingerprint;
+      } catch (preInjectError) {
+        item.fingerprint = fingerprint;
+        await fpLog('start.pre-inject-fail', {
+          profileId: profile.id,
+          error: String(preInjectError.message || preInjectError),
+        });
+        this.emit({
+          type: 'fingerprint-injection-failed',
+          id: profile.id,
+          message: 'pre-startpage inject: ' + preInjectError.message,
+        });
+      }
       // Keep reported modes as profile intent (not the stripped inject payload)
       if (item.nativeKernelFingerprint && fingerprint) {
         item.fingerprint = {
-          ...item.fingerprint,
+          ...(item.fingerprint || fingerprint),
           canvas: fingerprint.canvas,
           webgl: fingerprint.webgl,
           audio: fingerprint.audio,
@@ -1751,20 +2067,69 @@ class BrowserEngine {
           deviceMemory: fingerprint.deviceMemory,
         };
       }
-      await this.startWorkerFingerprintInjection(item, injectFp).catch((error) => {
+      await this.startWorkerFingerprintInjection(item, injectFp).catch(async (error) => {
         item.workerFingerprintError = error.message;
+        await fpLog('worker.inject-fail', { profileId: profile.id, error: String(error.message || error) });
         this.emit({ type: 'worker-fingerprint-injection-failed', id: profile.id, message: error.message });
       });
+      // Always open the welcome/start page (even if inject failed).
+      if (!restoreSession && startUrl) {
+        await fpLog('start.navigate-startpage', { profileId: profile.id, startUrl });
+        try {
+          await this.keepDefaultTab(item.port, startUrl);
+        } catch (navError) {
+          await fpLog('start.navigate-fail', { profileId: profile.id, error: String(navError.message || navError) });
+        }
+        try {
+          await this.ensureStartPageFingerprint(item, profile, injectFp, startUrl);
+        } catch (reInjectError) {
+          await fpLog('start.reinject-fail', { profileId: profile.id, error: String(reInjectError.message || reInjectError) });
+          this.emit({
+            type: 'fingerprint-injection-failed',
+            id: profile.id,
+            message: 'start-page re-inject: ' + reInjectError.message,
+          });
+        }
+      }
       // Brand window title as 环境 N (not generic Chrome)
       await this.applyEnvWindowTitle(item.port, profile).catch(() => {});
-    } catch (error) { item.cdpError = error.message; }
+      await fpLog('start.done', {
+        profileId: profile.id,
+        port: item.port,
+        reported: summarizeFp(item.fingerprint),
+      });
+    } catch (error) {
+      item.cdpError = error.message;
+      await fpLog('start.fail', { profileId: profile.id, error: String(error.message || error) });
+      // Last chance: still try to open start page so UI is not stuck on about:blank.
+      if (!restoreSession && startUrl && item.port) {
+        try {
+          await this.keepDefaultTab(item.port, startUrl);
+          await fpLog('start.navigate-after-fail', { profileId: profile.id, startUrl });
+        } catch (_) {}
+      }
+    }
     if (!this.running.has(profile.id)) {
       throw new Error(item.cdpError || '浏览器在启动过程中异常退出');
     }
     // Detect user closing browser with X (process may stay alive; CDP/pages are source of truth)
     this.startRunningWatch(item);
+    this.emitStartProgress(profile.id, 'ready', 100, '启动完成');
     this.emit({ type: 'status', id: profile.id, running: true, ...this.publicRunning(profile.id) });
     return this.publicRunning(profile.id);
+    } catch (error) {
+      this.emit({
+        type: 'profile-start-progress',
+        id: profile.id,
+        phase: 'error',
+        percent: 0,
+        message: error?.message || String(error || '启动失败'),
+        starting: false,
+        running: false,
+        error: true,
+      });
+      throw error;
+    }
   }
 
   publicRunning(id) {

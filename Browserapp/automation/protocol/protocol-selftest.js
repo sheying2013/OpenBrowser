@@ -33,7 +33,15 @@ const {
 
 const { EVENT_TYPE, payloadToSyncEvent, settingsToOperateList, operateAllows } = require('./event-map');
 const { planFanoutFromPayload } = require('./sync-fanout');
-const { syncCapabilities, isWindows, isMac, LOCAL_API_PORTS, toFileUrl } = require('./cross-platform');
+const {
+  syncCapabilities,
+  isWindows,
+  isMac,
+  LOCAL_API_PORTS,
+  toFileUrl,
+  extractUserDataDir,
+  windowsExecutableMatches,
+} = require('./cross-platform');
 
 function pass(name) { console.log('  PASS  ' + name); }
 
@@ -222,6 +230,23 @@ async function main() {
   assert.strictEqual(caps.nativeOsInputMirror, process.platform === 'win32');
   assert.ok(LOCAL_API_PORTS.includes(50325));
   assert.ok(toFileUrl(__filename).startsWith('file:'));
+  assert.strictEqual(
+    extractUserDataDir('"C:\\Program Files\\Browser\\browser.exe" "--user-data-dir=C:\\OpenBrowser Data\\env-001" --remote-debugging-port=9222'),
+    'C:\\OpenBrowser Data\\env-001'
+  );
+  assert.strictEqual(
+    extractUserDataDir('browser.exe --user-data-dir="C:\\OpenBrowser Data\\env-002" --no-first-run'),
+    'C:\\OpenBrowser Data\\env-002'
+  );
+  assert.strictEqual(
+    windowsExecutableMatches('C:\\Program Files\\Browser\\browser.exe', 'C:\\Program Files\\Browser\\browser.exe'),
+    true
+  );
+  assert.strictEqual(
+    windowsExecutableMatches('C:\\Program Files\\Browser\\browser.exe', 'C:\\Other\\browser.exe'),
+    false
+  );
+  pass('Windows process identity parsing');
   pass('cross-platform caps Win=' + isWindows() + ' Mac=' + isMac());
 
   console.log('\nAll pixel-protocol selftests passed.');

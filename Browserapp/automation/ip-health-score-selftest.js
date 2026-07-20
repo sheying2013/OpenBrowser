@@ -7,6 +7,7 @@ function run() {
   const unavailable = calculateIpHealthScore();
   assert.strictEqual(unavailable.score, null);
   assert.strictEqual(unavailable.level, 'unknown');
+  assert.ok(!JSON.stringify(unavailable).includes('IPPure'));
 
   const residential = calculateIpHealthScore({
     ip: '203.0.113.10',
@@ -21,8 +22,9 @@ function run() {
     { score: 70, level: 'review', label: '需复核' },
   );
   assert.strictEqual(residential.confidence, 'low');
+  assert.ok(!residential.factors.some((item) => /IPPure|不可用|ip-api|ipwho|ipinfo/i.test(item.label + item.detail)));
 
-  const ipPureExample = calculateIpHealthScore({
+  const riskExample = calculateIpHealthScore({
     ip: '2.27.132.142',
     countryCode: 'HK',
     asn: 'AS402279',
@@ -30,18 +32,33 @@ function run() {
     hosting: false,
     proxy: false,
     mobile: false,
-    ipPure: {
+    riskIntel: {
       fraudScore: 59,
       isResidential: false,
       isBroadcast: false,
       asOrganization: 'Private Customer',
     },
   });
-  assert.strictEqual(ipPureExample.score, 41);
-  assert.strictEqual(ipPureExample.level, 'risky');
-  assert.strictEqual(ipPureExample.label, '高风险');
-  assert.strictEqual(ipPureExample.confidence, 'high');
-  assert.strictEqual(ipPureExample.factors[0].code, 'ippure-risk');
+  assert.strictEqual(riskExample.score, 41);
+  assert.strictEqual(riskExample.level, 'risky');
+  assert.strictEqual(riskExample.label, '高风险');
+  assert.strictEqual(riskExample.confidence, 'high');
+  assert.strictEqual(riskExample.factors[0].code, 'risk-score');
+  assert.ok(!JSON.stringify(riskExample).includes('IPPure'));
+
+  const geoConflict = calculateIpHealthScore({
+    ip: '203.0.113.88',
+    countryCode: 'HK',
+    countryUsage: 'HK',
+    countryRegistered: 'GB',
+    countries: ['HK', 'GB'],
+    geoConflict: true,
+    countryNote: '多源地区不一致：HK / GB（使用地倾向 HK，注册/库表倾向 GB）',
+    asn: 'AS64510',
+  });
+  assert.strictEqual(geoConflict.score, 58);
+  assert.ok(geoConflict.factors.some((item) => item.code === 'geo-conflict'));
+  assert.ok(!JSON.stringify(geoConflict).includes('IPPure'));
 
   const proxy = calculateIpHealthScore({
     ip: '198.51.100.20',

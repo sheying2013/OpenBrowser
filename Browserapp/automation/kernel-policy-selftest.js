@@ -5,14 +5,20 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
+const https = require('https');
+const { EventEmitter } = require('events');
+const { PassThrough } = require('stream');
 const {
   BrowserKernelManager,
+  downloadFile,
   validateArchiveMemberName,
   safeInstalledBinary,
   findOpenBrowserKernelBinary,
   findBundledWayfernKernel,
   isOpenBrowser148SupportedHost,
   isMacX64Host,
+  isWayfernKernel,
+  termsAcceptanceArgsForKernel,
   SOURCE_OPENBROWSER,
 } = require('./browser-kernel');
 const { BrowserEngine, systemBrowserCandidatesForPlatform } = require('../engine');
@@ -55,6 +61,9 @@ async function main() {
     await fsp.writeFile(path.join(bundledRoot, 'kernel.json'), JSON.stringify({ version: '149.0.0.0' }), 'utf8');
     const bundled = findBundledWayfernKernel([root]);
     assert.strictEqual(path.resolve(bundled.binary), path.resolve(bundledBinary));
+    assert.strictEqual(isWayfernKernel({ path: bundledBinary }), true);
+    assert.deepStrictEqual(termsAcceptanceArgsForKernel({ path: bundledBinary }), ['--accept-terms-and-conditions']);
+    assert.deepStrictEqual(termsAcceptanceArgsForKernel({ path: binary, source: 'chrome-for-testing' }), []);
     console.log('  PASS  bundled Wayfern kernel discovered from packaged resource root');
 
     assert.throws(() => validateArchiveMemberName('../outside/chrome'));
@@ -64,6 +73,30 @@ async function main() {
     assert.throws(() => validateArchiveMemberName('NUL.txt'));
     assert.strictEqual(validateArchiveMemberName('chrome dir/chrome'), 'chrome dir/chrome');
     console.log('  PASS  kernel archive path traversal rejected');
+
+    const existingArchive = path.join(root, 'kernels', 'existing-wayfern.zip');
+    await fsp.mkdir(path.dirname(existingArchive), { recursive: true });
+    await fsp.writeFile(existingArchive, 'stale archive', 'utf8');
+    const originalGet = https.get;
+    https.get = (_url, _options, callback) => {
+      const req = new EventEmitter();
+      req.destroy = (error) => { if (error) req.emit('error', error); };
+      process.nextTick(() => {
+        const res = new PassThrough();
+        res.statusCode = 200;
+        res.headers = { 'content-length': '11' };
+        callback(res);
+        res.end(Buffer.from('fresh bytes'));
+      });
+      return req;
+    };
+    try {
+      await downloadFile('https://download.wayfern.com/test/wayfern.zip', existingArchive);
+    } finally {
+      https.get = originalGet;
+    }
+    assert.strictEqual(await fsp.readFile(existingArchive, 'utf8'), 'fresh bytes');
+    console.log('  PASS  kernel download overwrites stale archive files');
 
     if (process.platform !== 'win32') {
       const link = path.join(root, 'kernels', 'chrome-for-testing', 'linked-chrome');

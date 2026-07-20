@@ -10,6 +10,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
+const zlib = require('zlib');
 const { spawnSync, execFileSync } = require('child_process');
 
 const APP_ROOT = path.resolve(__dirname, '..');
@@ -218,27 +219,127 @@ print("OK")
   return result.status === 0 && fs.existsSync(outPng) && fs.statSync(outPng).size > 64;
 }
 
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let value = i;
+    for (let bit = 0; bit < 8; bit += 1) value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+    table[i] = value >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data = Buffer.alloc(0)) {
+  const name = Buffer.from(type, 'ascii');
+  const payload = Buffer.concat([name, data]);
+  const out = Buffer.alloc(12 + data.length);
+  out.writeUInt32BE(data.length, 0);
+  name.copy(out, 4);
+  data.copy(out, 8);
+  out.writeUInt32BE(crc32(payload), 8 + data.length);
+  return out;
+}
+
+function writeRgbaPng(size, pixels, outPng) {
+  const rows = [];
+  for (let y = 0; y < size; y += 1) {
+    rows.push(Buffer.from([0]));
+    rows.push(pixels.subarray(y * size * 4, (y + 1) * size * 4));
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(Buffer.concat(rows), { level: 9 })),
+    pngChunk('IEND'),
+  ]);
+  fs.mkdirSync(path.dirname(outPng), { recursive: true });
+  fs.writeFileSync(outPng, png);
+}
+
 function generateFallbackPng(number, size, outPng) {
-  const script = `
-import struct, zlib, sys
-from pathlib import Path
-number, size, out_png = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-r,g,b,a = 0, 122, 255, 255
-row = bytes([0] + [r,g,b,a] * size)
-raw = row * size
-def chunk(tag, data):
-  return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff)
-ihdr = struct.pack('>IIBBBBB', size, size, 8, 6, 0, 0, 0)
-png = b'\\x89PNG\\r\\n\\x1a\\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b'')
-Path(out_png).parent.mkdir(parents=True, exist_ok=True)
-Path(out_png).write_bytes(png)
-print('OK')
-`;
-  const result = spawnSync('python3', ['-c', script, String(number), String(size), outPng], {
-    encoding: 'utf8',
-    timeout: 10000,
-  });
-  return result.status === 0 && fs.existsSync(outPng);
+  const pixels = Buffer.alloc(size * size * 4);
+  const set = (x, y, color) => {
+    if (x < 0 || y < 0 || x >= size || y >= size) return;
+    const index = (y * size + x) * 4;
+    pixels[index] = color[0];
+    pixels[index + 1] = color[1];
+    pixels[index + 2] = color[2];
+    pixels[index + 3] = color[3];
+  };
+  const fillRect = (x, y, w, h, color) => {
+    for (let yy = Math.max(0, y); yy < Math.min(size, y + h); yy += 1) {
+      for (let xx = Math.max(0, x); xx < Math.min(size, x + w); xx += 1) set(xx, yy, color);
+    }
+  };
+  const fillCircle = (cx, cy, radius, color) => {
+    const r2 = radius * radius;
+    for (let y = Math.floor(cy - radius); y <= Math.ceil(cy + radius); y += 1) {
+      for (let x = Math.floor(cx - radius); x <= Math.ceil(cx + radius); x += 1) {
+        const dx = x - cx;
+        const dy = y - cy;
+        if (dx * dx + dy * dy <= r2) set(x, y, color);
+      }
+    }
+  };
+
+  fillRect(0, 0, size, size, [0, 122, 255, 255]);
+  fillRect(Math.floor(size * 0.18), Math.floor(size * 0.23), Math.floor(size * 0.64), Math.floor(size * 0.52), [255, 255, 255, 245]);
+  fillRect(Math.floor(size * 0.18), Math.floor(size * 0.23), Math.floor(size * 0.64), Math.floor(size * 0.14), [232, 232, 237, 255]);
+  fillRect(Math.floor(size * 0.27), Math.floor(size * 0.47), Math.floor(size * 0.32), Math.max(1, Math.floor(size * 0.05)), [0, 122, 255, 230]);
+  fillRect(Math.floor(size * 0.27), Math.floor(size * 0.58), Math.floor(size * 0.44), Math.max(1, Math.floor(size * 0.04)), [199, 199, 204, 255]);
+
+  const label = normalizeEnvNumber(number);
+  const badge = Math.max(10, Math.floor(size * 0.38));
+  const cx = size - Math.floor(badge * 0.55);
+  const cy = size - Math.floor(badge * 0.55);
+  fillCircle(cx, cy, Math.floor(badge * 0.52), [255, 255, 255, 255]);
+  fillCircle(cx, cy, Math.floor(badge * 0.43), [17, 24, 32, 255]);
+
+  const patterns = {
+    0: ['111', '101', '101', '101', '111'],
+    1: ['010', '110', '010', '010', '111'],
+    2: ['111', '001', '111', '100', '111'],
+    3: ['111', '001', '111', '001', '111'],
+    4: ['101', '101', '111', '001', '001'],
+    5: ['111', '100', '111', '001', '111'],
+    6: ['111', '100', '111', '101', '111'],
+    7: ['111', '001', '010', '010', '010'],
+    8: ['111', '101', '111', '101', '111'],
+    9: ['111', '101', '111', '001', '111'],
+  };
+  const chars = label.replace(/\D/g, '').slice(0, 3) || '1';
+  const unit = Math.max(1, Math.floor(badge / (chars.length * 4 + 1)));
+  const totalWidth = chars.length * 3 * unit + Math.max(0, chars.length - 1) * unit;
+  const totalHeight = 5 * unit;
+  let x0 = Math.round(cx - totalWidth / 2);
+  const y0 = Math.round(cy - totalHeight / 2);
+  for (const char of chars) {
+    const pattern = patterns[char] || patterns[1];
+    for (let row = 0; row < pattern.length; row += 1) {
+      for (let col = 0; col < pattern[row].length; col += 1) {
+        if (pattern[row][col] === '1') fillRect(x0 + col * unit, y0 + row * unit, unit, unit, [255, 255, 255, 255]);
+      }
+    }
+    x0 += 4 * unit;
+  }
+
+  try {
+    writeRgbaPng(size, pixels, outPng);
+    return fs.existsSync(outPng) && fs.statSync(outPng).size > 64;
+  } catch (_) {
+    return false;
+  }
 }
 
 /**

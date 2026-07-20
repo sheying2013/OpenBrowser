@@ -58,7 +58,10 @@ async function main() {
 
   const stripped = fingerprintForNativeKernelInject(fp);
   assert.strictEqual(stripped.canvas.mode, 'real');
+  // Pixel noise stripped for native; WebGL meta spoof must remain (not real-only wipe).
   assert.strictEqual(stripped.webgl.mode, 'real');
+  assert.notStrictEqual(stripped.webgl.metaMode, 'real', 'native inject must keep webgl metaMode for UNMASKED_* spoof');
+  assert.ok(stripped.webgl.vendor || stripped.webgl.renderer, 'native inject must keep webgl vendor/renderer strings');
   assert.strictEqual(fp.canvas.mode, 'noise');
 
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'ob-kernel-init-'));

@@ -133,10 +133,75 @@ html[data-theme-mode="dark"] .rpa-store-card:hover{
 .rpa-editor-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 .rpa-pill{font-size:12px;background:var(--theme-soft);color:var(--theme-accent-strong);border-radius:999px;padding:3px 10px;font-weight:600}
 .rpa-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+/* Run log: high-contrast console. Theme packs may retint, but keep text large enough. */
 .rpa-log{
-  background:var(--theme-surface-alt);border:1px solid var(--border);border-radius:8px;
-  padding:10px;max-height:180px;overflow:auto;font-size:12px;color:var(--theme-muted)}
-.rpa-log .log-line{padding:3px 0;border-bottom:1px solid var(--border);color:var(--theme-text)}
+  --rpa-log-fg: var(--theme-text);
+  --rpa-log-muted: var(--theme-muted);
+  --rpa-log-line: color-mix(in srgb, var(--border) 75%, transparent);
+  background:var(--theme-surface-alt);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:10px 12px;
+  min-height:140px;
+  max-height:260px;
+  overflow:auto;
+  font:13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, "PingFang SC", "Microsoft YaHei", monospace;
+  color:var(--rpa-log-fg);
+  letter-spacing:0.01em;
+  -webkit-font-smoothing:antialiased;
+}
+.rpa-log .log-line{
+  display:grid;
+  grid-template-columns:72px 58px minmax(0,1fr);
+  gap:8px 10px;
+  align-items:start;
+  padding:7px 4px;
+  border-bottom:1px solid var(--rpa-log-line);
+  color:var(--rpa-log-fg);
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+.rpa-log .log-line:last-child{border-bottom:0}
+.rpa-log .log-time{
+  color:var(--rpa-log-muted);
+  font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+}
+.rpa-log .log-level{
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+  white-space:nowrap;
+  opacity:0.95;
+}
+.rpa-log .log-msg{min-width:0; color:var(--rpa-log-fg); font-weight:500}
+.rpa-log .log-line.level-info .log-level{color:#3b82f6}
+.rpa-log .log-line.level-error .log-level,
+.rpa-log .log-line.level-fail .log-level,
+.rpa-log .log-line.level-error .log-msg,
+.rpa-log .log-line.level-fail .log-msg{color:#dc2626;font-weight:700}
+.rpa-log .log-line.level-warn .log-level,
+.rpa-log .log-line.level-warning .log-level,
+.rpa-log .log-line.level-warn .log-msg,
+.rpa-log .log-line.level-warning .log-msg{color:#d97706;font-weight:700}
+.rpa-log .log-line.level-ok .log-level,
+.rpa-log .log-line.level-success .log-level,
+.rpa-log .log-line.level-ok .log-msg,
+.rpa-log .log-line.level-success .log-msg{color:#059669;font-weight:700}
+.rpa-log .rpa-muted,
+.rpa-log .log-empty{
+  display:grid;
+  min-height:110px;
+  place-items:center;
+  color:var(--rpa-log-muted);
+  font-size:13px;
+  font-weight:500;
+}
+@media (max-width: 900px){
+  .rpa-log .log-line{grid-template-columns:1fr; gap:2px 0}
+  .rpa-log .log-time,.rpa-log .log-level{font-size:11px}
+}
 .rpa-card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
 .rpa-store-card{
   background:var(--theme-surface);border:1px solid var(--border);border-radius:12px;

@@ -5,6 +5,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const {
   resolveHostDist,
   findHostAppBundle,
@@ -15,6 +16,25 @@ const { ensureHostRuntime } = require('./ensure-host-runtime.js');
 
 const appRoot = path.resolve(__dirname, '..');
 
+// Never start as root: Electron appData would become /var/root/... and split
+// profile/fingerprint config from the normal user UI (~/Library/...).
+function assertNonRootDevUser() {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const euid = typeof process.geteuid === 'function' ? process.geteuid() : null;
+  const isRoot = uid === 0 || euid === 0 || process.env.USER === 'root' || process.env.LOGNAME === 'root';
+  if (!isRoot) return;
+  const hintUser = process.env.SUDO_USER || process.env.USER || 'your-user';
+  console.error([
+    '[run] refuse to start OpenBrowser as root/sudo.',
+    '      Root writes userData to /var/root/Library/Application Support/openbrowser',
+    '      while the UI you edit lives under ~/Library/Application Support/openbrowser.',
+    `      Start as a normal user, e.g.: sudo -u ${hintUser} -H npm start`,
+    `      home now would be: ${os.homedir()}`,
+  ].join('\n'));
+  process.exit(2);
+}
+
+assertNonRootDevUser();
 ensureHostRuntime(appRoot);
 
 if (process.platform === 'darwin') {

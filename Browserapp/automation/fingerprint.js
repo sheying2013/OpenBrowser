@@ -847,6 +847,7 @@ function buildInjectionScript(fp) {
 
   return `${uaScript}
 (() => {
+  try {
   const CFG = ${json};
   const seedNum = parseInt(String(CFG.seed || '1').slice(0, 8), 16) || 1;
   const noise = (n) => {
@@ -856,10 +857,10 @@ function buildInjectionScript(fp) {
   const normalizeHost = (value) => String(value || '')
     .trim()
     .toLowerCase()
-    .replace(/^https?:\/\//, '')
-    .replace(/\/.*$/, '')
-    .replace(/:\d+$/, '')
-    .replace(/^\*\./, '');
+    .replace(/^https?:\\/\\//, '')
+    .replace(/\\/.*$/, '')
+    .replace(/:\\d+$/, '')
+    .replace(/^\\*\\./, '');
   const hostMatches = (host, pattern) => {
     const h = normalizeHost(host);
     const p = normalizeHost(pattern);
@@ -991,6 +992,8 @@ function buildInjectionScript(fp) {
   } catch (_) {}
 
   // --- navigator (non-UA fields; UA handled by uaScript) ---
+  // Chromium often installs non-writable prototype getters; force delete + redefine
+  // on both Navigator.prototype and the live navigator instance.
   const navPatch = {
     platform: { get: () => CFG.platform },
     maxTouchPoints: { get: () => CFG.maxTouchPoints },
@@ -1002,11 +1005,84 @@ function buildInjectionScript(fp) {
   if (CFG.hardwareConcurrency != null) navPatch.hardwareConcurrency = { get: () => CFG.hardwareConcurrency };
   if (CFG.deviceMemory != null) navPatch.deviceMemory = { get: () => CFG.deviceMemory };
   if (CFG.doNotTrack != null) navPatch.doNotTrack = { get: () => CFG.doNotTrack };
+  const forceNavProp = (target, key, desc) => {
+    try {
+      if (!target) return false;
+      const full = { configurable: true, enumerable: true, ...desc };
+      try {
+        const existing = Object.getOwnPropertyDescriptor(target, key);
+        if (existing && existing.configurable === false) {
+          // Cannot delete/redefine non-configurable; try instance only later.
+          return false;
+        }
+        if (existing) {
+          try { delete target[key]; } catch (_) {}
+        }
+      } catch (_) {}
+      Object.defineProperty(target, key, full);
+      return true;
+    } catch (_) {
+      try {
+        Object.defineProperty(target, key, { configurable: true, enumerable: true, ...desc });
+        return true;
+      } catch (__) { return false; }
+    }
+  };
   try {
     for (const [key, desc] of Object.entries(navPatch)) {
-      try { Object.defineProperty(Navigator.prototype, key, { configurable: true, enumerable: true, ...desc }); } catch (_) {
-        try { Object.defineProperty(navigator, key, { configurable: true, ...desc }); } catch (__) {}
-      }
+      try {
+        forceNavProp(typeof Navigator !== 'undefined' ? Navigator.prototype : null, key, desc);
+        forceNavProp(navigator, key, desc);
+      } catch (_) {}
+    }
+  } catch (_) {}
+
+  // Hard override via window.navigator getter + Proxy.
+  // Bind methods with Reflect.apply so pages never hit Illegal invocation
+  // when they do navigator.x.bind / call through a proxied navigator.
+  try {
+    const navTarget = navigator;
+    const handler = {
+      get(t, prop, receiver) {
+        try {
+          if (Object.prototype.hasOwnProperty.call(navPatch, prop) && navPatch[prop] && typeof navPatch[prop].get === 'function') {
+            return navPatch[prop].get();
+          }
+        } catch (_) {}
+        let v;
+        try {
+          v = Reflect.get(t, prop, t);
+        } catch (_) {
+          try { v = t[prop]; } catch (__) { return undefined; }
+        }
+        if (typeof v === 'function') {
+          return function (...args) {
+            try { return Reflect.apply(v, t, args); }
+            catch (_) {
+              try { return Function.prototype.apply.call(v, t, args); } catch (__) { return undefined; }
+            }
+          };
+        }
+        return v;
+      },
+      getOwnPropertyDescriptor(t, prop) {
+        if (Object.prototype.hasOwnProperty.call(navPatch, prop)) {
+          return { configurable: true, enumerable: true, get: () => navPatch[prop].get() };
+        }
+        try { return Reflect.getOwnPropertyDescriptor(t, prop); } catch (_) { return undefined; }
+      },
+      has(t, prop) {
+        return Object.prototype.hasOwnProperty.call(navPatch, prop) || Reflect.has(t, prop);
+      },
+      ownKeys(t) {
+        try { return Reflect.ownKeys(t); } catch (_) { return []; }
+      },
+    };
+    const proxied = new Proxy(navTarget, handler);
+    try {
+      Object.defineProperty(window, 'navigator', { configurable: true, enumerable: true, get: () => proxied });
+    } catch (_) {
+      try { window.navigator = proxied; } catch (__) {}
     }
   } catch (_) {}
 
@@ -1121,12 +1197,15 @@ function buildInjectionScript(fp) {
       blockContext(globalThis.HTMLCanvasElement?.prototype);
       blockContext(globalThis.OffscreenCanvas?.prototype);
     } catch (_) {}
-  } else if (CFG.webgl && CFG.webgl.mode === 'noise') {
+  } else if (CFG.webgl && (CFG.webgl.mode === 'noise' || (CFG.webgl.metaMode && CFG.webgl.metaMode !== 'real'))) {
+    // mode=noise: pixel + meta; mode=real + metaMode=noise/custom/blocked: meta only
+    // (native-kernel inject strips pixel noise but keeps meta spoof — see fingerprintForNativeKernelInject)
     try {
       const mark = Number(CFG.webgl.mark) || 1;
+      const metaMode = String(CFG.webgl.metaMode || 'noise');
+      const pixelNoise = CFG.webgl.mode === 'noise';
       const patchGetParameter = (proto) => {
         if (!proto || !proto.getParameter) return;
-        const metaMode = String(CFG.webgl.metaMode || 'noise');
         if (metaMode === 'real') return;
         replaceMethod(proto, 'getParameter', (original) => function(param) {
           const UNMASKED_VENDOR_WEBGL = 0x9245;
@@ -1138,7 +1217,7 @@ function buildInjectionScript(fp) {
       };
       // Subtle deterministic readPixels noise so WebGL hashers diverge per env
       const patchReadPixels = (proto) => {
-        if (!proto || !proto.readPixels) return;
+        if (!pixelNoise || !proto || !proto.readPixels) return;
         replaceMethod(proto, 'readPixels', (original) => function(...args) {
           const result = original.apply(this, args);
           try {
@@ -1163,6 +1242,34 @@ function buildInjectionScript(fp) {
         patchGetParameter(WebGL2RenderingContext.prototype);
         patchReadPixels(WebGL2RenderingContext.prototype);
       }
+      // Wrap getContext so every GL instance inherits patched getParameter even if
+      // prototypes were frozen after first context creation.
+      try {
+        const wrapCtx = (proto) => {
+          if (!proto || !proto.getContext) return;
+          const original = proto.getContext;
+          Object.defineProperty(proto, 'getContext', {
+            configurable: true,
+            writable: true,
+            value: function(...args) {
+              const ctx = original.apply(this, args);
+              try {
+                if (ctx && typeof ctx.getParameter === 'function' && metaMode !== 'real') {
+                  const origGP = ctx.getParameter.bind(ctx);
+                  ctx.getParameter = function(param) {
+                    if (param === 0x9245) return metaMode === 'blocked' ? '' : CFG.webgl.vendor;
+                    if (param === 0x9246) return metaMode === 'blocked' ? '' : CFG.webgl.renderer;
+                    return origGP(param);
+                  };
+                }
+              } catch (_) {}
+              return ctx;
+            },
+          });
+        };
+        wrapCtx(globalThis.HTMLCanvasElement && HTMLCanvasElement.prototype);
+        wrapCtx(globalThis.OffscreenCanvas && OffscreenCanvas.prototype);
+      } catch (_) {}
     } catch (_) {}
   }
 
@@ -1249,8 +1356,8 @@ function buildInjectionScript(fp) {
               if (!desc || typeof desc.sdp !== 'string' || !targetIp) return desc;
               try {
                 return Object.assign({}, desc, {
-                  sdp: desc.sdp.replace(/(\n)a=candidate:.* typ host .*/g, (line) => {
-                    return line.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/, targetIp);
+                  sdp: desc.sdp.replace(/(\\n)a=candidate:.* typ host .*/g, (line) => {
+                    return line.replace(/\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b/, targetIp);
                   }),
                 });
               } catch (_) { return desc; }
@@ -1403,6 +1510,7 @@ function buildInjectionScript(fp) {
       }
     } catch (_) {}
   }
+} catch (e) { try { console.warn('[OpenBrowser] fingerprint inject', e && e.message || e); } catch (_) {} }
 })();`;
 }
 
@@ -1627,8 +1735,9 @@ function buildWorkerInjectionScript(fp) {
       if (value.includes('webgl') || value === 'experimental-webgl') return null;
       return original.call(this, type, ...rest);
     });
-  } else if (CFG.webgl?.mode === 'noise') {
+  } else if (CFG.webgl && (CFG.webgl.mode === 'noise' || (CFG.webgl.metaMode && CFG.webgl.metaMode !== 'real'))) {
     const mark = Number(CFG.webgl?.mark) || 1;
+    const pixelNoise = CFG.webgl.mode === 'noise';
     const patch = (proto) => {
       const metaMode = String(CFG.webgl?.metaMode || 'noise');
       if (metaMode !== 'real') {
@@ -1638,6 +1747,7 @@ function buildWorkerInjectionScript(fp) {
           return original.apply(this, arguments);
         });
       }
+      if (!pixelNoise) return;
       replace(proto, 'readPixels', (original) => function(...args) {
         const result = original.apply(this, args);
         try {
@@ -1747,6 +1857,22 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     return cdpCall(webSocketDebuggerUrl, method, params);
   };
 
+  // Page domain must be enabled or addScriptToEvaluateOnNewDocument is a no-op on some hosts.
+  await invoke('Page.enable', {}).catch(() => {});
+  await invoke('Runtime.enable', {}).catch(() => {});
+
+  // Soft overrides: CDP rejects a second setLocale/setTimezone with
+  // "Another locale override is already in effect" — must not abort the whole inject.
+  const softOverride = async (method, params) => {
+    try {
+      await invoke(method, params);
+    } catch (error) {
+      const msg = String(error && error.message || error || '');
+      if (/already in effect|cannot be overridden|not available/i.test(msg)) return;
+      throw error;
+    }
+  };
+
   // Network/Emulation.setUserAgentOverride + UserAgentMetadata (Client Hints)
   if (fp.userAgent || fp.uaProfile) {
     const uaProfile = fp.uaProfile || buildUaProfile({
@@ -1756,10 +1882,10 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     const acceptLanguage = (fp.languages || []).join(',');
     const override = cdpUserAgentOverride(uaProfile, acceptLanguage);
     // Emulation affects navigator + most page JS
-    await invoke('Emulation.setUserAgentOverride', override);
+    await softOverride('Emulation.setUserAgentOverride', override);
     // Network affects HTTP headers (User-Agent + sec-ch-ua*)
-    await invoke('Network.enable', {});
-    await invoke('Network.setUserAgentOverride', {
+    await softOverride('Network.enable', {});
+    await softOverride('Network.setUserAgentOverride', {
       userAgent: override.userAgent,
       acceptLanguage: override.acceptLanguage,
       platform: override.platform,
@@ -1767,7 +1893,7 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     });
   }
   if (fp.screen) {
-    await invoke('Emulation.setDeviceMetricsOverride', {
+    await softOverride('Emulation.setDeviceMetricsOverride', {
       width: fp.screen.width,
       height: fp.screen.height,
       deviceScaleFactor: fp.screen.devicePixelRatio || 1,
@@ -1775,23 +1901,73 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     });
   }
   if (timezone) {
-    await invoke('Emulation.setTimezoneOverride', { timezoneId: timezone });
+    await softOverride('Emulation.setTimezoneOverride', { timezoneId: timezone });
   }
   if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-    await invoke('Emulation.setGeolocationOverride', {
+    await softOverride('Emulation.setGeolocationOverride', {
       latitude,
       longitude,
       accuracy: privacy.accuracy || 100,
     });
   }
   if (fp.languages?.[0]) {
-    await invoke('Emulation.setLocaleOverride', { locale: fp.languages[0] });
+    await softOverride('Emulation.setLocaleOverride', { locale: fp.languages[0] });
   }
 
   const source = buildInjectionScript(fp);
-  await invoke('Page.addScriptToEvaluateOnNewDocument', { source });
-  // Best-effort for already-started documents; new navigations use addScript above.
-  await invoke('Runtime.evaluate', { expression: source }).catch(() => {});
+  // Register for future documents first (start page navigation depends on this).
+  // Must not silently drop registration failures — otherwise navigation paints host FP.
+  let documentStartOk = false;
+  try {
+    await invoke('Page.addScriptToEvaluateOnNewDocument', { source });
+    documentStartOk = true;
+  } catch (error) {
+    const msg = String(error && error.message || error || '');
+    if (!/already|duplicate|exists/i.test(msg)) {
+      // Retry once after re-enabling Page domain.
+      await invoke('Page.enable', {}).catch(() => {});
+      try {
+        await invoke('Page.addScriptToEvaluateOnNewDocument', { source });
+        documentStartOk = true;
+      } catch (retryError) {
+        const retryMsg = String(retryError && retryError.message || retryError || '');
+        if (!/already|duplicate|exists/i.test(retryMsg)) {
+          // Soft: still try Runtime.evaluate on current document.
+          documentStartOk = false;
+        } else {
+          documentStartOk = true;
+        }
+      }
+    } else {
+      documentStartOk = true;
+    }
+  }
+  // Already-open documents: best-effort patch. Never abort startup if evaluate throws
+  // (Chromium often reports "Uncaught" for redefine races; document-start still applies on next nav).
+  try {
+    const evaluated = await invoke('Runtime.evaluate', {
+      expression: source,
+      returnByValue: false,
+      awaitPromise: false,
+    });
+    if (evaluated && evaluated.exceptionDetails) {
+      // leave a soft signal for callers that inspect return value; do not throw
+      const text = evaluated.exceptionDetails.text
+        || evaluated.exceptionDetails.exception?.description
+        || 'Uncaught';
+      const err = new Error(text);
+      err.softInject = true;
+      err.exceptionDetails = evaluated.exceptionDetails;
+      err.documentStartOk = documentStartOk;
+      // Soft path: swallow so keepDefaultTab can still open the welcome page.
+    }
+  } catch (error) {
+    const msg = String(error && error.message || error || '');
+    if (!/Uncaught|already in effect|cannot be overridden/i.test(msg)) {
+      // unexpected CDP transport errors still surface
+      throw error;
+    }
+  }
 }
 
 module.exports = {
