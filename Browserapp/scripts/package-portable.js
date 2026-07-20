@@ -395,7 +395,11 @@ function packageMac() {
 
   const dmg = path.join(distRoot, `${packageArtifactStem()}.dmg`);
   removeIfExists(dmg);
-  run('hdiutil', ['create', '-volname', 'OpenBrowser', '-srcfolder', packageRoot, '-ov', '-format', 'UDZO', dmg]);
+  const dmgFormat = String(process.env.OPENBROWSER_MAC_DMG_FORMAT || 'UDZO').trim().toUpperCase();
+  if (!['UDZO', 'ULMO'].includes(dmgFormat)) {
+    throw new Error(`Unsupported macOS DMG format: ${dmgFormat}`);
+  }
+  run('hdiutil', ['create', '-volname', 'OpenBrowser', '-srcfolder', packageRoot, '-ov', '-format', dmgFormat, dmg]);
   console.log('macOS 安装映像：' + dmg);
   console.log('macOS 打包目录：' + packageRoot);
   console.log('主机：' + os.platform() + ' ' + os.arch());
