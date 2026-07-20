@@ -11,6 +11,7 @@ const path = require('path');
 const os = require('os');
 const http = require('http');
 const assert = require('assert');
+const fs = require('fs');
 const { LocalApiServer } = require('./local-api-server');
 const { RpaStore } = require('./rpa-store');
 const { RpaEngine } = require('./rpa-engine');
@@ -219,6 +220,23 @@ async function main() {
   assert.strictEqual(rpa.engine.running.get('p3')?.port, 9203, 'rpa auto-start exposes CDP port');
   assert.strictEqual(rpaAutoStartCount, 1, 'rpa auto-start starts profile once');
   ok('rpa-engine auto-starts stopped profile');
+
+  const rpaLogPath = path.join(os.tmpdir(), `openbrowser-rpa-log-${process.pid}-${Date.now()}.log`);
+  const paidGateStorePath = path.join(os.tmpdir(), `openbrowser-paid-gate-rpa-${process.pid}-${Date.now()}.json`);
+  const paidGateStore = new RpaStore(paidGateStorePath);
+  await paidGateStore.load();
+  const paidGateEngine = createFakeEngine();
+  paidGateEngine.profiles.set('p4', { id: 'p4', name: 'Env 4', number: 4 });
+  paidGateEngine.start = async () => {
+    throw new Error('Browser exited before CDP was ready (code 1) [browserOutput=Browser automation requires a paid Donut Browser plan.]');
+  };
+  const paidGateRpa = new RpaEngine({ engine: paidGateEngine, store: paidGateStore, emit: () => {}, rpaLogPath });
+  const paidGateTask = await paidGateStore.createTask({ profile_id: 'p4', process_name: 'paid-gate', steps: [{ type: 'noop' }] });
+  const paidGateRun = await paidGateRpa.runTask(paidGateTask.id);
+  assert.strictEqual(paidGateRun.success, false, 'paid gate task fails');
+  assert.ok(/当前浏览器内核拒绝 CDP\/RPA 自动化/.test(paidGateRun.error), 'paid gate error is actionable');
+  assert.ok(fs.readFileSync(rpaLogPath, 'utf8').includes('rpa-task-failed'), 'paid gate failure is logged');
+  ok('rpa-engine paid automation gate diagnostics');
 
   const parallelPlan = await store.upsertPlan({
     plan_name: 'parallel-selftest',

@@ -21,6 +21,24 @@ npm run selftest:automation
 node automation/automation-selftest.js
 ```
 
+## 日志
+
+RPA 任务启动、成功、失败会写入本机诊断日志，默认位置：
+
+- Windows: `%APPDATA%\\openbrowser\\logs\\rpa-automation.log`
+- macOS: `~/Library/Application Support/openbrowser/logs/rpa-automation.log`
+- Linux: `~/.config/openbrowser/logs/rpa-automation.log`
+
+查看最近记录：
+
+```bash
+npm run log:rpa
+# 或
+node scripts/read-rpa-log.js --tail 120
+```
+
+如果内核拒绝 CDP/RPA 自动化，任务结果和日志会明确写出原因，避免只看到 `Browser exited before CDP was ready`。
+
 ## 启动
 
 随 OpenBrowser 主进程自动启动 Local API。

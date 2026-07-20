@@ -16,6 +16,7 @@
     "selftest:cloud": "node automation/cloud-sync-security-selftest.js",
     "log:startup": "node scripts/read-startup-log.js",
     "log:fingerprint": "node scripts/read-fp-log.js",
+    "log:rpa": "node scripts/read-rpa-log.js",
     "prepare:bundled-kernel": "node scripts/prepare-bundled-kernel.js",
     "build:native": "node scripts/build-native.js",
     "package:portable": "node scripts/package-portable.js",
