@@ -12,6 +12,18 @@ on:
         required: false
         type: boolean
         default: false
+      target_platform:
+        description: 'Package target; choose one target to avoid running unrelated jobs'
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - macos-arm64-with-kernel
+          - macos-arm64-without-kernel
+          - macos-x86_64
+          - windows-x86_64-with-kernel
+          - windows-x86_64-without-kernel
 
 concurrency:
   group: openbrowser-installers-${{ inputs.release_tag }}
@@ -70,6 +82,7 @@ jobs:
 
   macos-arm64-with-kernel:
     name: macOS arm64 with bundled kernel
+    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'macos-arm64-with-kernel' }}
     needs: prepare-release
     runs-on: macos-14
     defaults:
@@ -79,6 +92,7 @@ jobs:
       OPENBROWSER_PACKAGE_ARCH: arm64
       OPENBROWSER_PACKAGE_VARIANT: with-kernel
       OPENBROWSER_BUNDLE_KERNEL: 'true'
+      OPENBROWSER_MAC_DMG_FORMAT: ULMO
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -122,6 +136,7 @@ jobs:
 
   macos-arm64-without-kernel:
     name: macOS arm64 without bundled kernel
+    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'macos-arm64-without-kernel' }}
     needs: prepare-release
     runs-on: macos-14
     defaults:
@@ -170,6 +185,7 @@ jobs:
 
   macos-x86_64:
     name: macOS x86_64
+    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'macos-x86_64' }}
     needs: prepare-release
     runs-on: macos-15-intel
     defaults:
@@ -218,6 +234,7 @@ jobs:
 
   windows-x86_64-with-kernel:
     name: Windows x86_64 with bundled kernel
+    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'windows-x86_64-with-kernel' }}
     needs: prepare-release
     runs-on: windows-2022
     defaults:
@@ -278,6 +295,7 @@ jobs:
 
   windows-x86_64-without-kernel:
     name: Windows x86_64 without bundled kernel
+    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'windows-x86_64-without-kernel' }}
     needs: prepare-release
     runs-on: windows-2022
     defaults:
