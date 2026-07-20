@@ -26,8 +26,8 @@ function isOptionalElementStep(params = {}) {
     return true;
   }
   const selector = String(params.selector || params.content || '');
-  // Common interstitial / redirect / consent dismiss controls — skip quietly if absent.
-  if (/redir-overlay|redir-dismiss|cookie[-_ ]?(banner|accept|consent)|consent[-_ ]?dismiss|#sp-cc-accept|gdpr|onetrust/i.test(selector)) {
+  // Common interstitial / geo / consent chrome — skip quietly if absent on the current locale page.
+  if (/redir-overlay|redir-dismiss|cookie[-_ ]?(banner|accept|consent)|consent[-_ ]?dismiss|#sp-cc-accept|gdpr|onetrust|nav-global-location|GLUXZip|GLUXZipUpdateInput|GLUXZipInputSection|GLUXConfirmClose|glow-ingress|a-popover-close|icp-nav-flyout|nav-link-accountList/i.test(selector)) {
     return true;
   }
   return false;
@@ -405,27 +405,36 @@ class RpaEngine {
     if (type === 'typetext' || type === 'type' || type === 'input' || type === 'inserttext' || type === 'inputcontent') {
       const inputText = text(params.text ?? params.value ?? params.content ?? (params.isRandom ? params.randomContent : ''));
       const clear = params.clear || params.isClear;
+      const optional = isOptionalElementStep(params);
       if (clear && !params.selector) await cdp.clearFocused(port).catch(() => {});
       if (params.selector) {
-        await this.withPage(port, async (ws) => {
-          await this.focusSelector(ws, params.selector, params.selectorRadio);
-          if (clear) {
-            await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 65, modifiers: 2 });
-            await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 65, modifiers: 2 });
-            await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 8 });
-            await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 8 });
-          }
-          // intervals / human typing
-          const human = params.human || params.intervals;
-          if (human) {
-            for (const ch of inputText) {
-              await cdp.call(ws, 'Input.insertText', { text: ch });
-              await sleep(randomBetween(params.minDelay || 30, params.maxDelay || 120));
+        try {
+          await this.withPage(port, async (ws) => {
+            await this.focusSelector(ws, params.selector, params.selectorRadio);
+            if (clear) {
+              await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 65, modifiers: 2 });
+              await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 65, modifiers: 2 });
+              await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 8 });
+              await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 8 });
             }
-          } else {
-            await cdp.call(ws, 'Input.insertText', { text: inputText });
+            // intervals / human typing
+            const human = params.human || params.intervals;
+            if (human) {
+              for (const ch of inputText) {
+                await cdp.call(ws, 'Input.insertText', { text: ch });
+                await sleep(randomBetween(params.minDelay || 30, params.maxDelay || 120));
+              }
+            } else {
+              await cdp.call(ws, 'Input.insertText', { text: inputText });
+            }
+          });
+        } catch (error) {
+          if (optional) {
+            if (ctx?.log) await ctx.log('optional input skipped (not found): ' + params.selector);
+            return;
           }
-        });
+          throw error;
+        }
       } else {
         await cdp.insertText(port, inputText);
       }
