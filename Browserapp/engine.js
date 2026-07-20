@@ -36,6 +36,44 @@ function managedBrowserKillOptions(itemOrBrowser, root, launchBinary = null) {
   };
 }
 
+const STARTUP_DIAGNOSTIC_LIMIT = 16 * 1024;
+
+function appendDiagnosticOutput(current, chunk) {
+  const value = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
+  return (String(current || '') + value).slice(-STARTUP_DIAGNOSTIC_LIMIT);
+}
+
+function formatBrowserStartupError(error, child, diagnostic = {}) {
+  const base = String(error?.message || error || 'Browser startup failed').trim();
+  if (base.includes('[executable=')) return base;
+  const details = [];
+  if (diagnostic.launchBinary) details.push(`executable=${diagnostic.launchBinary}`);
+  if (diagnostic.profileRoot) details.push(`profile=${diagnostic.profileRoot}`);
+  if (child?.pid) details.push(`pid=${child.pid}`);
+  if (child?.exitCode !== null && child?.exitCode !== undefined) details.push(`exitCode=${child.exitCode}`);
+  if (child?.signalCode) details.push(`signal=${child.signalCode}`);
+  const output = [diagnostic.stderr, diagnostic.stdout]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  if (output.length) details.push(`browserOutput=${output.join(' | ')}`);
+  return details.length ? `${base} [${details.join('; ')}]` : base;
+}
+
+async function writeBrowserStartupDiagnostic(userDataPath, record) {
+  try {
+    const logDir = path.join(userDataPath, 'logs');
+    await fsp.mkdir(logDir, { recursive: true });
+    const file = path.join(logDir, 'browser-startup.log');
+    const line = JSON.stringify({ at: new Date().toISOString(), ...record }) + '\n';
+    await fsp.appendFile(file, line, 'utf8');
+    const stat = await fsp.stat(file);
+    if (stat.size > 512 * 1024) {
+      const content = await fsp.readFile(file, 'utf8');
+      await fsp.writeFile(file, content.slice(-256 * 1024), 'utf8');
+    }
+  } catch (_) {}
+}
+
 /** Best-effort: stop detached ipc-stub.py for this env's kernel window name. */
 function stopIpcStubForWindow(windowName) {
   const win = String(windowName || '').trim();
@@ -1311,8 +1349,15 @@ class BrowserEngine {
     const started = Date.now();
     // Do not delete DevToolsActivePort here — cleared before spawn; post-spawn delete races Chromium.
     while (Date.now() - started < timeout) {
+      if (child?._startupDiagnostic?.spawnError) {
+        throw new Error(`Browser process could not start: ${child._startupDiagnostic.spawnError}`);
+      }
       if (child && child.exitCode !== null && child.exitCode !== undefined) {
-        throw new Error(`Browser exited before CDP was ready (code ${child.exitCode}${child.signalCode ? ', signal ' + child.signalCode : ''})`);
+        throw new Error(formatBrowserStartupError(
+          `Browser exited before CDP was ready (code ${child.exitCode}${child.signalCode ? ', signal ' + child.signalCode : ''})`,
+          child,
+          child._startupDiagnostic,
+        ));
       }
       try {
         const content = await fsp.readFile(file, 'utf8');
@@ -1333,7 +1378,11 @@ class BrowserEngine {
       if (child && child.exitCode !== null) hint = ` childExit=${child.exitCode}`;
       else if (child && child.pid) hint = ` childPid=${child.pid} still running`;
     } catch (_) {}
-    throw new Error('Browser started but CDP port was not ready' + hint);
+    throw new Error(formatBrowserStartupError(
+      'Browser started but CDP port was not ready' + hint,
+      child,
+      child?._startupDiagnostic,
+    ));
   }
 
   async start(raw) {
@@ -1532,18 +1581,40 @@ class BrowserEngine {
       child = spawn(launchBinary, finalArgs, {
         detached: process.platform !== 'win32',
         windowsHide: process.platform === 'win32',
-        stdio: 'ignore',
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
+      const startupDiagnostic = { launchBinary, profileRoot: root, stdout: '', stderr: '' };
+      child._startupDiagnostic = startupDiagnostic;
+      child.stdout?.setEncoding('utf8');
+      child.stderr?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk) => { startupDiagnostic.stdout = appendDiagnosticOutput(startupDiagnostic.stdout, chunk); });
+      child.stderr?.on('data', (chunk) => { startupDiagnostic.stderr = appendDiagnosticOutput(startupDiagnostic.stderr, chunk); });
+      child.once('error', (error) => { startupDiagnostic.spawnError = error.message; });
       port = await this.waitForPort(root, 30000, child);
       connection = await portConnection(port);
     } catch (error) {
+      const diagnostic = child?._startupDiagnostic || { launchBinary, profileRoot: root };
+      await writeBrowserStartupDiagnostic(this.app.getPath('userData'), {
+        type: 'browser-startup-failure',
+        profileId: profile.id,
+        browser: browser.name,
+        source: browser.source || null,
+        error: formatBrowserStartupError(error, child, diagnostic),
+        executable: launchBinary,
+        profileRoot: root,
+        exitCode: child?.exitCode ?? null,
+        signal: child?.signalCode || null,
+        stdout: diagnostic.stdout || '',
+        stderr: diagnostic.stderr || '',
+        spawnError: diagnostic.spawnError || null,
+      });
       if (child && child.exitCode === null) {
         await killProcessTree(child.pid, managedBrowserKillOptions(browser, root, launchBinary)).catch(() => {});
       }
       stopIpcStubForWindow(kernelWindowName);
       await proxyForwarder?.close().catch(() => {});
       await releaseProfileLock(root, profileLock);
-      throw error;
+      throw new Error(formatBrowserStartupError(error, child, diagnostic));
     }
     if (profile.cookies && profile.advanced.saveCookies) { try { await this.importProfileCookies(connection, profile.cookies); } catch (error) { this.emit({ type: 'sync-error', action: 'import-cookies', id: profile.id, message: 'Cookie 导入失败：' + error.message }); } }
     let reconciled;
@@ -2088,4 +2159,4 @@ class BrowserEngine {
   async sessions() { const result = []; for (const { id, item } of this.runningWithCdp([...this.running.keys()])) { try { result.push({ id, profile: this.profiles.get(id), port: item.port, browser: item.browser.name, tabs: await cdp.tabs(item.port) }); } catch (error) { result.push({ id, profile: this.profiles.get(id), port: item.port, browser: item.browser.name, tabs: [], error: error.message }); } } return result; }
 }
 
-module.exports = { BrowserEngine };
+module.exports = { BrowserEngine, appendDiagnosticOutput, formatBrowserStartupError };

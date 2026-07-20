@@ -413,6 +413,13 @@ async function waitForDevToolsPort(root, timeout = 12000) {
   throw new Error('浏览器未在限定时间内提供 CDP 调试端口');
 }
 
+function startupOutput(child) {
+  return [child?._startupStdout, child?._startupStderr]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(' | ');
+}
+
 async function stopProbeProcess(child) {
   if (!child || child.exitCode !== null) return;
   child.kill('SIGTERM');
@@ -1075,7 +1082,13 @@ class BrowserKernelManager {
         '--no-default-browser-check',
         '--disable-background-mode',
         'about:blank',
-      ], { detached: process.platform !== 'win32', windowsHide: process.platform === 'win32', stdio: 'ignore' });
+      ], { detached: process.platform !== 'win32', windowsHide: process.platform === 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+      child.stdout?.setEncoding('utf8');
+      child.stderr?.setEncoding('utf8');
+      child._startupStdout = '';
+      child._startupStderr = '';
+      child.stdout?.on('data', (chunk) => { child._startupStdout = String(child._startupStdout + chunk).slice(-16 * 1024); });
+      child.stderr?.on('data', (chunk) => { child._startupStderr = String(child._startupStderr + chunk).slice(-16 * 1024); });
       const port = await waitForDevToolsPort(probeRoot);
       const details = await requestJson(`http://127.0.0.1:${port}/json/version`);
       if (!/\b(chrome|chromium|wayfern)\b/i.test(String(details.Browser || ''))) {
@@ -1084,7 +1097,11 @@ class BrowserKernelManager {
       const version = String(details.Browser || versionOutput).match(/(\d+(?:\.\d+){1,3})/)?.[1] || 'custom';
       return { path: resolved, version, browser: String(details.Browser), protocolVersion: String(details['Protocol-Version'] || '') };
     } catch (error) {
-      throw new Error('内核兼容性验证失败：' + (error.message || error));
+      const output = startupOutput(child);
+      const status = child && child.exitCode !== null && child.exitCode !== undefined
+        ? ` exitCode=${child.exitCode}${child.signalCode ? ` signal=${child.signalCode}` : ''}`
+        : '';
+      throw new Error('内核兼容性验证失败：' + (error.message || error) + status + (output ? ` browserOutput=${output}` : ''));
     } finally {
       await stopProbeProcess(child).catch(() => {});
       await fsp.rm(probeRoot, { recursive: true, force: true }).catch(() => {});
