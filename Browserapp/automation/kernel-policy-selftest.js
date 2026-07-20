@@ -15,7 +15,7 @@ const {
   isMacX64Host,
   SOURCE_OPENBROWSER,
 } = require('./browser-kernel');
-const { BrowserEngine } = require('../engine');
+const { BrowserEngine, systemBrowserCandidatesForPlatform } = require('../engine');
 
 function cftBinary(root) {
   const platform = process.platform === 'darwin'
@@ -81,6 +81,21 @@ async function main() {
     assert.strictEqual(isOpenBrowser148SupportedHost('linux', 'x64'), false);
     assert.strictEqual(isMacX64Host(), process.platform === 'darwin' && process.arch === 'x64');
     console.log('  PASS  openbrowser-148 supported only on macOS x86_64');
+
+    const windowsCandidates = systemBrowserCandidatesForPlatform('win32', {
+      PROGRAMFILES: 'C:\\Program Files',
+      'PROGRAMFILES(X86)': 'C:\\Program Files (x86)',
+      PROGRAMW6432: 'C:\\Program Files',
+      LOCALAPPDATA: 'C:\\Users\\Test\\AppData\\Local',
+    });
+    assert.ok(windowsCandidates.some((item) => item.name === 'Google Chrome' && item.path === 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'));
+    assert.ok(windowsCandidates.some((item) => item.name === 'Google Chrome' && item.path === 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'));
+    assert.ok(windowsCandidates.some((item) => item.name === 'Google Chrome' && item.path === 'C:\\Users\\Test\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe'));
+    assert.ok(windowsCandidates.some((item) => item.name === 'Microsoft Edge' && item.path === 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'));
+    assert.ok(windowsCandidates.some((item) => item.name === 'Microsoft Edge' && item.path === 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'));
+    assert.ok(windowsCandidates.some((item) => item.name === 'Microsoft Edge' && item.path === 'C:\\Users\\Test\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe'));
+    assert.ok(windowsCandidates.every((item) => item.name === 'Google Chrome' || item.name === 'Microsoft Edge'));
+    console.log('  PASS  Windows system-browser choices include Chrome and Edge install locations');
 
     // Source-tree discovery: Browserapp/kernels/openbrowser (when present)
     const appRoot = path.join(__dirname, '..');
