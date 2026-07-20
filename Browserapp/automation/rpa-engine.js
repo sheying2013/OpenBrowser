@@ -662,24 +662,97 @@ class RpaEngine {
     }
 
     if (type === 'useexcel') {
-      const filePath = text(params.path);
-      if (!filePath) throw new Error('useExcel requires a CSV or JSON file path');
-      const safePath = resolveSafeRpaPath(filePath);
-      const extension = path.extname(safePath).toLowerCase();
-      if (extension !== '.csv' && extension !== '.json') {
-        throw new Error('useExcel currently accepts .csv or .json. Convert the spreadsheet and update dataExcelPath.');
+      const targetVar = params.variable || 'data';
+      const skippable = (
+        params.isSkip === true
+        || params.isSkip === 1
+        || params.isSkip === '1'
+        || params.isSkip === 'true'
+        || params.optional === true
+        || params.optional === '1'
+      );
+      let filePath = text(
+        params.path
+        ?? params.filePath
+        ?? params.file
+        ?? params.dataExcelPath
+        ?? params.excelPath
+        ?? params.content
+      ).trim();
+      // Unresolved ${var} placeholders mean the user has not configured a spreadsheet yet.
+      if (!filePath || /\$\{[^}]+\}/.test(filePath)) {
+        variables[targetVar] = [];
+        if (ctx?.log) {
+          await ctx.log(
+            skippable || !filePath
+              ? 'useExcel skipped: no spreadsheet path configured (set a CSV/JSON path in template variables)'
+              : 'useExcel skipped: path variable is still a placeholder (configure the file path first)'
+          );
+        }
+        return;
       }
-      const raw = await fs.readFile(safePath, 'utf8');
+
+      let safePath;
+      try {
+        safePath = await this.resolveSpreadsheetPath(filePath);
+      } catch (error) {
+        if (skippable) {
+          variables[targetVar] = [];
+          if (ctx?.log) await ctx.log('useExcel skipped: ' + error.message);
+          return;
+        }
+        throw error;
+      }
+
+      const extension = path.extname(safePath).toLowerCase();
+      if (extension === '.xlsx' || extension === '.xls') {
+        variables[targetVar] = [];
+        const message = 'useExcel does not read .xlsx/.xls yet; convert to .csv or .json and set the path variable';
+        if (skippable) {
+          if (ctx?.log) await ctx.log('useExcel skipped: ' + message);
+          return;
+        }
+        throw new Error(message);
+      }
+      if (extension !== '.csv' && extension !== '.json') {
+        const message = 'useExcel currently accepts .csv or .json (got ' + extension + ')';
+        if (skippable) {
+          variables[targetVar] = [];
+          if (ctx?.log) await ctx.log('useExcel skipped: ' + message);
+          return;
+        }
+        throw new Error(message);
+      }
+
+      let raw;
+      try {
+        raw = await fs.readFile(safePath, 'utf8');
+      } catch (error) {
+        if (skippable) {
+          variables[targetVar] = [];
+          if (ctx?.log) await ctx.log('useExcel skipped: cannot read file ' + safePath);
+          return;
+        }
+        throw new Error('useExcel cannot read file: ' + safePath);
+      }
+
       let records;
       if (extension === '.json') {
         records = JSON.parse(raw);
       } else {
-        const [headerLine, ...rows] = raw.split(/\r?\n/).filter(Boolean);
-        const headers = headerLine.split(',').map((item) => item.trim());
-        records = rows.map((row) => Object.fromEntries(row.split(',').map((item, index) => [headers[index], item.trim()])));
+        const lines = raw.split(/\r?\n/).filter((line) => line.length > 0);
+        if (!lines.length) {
+          variables[targetVar] = [];
+          return;
+        }
+        const headers = lines[0].split(',').map((item) => item.trim());
+        records = lines.slice(1).map((row) => Object.fromEntries(
+          row.split(',').map((item, index) => [headers[index] || ('col' + index), item.trim()])
+        ));
       }
       if (!Array.isArray(records)) throw new Error('useExcel JSON content must be an array');
-      variables[params.variable || 'data'] = records;
+      variables[targetVar] = records;
+      if (ctx?.log) await ctx.log(`useExcel loaded ${records.length} row(s) from ${safePath}`);
       return;
     }
 
@@ -947,6 +1020,13 @@ class RpaEngine {
 
   initialVariables(task) {
     const variables = {};
+    // Explicit plan/task variables win first (installed templates may store these without process_content).
+    const explicit = task?.variables || task?.global_variables || task?.globalVariable || {};
+    if (explicit && typeof explicit === 'object' && !Array.isArray(explicit)) {
+      for (const [key, value] of Object.entries(explicit)) {
+        if (key) variables[String(key)] = value ?? '';
+      }
+    }
     let process = task.process_content;
     if (typeof process === 'string') {
       try { process = JSON.parse(process); } catch (_) { process = null; }
@@ -954,9 +1034,68 @@ class RpaEngine {
     const start = process?.nodes?.find((node) => node.type === 'startNode');
     const definitions = start?.globalVariable || start?.config?.variableObjList || [];
     for (const item of definitions) {
-      if (item?.key) variables[String(item.key)] = item.value ?? '';
+      if (item?.key && !(String(item.key) in variables)) {
+        variables[String(item.key)] = item.value ?? '';
+      }
     }
     return variables;
+  }
+
+  /**
+   * Resolve spreadsheet paths for useExcel.
+   * Allows RPA output dir plus common user folders (Desktop/Documents/Downloads/home),
+   * because catalog templates expect user-picked absolute paths.
+   */
+  async resolveSpreadsheetPath(filePath) {
+    const raw = String(filePath || '').trim();
+    if (!raw) throw new Error('useExcel requires a CSV or JSON file path');
+    if (raw.includes('\0')) throw new Error('invalid file path');
+
+    const home = os.homedir();
+    const candidates = [];
+    if (path.isAbsolute(raw)) {
+      candidates.push(path.resolve(raw));
+    } else {
+      candidates.push(path.resolve(OUTPUT_DIRECTORY, raw));
+      candidates.push(path.resolve(home, raw));
+      candidates.push(path.resolve(home, 'Desktop', raw));
+      candidates.push(path.resolve(home, 'Documents', raw));
+      candidates.push(path.resolve(home, 'Downloads', raw));
+      if (process.platform === 'win32') {
+        const userProfile = process.env.USERPROFILE || home;
+        candidates.push(path.resolve(userProfile, 'Desktop', raw));
+        candidates.push(path.resolve(userProfile, 'Documents', raw));
+        candidates.push(path.resolve(userProfile, 'Downloads', raw));
+      }
+    }
+
+    const allowedRoots = [
+      OUTPUT_DIRECTORY,
+      home,
+      path.join(home, 'Desktop'),
+      path.join(home, 'Documents'),
+      path.join(home, 'Downloads'),
+    ];
+    if (process.platform === 'win32') {
+      const userProfile = process.env.USERPROFILE || home;
+      allowedRoots.push(userProfile, path.join(userProfile, 'Desktop'), path.join(userProfile, 'Documents'), path.join(userProfile, 'Downloads'));
+    }
+
+    let lastError = null;
+    for (const candidate of candidates) {
+      const okRoot = allowedRoots.some((root) => isPathInsideRoot(candidate, root));
+      if (!okRoot) {
+        lastError = new Error('useExcel path is outside allowed folders (home/Desktop/Documents/Downloads/rpa-output)');
+        continue;
+      }
+      try {
+        await fs.access(candidate);
+        return candidate;
+      } catch (error) {
+        lastError = new Error('useExcel file not found: ' + candidate);
+      }
+    }
+    throw lastError || new Error('useExcel requires a CSV or JSON file path');
   }
 
   evaluateCondition(params, variables) {

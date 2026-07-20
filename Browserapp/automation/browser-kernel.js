@@ -10,6 +10,7 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const os = require('os');
 const https = require('https');
 const http = require('http');
 const { execFile, spawn } = require('child_process');
@@ -401,6 +402,29 @@ function termsAcceptanceArgsForKernel(candidate = {}, versionOutput = '') {
   return isWayfernKernel(candidate, versionOutput) ? [WAYFERN_ACCEPT_TERMS_ARG] : [];
 }
 
+function wayfernLicenseAcceptedPath() {
+  if (process.platform === 'win32') {
+    const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(base, 'Wayfern', 'license-accepted');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'Wayfern', 'license-accepted');
+  }
+  return path.join(os.homedir(), '.config', 'Wayfern', 'license-accepted');
+}
+
+function wayfernTermsAlreadyAccepted() {
+  try {
+    return fs.existsSync(wayfernLicenseAcceptedPath());
+  } catch (_) {
+    return false;
+  }
+}
+
+function looksLikeTermsAcceptedOutput(text = '') {
+  return /Terms and Conditions accepted|License recorded|You can now run Wayfern normally/i.test(String(text || ''));
+}
+
 async function ensureKernelReadyForLaunch(candidate = {}, versionOutput = '') {
   const binary = String(candidate.path || candidate.binary || candidate || '').trim();
   if (!binary) throw new Error('内核不可用：缺少内核路径');
@@ -419,10 +443,19 @@ async function ensureKernelReadyForLaunch(candidate = {}, versionOutput = '') {
   if (!args.length) return false;
 
   const cacheKey = [path.resolve(binary), process.env.APPDATA || process.env.HOME || ''].join('\0');
-  if (acceptedWayfernTerms.has(cacheKey)) return true;
+  if (acceptedWayfernTerms.has(cacheKey) || wayfernTermsAlreadyAccepted()) {
+    acceptedWayfernTerms.add(cacheKey);
+    return true;
+  }
 
   try {
-    await execFileAsync(binary, args, { timeout: 15000, windowsHide: true, maxBuffer: 128 * 1024 });
+    // One-shot accept process: it is expected to exit after writing license-accepted.
+    // Do NOT pass this flag to the long-lived browser spawn.
+    const { stdout, stderr } = await execFileAsync(binary, args, {
+      timeout: 20000,
+      windowsHide: true,
+      maxBuffer: 256 * 1024,
+    });
     acceptedWayfernTerms.add(cacheKey);
     return true;
   } catch (error) {
@@ -430,6 +463,11 @@ async function ensureKernelReadyForLaunch(candidate = {}, versionOutput = '') {
       .map((value) => String(value || '').trim())
       .filter(Boolean)
       .join(' | ');
+    // Some builds exit non-zero after successfully recording the license.
+    if (looksLikeTermsAcceptedOutput(output) || wayfernTermsAlreadyAccepted()) {
+      acceptedWayfernTerms.add(cacheKey);
+      return true;
+    }
     throw new Error('内核条款初始化失败：' + (output || 'accept-terms command failed'));
   }
 }

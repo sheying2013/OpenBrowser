@@ -37,9 +37,9 @@ async function main() {
   try {
     const termsArgs = termsAcceptanceArgsForKernel({ path: binary });
     assert.deepStrictEqual(termsArgs, ['--accept-terms-and-conditions']);
+    // Long-lived browser spawn must NOT include accept-terms (that flag exits after recording license).
     child = spawn(binary, [
       `--user-data-dir=${root}`,
-      ...termsArgs,
       '--remote-debugging-port=0',
       '--no-first-run',
       '--no-default-browser-check',
