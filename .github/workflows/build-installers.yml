@@ -2,23 +2,23 @@ name: Build OpenBrowser installers
 
 # Product policy:
 # - macOS x86_64 / macOS arm64 / Windows x86_64 all ship WITH integrated kernels by default
-# - platforms package independently (fail-fast: false, max-parallel: 1, per-platform concurrency)
+# - three platform jobs are independent (no shared cancel group, no fail-fast chain)
 # - each finished platform uploads its own assets to the same GitHub Release immediately
 
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.1'
+        description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.1'
+        default: 'v1.0.2'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
         type: boolean
         default: false
       target_platform:
-        description: 'Build one platform (recommended). Choose all for sequential batch.'
+        description: 'Build one platform (recommended). Choose all for independent batch.'
         required: false
         type: choice
         default: windows-x86_64
@@ -39,65 +39,23 @@ env:
   RELEASE_NOTES: |
     ## OpenBrowser ${{ inputs.release_tag }}
 
-    - Installers ship with integrated independent kernels (no runtime kernel download).
-    - macOS x86_64 / macOS arm64 / Windows x86_64 are packaged independently and uploaded as they finish.
+    - 修复了一些已知问题
+    - 新增主题
+    - 优化了界面体验
+    - 各平台安装包默认内置独立内核
+
+    - Bug fixes
+    - New themes
+    - UI polish
+    - Platform packages ship with integrated kernels
 
 jobs:
-  package:
-    name: ${{ matrix.label }}
-    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == matrix.id }}
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include:
-          - id: windows-x86_64
-            label: Windows x86_64 (with kernel)
-            runs_on: windows-2022
-            arch: x86_64
-          - id: macos-x86_64
-            label: macOS x86_64 (with kernel)
-            runs_on: macos-15-intel
-            arch: x86_64
-          - id: macos-arm64
-            label: macOS arm64 (with kernel)
-            runs_on: macos-14
-            arch: arm64
-    runs-on: ${{ matrix.runs_on }}
-    concurrency:
-      group: openbrowser-installers-${{ inputs.release_tag }}-${{ matrix.id }}
-      cancel-in-progress: true
-    defaults:
-      run:
-        working-directory: Browserapp
-        shell: bash
-    env:
-      OPENBROWSER_PACKAGE_ARCH: ${{ matrix.arch }}
-      OPENBROWSER_PACKAGE_VARIANT: with-kernel
-      OPENBROWSER_BUNDLE_KERNEL: 'true'
-      OPENBROWSER_MAC_DMG_FORMAT: ULMO
+  ensure-release:
+    name: Ensure GitHub Release
+    runs-on: ubuntu-latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      - name: Prune foreign kernel seeds (save disk/time)
-        run: |
-          set -euo pipefail
-          case "${{ matrix.id }}" in
-            windows-x86_64)
-              rm -rf kernels/macos-x64 kernels/macos-arm64 kernels/openbrowser kernels/wayfern/macos-arm64 kernels/wayfern/macos-x64 || true
-              ;;
-            macos-x86_64)
-              rm -rf kernels/windows-x64 kernels/macos-arm64 kernels/wayfern || true
-              ;;
-            macos-arm64)
-              rm -rf kernels/macos-x64 kernels/windows-x64 kernels/openbrowser || true
-              ;;
-          esac
-
-      - name: Ensure GitHub Release exists
+      - name: Create or update release shell
+        shell: bash
         run: |
           set -euo pipefail
           notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
@@ -109,7 +67,7 @@ jobs:
             fi
             gh release edit "${edit_args[@]}" || true
           else
-            args=("$RELEASE_TAG" --target "$GITHUB_SHA" --title "OpenBrowser $RELEASE_TAG" --notes-file "$notes_file")
+            args=("$RELEASE_TAG" --target "${{ github.sha }}" --title "OpenBrowser $RELEASE_TAG" --notes-file "$notes_file")
             if [[ "${{ inputs.prerelease }}" == "true" ]]; then
               args+=(--prerelease)
             fi
@@ -117,101 +75,186 @@ jobs:
             gh release view "$RELEASE_TAG" >/dev/null
           fi
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+  windows-x86_64:
+    name: Windows x86_64 (with kernel)
+    needs: ensure-release
+    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'windows-x86_64' }}
+    runs-on: windows-2022
+    concurrency:
+      group: openbrowser-installers-${{ inputs.release_tag }}-windows-x86_64
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: Browserapp
+        shell: bash
+    env:
+      OPENBROWSER_PACKAGE_ARCH: x86_64
+      OPENBROWSER_PACKAGE_VARIANT: with-kernel
+      OPENBROWSER_BUNDLE_KERNEL: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Prune foreign kernels
+        run: rm -rf kernels/macos-x64 kernels/macos-arm64 kernels/openbrowser kernels/wayfern/macos-arm64 kernels/wayfern/macos-x64 || true
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: Browserapp/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci --include=dev
-
-      - name: Verify integrated kernel seed
+      - run: npm ci --include=dev
+      - name: Verify kernel seed
         run: |
           set -euo pipefail
-          case "${{ matrix.id }}" in
-            windows-x86_64)
-              test -f kernels/windows-x64/chrome.exe
-              test -f kernels/windows-x64/chrome.dll
-              npm run prepare:bundled-kernel
-              ;;
-            macos-x86_64)
-              BIN="kernels/macos-x64/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
-              test -f "$BIN"
-              test -f "${BIN}.bin"
-              chmod +x "$BIN" "${BIN}.bin" || true
-              npm run prepare:bundled-kernel
-              ;;
-            macos-arm64)
-              test -x kernels/macos-arm64/Wayfern.app/Contents/MacOS/Wayfern
-              npm run prepare:bundled-kernel
-              ;;
-          esac
-
-      - name: Install NSIS (Windows)
-        if: matrix.id == 'windows-x86_64'
+          test -f kernels/windows-x64/chrome.exe
+          test -f kernels/windows-x64/chrome.dll
+          npm run prepare:bundled-kernel
+      - name: Install NSIS
         shell: pwsh
         run: choco install nsis --no-progress --yes
-
-      - name: Run self-tests
+      - name: Self-tests
         run: |
           npm run selftest
           npm run selftest:automation
           npm run selftest:protocol
           npm run selftest:isolation
           npm run selftest:kernel
-
-      - name: Package
-        run: npm run package:portable
-
+      - run: npm run package:portable
       - name: Verify package
         run: |
           set -euo pipefail
-          case "${{ matrix.id }}" in
-            windows-x86_64)
-              STEM="OpenBrowser-Windows-x86_64-with-kernel"
-              APP="dist/${STEM}/runtime/resources/app"
-              test -f "$APP/kernels/windows-x64/chrome.exe"
-              test -f "$APP/kernels/windows-x64/chrome.dll"
-              test ! -e "$APP/kernels/macos-x64"
-              test ! -e "$APP/kernels/macos-arm64"
-              test -f "dist/${STEM}.exe"
-              test -f "dist/${STEM}.zip"
-              ;;
-            macos-x86_64)
-              APP="dist/OpenBrowser-macOS-x86_64/OpenBrowser.app/Contents/Resources/app"
-              test -f "$APP/kernels/macos-x64/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
-              test ! -e "$APP/kernels/windows-x64"
-              test ! -e "$APP/kernels/macos-arm64"
-              test -f "dist/OpenBrowser-macOS-x86_64.dmg"
-              ;;
-            macos-arm64)
-              APP="dist/OpenBrowser-macOS-arm64-with-kernel/OpenBrowser.app/Contents/Resources/app"
-              test -x "$APP/kernels/macos-arm64/Wayfern.app/Contents/MacOS/Wayfern"
-              test ! -e "$APP/kernels/macos-x64"
-              test ! -e "$APP/kernels/windows-x64"
-              test -f "dist/OpenBrowser-macOS-arm64-with-kernel.dmg"
-              ;;
-          esac
-
-      - name: Upload package to GitHub Release
+          STEM="OpenBrowser-Windows-x86_64-with-kernel"
+          APP="dist/${STEM}/runtime/resources/app"
+          test -f "$APP/kernels/windows-x64/chrome.exe"
+          test -f "$APP/kernels/windows-x64/chrome.dll"
+          test ! -e "$APP/kernels/macos-x64"
+          test ! -e "$APP/kernels/macos-arm64"
+          test -f "dist/${STEM}.exe"
+          test -f "dist/${STEM}.zip"
+      - name: Upload to release
         run: |
           set -euo pipefail
           notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
           printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
-          case "${{ matrix.id }}" in
-            windows-x86_64)
-              bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
-                dist/OpenBrowser-Windows-x86_64-with-kernel.exe \
-                dist/OpenBrowser-Windows-x86_64-with-kernel.zip
-              ;;
-            macos-x86_64)
-              bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
-                dist/OpenBrowser-macOS-x86_64.dmg
-              ;;
-            macos-arm64)
-              bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
-                dist/OpenBrowser-macOS-arm64-with-kernel.dmg
-              ;;
-          esac
+          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
+            dist/OpenBrowser-Windows-x86_64-with-kernel.exe \
+            dist/OpenBrowser-Windows-x86_64-with-kernel.zip
+
+  macos-x86_64:
+    name: macOS x86_64 (with kernel)
+    needs: ensure-release
+    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'macos-x86_64' }}
+    runs-on: macos-15-intel
+    concurrency:
+      group: openbrowser-installers-${{ inputs.release_tag }}-macos-x86_64
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: Browserapp
+        shell: bash
+    env:
+      OPENBROWSER_PACKAGE_ARCH: x86_64
+      OPENBROWSER_PACKAGE_VARIANT: with-kernel
+      OPENBROWSER_BUNDLE_KERNEL: 'true'
+      OPENBROWSER_MAC_DMG_FORMAT: ULMO
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Prune foreign kernels
+        run: rm -rf kernels/windows-x64 kernels/macos-arm64 kernels/wayfern || true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Browserapp/package-lock.json
+      - run: npm ci --include=dev
+      - name: Verify kernel seed
+        run: |
+          set -euo pipefail
+          BIN="kernels/macos-x64/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
+          test -f "$BIN"
+          test -f "${BIN}.bin"
+          chmod +x "$BIN" "${BIN}.bin" || true
+          npm run prepare:bundled-kernel
+      - name: Self-tests
+        run: |
+          npm run selftest
+          npm run selftest:automation
+          npm run selftest:protocol
+          npm run selftest:isolation
+          npm run selftest:kernel
+      - run: npm run package:portable
+      - name: Verify package
+        run: |
+          set -euo pipefail
+          APP="dist/OpenBrowser-macOS-x86_64/OpenBrowser.app/Contents/Resources/app"
+          test -f "$APP/kernels/macos-x64/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
+          test ! -e "$APP/kernels/windows-x64"
+          test ! -e "$APP/kernels/macos-arm64"
+          test -f "dist/OpenBrowser-macOS-x86_64.dmg"
+      - name: Upload to release
+        run: |
+          set -euo pipefail
+          notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
+          printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
+          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
+            dist/OpenBrowser-macOS-x86_64.dmg
+
+  macos-arm64:
+    name: macOS arm64 (with kernel)
+    needs: ensure-release
+    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'macos-arm64' }}
+    runs-on: macos-14
+    concurrency:
+      group: openbrowser-installers-${{ inputs.release_tag }}-macos-arm64
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: Browserapp
+        shell: bash
+    env:
+      OPENBROWSER_PACKAGE_ARCH: arm64
+      OPENBROWSER_PACKAGE_VARIANT: with-kernel
+      OPENBROWSER_BUNDLE_KERNEL: 'true'
+      OPENBROWSER_MAC_DMG_FORMAT: ULMO
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Prune foreign kernels
+        run: rm -rf kernels/macos-x64 kernels/windows-x64 kernels/openbrowser || true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Browserapp/package-lock.json
+      - run: npm ci --include=dev
+      - name: Verify kernel seed
+        run: |
+          set -euo pipefail
+          test -x kernels/macos-arm64/Wayfern.app/Contents/MacOS/Wayfern
+          npm run prepare:bundled-kernel
+      - name: Self-tests
+        run: |
+          npm run selftest
+          npm run selftest:automation
+          npm run selftest:protocol
+          npm run selftest:isolation
+          npm run selftest:kernel
+      - run: npm run package:portable
+      - name: Verify package
+        run: |
+          set -euo pipefail
+          APP="dist/OpenBrowser-macOS-arm64-with-kernel/OpenBrowser.app/Contents/Resources/app"
+          test -x "$APP/kernels/macos-arm64/Wayfern.app/Contents/MacOS/Wayfern"
+          test ! -e "$APP/kernels/macos-x64"
+          test ! -e "$APP/kernels/windows-x64"
+          test -f "dist/OpenBrowser-macOS-arm64-with-kernel.dmg"
+      - name: Upload to release
+        run: |
+          set -euo pipefail
+          notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
+          printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
+          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
+            dist/OpenBrowser-macOS-arm64-with-kernel.dmg
