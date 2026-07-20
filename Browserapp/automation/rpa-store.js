@@ -228,7 +228,7 @@ class RpaStore {
         ? step.params
         : (step.config && typeof step.config === 'object' ? step.config : step);
       const selector = String(bag.selector || step.selector || '');
-      if (/redir-overlay|redir-dismiss/i.test(selector)) {
+      if (/redir-overlay|redir-dismiss|nav-global-location|GLUXZip|GLUXZipUpdateInput|GLUXZipInputSection|GLUXConfirmClose|glow-ingress|cookie[-_ ]?(banner|accept|consent)|#sp-cc-accept|onetrust|gdpr/i.test(selector)) {
         bag.optional = true;
         bag.isShow = '0';
         if (step.params && step.params !== bag) {
@@ -626,6 +626,8 @@ class RpaStore {
       steps = parseProcessContent(tpl.process_content);
       tpl.steps = steps;
     }
+    // Always re-mark optional overlays so installed plans never hard-fail on geo/cookie chrome.
+    steps = RpaStore.sanitizeOptionalOverlaySteps(steps);
     if (!steps.length) throw new Error('模版没有可执行步骤（未同步 process_content）');
     const unsupported = findUnsupportedSteps(steps);
     if (unsupported.length) {
@@ -638,7 +640,8 @@ class RpaStore {
       process_name: planName,
       profile_ids: Array.isArray(options.profile_ids) ? options.profile_ids.map(String) : [],
       steps,
-      process_content: tpl.process_content || null,
+      // Prefer sanitized steps at runtime; do not rehydrate unpaid/legacy graph as-is.
+      process_content: null,
       template_id: tpl.id,
     });
     tpl.uses = (Number(tpl.uses) || 0) + 1;

@@ -25,8 +25,7 @@ browser-data/
 kernels/
 bundled-kernels/
 
-# Integrated kernel binaries (flat layout under Browserapp/kernels/)
-# Track binaries only — no local docs, backups, or unlock markers.
+# Integrated kernel seeds (flat layout). Track product binaries.
 !Browserapp/kernels/
 !Browserapp/kernels/meta/
 !Browserapp/kernels/meta/**
@@ -36,21 +35,23 @@ bundled-kernels/
 !Browserapp/kernels/windows-x64/**
 !Browserapp/kernels/macos-arm64/
 !Browserapp/kernels/macos-arm64/**
-# Legacy compat path names are local-only aliases/caches.
+
+# Legacy local aliases only
 Browserapp/kernels/openbrowser
 Browserapp/kernels/openbrowser/
 Browserapp/kernels/openbrowser/**
 Browserapp/kernels/wayfern/
 Browserapp/kernels/wayfern/**
 
-# Never publish local-only kernel notes / backups / markers
+# Local-only notes / backups / private markers (do NOT match OpenBrowser binaries)
 Browserapp/kernels/README.md
 Browserapp/kernels/**/README.md
 Browserapp/kernels/**/*.orig
+Browserapp/kernels/**/*.bak
 Browserapp/kernels/**/*UNLOCK*
 Browserapp/kernels/**/*unlock*
-Browserapp/kernels/**/*.bak
-Browserapp/kernels/**/OPENBROWSER_*
+Browserapp/kernels/**/OPENBROWSER_AUTOMATION_*
+Browserapp/kernels/**/OPENBROWSER_UNLOCK*
 
 runtime/
 chromium/
@@ -58,24 +59,31 @@ chrome-for-testing/
 **/User Data/
 **/Default/
 
-# Build products
+# Build products (allow kernel tree executables)
 *.exe
 *.msi
 *.dmg
 *.pkg
 *.zip
 *.app/
-# Allow kernel executables required for packaging
 !Browserapp/kernels/**/*.app/
 !Browserapp/kernels/**/*.app/**
 !Browserapp/kernels/**/*.exe
 !Browserapp/kernels/**/*.dll
-# Re-ignore local-only markers even inside allowed .app trees
+!Browserapp/kernels/**/OpenBrowser
+!Browserapp/kernels/**/OpenBrowser.bin
+!Browserapp/kernels/**/webdriver
+!Browserapp/kernels/**/*.dylib
+
+# Re-ignore private markers inside app trees
 Browserapp/kernels/**/*.orig
+Browserapp/kernels/**/*.bak
 Browserapp/kernels/**/*UNLOCK*
 Browserapp/kernels/**/*unlock*
-Browserapp/kernels/**/OPENBROWSER_*
+Browserapp/kernels/**/OPENBROWSER_AUTOMATION_*
+Browserapp/kernels/**/OPENBROWSER_UNLOCK*
 Browserapp/kernels/**/README.md
+
 /OpenBrowser.app/
 /OpenBrowser.app/**
 **/node_modules/
