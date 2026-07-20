@@ -14,6 +14,7 @@
     "selftest:kernel": "node automation/kernel-policy-selftest.js",
     "selftest:startup": "node browser-startup-diagnostic-selftest.js",
     "selftest:cloud": "node automation/cloud-sync-security-selftest.js",
+    "prepare:bundled-kernel": "node scripts/prepare-bundled-kernel.js",
     "build:native": "node scripts/build-native.js",
     "package:portable": "node scripts/package-portable.js"
   },

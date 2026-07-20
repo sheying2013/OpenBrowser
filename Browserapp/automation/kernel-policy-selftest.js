@@ -10,6 +10,7 @@ const {
   validateArchiveMemberName,
   safeInstalledBinary,
   findOpenBrowserKernelBinary,
+  findBundledWayfernKernel,
   isOpenBrowser148SupportedHost,
   isMacX64Host,
   SOURCE_OPENBROWSER,
@@ -46,6 +47,15 @@ async function main() {
     assert.strictEqual(manager.status().kernel.path, binary);
     assert.strictEqual(manager.meta.binary, binary);
     console.log('  PASS  stale kernel metadata repaired to current data root');
+
+    const bundledRoot = path.join(root, 'bundled-kernels', 'wayfern');
+    const bundledBinary = path.join(bundledRoot, process.platform === 'win32' ? 'wayfern.exe' : 'wayfern');
+    await fsp.mkdir(bundledRoot, { recursive: true });
+    await fsp.writeFile(bundledBinary, '', 'utf8');
+    await fsp.writeFile(path.join(bundledRoot, 'kernel.json'), JSON.stringify({ version: '149.0.0.0' }), 'utf8');
+    const bundled = findBundledWayfernKernel([root]);
+    assert.strictEqual(path.resolve(bundled.binary), path.resolve(bundledBinary));
+    console.log('  PASS  bundled Wayfern kernel discovered from packaged resource root');
 
     assert.throws(() => validateArchiveMemberName('../outside/chrome'));
     assert.throws(() => validateArchiveMemberName('/tmp/chrome'));
@@ -125,6 +135,24 @@ async function main() {
       assert.strictEqual(chosen.path, binary);
       console.log('  PASS  legacy fallback policy migrates to independent-only');
     }
+
+    await engine.setKernelPolicy({ allowSystemBrowserFallback: true });
+    assert.strictEqual(engine.allowSystemBrowserFallback, true);
+    assert.strictEqual(engine.systemBrowserPath, null);
+    const resolveInstalled = engine.kernelManager.resolveInstalled;
+    engine.kernelManager.resolveInstalled = () => null;
+    assert.strictEqual(engine.browserSelection().mode, 'blocked');
+    const manualBrowser = path.join(root, 'manual-system-browser');
+    await fsp.writeFile(manualBrowser, '', 'utf8');
+    engine.systemBrowserCandidates = () => [{ name: 'Test system browser', path: manualBrowser }];
+    await engine.setKernelPolicy({ systemBrowserPath: manualBrowser });
+    assert.strictEqual(engine.browserSelection().mode, 'system-manual');
+    assert.strictEqual(engine.browserSelection().browser.path, manualBrowser);
+    engine.kernelManager.resolveInstalled = resolveInstalled;
+    const reloaded = new BrowserEngine(app);
+    await reloaded.init(null);
+    assert.strictEqual(reloaded.allowSystemBrowserFallback, true);
+    console.log('  PASS  system-browser fallback requires explicit manual selection');
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }

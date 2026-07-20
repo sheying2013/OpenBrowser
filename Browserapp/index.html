@@ -1037,8 +1037,9 @@
     <button class="outline" id="kernel-refresh" type="button">刷新状态</button>
   </div>
   <label class="check-row" style="margin-top:12px;display:flex;gap:8px;align-items:center"><input id="kernel-prefer-independent" type="checkbox" checked> 优先使用独立内核（推荐）</label>
-  <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center;opacity:.65"><input id="kernel-allow-system" type="checkbox" disabled> 禁止回退到本机浏览器（强制隔离）</label>
-  <p class="storage-warning" id="kernel-progress">首次约 150–250MB，从 Donut/Wayfern CDN 拉取。当前平台无 Wayfern 包时自动回退 Chrome for Testing。使用 Wayfern 即同意其服务条款（wayfern.com/tos）。</p>
+  <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center"><input id="kernel-allow-system" type="checkbox"> 允许手动回退到本机浏览器（默认关闭）</label>
+  <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center">手动选择回退浏览器<select id="kernel-system-browser"><option value="">未选择</option></select></label>
+  <p class="storage-warning" id="kernel-progress">Windows x64 与 macOS arm64 安装包已内置对应内核。默认不会自动回退到本机浏览器；只有手动选择并开启后才会使用本机浏览器。使用 Wayfern 即同意其服务条款（wayfern.com/tos）。</p>
 </article>
 <article><h3>运行时</h3><dl id="runtime-info"></dl></article><article><h3>能力状态</h3><dl><div><dt>真实浏览器进程</dt><dd class="ok">已启用</dd></div><div><dt>独立用户目录</dt><dd class="ok">已启用</dd></div><div><dt>扩展批量加载</dt><dd class="ok">已启用</dd></div><div><dt>Chrome DevTools Protocol</dt><dd class="ok">已启用</dd></div><div><dt>运行模式</dt><dd class="ok">纯本地</dd></div><div><dt>本机接口</dt><dd class="ok">127.0.0.1:50325</dd></div></dl></article><article class="storage-settings-card"><div class="storage-settings-head"><div><h3>环境缓存与数据位置</h3><p>各环境的 Chrome 用户目录、Cookie、缓存、本地存储、IndexedDB 和会话数据都会保存在这里。</p></div><span>本地保存</span></div><div class="storage-path-box"><small>当前目录</small><code id="profile-storage-path">正在读取...</code></div><div class="storage-actions"><button class="primary" id="choose-profile-storage" type="button">选择新目录</button><button class="outline" id="open-profile-storage" type="button">打开目录</button><button class="outline" id="reset-profile-storage" type="button">恢复默认位置</button></div><p class="storage-warning">修改前请先停止所有环境。新位置在环境下次启动时生效；旧目录中的数据不会自动移动或删除。</p></article></div></section>
       </main>

@@ -4885,6 +4885,7 @@ async function refreshKernelPanel() {
   const channelEl = document.getElementById('kernel-channel');
   const prefer = document.getElementById('kernel-prefer-independent');
   const allow = document.getElementById('kernel-allow-system');
+  const systemBrowser = document.getElementById('kernel-system-browser');
   try {
     const info = await window.ops.getInfo();
     updateEngineBadge(info);
@@ -4912,16 +4913,21 @@ async function refreshKernelPanel() {
       const mode = selection?.mode;
       launchModeEl.textContent = mode === 'independent'
         ? `独立内核 · ${selection.browser.name}`
-        : mode === 'system-fallback'
-          ? `本机浏览器回退 · ${selection.browser.name}`
+        : mode === 'system-manual'
+          ? `手动选择本机浏览器 · ${selection.browser.name}`
           : mode === 'system'
             ? `本机浏览器 · ${selection.browser.name}`
             : tx('已阻止启动：需要独立内核');
     }
     if (prefer) prefer.checked = info.preferIndependentKernel !== false;
-    if (allow) {
-      allow.checked = false;
-      allow.disabled = true;
+    if (allow) allow.checked = info.allowSystemBrowserFallback === true;
+    if (systemBrowser) {
+      const selected = info.systemBrowserPath || '';
+      systemBrowser.replaceChildren(new Option(tx('未选择'), ''));
+      for (const item of info.systemBrowsers || []) {
+        systemBrowser.add(new Option(`${item.name} · ${item.path}`, item.path));
+      }
+      systemBrowser.value = selected;
     }
   } catch (error) {
     if (badge) badge.textContent = tx('读取失败');
@@ -5002,8 +5008,36 @@ document.getElementById('kernel-prefer-independent')?.addEventListener('change',
     toast(e.target.checked ? tx('已优先独立内核') : tx('已允许使用候选列表第一项'));
   } catch (error) { toast(error.message); }
 });
-// System-browser fallback is intentionally not user-configurable: profile
-// environments must remain isolated from installed browsers.
+document.getElementById('kernel-allow-system')?.addEventListener('change', async (e) => {
+  try {
+    const systemBrowser = document.getElementById('kernel-system-browser');
+    if (e.target.checked && !systemBrowser?.value) {
+      e.target.checked = false;
+      toast(tx('请先手动选择回退浏览器'));
+      return;
+    }
+    await window.ops.kernelPolicy({ allowSystemBrowserFallback: e.target.checked });
+    toast(e.target.checked
+      ? tx('已允许在独立内核不可用时回退本机浏览器')
+      : tx('已禁止自动回退本机浏览器'));
+    await refreshKernelPanel();
+  } catch (error) {
+    e.target.checked = !e.target.checked;
+    toast(error.message);
+  }
+});
+document.getElementById('kernel-system-browser')?.addEventListener('change', async (e) => {
+  try {
+    const allow = document.getElementById('kernel-allow-system');
+    await window.ops.kernelPolicy({ systemBrowserPath: e.target.value });
+    if (allow && !e.target.value) allow.checked = false;
+    toast(e.target.value ? tx('已选择手动回退浏览器') : tx('已清除手动回退浏览器'));
+    await refreshKernelPanel();
+  } catch (error) {
+    toast(error.message);
+    await refreshKernelPanel();
+  }
+});
 
 // ---------- Cloud backup UI (本地设置) ----------
 const CLOUD_BRIDGE_PRESETS = {
@@ -5441,5 +5475,3 @@ window.ops.onEvent((value) => {
     refreshCloudPanel().catch(() => {});
   }
 });
-
-

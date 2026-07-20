@@ -10,6 +10,7 @@ const {
   findMacBinary,
 } = require('./resolve-host-dist');
 const { ensureHostRuntime } = require('./ensure-host-runtime');
+const { findBundledWayfernKernel } = require('../automation/browser-kernel');
 
 const appRoot = path.resolve(__dirname, '..');
 const packageArch = resolvePackageArch();
@@ -51,6 +52,7 @@ function copyRecursive(source, destination) {
   }
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.copyFileSync(source, destination);
+  fs.chmodSync(destination, stats.mode & 0o777);
 }
 
 function removeIfExists(target) {
@@ -62,15 +64,19 @@ function writeText(file, content) {
   fs.writeFileSync(file, content, 'utf8');
 }
 
-/**
- * openbrowser-148 (Browserapp/kernels/openbrowser) ships ONLY in macOS x86_64
- * packages. Windows / macOS arm64 / any other platform MUST exclude kernels/.
- */
+/** openbrowser-148 ships only in macOS x86_64 packages. */
 function shouldShipOpenBrowser148Kernel(platform = process.platform, arch = packageArch) {
   const p = String(platform || '').toLowerCase();
   const a = String(arch || '').toLowerCase();
   const isX64 = a === 'x64' || a === 'x86_64' || a === 'amd64';
   return p === 'darwin' && isX64;
+}
+
+function shouldShipBundledWayfern(platform = process.platform, arch = packageArch) {
+  const p = String(platform || '').toLowerCase();
+  const a = String(arch || '').toLowerCase();
+  return (p === 'win32' && ['x86_64', 'x64', 'amd64'].includes(a))
+    || (p === 'darwin' && a === 'arm64');
 }
 
 /**
@@ -89,6 +95,7 @@ function appResourceExcludes() {
   if (!shouldShipOpenBrowser148Kernel()) {
     excluded.add('kernels');
   }
+  if (!shouldShipBundledWayfern()) excluded.add('bundled-kernels');
   return excluded;
 }
 
@@ -108,10 +115,12 @@ const OPENBROWSER_148_REL = path.join(
  * Throws so a packaging bug cannot ship openbrowser-148 on the wrong platform.
  */
 function assertKernelPackagePolicy(resourceApp) {
-  const ship = shouldShipOpenBrowser148Kernel();
+  const shipOpenBrowser = shouldShipOpenBrowser148Kernel();
+  const shipWayfern = shouldShipBundledWayfern();
   const kernelsDir = path.join(resourceApp, 'kernels');
   const openBrowserBin = path.join(resourceApp, OPENBROWSER_148_REL);
-  if (!ship) {
+  const bundled = findBundledWayfernKernel([resourceApp]);
+  if (!shipOpenBrowser) {
     if (fs.existsSync(kernelsDir)) {
       throw new Error(
         '[package] FATAL: kernels/ present in package but openbrowser-148 is macOS x86_64 only'
@@ -119,12 +128,16 @@ function assertKernelPackagePolicy(resourceApp) {
         + ' 其它系统严禁混入该内核。'
       );
     }
-    return;
-  }
-  if (!fs.existsSync(openBrowserBin)) {
+  } else if (!fs.existsSync(openBrowserBin)) {
     throw new Error(
       '[package] FATAL: macOS x86_64 package missing openbrowser-148 binary: ' + openBrowserBin
     );
+  }
+  if (shipWayfern && !bundled) {
+    throw new Error('[package] FATAL: package is missing the prepared bundled Wayfern kernel under bundled-kernels/');
+  }
+  if (!shipWayfern && fs.existsSync(path.join(resourceApp, 'bundled-kernels'))) {
+    throw new Error('[package] FATAL: unsupported bundled-kernels/ present in package');
   }
 }
 
@@ -135,11 +148,9 @@ function copyAppResources(resourceApp) {
     if (excluded.has(entry)) continue;
     copyRecursive(path.join(appRoot, entry), path.join(resourceApp, entry));
   }
-  if (excluded.has('kernels')) {
-    console.log('[package] 排除 kernels/（openbrowser-148 仅 macOS x86_64 打包） arch=' + packageArch + ' platform=' + process.platform);
-  } else {
-    console.log('[package] 打入 kernels/openbrowser 作为 macOS x86_64 默认内核');
-  }
+  console.log('[package] kernel policy: openbrowser-148=' + shouldShipOpenBrowser148Kernel()
+    + ' bundled-wayfern=' + shouldShipBundledWayfern()
+    + ' arch=' + packageArch + ' platform=' + process.platform);
   assertKernelPackagePolicy(resourceApp);
 }
 
@@ -252,7 +263,7 @@ function packageWindows() {
     '1. 解压完整压缩包，不要只复制单个 EXE。',
     '2. 双击 START.cmd 启动。',
     '3. 本目录 runtime 内含 OpenBrowser 桌面主机与 Chromium 组件。',
-    '4. 本 Windows 包不包含 openbrowser-148 内核（该内核仅适用于 macOS x86_64）。请在“本地设置”下载/选择 Windows 独立内核；禁止使用系统 Chrome 作指纹环境。',
+    '4. 本 Windows x64 包已内置对应 Wayfern 独立内核；默认不会自动回退到本机浏览器，如需回退请在“本地设置”手动选择浏览器并开启。',
     '5. 环境数据默认保存在当前 Windows 用户的 AppData\\Roaming\\openbrowser 中；也可在“本地设置”修改。',
     '6. 请勿把 Cookies、代理密码或浏览器 Profile 上传到 GitHub。',
     '',
@@ -337,8 +348,8 @@ function packageMac() {
   if (fs.existsSync(appBinary)) fs.chmodSync(appBinary, 0o755);
 
   const kernelNote = packageArch === 'x86_64'
-    ? '3. 本包（macOS x86_64 / Intel）已内置 OpenBrowser 148 默认独立内核（resources/app/kernels/openbrowser），启动环境无需再下载 Wayfern 或其它内核。'
-    : '3. 本包架构为 ' + packageArch + '：不包含 openbrowser-148 内核（该内核仅适用于 macOS x86_64）。请在“本地设置”下载/选择适用于本架构的独立内核；禁止使用系统 Chrome 作指纹环境。';
+    ? '3. 本包（macOS x86_64 / Intel）已内置 OpenBrowser 148 默认独立内核。'
+    : '3. 本包（macOS arm64）已内置对应 Wayfern 独立内核。';
   writeText(path.join(packageRoot, '运行说明.txt'), [
     'OpenBrowser macOS 版（' + packageArch + '）',
     '',
@@ -346,9 +357,10 @@ function packageMac() {
     '2. 首次打开若被 Gatekeeper 拦截，请到“系统设置 > 隐私与安全性”允许运行，或执行：',
     '   xattr -dr com.apple.quarantine "OpenBrowser.app"',
     kernelNote,
-    '4. 环境数据默认保存在 ~/Library/Application Support/openbrowser。',
-    '5. 窗口同步在 macOS 使用 CDP 页面同步 + 全局快捷键；Chrome 原生 UI（地址栏/标签栏）的原生输入镜像仅 Windows 可用。',
-    '6. 请勿把 Cookies、代理密码或浏览器 Profile 上传到 GitHub。',
+    '4. 默认不会自动回退到本机浏览器；如需回退，请在“本地设置”手动选择浏览器并开启。',
+    '5. 环境数据默认保存在 ~/Library/Application Support/openbrowser。',
+    '6. 窗口同步在 macOS 使用 CDP 页面同步 + 全局快捷键；Chrome 原生 UI（地址栏/标签栏）的原生输入镜像仅 Windows 可用。',
+    '7. 请勿把 Cookies、代理密码或浏览器 Profile 上传到 GitHub。',
     '',
   ].join('\n'));
 

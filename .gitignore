@@ -18,6 +18,7 @@ user-data/
 browser-data/
 # UserData / 下载的内核一律忽略；源码树内「仅 macOS x86_64 默认内核」例外见下
 kernels/
+bundled-kernels/
 # openbrowser-148：仅 macOS x86_64 默认独立内核（GitHub 仅该产物打包打入；arm64/Windows 打包排除）
 !Browserapp/kernels/
 !Browserapp/kernels/openbrowser/

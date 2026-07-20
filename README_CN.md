@@ -130,7 +130,7 @@ OpenBrowser/
 └── README_CN.md           # 中文说明
 ```
 
-仓库只包含源码与文档，不包含 Profile、Cookie、代理凭据、内核二进制或安装包。
+仓库只包含源码与文档，不包含 Profile、Cookie、代理凭据、打包用内核二进制或安装包。官方 Windows x64 和 macOS arm64 构建会在 CI 打包时下载并集成对应 Wayfern 内核；macOS x86_64 构建使用 OpenBrowser 148 内核。
 
 ## 数据与安全
 
@@ -154,7 +154,7 @@ OpenBrowser/
 
 独立内核来自 [Donut Browser](https://github.com/zhom/donutbrowser) / [Wayfern](https://wayfern.com/)（作者 [zhom](https://github.com/zhom)）。更新源：[wayfern.json](https://donutbrowser.com/wayfern.json)。条款：[Wayfern ToS](https://wayfern.com/tos)。
 
-本仓库不重新分发内核。
+仓库不保存内核二进制。官方平台包会在 CI 打包时从官方源获取对应 Wayfern 内核；macOS x86_64 包使用已纳入源码的 OpenBrowser 148 运行时。
 
 </details>
 
