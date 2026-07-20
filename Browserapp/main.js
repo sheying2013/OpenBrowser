@@ -16,6 +16,15 @@ const appDataRoot = app.getPath('appData');
 const userDataRoot = path.join(appDataRoot, 'openbrowser');
 app.setName('OpenBrowser');
 try { process.title = 'OpenBrowser'; } catch (_) { /* ignore */ }
+// Guard: root/sudo would isolate configs under /var/root and break CPU/memory UI sync.
+try {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const euid = typeof process.geteuid === 'function' ? process.geteuid() : null;
+  if (uid === 0 || euid === 0) {
+    console.error('[OpenBrowser] refuse to run as root/sudo — userData would split from normal user profiles.');
+    app.exit(2);
+  }
+} catch (_) { /* ignore */ }
 app.setPath('userData', userDataRoot);
 
 const defaultProfileDataRoot = path.join(app.getPath('userData'), 'browser-profiles-v2');
@@ -27,8 +36,8 @@ const UPDATE_LATEST_HTML = `https://github.com/${UPDATE_REPOSITORY}/releases/lat
 const UPDATE_RELEASES_ATOM = `https://github.com/${UPDATE_REPOSITORY}/releases.atom`;
 const UPDATE_ASSETS = Object.freeze({
   'darwin:x64': 'OpenBrowser-macOS-x86_64.dmg',
-  'darwin:arm64': 'OpenBrowser-macOS-arm64.dmg',
-  'win32:x64': 'OpenBrowser-Windows-x86_64.exe',
+  'darwin:arm64': 'OpenBrowser-macOS-arm64-with-kernel.dmg',
+  'win32:x64': 'OpenBrowser-Windows-x86_64-with-kernel.exe',
 });
 const UPDATE_MAX_BYTES = 1024 * 1024 * 1024;
 const UPDATE_TIMEOUT_MS = 20000;
@@ -218,7 +227,36 @@ async function resolveReleaseAsset(remoteVersion, assetName) {
       clearTimeout(timer);
     }
   } catch (_) { /* optional */ }
-  return { name: assetName, size: 0, browser_download_url: directUrl };
+
+  // HEAD can be blocked or redirected differently by GitHub's edge. Resolve
+  // the exact tagged release through the API before declaring the asset absent.
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPDATE_TIMEOUT_MS);
+    try {
+      const apiUrl = `${UPDATE_API_URL.replace(/\/latest$/, '')}/tags/v${encodeURIComponent(remoteVersion)}`;
+      const response = await fetch(apiUrl, {
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': updateUserAgent() },
+        signal: controller.signal,
+      });
+      if (response.ok) {
+        const release = await response.json();
+        const asset = Array.isArray(release.assets)
+          ? release.assets.find((item) => item?.name === assetName)
+          : null;
+        if (asset?.browser_download_url && updateUrlIsAllowed(asset.browser_download_url, assetName)) {
+          return {
+            name: asset.name,
+            size: Number(asset.size) || 0,
+            browser_download_url: asset.browser_download_url,
+          };
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (_) { /* unavailable release metadata */ }
+  return null;
 }
 
 /** @deprecated use resolveLatestReleaseMeta — kept for download path compatibility */
@@ -1206,6 +1244,7 @@ async function fetchChromeStoreIcon(storeId) {
 /** Theme chrome colors for fused title bar (shipping-app look). */
 const THEME_CHROME = {
   'pixel-workstation': { bg: '#0b1117', overlay: '#151f27', symbol: '#eef8f0' },
+  'nes-light': { bg: '#f8f8f8', overlay: '#ffffff', symbol: '#212529' },
   'element-admin': { bg: '#e8e8ed', overlay: '#f5f5f7', symbol: '#1d1d1f' },
   'element-admin-dark': { bg: '#1c1c1e', overlay: '#2c2c2e', symbol: '#f5f5f7' },
   'retro-desktop': { bg: '#dddddd', overlay: '#eeeeee', symbol: '#000000' },

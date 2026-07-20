@@ -4,11 +4,14 @@ const http = require('http');
 const https = require('https');
 const tls = require('tls');
 const net = require('net');
+const dns = require('dns');
 const crypto = require('crypto');
 const { URL } = require('url');
 const { buildStartPageHtml } = require('./start-page-template');
 const { calculateIpHealthScore } = require('./ip-health-score');
 const { lookupDirectCountry, parseProxy, startAuthenticatedProxy } = require('../proxy-forwarder');
+const { fpLog } = require('./fingerprint-debug-log');
+const dnsPromises = dns.promises;
 
 /**
  * OpenBrowser · 原生启动页服务（纯本机）
@@ -418,6 +421,201 @@ async function lookupReachability(options = {}) {
   return Object.fromEntries(entries);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeCountryCode(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+async function fetchJsonUrl(url, { timeout = 12000, headers = {} } = {}) {
+  const probe = await probeDirect(url, timeout, 200000);
+  if (!probe.ok && !(probe.status >= 200 && probe.status < 500)) {
+    throw new Error(probe.error || ('HTTP ' + (probe.status || 0)));
+  }
+  const text = String(probe.body || '').trim();
+  if (!text) throw new Error('empty response');
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error('invalid json response');
+  }
+}
+
+async function resolveDnsLeakProbes(testId, count = 12) {
+  const id = String(testId || '').trim();
+  if (!id) return { resolved: 0, hosts: [] };
+  const indexes = Array.from({ length: count }, (_, i) => i);
+  const hosts = indexes.map((i) => `${i}.${id}.bash.ws`);
+  // Fire unique A lookups so the leak service can observe which resolvers query them.
+  // NXDOMAIN / timeout still count as probes that left this machine.
+  await Promise.all(hosts.map(async (host) => {
+    try {
+      await Promise.race([
+        dnsPromises.lookup(host, { all: true }),
+        sleep(2500).then(() => { throw new Error('timeout'); }),
+      ]);
+    } catch (_) { /* expected for many probes */ }
+  }));
+  return { resolved: hosts.length, hosts };
+}
+
+function summarizeDnsLeak(rows = [], exitNetwork = null) {
+  const list = Array.isArray(rows) ? rows : [];
+  const exitIp = String(exitNetwork?.ip || '').trim();
+  const exitCountry = normalizeCountryCode(exitNetwork?.countryCode || exitNetwork?.countryUsage || '');
+  const servers = [];
+  let conclusionText = '';
+  let observedIp = '';
+  for (const row of list) {
+    const type = String(row?.type || '').toLowerCase();
+    const ip = String(row?.ip || '').trim();
+    const country = normalizeCountryCode(row?.country || row?.country_code || '');
+    const countryName = String(row?.country_name || row?.countryName || '').trim();
+    const asn = String(row?.asn || '').trim();
+    if (type === 'ip') {
+      observedIp = ip || observedIp;
+      continue;
+    }
+    if (type === 'conclusion') {
+      conclusionText = ip || String(row?.conclusion || '');
+      continue;
+    }
+    if (type === 'dns' || (!type && ip && net.isIP(ip))) {
+      if (!ip || !net.isIP(ip)) continue;
+      servers.push({
+        ip,
+        countryCode: country,
+        country: countryName || countryLabel(country),
+        asn,
+      });
+    }
+  }
+
+  // de-dupe by IP
+  const unique = [];
+  const seen = new Set();
+  for (const item of servers) {
+    if (seen.has(item.ip)) continue;
+    seen.add(item.ip);
+    unique.push(item);
+  }
+
+  const dnsCountries = [...new Set(unique.map((item) => item.countryCode).filter(Boolean))];
+  const countryMismatch = Boolean(
+    exitCountry
+    && dnsCountries.length
+    && dnsCountries.some((code) => code !== exitCountry)
+  );
+  const multiCountryDns = dnsCountries.length > 1;
+  const sameAsExitIp = Boolean(exitIp && unique.some((item) => item.ip === exitIp));
+
+  let state = 'good';
+  let label = '未发现泄露';
+  let detail = '';
+  // Judge by observed resolver geo vs exit geo only.
+  // Third-party conclusion text is often generic ("may be leaking") and must not override a clean match.
+  if (!unique.length) {
+    state = 'warn';
+    label = '未观测到 DNS 服务器';
+    detail = '已触发唯一探测域名，但结果服务未返回可识别的 DNS 解析器。可稍后重试。';
+  } else if (countryMismatch) {
+    state = 'bad';
+    label = '可能存在 DNS 泄露';
+    detail = [
+      exitCountry ? `出口地区 ${exitCountry}` : '',
+      dnsCountries.length ? `DNS 地区 ${dnsCountries.join('/')}` : '',
+      unique.slice(0, 4).map((item) => item.ip).join(', '),
+    ].filter(Boolean).join(' · ');
+  } else if (multiCountryDns) {
+    state = 'warn';
+    label = 'DNS 地区不一致';
+    detail = `观测到多个 DNS 地区：${dnsCountries.join('/')}。服务器：${unique.slice(0, 4).map((item) => item.ip).join(', ')}`;
+  } else if (!exitCountry && dnsCountries.length) {
+    state = 'good';
+    label = '已观测 DNS 解析器';
+    detail = [
+      dnsCountries[0] ? `DNS ${dnsCountries[0]}` : '',
+      `${unique.length} 个解析器`,
+      unique.slice(0, 3).map((item) => item.ip).join(', '),
+    ].filter(Boolean).join(' · ');
+  } else {
+    state = 'good';
+    label = sameAsExitIp ? 'DNS 与出口一致' : 'DNS 地区一致';
+    detail = [
+      exitCountry ? `出口 ${exitCountry}` : '',
+      dnsCountries[0] ? `DNS ${dnsCountries[0]}` : '',
+      `${unique.length} 个解析器`,
+      unique.slice(0, 3).map((item) => item.ip).join(', '),
+    ].filter(Boolean).join(' · ');
+  }
+
+  return {
+    ok: state !== 'bad',
+    state,
+    label,
+    detail,
+    exitIp,
+    exitCountryCode: exitCountry,
+    observedIp: observedIp || exitIp || '',
+    servers: unique.slice(0, 12),
+    dnsCountries,
+    countryMismatch,
+    conclusion: conclusionText || '',
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * DNS leak check:
+ * 1) request a unique test id from bash.ws
+ * 2) resolve N unique subdomains via local resolver path
+ * 3) read which DNS servers the service observed
+ * 4) compare DNS countries with current exit IP country
+ *
+ * For proxy profiles, the probe still uses the host resolver path — this is
+ * intentional: it surfaces true DNS leaks when the browser/OS bypasses the proxy.
+ */
+async function lookupDnsLeak(options = {}) {
+  const exitNetwork = options.exitNetwork || null;
+  const probeCount = Math.min(20, Math.max(8, Number(options.probeCount) || 12));
+  try {
+    const idProbe = await probeDirect('https://bash.ws/id', 10000, 4096);
+    const testId = String(idProbe.body || '').trim();
+    if (!/^[A-Za-z0-9_-]{6,64}$/.test(testId)) {
+      throw new Error('failed to allocate dns leak test id');
+    }
+    await resolveDnsLeakProbes(testId, probeCount);
+    await sleep(1200);
+    const rows = await fetchJsonUrl(`https://bash.ws/dnsleak/test/${encodeURIComponent(testId)}?json`, {
+      timeout: 15000,
+    });
+    const summary = summarizeDnsLeak(rows, exitNetwork);
+    return {
+      ...summary,
+      testId,
+      provider: 'openbrowser-dns-probe',
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      state: 'warn',
+      label: '检测失败',
+      detail: String(error && error.message || error || 'dns leak check failed'),
+      exitIp: String(exitNetwork?.ip || ''),
+      exitCountryCode: normalizeCountryCode(exitNetwork?.countryCode || ''),
+      observedIp: '',
+      servers: [],
+      dnsCountries: [],
+      countryMismatch: false,
+      conclusion: '',
+      checkedAt: new Date().toISOString(),
+      error: String(error && error.message || error || ''),
+    };
+  }
+}
+
 function formatTime(ts) {
   const n = Number(ts);
   const d = Number.isFinite(n) && n > 1e9
@@ -450,6 +648,7 @@ class StartPageServer {
     this.engine = options.engine || null;
     this.lookupDirectNetwork = options.lookupDirectNetwork || lookupDirectNetwork;
     this.lookupReachability = options.lookupReachability || lookupReachability;
+    this.lookupDnsLeak = options.lookupDnsLeak || lookupDnsLeak;
   }
 
   setEngine(engine) {
@@ -510,17 +709,73 @@ class StartPageServer {
         ? 'direct'
         : String(profile.proxy).split(':', 1)[0].toLowerCase(),
       expectedFingerprint: {
-        language: String(profile.language || ''),
-        userAgent: String(profile.userAgent || extras.userAgent || ''),
-        timezone,
-        screenWidth: Number(profile.width) || null,
-        screenHeight: Number(profile.height) || null,
-        webrtc: String(profile.privacy?.webrtc || ''),
-        canvas: String(profile.privacy?.canvas || ''),
-        webgl: String(profile.privacy?.webgl || ''),
-        audio: String(profile.privacy?.audio || ''),
-        hardwareConcurrency: Number(profile.privacy?.fingerprint?.hardwareConcurrency || profile.privacy?.cores) || null,
-        deviceMemory: Number(profile.privacy?.fingerprint?.deviceMemory || profile.privacy?.memory) || null,
+        ...(extras.expectedFingerprint && typeof extras.expectedFingerprint === 'object' ? extras.expectedFingerprint : {}),
+        language: String(
+          (extras.expectedFingerprint && extras.expectedFingerprint.language)
+          || profile.language
+          || ''
+        ),
+        userAgent: String(
+          (extras.expectedFingerprint && extras.expectedFingerprint.userAgent)
+          || profile.userAgent
+          || extras.userAgent
+          || ''
+        ),
+        timezone: String(
+          (extras.expectedFingerprint && extras.expectedFingerprint.timezone)
+          || timezone
+          || ''
+        ),
+        screenWidth: Number(
+          (extras.expectedFingerprint && extras.expectedFingerprint.screenWidth)
+          || profile.width
+        ) || null,
+        screenHeight: Number(
+          (extras.expectedFingerprint && extras.expectedFingerprint.screenHeight)
+          || profile.height
+        ) || null,
+        webrtc: String(
+          (extras.expectedFingerprint && extras.expectedFingerprint.webrtc)
+          || profile.privacy?.webrtc
+          || ''
+        ),
+        canvas: String(
+          (extras.expectedFingerprint && extras.expectedFingerprint.canvas)
+          || profile.privacy?.canvas
+          || ''
+        ),
+        webgl: String(
+          (extras.expectedFingerprint && extras.expectedFingerprint.webgl)
+          || profile.privacy?.webgl
+          || ''
+        ),
+        webglVendor: String(
+          (extras.expectedFingerprint && extras.expectedFingerprint.webglVendor)
+          || ''
+        ),
+        webglRenderer: String(
+          (extras.expectedFingerprint && extras.expectedFingerprint.webglRenderer)
+          || ''
+        ),
+        platform: String(
+          (extras.expectedFingerprint && extras.expectedFingerprint.platform)
+          || ''
+        ),
+        audio: String(
+          (extras.expectedFingerprint && extras.expectedFingerprint.audio)
+          || profile.privacy?.audio
+          || ''
+        ),
+        hardwareConcurrency: (() => {
+          const fromExtra = extras.expectedFingerprint && extras.expectedFingerprint.hardwareConcurrency;
+          if (fromExtra != null && fromExtra !== '') return Number(fromExtra) || null;
+          return Number(profile.privacy?.fingerprint?.hardwareConcurrency || profile.privacy?.cores) || null;
+        })(),
+        deviceMemory: (() => {
+          const fromExtra = extras.expectedFingerprint && extras.expectedFingerprint.deviceMemory;
+          if (fromExtra != null && fromExtra !== '') return Number(fromExtra) || null;
+          return Number(profile.privacy?.fingerprint?.deviceMemory || profile.privacy?.memory) || null;
+        })(),
       },
       token: crypto.randomBytes(24).toString('base64url'),
       at: Date.now(),
@@ -822,6 +1077,32 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
       return this.#json(res, 200, { ok: true, data, pid });
     }
 
+    // Welcome page posts live navigator/WebGL samples here so we can diagnose
+    // inject failures from disk without copying UI text.
+    if (pathname === '/api/fingerprint-report' && (req.method === 'POST' || req.method === 'PUT')) {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      let report = {};
+      try { report = body ? JSON.parse(body) : {}; } catch (_) { report = { raw: String(body).slice(0, 2000) }; }
+      const expected = session?.expectedFingerprint || {};
+      await fpLog('welcome.report', {
+        profileId: pid,
+        phase: report.phase || 'page',
+        expected,
+        live: report.live || report,
+        mismatch: {
+          ua: Boolean(expected.userAgent && report.live?.userAgent && expected.userAgent !== report.live.userAgent),
+          platform: Boolean(expected.platform && report.live?.platform && expected.platform !== report.live.platform),
+          cores: expected.hardwareConcurrency != null && report.live?.hardwareConcurrency != null
+            && Number(expected.hardwareConcurrency) !== Number(report.live.hardwareConcurrency),
+          webglRenderer: Boolean(expected.webglRenderer && report.live?.webglRenderer
+            && String(report.live.webglRenderer) !== String(expected.webglRenderer)
+            && !String(report.live.webglRenderer).includes(String(expected.webglRenderer).slice(0, 20))),
+        },
+      });
+      return this.#json(res, 200, { ok: true });
+    }
+
     if (pathname === '/api/network') {
       const refresh = query.refresh === '1' || query.refresh === 'true';
       try {
@@ -868,6 +1149,35 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
             exitIp: exitNetwork?.ip || session?.exitIp || '',
             exitCountryCode: exitNetwork?.countryCode || session?.countryCode || '',
             viaProxy: Boolean(proxy),
+          },
+        });
+      } catch (error) {
+        return this.#json(res, 500, { ok: false, msg: error.message });
+      }
+    }
+
+    if (pathname === '/api/dns-leak') {
+      let exitNetwork = session?.network || null;
+      if (this.engine && pid) {
+        exitNetwork = this.engine.networkInfo?.get?.(String(pid)) || exitNetwork;
+        if (!exitNetwork) {
+          try { exitNetwork = await this.#resolveNetwork(pid, false); } catch (_) {}
+        }
+      }
+      try {
+        const data = await this.lookupDnsLeak({
+          exitNetwork: exitNetwork || {
+            ip: session?.exitIp || '',
+            countryCode: session?.countryCode || '',
+            country: '',
+          },
+        });
+        return this.#json(res, 200, {
+          ok: true,
+          data,
+          meta: {
+            exitIp: exitNetwork?.ip || session?.exitIp || '',
+            exitCountryCode: exitNetwork?.countryCode || session?.countryCode || '',
           },
         });
       } catch (error) {
@@ -932,5 +1242,7 @@ module.exports = {
   buildStartPageHtml,
   lookupDirectNetwork,
   lookupReachability,
+  lookupDnsLeak,
+  summarizeDnsLeak,
   DEFAULT_PORT,
 };

@@ -78,32 +78,105 @@ function commandMatchesExecutable(command, executable) {
   const hint = String(executable || '').trim();
   if (!cmd || !hint) return false;
   const base = path.basename(hint);
+  const winBase = path.win32.basename(hint);
+  const basenames = new Set([base, winBase].filter(Boolean));
+  const compare = (value) => isWindows() ? String(value).toLowerCase() : String(value);
+  const comparableCommand = compare(cmd);
   // Full absolute path (may contain spaces) appears as a substring of the command line.
-  if (path.isAbsolute(hint)) {
-    const resolved = path.resolve(hint);
-    if (cmd.includes(resolved) || cmd.includes(hint)) return true;
+  if (path.isAbsolute(hint) || path.win32.isAbsolute(hint)) {
+    const resolved = path.isAbsolute(hint) ? path.resolve(hint) : path.win32.normalize(hint);
+    if (comparableCommand.includes(compare(resolved)) || comparableCommand.includes(compare(hint))) return true;
   }
   // Basename as a path segment: …/OpenBrowser.bin or …\OpenBrowser
-  if (base && (cmd.includes(`/${base}`) || cmd.includes(`\\${base}`))) return true;
+  for (const candidate of basenames) {
+    if (comparableCommand.includes(`/${compare(candidate)}`) || comparableCommand.includes(`\\${compare(candidate)}`)) return true;
+  }
   // Bare argv0 without directory (e.g. "node script.js", "OpenBrowser.bin --flag")
-  if (base) {
-    const first = cmd.split(/\s+/)[0].replace(/^['"]|['"]$/g, '');
-    if (first === base || path.basename(first) === base) return true;
+  const first = comparableCommand.split(/\s+/)[0].replace(/^['"]|['"]$/g, '');
+  for (const candidate of basenames) {
+    const comparableCandidate = compare(candidate);
+    if (first === comparableCandidate || compare(path.basename(first)) === comparableCandidate
+      || compare(path.win32.basename(first)) === comparableCandidate) return true;
   }
   // OpenBrowser Dock shell: kernel path ends with OpenBrowser, live process is OpenBrowser.bin
-  if (/^OpenBrowser(\.bin)?$/i.test(base) && /(?:^|\/|\\)OpenBrowser(?:\.bin)?(?:\s|$)/i.test(cmd)) return true;
+  if ([...basenames].some((candidate) => /^OpenBrowser(\.bin)?$/i.test(candidate))
+    && /(?:^|\/|\\)OpenBrowser(?:\.bin)?(?:\s|$)/i.test(cmd)) return true;
   // env-apps Dock wrapper path is strong evidence for managed OpenBrowser shells
   if (/env-apps[/\\]/.test(cmd) && /OpenBrowser(?:\.bin)?/i.test(cmd) && /OpenBrowser/i.test(base || hint)) return true;
   return false;
 }
 
+function inspectWindowsProcess(pid) {
+  const numericPid = Number(pid);
+  if (!Number.isSafeInteger(numericPid) || numericPid <= 0) {
+    return { ok: false, reason: 'invalid process id' };
+  }
+  const script = [
+    `$p = Get-CimInstance Win32_Process -Filter 'ProcessId = ${numericPid}'`,
+    'if ($null -eq $p) { exit 2 }',
+    '[Console]::Out.Write(($p | Select-Object ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress))',
+  ].join('; ');
+  try {
+    const output = execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command', script,
+    ], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (!output) return { ok: false, reason: 'process is not running' };
+    const record = JSON.parse(output);
+    return {
+      ok: true,
+      pid: Number(record.ProcessId),
+      executablePath: String(record.ExecutablePath || ''),
+      commandLine: String(record.CommandLine || ''),
+    };
+  } catch (_) {
+    return { ok: false, reason: 'unable to inspect process identity' };
+  }
+}
+
+function extractUserDataDir(command) {
+  const match = String(command || '').match(
+    /(?:^|\s)(?:"--user-data-dir=([^"]*)"|'--user-data-dir=([^']*)'|--user-data-dir="([^"]*)"|--user-data-dir='([^']*)'|--user-data-dir=([^\s]+))/i
+  );
+  if (!match) return '';
+  return String(match.slice(1).find((value) => value !== undefined) || '').trim();
+}
+
+function windowsExecutableMatches(actualExecutable, expectedExecutable) {
+  const actual = path.win32.normalize(String(actualExecutable || '')).toLowerCase();
+  const expected = String(expectedExecutable || '').trim();
+  if (!actual || !expected) return false;
+  if (path.win32.isAbsolute(expected)) {
+    return actual === path.win32.normalize(expected).toLowerCase();
+  }
+  return path.win32.basename(actual) === path.win32.basename(expected).toLowerCase();
+}
+
 /**
- * Inspect a managed browser pid (macOS/Linux). Windows defers identity to taskkill.
+ * Inspect a managed browser pid on every platform before allowing termination.
  * options.expectedExecutable(s): path(s) or basenames that may appear in the command line
  * options.expectedUserDataDir: required --user-data-dir match when set
  */
 function processIdentity(pid, options = {}) {
-  if (isWindows()) return { ok: true, reason: 'windows identity check delegated to taskkill' };
+  if (isWindows()) {
+    const inspected = inspectWindowsProcess(pid);
+    if (!inspected.ok) return inspected;
+    const command = [inspected.executablePath, inspected.commandLine].filter(Boolean).join(' ');
+    const executables = normalizeExpectedExecutables(options);
+    if (executables.length && !executables.some((exe) => windowsExecutableMatches(inspected.executablePath, exe))) {
+      return { ok: false, reason: 'managed executable does not match', command, executables };
+    }
+    if (options.expectedUserDataDir) {
+      const expectedRoot = path.win32.normalize(String(options.expectedUserDataDir)).toLowerCase();
+      const userDataArg = extractUserDataDir(inspected.commandLine);
+      const actualRoot = path.win32.normalize(String(userDataArg || '')).toLowerCase();
+      if (!userDataArg || actualRoot !== expectedRoot) {
+        return { ok: false, reason: 'managed user-data-dir does not match', command };
+      }
+    }
+    return { ok: true, command, executablePath: inspected.executablePath };
+  }
   let command;
   try {
     command = execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -135,7 +208,7 @@ function killProcessTree(pid, options = {}) {
     if (isWindows()) {
       const args = force ? ['/PID', String(pid), '/T', '/F'] : ['/PID', String(pid), '/T'];
       const child = spawn('taskkill.exe', args, { windowsHide: true, stdio: 'ignore' });
-      child.once('exit', () => resolve(true));
+      child.once('exit', (code) => resolve(code === 0));
       child.once('error', () => resolve(false));
       return;
     }
@@ -186,6 +259,8 @@ module.exports = {
   processIdentity,
   commandMatchesExecutable,
   normalizeExpectedExecutables,
+  extractUserDataDir,
+  windowsExecutableMatches,
   LOCAL_API_PORTS,
   defaultApiPort,
   defaultStageRoots,

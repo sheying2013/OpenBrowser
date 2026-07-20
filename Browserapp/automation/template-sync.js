@@ -223,7 +223,7 @@ function normalizeRemoteTemplate(item = {}, detail = null, processContent = null
     steps,
     process_content: pc,
     uses: Number(src.use_num || src.uses || 0) || 0,
-    pay_type: Number(src.pay_type || 1) || 1,
+    pay_type: 1,
     price: src.price != null ? Number(src.price) : 0,
     developer: typeof src.developer === 'object' && src.developer
       ? String(src.developer.name || 'Remote')

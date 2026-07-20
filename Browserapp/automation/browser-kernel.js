@@ -38,6 +38,7 @@ const SOURCE_CUSTOM = 'custom';
 /** Bundled / userData OpenBrowser 148 independent kernel. Default on macOS x64. */
 const SOURCE_OPENBROWSER = 'openbrowser-148';
 const OPENBROWSER_KERNEL_VERSION = '148.0.7778.165';
+const WAYFERN_ACCEPT_TERMS_ARG = '--accept-terms-and-conditions';
 const MAX_META_BYTES = 2 * 1024 * 1024;
 const MAX_KERNEL_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_REDIRECTS = 6;
@@ -48,6 +49,7 @@ const KERNEL_HOSTS = new Set([
   'googlechromelabs.github.io',
   'storage.googleapis.com',
 ]);
+const acceptedWayfernTerms = new Set();
 
 function trustedKernelUrl(value) {
   const parsed = new URL(value);
@@ -269,6 +271,41 @@ function kernelDisplayName(source) {
   return 'Independent Chromium';
 }
 
+function isWayfernKernel(candidate = {}, versionOutput = '') {
+  const source = String(candidate.source || '').toLowerCase();
+  const binaryPath = String(candidate.path || candidate.binary || candidate || '').toLowerCase().replace(/\\/g, '/');
+  const version = String(versionOutput || candidate.versionOutput || '').toLowerCase();
+  return source === SOURCE_WAYFERN
+    || /(?:^|\/)wayfern(?:\/|$)/.test(binaryPath)
+    || /\bwayfern\b/.test(version);
+}
+
+function termsAcceptanceArgsForKernel(candidate = {}, versionOutput = '') {
+  return isWayfernKernel(candidate, versionOutput) ? [WAYFERN_ACCEPT_TERMS_ARG] : [];
+}
+
+async function ensureKernelReadyForLaunch(candidate = {}, versionOutput = '') {
+  const args = termsAcceptanceArgsForKernel(candidate, versionOutput);
+  if (!args.length) return false;
+  const binary = String(candidate.path || candidate.binary || candidate || '').trim();
+  if (!binary) throw new Error('Wayfern 条款初始化失败：缺少内核路径');
+
+  const cacheKey = [path.resolve(binary), process.env.APPDATA || process.env.HOME || ''].join('\0');
+  if (acceptedWayfernTerms.has(cacheKey)) return true;
+
+  try {
+    await execFileAsync(binary, args, { timeout: 15000, windowsHide: true, maxBuffer: 128 * 1024 });
+    acceptedWayfernTerms.add(cacheKey);
+    return true;
+  } catch (error) {
+    const output = [error.stdout, error.stderr, error.message]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .join(' | ');
+    throw new Error('Wayfern 条款初始化失败：' + (output || 'accept-terms command failed'));
+  }
+}
+
 function compareVersions(a, b) {
   const pa = String(a || '').replace(/^v/i, '').split(/[^\d]+/).map((n) => Number.parseInt(n, 10) || 0);
   const pb = String(b || '').replace(/^v/i, '').split(/[^\d]+/).map((n) => Number.parseInt(n, 10) || 0);
@@ -357,7 +394,8 @@ function downloadFile(url, dest, onProgress) {
         const total = Number(res.headers['content-length']) || 0;
         if (total > MAX_KERNEL_BYTES) { res.resume(); return fail(new Error('Kernel archive exceeds 2 GiB')); }
         let received = 0;
-        const out = createWriteStream(dest, { flags: 'wx', mode: 0o600 });
+        try { fs.rmSync(dest, { force: true }); } catch (_) {}
+        const out = createWriteStream(dest, { flags: 'w', mode: 0o600 });
         activeOutput = out;
         res.on('data', (chunk) => {
           if (settled) return;
@@ -1144,6 +1182,7 @@ class BrowserKernelManager {
     let child;
     try {
       this.onProgress({ phase: 'validate', message: '验证自定义 Chromium 内核兼容性…', binary: resolved });
+      await ensureKernelReadyForLaunch({ path: resolved }, versionOutput);
       child = spawn(resolved, [
         `--user-data-dir=${probeRoot}`,
         `--disk-cache-dir=${path.join(probeRoot, 'OpenBrowserCache')}`,
@@ -1247,6 +1286,9 @@ module.exports = {
   SOURCE_CUSTOM,
   SOURCE_OPENBROWSER,
   OPENBROWSER_KERNEL_VERSION,
+  isWayfernKernel,
+  termsAcceptanceArgsForKernel,
+  ensureKernelReadyForLaunch,
   compareVersions,
   validateArchiveMemberName,
   safeInstalledBinary,

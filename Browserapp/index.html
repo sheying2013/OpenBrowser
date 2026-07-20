@@ -5,14 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>OpenBrowser</title>
-  <script src="i18n.js?v=20260719-i18n-v4-pages"></script>
+  <script src="i18n.js?v=20260720-nes-light"></script>
   <link rel="icon" type="image/png" href="assets/logo-pixel.png?v=20260720-pixel">
   <link rel="stylesheet" href="styles.css?v=20260719-nav-fix">
-  <link rel="stylesheet" href="themes.css?v=20260719-native-popover">
+  <link rel="stylesheet" href="themes.css?v=20260720-start-progress">
   <link rel="stylesheet" href="environment-audit.css?v=20260719-readable-scale">
-  <link rel="stylesheet" href="ui-shell.css?v=20260719-native-popover">
-  <link rel="stylesheet" href="pixel-workstation.css?v=20260719-nav-fix">
-  <link rel="stylesheet" href="element-admin.css?v=20260719-native-popover">
+  <link rel="stylesheet" href="ui-shell.css?v=20260720-start-progress">
+  <link rel="stylesheet" href="pixel-workstation.css?v=20260720-start-progress">
+  <link rel="stylesheet" href="nes-light.css?v=20260720-nes-light">
+  <link rel="stylesheet" href="element-admin.css?v=20260720-start-progress">
 </head>
 <body>
   <div class="app-shell">
@@ -31,7 +32,7 @@
           <button class="nav nav-child" data-view="rpa" data-rpa-tab="flows"><i data-lucide="route"></i><span data-i18n="nav.rpa.flows">流程管理</span></button>
           <button class="nav nav-child" data-view="rpa" data-rpa-tab="tasks"><i data-lucide="list-checks"></i><span data-i18n="nav.rpa.tasks">任务管理</span></button>
           <button class="nav nav-child" data-view="rpa" data-rpa-tab="runs"><i data-lucide="history"></i><span data-i18n="nav.rpa.runs">运行记录</span></button>
-          <button class="nav nav-child" data-view="rpa" data-rpa-tab="store"><i data-lucide="store"></i><span data-i18n="nav.rpa.store">模板商店</span></button>
+          <button class="nav nav-child" data-view="rpa" data-rpa-tab="store"><i data-lucide="store"></i><span data-i18n="nav.rpa.store">模板仓库</span></button>
           <button class="nav nav-child" data-view="rpa-guide"><i data-lucide="book-open"></i><span data-i18n="nav.rpa.guide">说明文档</span></button>
         </div>
                 <button class="nav" data-view="api-mcp"><i data-lucide="braces"></i><span data-i18n="nav.api">API & MCP</span></button>
@@ -64,6 +65,7 @@
               <div class="theme-popover-head"><strong data-i18n="theme.title">界面皮肤</strong><span id="theme-current" data-i18n="theme.pixel.name">像素工作站</span></div>
               <div class="theme-grid" id="theme-options">
                 <button class="theme-option active" type="button" data-ui-theme-option="pixel-workstation" aria-pressed="true"><i></i><span><strong data-i18n="theme.pixel">像素工作站</strong><small data-i18n="theme.pixel.desc">Pxlkit + RetroUI 整套界面</small></span></button>
+                <button class="theme-option" type="button" data-ui-theme-option="nes-light" aria-pressed="false"><i></i><span><strong data-i18n="theme.nes">NES 像素浅色</strong><small data-i18n="theme.nes.desc">NES.css 浅色像素复古</small></span></button>
                 <button class="theme-option" type="button" data-ui-theme-option="retro-desktop" aria-pressed="false"><i></i><span><strong data-i18n="theme.retro">复古桌面</strong><small data-i18n="theme.retro.desc">完整界面皮肤</small></span></button>
                 <button class="theme-option" type="button" data-ui-theme-option="element-admin" aria-pressed="false"><i></i><span><strong data-i18n="theme.native">系统原生</strong><small data-i18n="theme.native.desc">macOS HIG · Windows Fluent</small></span></button>
               </div>
@@ -582,7 +584,7 @@
             </div>
             <div class="rpa-empty-card" id="rpa-flow-empty">
               <div class="rpa-empty-art">🤖</div>
-              <p>暂无流程，创建后可在此管理与运行；也可从「模板商店」一键安装</p>
+              <p>暂无流程，创建后可在此管理与运行；也可从「模板仓库」一键安装</p>
               <button class="primary" type="button" id="rpa-new-plan-2"><i data-lucide="plus"></i>创建任务流程</button>
             </div>
             <div class="rpa-split" id="rpa-flow-editor" hidden>
@@ -662,9 +664,9 @@
             </div>
           </div>
 
-          <!-- 模板商店 -->
+          <!-- 模板仓库 -->
           <div class="rpa-panel" data-rpa-panel="store" hidden>
-            <div class="rpa-banner" data-i18n="rpa.store.banner">模板商店：内置可运行流程，支持自定义创建、导入和导出。「使用」会创建可编辑流程，可直接运行。</div>
+            <div class="rpa-banner" data-i18n="rpa.store.banner">模板仓库：内置可运行流程，支持自定义创建、导入和导出。「使用」会创建可编辑流程，可直接运行。</div>
             <div class="rpa-toolbar">
               <button class="primary" type="button" id="rpa-store-custom"><i data-lucide="plus"></i><span data-i18n="rpa.store.custom">定制模板</span></button>
               <button class="outline" type="button" id="rpa-store-import" data-i18n="rpa.store.import">导入 JSON</button>
@@ -697,7 +699,7 @@
           <div class="rpa-panel rpa-guide-page">
             <div class="rpa-guide-page-head">
               <div>
-                <p class="rpa-guide-eyebrow">自动脚本 / 模板商店</p>
+                <p class="rpa-guide-eyebrow">自动脚本 / 模板仓库</p>
                 <h2>新建自定义模板</h2>
                 <p>把可重复执行的浏览器操作保存为本机模板，后续可随时创建流程、修改、导入或导出。</p>
               </div>
@@ -717,7 +719,7 @@
               <div class="rpa-guide-article">
                 <section class="rpa-guide-section" id="rpa-guide-create-template">
                   <h3>1. 新建模板</h3>
-                  <p>在模板商店点击「定制模板」。填写模板名称、分类和说明后，在“步骤 JSON”中填写需要执行的操作。</p>
+                  <p>在模板仓库点击「定制模板」。填写模板名称、分类和说明后，在“步骤 JSON”中填写需要执行的操作。</p>
                   <ul>
                     <li><strong>模板名称</strong>：用于在商店中识别模板，例如“每日签到”。</li>
                     <li><strong>分类</strong>：用于筛选，建议按业务或网站命名，例如“内容发布”。</li>
@@ -745,7 +747,7 @@
 
                 <section class="rpa-guide-section" id="rpa-guide-save-use">
                   <h3>3. 保存和使用</h3>
-                  <p>点击「保存到商店」后，模板会出现在模板商店的来源「我的/导入」中。点击模板卡片上的「使用」会创建一份新的可编辑流程，原模板不会被修改。</p>
+                  <p>点击「保存到仓库」后，模板会出现在模板仓库的来源「我的/导入」中。点击模板卡片上的「使用」会创建一份新的可编辑流程，原模板不会被修改。</p>
                   <p>可以在“流程管理”中编辑新流程的名称、运行环境和步骤 JSON；确认无误后再保存或运行。</p>
                 </section>
 
@@ -773,7 +775,7 @@
             <label class="rpa-field">说明<textarea id="rpa-tpl-desc" rows="2" placeholder="简要说明用途"></textarea></label>
             <label class="rpa-field">步骤 JSON<textarea id="rpa-tpl-steps" rows="12" spellcheck="false"></textarea></label>
             <div class="rpa-actions">
-              <button type="submit" class="primary" id="rpa-tpl-save" value="save">保存到商店</button>
+              <button type="submit" class="primary" id="rpa-tpl-save" value="save">保存到仓库</button>
               <button type="submit" class="outline" value="cancel" formnovalidate>取消</button>
             </div>
           </form>
@@ -849,7 +851,7 @@
                 <li><code>POST /api/v1/browser/stop</code> 停止环境</li>
                 <li><code>POST /api/sync/start</code> 窗口同步</li>
                 <li><code>POST /api/rpa/run</code> 运行自动脚本</li>
-                <li><code>GET /api/rpa/templates</code> 模板商店列表</li>
+                <li><code>GET /api/rpa/templates</code> 模板仓库列表</li>
                 <li><code>POST /api/rpa/templates</code> 安装/导入/另存模板</li>
                 <li><code>GET|POST /api/v2/proxy-list/*</code> 代理库</li>
               </ul>
@@ -1178,6 +1180,6 @@
   </form></dialog><dialog id="add-app-dialog"><div class="dialog-head"><div><h2>&#28155;&#21152;&#24212;&#29992;</h2><p>&#20174;&#26412;&#22320;&#30446;&#24405;&#25110; Chrome &#24212;&#29992;&#21830;&#24215;&#28155;&#21152;</p></div><button id="close-add-app">&times;</button></div><div class="store-source-tabs"><button class="outline" id="choose-extension-folder">&#23433;&#35013;&#21253;&#30446;&#24405;</button><button class="primary" type="button">Chrome &#24212;&#29992;&#21830;&#24215;</button></div><label>Chrome &#24212;&#29992;&#21830;&#24215; URL<input id="chrome-store-url" placeholder="https://chromewebstore.google.com/detail/.../extension-id"></label><label class="assign-item"><input id="store-assign-all" type="checkbox" checked> &#28155;&#21152;&#21040;&#25152;&#26377;&#29615;&#22659;&#24182;&#37325;&#21551;&#27491;&#22312;&#36816;&#34892;&#30340;&#29615;&#22659;</label><p class="store-note">&#21482;&#25509;&#21463; Chrome Web Store &#38142;&#25509;&#65307;&#19979;&#36733;&#21518;&#20250;&#26657;&#39564; CRX &#26684;&#24335;&#21644;&#25991;&#20214;&#36335;&#24452;&#12290;</p><div class="dialog-actions"><button class="outline" id="cancel-add-app">&#21462;&#28040;</button><button class="primary" id="add-store-submit">&#30830;&#23450;&#28155;&#21152;</button></div></dialog><div class="toast" id="toast"></div>
   <script src="environment-audit.js?v=20260719-environment-audit"></script>
   <script src="assets/vendor/lucide.min.js"></script>
-  <script src="renderer.js?v=20260719-native-popover"></script>
+  <script src="renderer.js?v=20260720-nes-light"></script>
 </body>
 </html>

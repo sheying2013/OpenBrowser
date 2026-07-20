@@ -575,6 +575,8 @@ function normalizeIpApiResult(value) {
     mobile: Boolean(value.mobile),
     proxy: Boolean(value.proxy),
     hosting: Boolean(value.hosting),
+    // ip-api style feeds are closer to registry / WHOIS-facing attributes.
+    geoRole: 'registry',
     checkedAt: new Date().toISOString(),
   };
 }
@@ -583,7 +585,7 @@ function normalizeIpPureResult(value) {
   const ip = String(value.ip || '').trim();
   const fraudScore = Number(value.fraudScore);
   if (!ip || !Number.isFinite(fraudScore) || fraudScore < 0 || fraudScore > 100) {
-    throw new Error('IPPure response was incomplete');
+    throw new Error('risk intelligence response was incomplete');
   }
   return {
     ip,
@@ -599,24 +601,42 @@ function normalizeIpPureResult(value) {
     latitude: Number.isFinite(Number(value.latitude)) ? Number(value.latitude) : null,
     longitude: Number.isFinite(Number(value.longitude)) ? Number(value.longitude) : null,
     postalCode: String(value.postalCode || ''),
+    geoRole: 'risk',
     checkedAt: new Date().toISOString(),
   };
 }
 
 function attachIpPure(network, result) {
-  if (!result || result.ip !== network.ip) return network;
-  return { ...network, ipPure: result };
+  if (!result || !network?.ip) return network;
+  if (result.ip && result.ip !== network.ip) return network;
+  return {
+    ...network,
+    // Keep risk fields under a neutral key. UI must not surface provider brand.
+    riskIntel: {
+      fraudScore: result.fraudScore,
+      isResidential: result.isResidential,
+      isBroadcast: result.isBroadcast,
+      asOrganization: result.asOrganization || '',
+    },
+    // Backward-compatible alias for older score code paths.
+    ipPure: {
+      fraudScore: result.fraudScore,
+      isResidential: result.isResidential,
+      isBroadcast: result.isBroadcast,
+      asOrganization: result.asOrganization || '',
+    },
+  };
 }
 
 async function lookupIpPureDirect() {
   const { status, body } = await fetchUrlText('https://my.ippure.com/v1/info', { timeout: 12000 });
-  if (status !== 200) throw new Error('IPPure lookup returned HTTP ' + status);
+  if (status !== 200) throw new Error('risk intelligence lookup returned HTTP ' + status);
   return normalizeIpPureResult(JSON.parse(body));
 }
 
 async function lookupIpPureProxy(config) {
   const response = await requestProxyHttps(config, 'my.ippure.com', '/v1/info');
-  if (response.status !== 200) throw new Error('IPPure proxy lookup returned HTTP ' + response.status);
+  if (response.status !== 200) throw new Error('risk intelligence proxy lookup returned HTTP ' + response.status);
   return normalizeIpPureResult(JSON.parse(response.body.toString('utf8')));
 }
 
@@ -626,6 +646,197 @@ async function enrichWithIpPure(network, lookup) {
   } catch (_) {
     return network;
   }
+}
+
+function parseCloudflareTrace(body = '') {
+  const text = String(body || '');
+  const pick = (key) => {
+    const match = text.match(new RegExp(`(?:^|\\n)${key}=([^\\n\\r]+)`, 'i'));
+    return match ? String(match[1]).trim() : '';
+  };
+  const ip = pick('ip');
+  const loc = pick('loc').toUpperCase();
+  const colo = pick('colo');
+  if (!ip || !/^[A-Z]{2}$/.test(loc)) {
+    throw new Error('edge location probe response was incomplete');
+  }
+  return {
+    ip,
+    country: loc,
+    countryCode: loc,
+    region: '',
+    city: '',
+    zip: '',
+    timezone: '',
+    latitude: null,
+    longitude: null,
+    isp: '',
+    organization: '',
+    asn: '',
+    asName: '',
+    mobile: false,
+    proxy: false,
+    hosting: false,
+    colo,
+    // Cloudflare loc reflects the egress/anycast edge the client actually hits.
+    geoRole: 'usage',
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeIpInfoResult(value) {
+  const ip = String(value.ip || '').trim();
+  const countryCode = String(value.country || value.countryCode || '').toUpperCase();
+  if (!ip || !/^[A-Z]{2}$/.test(countryCode)) {
+    throw new Error('secondary exit lookup response was incomplete');
+  }
+  const regionCity = String(value.region || '');
+  const city = String(value.city || '');
+  const org = String(value.org || '');
+  const asnMatch = org.match(/\bAS\d+\b/i);
+  return {
+    ip,
+    country: countryCode,
+    countryCode,
+    region: regionCity,
+    city,
+    zip: String(value.postal || value.zip || ''),
+    timezone: String(value.timezone || ''),
+    latitude: Number.isFinite(Number(value.latitude ?? value.loc?.split?.(',')?.[0]))
+      ? Number(value.latitude ?? value.loc.split(',')[0])
+      : null,
+    longitude: Number.isFinite(Number(value.longitude ?? value.loc?.split?.(',')?.[1]))
+      ? Number(value.longitude ?? value.loc.split(',')[1])
+      : null,
+    isp: org,
+    organization: org,
+    asn: asnMatch ? asnMatch[0].toUpperCase() : '',
+    asName: org.replace(/\bAS\d+\b/i, '').trim(),
+    mobile: false,
+    proxy: false,
+    hosting: false,
+    geoRole: 'registry',
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+function firstFilled(...values) {
+  for (const value of values) {
+    if (value == null) continue;
+    if (typeof value === 'string' && !value.trim()) continue;
+    return value;
+  }
+  return values[values.length - 1];
+}
+
+/**
+ * Merge multi-source exit lookups.
+ * - usage sources (edge/CDN loc) prefer "where traffic lands"
+ * - registry sources prefer WHOIS/registration-facing geo
+ * Conflicts like "registered GB / used HK" become countryNote + geoConflict.
+ */
+function mergeNetworkLookups(parts = []) {
+  const list = (Array.isArray(parts) ? parts : []).filter((item) => item && item.ip);
+  if (!list.length) throw new Error('exit lookup produced no usable result');
+
+  // Prefer the most common IP; ties keep first.
+  const ipVotes = new Map();
+  for (const item of list) {
+    const ip = String(item.ip).trim();
+    ipVotes.set(ip, (ipVotes.get(ip) || 0) + 1);
+  }
+  const ip = [...ipVotes.entries()].sort((a, b) => b[1] - a[1] || 0)[0][0];
+  const sameIp = list.filter((item) => String(item.ip).trim() === ip);
+
+  const countryVotes = new Map();
+  const usageCodes = [];
+  const registryCodes = [];
+  for (const item of sameIp) {
+    const code = String(item.countryCode || '').toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code)) continue;
+    countryVotes.set(code, (countryVotes.get(code) || 0) + 1);
+    if (item.geoRole === 'usage') usageCodes.push(code);
+    else registryCodes.push(code);
+  }
+  const countries = [...countryVotes.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([code]) => code);
+
+  const usageCountry = usageCodes.find(Boolean) || '';
+  const registryCountry = registryCodes.find(Boolean) || '';
+  // Prefer real egress/usage country when available; fall back to majority registry.
+  const countryCode = usageCountry || countries[0] || '';
+  const geoConflict = countries.length > 1;
+  const countryNote = geoConflict
+    ? `多源地区不一致：${countries.join(' / ')}${usageCountry && registryCountry && usageCountry !== registryCountry
+      ? `（使用地倾向 ${usageCountry}，注册/库表倾向 ${registryCountry}）`
+      : ''}`
+    : '';
+
+  const pick = (...keys) => {
+    for (const item of sameIp) {
+      for (const key of keys) {
+        const value = item[key];
+        if (value == null) continue;
+        if (typeof value === 'string' && !String(value).trim()) continue;
+        return value;
+      }
+    }
+    return null;
+  };
+
+  const primary = sameIp.find((item) => item.geoRole !== 'usage') || sameIp[0];
+  const usage = sameIp.find((item) => item.geoRole === 'usage') || null;
+
+  return {
+    ip,
+    country: firstFilled(
+      sameIp.find((item) => String(item.countryCode || '').toUpperCase() === countryCode)?.country,
+      primary.country,
+      countryCode,
+    ),
+    countryCode,
+    countries,
+    countryUsage: usageCountry || '',
+    countryRegistered: registryCountry || '',
+    geoConflict,
+    countryNote,
+    region: firstFilled(pick('region'), ''),
+    city: firstFilled(pick('city'), ''),
+    zip: firstFilled(pick('zip'), pick('postalCode'), ''),
+    timezone: firstFilled(pick('timezone'), ''),
+    latitude: pick('latitude'),
+    longitude: pick('longitude'),
+    isp: firstFilled(pick('isp'), ''),
+    organization: firstFilled(pick('organization'), pick('asOrganization'), ''),
+    asn: firstFilled(pick('asn'), ''),
+    asName: firstFilled(pick('asName'), pick('asOrganization'), ''),
+    mobile: sameIp.some((item) => item.mobile),
+    proxy: sameIp.some((item) => item.proxy),
+    hosting: sameIp.some((item) => item.hosting),
+    colo: usage?.colo || pick('colo') || '',
+    sourceCount: sameIp.length,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+async function raceSettledValues(tasks, { minWaitMs = 0, maxWaitMs = 10000 } = {}) {
+  const started = Date.now();
+  const results = [];
+  await Promise.all(tasks.map(async (task) => {
+    try {
+      const value = await Promise.race([
+        task(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('lookup timed out')), maxWaitMs)),
+      ]);
+      if (value) results.push(value);
+    } catch (_) { /* ignore single-source failure */ }
+  }));
+  const elapsed = Date.now() - started;
+  if (minWaitMs > elapsed) {
+    await new Promise((resolve) => setTimeout(resolve, minWaitMs - elapsed));
+  }
+  return results;
 }
 
 function classifyProxyError(error) {
@@ -844,13 +1055,16 @@ async function invokeProxyRefresh(url) {
 }
 
 async function lookupProxyCountry(config) {
-  const fields = 'status,message,country,countryCode,regionName,city,zip,timezone,lat,lon,isp,org,as,asname,mobile,proxy,hosting,query';
   const started = Date.now();
   try {
-    const response = await requestProxyHttp(config, 'ip-api.com', '/json/?fields=' + fields);
-    if (response.status !== 200) throw new Error('Proxy exit lookup returned HTTP ' + response.status);
-    const value = JSON.parse(response.body.toString('utf8'));
-    const result = normalizeIpApiResult(value);
+    const parts = await raceSettledValues([
+      () => lookupProxyIpApi(config),
+      () => lookupProxyIpWho(config),
+      () => lookupProxyIpInfo(config),
+      () => lookupProxyCloudflareTrace(config),
+    ], { maxWaitMs: 12000 });
+    if (!parts.length) throw new Error('Proxy exit lookup failed on all sources');
+    const result = mergeNetworkLookups(parts);
     const latencyMs = Date.now() - started;
     return enrichWithIpPure({
       ...result,
@@ -891,32 +1105,85 @@ function normalizeIpWhoResult(value) {
     mobile: Boolean(value.connection?.mobile || value.mobile),
     proxy: Boolean(value.security?.proxy || value.proxy),
     hosting: Boolean(value.connection?.hosting || value.hosting),
+    geoRole: 'registry',
     checkedAt: new Date().toISOString(),
   };
 }
 
-/** Direct (no proxy) exit lookup for language-from-IP on local direct mode. */
-async function lookupDirectCountry() {
+async function lookupDirectIpApi() {
   const fields = 'status,message,country,countryCode,regionName,city,zip,timezone,lat,lon,isp,org,as,asname,mobile,proxy,hosting,query';
-  // Free ip-api.com only allows HTTP; HTTPS returns 403. Prefer HTTP, then other public endpoints.
-  const endpoints = [
-    { url: `http://ip-api.com/json/?fields=${fields}`, kind: 'ip-api' },
-    { url: 'https://ipwho.is/', kind: 'ipwho' },
-    { url: 'http://ipwho.is/', kind: 'ipwho' },
-  ];
+  const { status, body } = await fetchUrlText(`http://ip-api.com/json/?fields=${fields}`, { timeout: 10000 });
+  if (status !== 200) throw new Error('HTTP ' + status);
+  return normalizeIpApiResult(JSON.parse(body));
+}
+
+async function lookupDirectIpWho() {
   const errors = [];
-  for (const endpoint of endpoints) {
+  for (const url of ['https://ipwho.is/', 'http://ipwho.is/']) {
     try {
-      const { status, body } = await fetchUrlText(endpoint.url, { timeout: 12000 });
+      const { status, body } = await fetchUrlText(url, { timeout: 10000 });
       if (status !== 200) throw new Error('HTTP ' + status);
-      const value = JSON.parse(body);
-      const network = endpoint.kind === 'ip-api' ? normalizeIpApiResult(value) : normalizeIpWhoResult(value);
-      return enrichWithIpPure(network, lookupIpPureDirect);
+      return normalizeIpWhoResult(JSON.parse(body));
     } catch (error) {
       errors.push(String(error.message || error));
     }
   }
-  throw new Error(errors[0] ? ('本地出口查询失败：' + errors[0]) : '本地出口查询失败');
+  throw new Error(errors[0] || 'ipwho lookup failed');
+}
+
+async function lookupDirectIpInfo() {
+  const { status, body } = await fetchUrlText('https://ipinfo.io/json', { timeout: 10000 });
+  if (status !== 200) throw new Error('HTTP ' + status);
+  return normalizeIpInfoResult(JSON.parse(body));
+}
+
+async function lookupDirectCloudflareTrace() {
+  const { status, body } = await fetchUrlText('https://www.cloudflare.com/cdn-cgi/trace', { timeout: 10000 });
+  if (status !== 200) throw new Error('HTTP ' + status);
+  return parseCloudflareTrace(body);
+}
+
+/** Direct (no proxy) multi-source exit lookup. */
+async function lookupDirectCountry() {
+  const parts = await raceSettledValues([
+    lookupDirectIpApi,
+    lookupDirectIpWho,
+    lookupDirectIpInfo,
+    lookupDirectCloudflareTrace,
+  ], { maxWaitMs: 11000 });
+  if (!parts.length) throw new Error('本地出口查询失败：所有公开源均不可用');
+  const merged = mergeNetworkLookups(parts);
+  return enrichWithIpPure({
+    ...merged,
+    latencyMs: null,
+    networkType: networkTypeFromLookup(merged),
+    protocol: 'direct',
+  }, lookupIpPureDirect);
+}
+
+async function lookupProxyIpApi(config) {
+  const fields = 'status,message,country,countryCode,regionName,city,zip,timezone,lat,lon,isp,org,as,asname,mobile,proxy,hosting,query';
+  const response = await requestProxyHttp(config, 'ip-api.com', '/json/?fields=' + fields);
+  if (response.status !== 200) throw new Error('Proxy exit lookup returned HTTP ' + response.status);
+  return normalizeIpApiResult(JSON.parse(response.body.toString('utf8')));
+}
+
+async function lookupProxyIpWho(config) {
+  const response = await requestProxyHttps(config, 'ipwho.is', '/');
+  if (response.status !== 200) throw new Error('Proxy exit lookup returned HTTP ' + response.status);
+  return normalizeIpWhoResult(JSON.parse(response.body.toString('utf8')));
+}
+
+async function lookupProxyIpInfo(config) {
+  const response = await requestProxyHttps(config, 'ipinfo.io', '/json');
+  if (response.status !== 200) throw new Error('Proxy exit lookup returned HTTP ' + response.status);
+  return normalizeIpInfoResult(JSON.parse(response.body.toString('utf8')));
+}
+
+async function lookupProxyCloudflareTrace(config) {
+  const response = await requestProxyHttps(config, 'www.cloudflare.com', '/cdn-cgi/trace');
+  if (response.status !== 200) throw new Error('Proxy edge probe returned HTTP ' + response.status);
+  return parseCloudflareTrace(response.body.toString('utf8'));
 }
 
 async function probeProxyTunnel(config, hostname = 'www.google.com', port = 443) {
@@ -953,6 +1220,9 @@ module.exports = {
   startAuthenticatedProxy,
   lookupProxyCountry,
   lookupDirectCountry,
+  mergeNetworkLookups,
+  parseCloudflareTrace,
+  normalizeIpInfoResult,
   probeProxyTunnel,
   probeProxyHttps,
   classifyProxyError,

@@ -73,7 +73,7 @@ class RpaStore {
         existing.desc = item.desc;
         existing.tags = item.tags;
         existing.steps = JSON.parse(JSON.stringify(item.steps || []));
-        existing.pay_type = item.pay_type || 1;
+        existing.pay_type = 1;
         existing.developer = item.developer || 'OpenBrowser';
         existing.builtin = true;
         existing.source = 'builtin';
@@ -202,8 +202,9 @@ class RpaStore {
       // The local catalog only supplies templates. Its source usage figures do
       // not represent OpenBrowser usage and must never be displayed here.
       uses: 0,
-      pay_type: Number(raw.pay_type || 1) || 1,
-      price: raw.price != null ? Number(raw.price) : null,
+      // Local OpenBrowser templates are always free — never surface paid flags.
+      pay_type: 1,
+      price: null,
       developer: 'OpenBrowser',
       img_url: String(raw.img_url || '').slice(0, 500),
       builtin: false,
@@ -490,8 +491,9 @@ class RpaStore {
       uses: Number.isFinite(Number(input.uses))
         ? Number(input.uses)
         : (Number(existing?.uses) || 0),
-      pay_type: Number(input.pay_type ?? existing?.pay_type ?? 1) || 1,
-      price: input.price != null ? Number(input.price) : (existing?.price ?? null),
+      // Local OpenBrowser templates are always free.
+      pay_type: 1,
+      price: null,
       developer: String(input.developer || existing?.developer || (builtin ? 'OpenBrowser' : '')).slice(0, 80),
       img_url: String(input.img_url || existing?.img_url || '').slice(0, 500),
       builtin,
@@ -549,7 +551,7 @@ class RpaStore {
       steps = parseProcessContent(tpl.process_content);
       tpl.steps = steps;
     }
-    if (!steps.length) throw new Error('模版没有可执行步骤（可能是付费模版未同步 process_content）');
+    if (!steps.length) throw new Error('模版没有可执行步骤（未同步 process_content）');
     const unsupported = findUnsupportedSteps(steps);
     if (unsupported.length) {
       const summary = unsupported.slice(0, 4).map((item) => `${item.path.join('.')}: ${item.type}`).join(', ');
@@ -722,7 +724,7 @@ class RpaStore {
           tags: tags.length ? tags : ['导入'],
           steps,
           process_content: raw.process_content || null,
-          pay_type: raw.pay_type || 1,
+          pay_type: 1,
           developer: RpaStore.stripExternalBranding(raw.developer),
           uses: Number(raw.uses || raw.use_num || 0) || 0,
           builtin: false,

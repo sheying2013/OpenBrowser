@@ -214,3 +214,53 @@ html[data-ui-theme="retro-desktop"] .log-empty {
   display: grid; min-height: 420px; place-items: center; color: #666; font-size: 12px;
   background-image: repeating-linear-gradient(0deg, transparent 0 27px, #e4e4e4 27px 28px);
 }
+
+
+/* Start progress — retro desktop */
+html[data-ui-theme="retro-desktop"] .start-progress {
+  --start-progress-height: 10px;
+  --start-progress-radius: 0;
+  --start-progress-track: #c9c9c9;
+  --start-progress-fill: #1534b5;
+  --start-progress-fill-soft: #4d6fe0;
+  --start-progress-label: #000;
+  max-width: 118px;
+  gap: 3px 6px;
+}
+html[data-ui-theme="retro-desktop"] .start-progress-label {
+  font-size: 10px;
+  font-weight: 800;
+}
+html[data-ui-theme="retro-desktop"] .start-progress-percent {
+  color: #555;
+  font-size: 9px;
+  font-weight: 700;
+}
+html[data-ui-theme="retro-desktop"] .start-progress-track {
+  border: 2px solid #000;
+  background: #fff;
+  box-shadow: inset 1px 1px 0 #fff, inset -1px -1px 0 #7a7a7a, 2px 2px 0 #000;
+}
+html[data-ui-theme="retro-desktop"] .start-progress-fill {
+  background: repeating-linear-gradient(
+    90deg,
+    #1534b5 0 6px,
+    #1f45d2 6px 8px
+  );
+  border-right: 1px solid #000;
+  transition: width 180ms steps(12, end);
+}
+html[data-ui-theme="retro-desktop"] .start-progress-shimmer {
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.55) 50%, transparent 100%);
+  animation-duration: 1s;
+  animation-timing-function: steps(8, end);
+}
+html[data-ui-theme="retro-desktop"] #view-profiles .table-card tbody tr.is-starting {
+  background: #e1e7ff;
+}
+html[data-ui-theme="retro-desktop"] #view-profiles .table-card .actions .mini.is-starting {
+  border: 2px solid #000 !important;
+  background: #c9c9c9 !important;
+  color: #000 !important;
+  box-shadow: 2px 2px 0 #000;
+}

@@ -396,14 +396,26 @@ async function writeOpenBrowserKernelInit(profileRoot, options = {}) {
 }
 
 /**
- * When native kernel owns canvas/webgl/audio/clientRects noise, strip those
- * modes from the CDP inject payload so the two stacks do not double-noise.
+ * When native kernel owns canvas/webgl/audio/clientRects *image* noise, strip
+ * those pixel-noise modes from the CDP inject payload so the two stacks do not
+ * double-noise. Keep WebGL *metadata* spoof (vendor/renderer / metaMode) so
+ * UNMASKED_* still works if Framework misses debug-renderer strings.
  */
 function fingerprintForNativeKernelInject(fp) {
   if (!fp || typeof fp !== 'object') return fp;
   const out = { ...fp };
   if (fp.canvas?.mode === 'noise') out.canvas = { ...fp.canvas, mode: 'real' };
-  if (fp.webgl?.mode === 'noise') out.webgl = { ...fp.webgl, mode: 'real' };
+  if (fp.webgl?.mode === 'noise') {
+    const metaMode = fp.webgl.metaMode === 'real' ? 'real' : (fp.webgl.metaMode || 'noise');
+    out.webgl = {
+      ...fp.webgl,
+      // Skip JS readPixels noise (native owns image); keep meta spoof hooks.
+      mode: 'real',
+      metaMode,
+      vendor: metaMode === 'real' ? fp.webgl.vendor : (fp.webgl.vendor ?? null),
+      renderer: metaMode === 'real' ? fp.webgl.renderer : (fp.webgl.renderer ?? null),
+    };
+  }
   if (fp.audio?.mode === 'noise') out.audio = { ...fp.audio, mode: 'real' };
   if (fp.clientRects?.mode === 'noise') out.clientRects = { ...fp.clientRects, mode: 'real' };
   return out;

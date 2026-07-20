@@ -290,7 +290,8 @@ async function main() {
   assert.strictEqual(directResponse.body.data.healthScore.score, 70);
   assert.strictEqual(directResponse.body.data.healthScore.level, 'review');
   assert.strictEqual(directResponse.body.data.healthScore.confidence, 'low');
-  assert.strictEqual(directResponse.body.data.healthScore.factors.at(-1).code, 'ippure-unavailable');
+  // Missing risk intel no longer surfaces a provider/unavailable factor in UI.
+  assert.ok(!directResponse.body.data.healthScore.factors.some((item) => /pure|unavailable|ip-api|ipwho|ipinfo/i.test(String(item.code || '') + String(item.label || ''))));
   const proxyResponse = await httpJson(startPage.port, 'GET', '/api/network?pid=proxy&refresh=1', undefined, startHeaders(proxyToken));
   assert.strictEqual(proxyResponse.status, 200);
   assert.strictEqual(proxyResponse.body.data.healthScore.score, 25);
@@ -339,7 +340,9 @@ async function main() {
   assert.ok(startHtml.includes('浏览器指纹表面'));
   assert.ok(startHtml.includes('WebRTC 地址暴露'));
   assert.ok(startHtml.includes('DNS 泄露'));
-  assert.ok(startHtml.includes('未配置 OpenBrowser 专用唯一 DNS 检测节点'));
+  assert.ok(startHtml.includes('正在触发唯一探测域名'));
+  assert.ok(startHtml.includes('/api/dns-leak'));
+  assert.ok(!startHtml.includes('未配置 OpenBrowser 专用唯一 DNS 检测节点'));
   assert.ok(!startHtml.includes('DNS 安全'));
   assert.ok(!startHtml.includes('OpenBrowser 原生启动页 · 127.0.0.1'));
   for (const match of startHtml.matchAll(/<script>([\s\S]*?)<\/script>/g)) {

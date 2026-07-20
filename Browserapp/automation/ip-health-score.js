@@ -16,8 +16,8 @@ function finitePercent(value) {
   return Number.isFinite(number) && number >= 0 && number <= 100 ? number : null;
 }
 
-function ipPureData(network = {}) {
-  const nested = network.ipPure || network.ippure || {};
+function riskIntelData(network = {}) {
+  const nested = network.riskIntel || network.ipPure || network.ippure || {};
   const fraudScore = finitePercent(
     nested.fraudScore ?? nested.riskScore ?? network.ippureFraudScore ?? network.fraudScore,
   );
@@ -50,27 +50,46 @@ function calculateIpHealthScore(network = {}) {
   }
 
   const proxy = asBoolean(network.proxy) || normalizeNetworkType(network) === 'proxy';
-  const ipPure = ipPureData(network);
+  const risk = riskIntelData(network);
   const hosting = asBoolean(network.hosting)
     || normalizeNetworkType(network) === 'hosting'
-    || (ipPure.isResidential === false && ipPure.isBroadcast === false);
+    || (risk.isResidential === false && risk.isBroadcast === false);
   const mobile = asBoolean(network.mobile) || normalizeNetworkType(network) === 'mobile';
+  const geoConflict = asBoolean(network.geoConflict)
+    || (Array.isArray(network.countries) && new Set(network.countries.filter(Boolean)).size > 1);
   const factors = [];
-  const hasIpPureScore = ipPure.fraudScore != null;
-  let score = hasIpPureScore ? SCORE_MAX - ipPure.fraudScore : 70;
+  const hasRiskScore = risk.fraudScore != null;
+  let score = hasRiskScore ? SCORE_MAX - risk.fraudScore : 70;
 
-  if (hasIpPureScore) {
-    const riskLabel = ipPure.fraudScore >= 70 ? '高风险' : ipPure.fraudScore >= 40 ? '中度风险' : '低风险';
+  if (hasRiskScore) {
+    const riskLabel = risk.fraudScore >= 70 ? '高风险' : risk.fraudScore >= 40 ? '中度风险' : '低风险';
     factors.push({
-      code: 'ippure-risk',
-      state: ipPure.fraudScore >= 70 ? 'bad' : ipPure.fraudScore >= 40 ? 'warn' : 'good',
-      impact: -ipPure.fraudScore,
-      label: `IPPure 风险系数 ${ipPure.fraudScore}%（${riskLabel}）`,
-      detail: '该数值来自 IPPure 公开接口；本地健康分按 100 - 风险系数计算，不代表商业数据库官方健康分。',
+      code: 'risk-score',
+      state: risk.fraudScore >= 70 ? 'bad' : risk.fraudScore >= 40 ? 'warn' : 'good',
+      impact: -risk.fraudScore,
+      label: `风险系数 ${risk.fraudScore}%（${riskLabel}）`,
+      detail: '综合风险信号已计入评分；仅供本地参考，不代表任何站点的账号可用性。',
     });
   }
 
-  if (proxy && hosting && !hasIpPureScore) {
+  if (geoConflict) {
+    score -= 12;
+    const usage = String(network.countryUsage || '').toUpperCase();
+    const registered = String(network.countryRegistered || '').toUpperCase();
+    const countries = Array.isArray(network.countries)
+      ? network.countries.map((item) => String(item || '').toUpperCase()).filter(Boolean)
+      : [];
+    factors.push({
+      code: 'geo-conflict',
+      state: 'warn',
+      impact: -12,
+      label: '注册地与使用地不一致',
+      detail: network.countryNote
+        || `多源地区结果不一致：${countries.join(' / ') || [registered, usage].filter(Boolean).join(' / ') || '未知'}。常见于广播/Anycast 或注册地与实际出口不同的线路。`,
+    });
+  }
+
+  if (proxy && hosting && !hasRiskScore) {
     score -= 45;
     factors.push({
       code: 'proxy-hosting',
@@ -79,7 +98,7 @@ function calculateIpHealthScore(network = {}) {
       label: '代理 / 托管标记',
       detail: '出口查询同时标记为代理或 VPN，以及托管/机房网络。',
     });
-  } else if (proxy && !hasIpPureScore) {
+  } else if (proxy && !hasRiskScore) {
     score -= 35;
     factors.push({
       code: 'proxy',
@@ -88,7 +107,7 @@ function calculateIpHealthScore(network = {}) {
       label: '代理 / VPN 标记',
       detail: '出口查询将此 IP 标记为代理或 VPN；这不是对代理用途本身的否定。',
     });
-  } else if (hosting && !hasIpPureScore) {
+  } else if (hosting && !hasRiskScore) {
     score -= 28;
     factors.push({
       code: 'hosting',
@@ -97,7 +116,7 @@ function calculateIpHealthScore(network = {}) {
       label: '托管 / 机房网络',
       detail: '出口查询将此 IP 归为托管或数据中心网络。',
     });
-  } else if (!hasIpPureScore) {
+  } else if (!hasRiskScore) {
     factors.push({
       code: 'no-datacenter-flag',
       state: 'good',
@@ -107,13 +126,23 @@ function calculateIpHealthScore(network = {}) {
     });
   }
 
-  if (hasIpPureScore && hosting) {
+  if (hasRiskScore && hosting) {
     factors.push({
-      code: 'ippure-non-residential',
+      code: 'non-residential',
       state: 'bad',
       impact: 0,
-      label: 'IPPure：非住宅 / 机房属性',
-      detail: 'IPPure 未将此 IP 识别为住宅网络；该信号已由风险系数综合反映，避免重复扣分。',
+      label: '非住宅 / 机房属性',
+      detail: '风险情报未将此 IP 识别为住宅网络；该信号已由风险系数综合反映，避免重复扣分。',
+    });
+  }
+
+  if (hasRiskScore && risk.isBroadcast === true) {
+    factors.push({
+      code: 'broadcast',
+      state: 'warn',
+      impact: 0,
+      label: '广播 / 共享出口特征',
+      detail: '该出口更像广播或共享线路，地区标签可能与注册地不同。',
     });
   }
 
@@ -141,20 +170,15 @@ function calculateIpHealthScore(network = {}) {
     });
   }
 
-  if (!hasIpPureScore) {
-    factors.push({
-      code: 'ippure-unavailable',
-      state: 'neutral',
-      impact: 0,
-      label: 'IPPure 风险数据不可用',
-      detail: '未取得 IPPure 风险系数；当前分数只是基础网络信号评估，不能视为完整 IP 健康结论。',
-    });
-  }
+  // Intentionally do NOT surface "risk data unavailable" or provider names in UI.
+  // Missing risk intel is already reflected by lower confidence.
 
   score = Math.max(SCORE_MIN, Math.min(SCORE_MAX, score));
   const level = score >= 80 ? 'healthy' : score >= 50 ? 'review' : 'risky';
   const label = level === 'healthy' ? '健康' : level === 'review' ? '需复核' : '高风险';
-  const confidence = hasIpPureScore ? (missing.length ? 'medium' : 'high') : 'low';
+  const confidence = hasRiskScore
+    ? (missing.length || geoConflict ? 'medium' : 'high')
+    : (geoConflict ? 'medium' : 'low');
 
   return { score, level, label, confidence, factors };
 }
