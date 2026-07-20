@@ -14,7 +14,24 @@ const {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const OUTPUT_DIRECTORY = path.join(process.cwd(), 'rpa-output');
 const RPA_DIAGNOSTIC_LIMIT = 512 * 1024;
-const PAID_AUTOMATION_GATE = 'Browser automation requires a paid Donut Browser plan.';
+const CDP_AUTOMATION_BLOCKED = 'Browser automation requires a paid Donut Browser plan.';
+
+/** True when a missing element should not fail the whole flow. */
+function isOptionalElementStep(params = {}) {
+  if (params.optional === true || params.optional === 1 || params.optional === '1' || params.optional === 'true') {
+    return true;
+  }
+  // Legacy catalog: isShow "0"/false means "do not require visible"
+  if (params.isShow === false || params.isShow === 0 || params.isShow === '0' || params.isShow === 'false') {
+    return true;
+  }
+  const selector = String(params.selector || params.content || '');
+  // Common interstitial / redirect / consent dismiss controls — skip quietly if absent.
+  if (/redir-overlay|redir-dismiss|cookie[-_ ]?(banner|accept|consent)|consent[-_ ]?dismiss|#sp-cc-accept|gdpr|onetrust/i.test(selector)) {
+    return true;
+  }
+  return false;
+}
 
 function isPathInsideRoot(candidate, root) {
   const child = path.resolve(candidate);
@@ -131,9 +148,9 @@ function compactError(error) {
 
 function formatRpaError(error) {
   const message = String(error?.message || error || 'Unknown RPA error');
-  if (message.includes(PAID_AUTOMATION_GATE)) {
+  if (message.includes(CDP_AUTOMATION_BLOCKED)) {
     return [
-      '当前浏览器内核拒绝 CDP/RPA 自动化：' + PAID_AUTOMATION_GATE,
+      '当前浏览器内核拒绝 CDP/RPA 自动化（独立内核未就绪或策略不匹配）。请使用安装包内置 kernels/windows-x64 并清理 userData 过期内核。',
       '请改用支持本地 CDP 自动化的内核，或在本机浏览器回退中手动选择 Chrome/Edge 后再运行自动脚本。',
     ].join(' ');
   }
@@ -416,10 +433,17 @@ class RpaEngine {
     }
 
     if (type === 'click' || type === 'clickelement') {
+      const optional = isOptionalElementStep(params);
       await this.withPage(port, async (ws) => {
         if (params.selector) {
           const box = await this.boundingBox(ws, params.selector, params.selectorRadio);
-          if (!box) throw new Error('Element not found: ' + params.selector);
+          if (!box) {
+            if (optional) {
+              if (ctx?.log) await ctx.log('optional click skipped (not found): ' + params.selector);
+              return;
+            }
+            throw new Error('Element not found: ' + params.selector);
+          }
           const x = box.x + box.width / 2;
           const y = box.y + box.height / 2;
           const button = params.button === 'right' ? 'right' : params.button === 'middle' ? 'middle' : 'left';
@@ -473,7 +497,7 @@ class RpaEngine {
         if (found) return;
         await sleep(200);
       }
-      if (params.isShow === false || params.isShow === '0') return;
+      if (isOptionalElementStep(params)) return;
       throw new Error('waitForSelector timeout: ' + selector);
     }
 
@@ -525,14 +549,37 @@ class RpaEngine {
     }
 
     if (type === 'getelement' || type === 'passingelement' || type === 'focuselement') {
+      const optional = isOptionalElementStep(params);
       const selector = text(params.selector || (params.selectorType === 'element' ? variables[params.element]?.selector : ''));
       const referenced = params.element && variables[params.element];
-      if (!selector && !referenced) throw new Error(`${type} requires selector or a stored element`);
+      if (!selector && !referenced) {
+        if (optional) {
+          if (ctx?.log) await ctx.log(`optional ${type} skipped (no selector)`);
+          return;
+        }
+        throw new Error(`${type} requires selector or a stored element`);
+      }
       if (type === 'focuselement') {
-        await this.withPage(port, (ws) => this.focusSelector(ws, selector || referenced.selector, params.selectorRadio));
+        try {
+          await this.withPage(port, (ws) => this.focusSelector(ws, selector || referenced.selector, params.selectorRadio));
+        } catch (error) {
+          if (optional) {
+            if (ctx?.log) await ctx.log('optional focus skipped: ' + (selector || referenced.selector));
+            return;
+          }
+          throw error;
+        }
         return;
       }
       const result = await this.withPage(port, async (ws) => this.readElement(ws, selector || referenced.selector, params));
+      if (result == null) {
+        if (optional) {
+          if (ctx?.log) await ctx.log('optional getElement skipped (not found): ' + (selector || referenced.selector));
+          if (params.variable) variables[params.variable] = null;
+          return;
+        }
+        throw new Error('Element not found: ' + (selector || referenced.selector));
+      }
       if (params.variable) variables[params.variable] = result;
       return;
     }

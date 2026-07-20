@@ -10,7 +10,11 @@ const {
   findMacBinary,
 } = require('./resolve-host-dist');
 const { ensureHostRuntime } = require('./ensure-host-runtime');
-const { findBundledWayfernKernel } = require('../automation/browser-kernel');
+const {
+  findBundledWayfernKernel,
+  isIntegratedKernelCdpReady,
+  companionLibraryForKernelBinary,
+} = require('../automation/browser-kernel');
 
 const appRoot = path.resolve(__dirname, '..');
 const packageArch = resolvePackageArch();
@@ -271,6 +275,14 @@ function assertKernelPackagePolicy(resourceApp) {
     }
     if (!integrated) {
       throw new Error(`[package] FATAL: kernel binary not discovered under kernels/${expected}`);
+    }
+    // Fail packaging if companion library CDP readiness markers are missing.
+    if (!isIntegratedKernelCdpReady({ path: integrated.binary || integrated.path, source: 'donut-wayfern' })) {
+      const lib = companionLibraryForKernelBinary(integrated.binary || integrated.path);
+      throw new Error(
+        '[package] FATAL: integrated kernel is not CDP-ready for RPA/Local API'
+        + ` (seed=${expected} companion=${lib || 'missing'})`
+      );
     }
   } else {
     for (const name of ['windows-x64', 'macos-arm64', 'wayfern']) {

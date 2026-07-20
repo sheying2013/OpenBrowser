@@ -7,7 +7,7 @@ const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const { ensureKernelReadyForLaunch } = require('./browser-kernel');
+const { ensureKernelReadyForLaunch, termsAcceptanceArgsForKernel } = require('./browser-kernel');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -35,8 +35,11 @@ async function main() {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'openbrowser-wayfern-launch-'));
   let child;
   try {
+    const termsArgs = termsAcceptanceArgsForKernel({ path: binary });
+    assert.deepStrictEqual(termsArgs, ['--accept-terms-and-conditions']);
     child = spawn(binary, [
       `--user-data-dir=${root}`,
+      ...termsArgs,
       '--remote-debugging-port=0',
       '--no-first-run',
       '--no-default-browser-check',

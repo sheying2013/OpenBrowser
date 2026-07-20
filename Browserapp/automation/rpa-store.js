@@ -42,6 +42,8 @@ class RpaStore {
     await this.ensureBuiltinTemplates();
     await this.ensureLocalCatalogTemplates();
     this.scrubLegacyFieldsFromTemplates();
+    this.forceFreeAllTemplates();
+    this.enforceFreeTemplates();
     if (this.data.version < 4) this.resetSeedTemplateUsage();
     this.data.version = 4;
     await this.save();
@@ -189,6 +191,9 @@ class RpaStore {
     const tags = (Array.isArray(raw.tags) ? raw.tags : [])
       .map(RpaStore.stripExternalBranding)
       .filter(Boolean);
+    const normalizedSteps = RpaStore.sanitizeOptionalOverlaySteps(
+      JSON.parse(JSON.stringify(Array.isArray(steps) ? steps : []))
+    );
     return {
       id: `catalog-${originalId}`,
       external_id: null,
@@ -197,14 +202,14 @@ class RpaStore {
       category_id: String(raw.category_id || ''),
       desc: RpaStore.localTemplateDescription(raw.name, raw.desc || raw.description || raw.abstract),
       tags: tags.length ? tags : ['本地模版'],
-      steps: JSON.parse(JSON.stringify(Array.isArray(steps) ? steps : [])),
+      steps: normalizedSteps,
       process_content: raw.process_content || null,
       // The local catalog only supplies templates. Its source usage figures do
       // not represent OpenBrowser usage and must never be displayed here.
       uses: 0,
       // Local OpenBrowser templates are always free — never surface paid flags.
       pay_type: 1,
-      price: null,
+      price: 0,
       developer: 'OpenBrowser',
       img_url: String(raw.img_url || '').slice(0, 500),
       builtin: false,
@@ -212,6 +217,73 @@ class RpaStore {
       create_time: raw.create_time || new Date().toISOString(),
       update_time: new Date().toISOString(),
     };
+  }
+
+  /** Mark ephemeral interstitial selectors as optional so missing overlays never fail runs. */
+  static sanitizeOptionalOverlaySteps(steps) {
+    if (!Array.isArray(steps)) return steps;
+    const mark = (step) => {
+      if (!step || typeof step !== 'object') return;
+      const bag = step.params && typeof step.params === 'object'
+        ? step.params
+        : (step.config && typeof step.config === 'object' ? step.config : step);
+      const selector = String(bag.selector || step.selector || '');
+      if (/redir-overlay|redir-dismiss/i.test(selector)) {
+        bag.optional = true;
+        bag.isShow = '0';
+        if (step.params && step.params !== bag) {
+          step.params.optional = true;
+          step.params.isShow = '0';
+        }
+        if (step.config && step.config !== bag) {
+          step.config.optional = true;
+          step.config.isShow = '0';
+        }
+        step.optional = true;
+        step.isShow = '0';
+      }
+      if (Array.isArray(step.children)) step.children.forEach(mark);
+      if (Array.isArray(step.elseChildren)) step.elseChildren.forEach(mark);
+      if (Array.isArray(step.params?.children)) step.params.children.forEach(mark);
+      if (Array.isArray(step.params?.elseChildren)) step.params.elseChildren.forEach(mark);
+    };
+    steps.forEach(mark);
+    return steps;
+  }
+
+  /** Strip paid metadata from one template (open-source: always free). */
+  forceFreeTemplate(template = {}) {
+    if (!template || typeof template !== 'object') return template;
+    const tags = Array.isArray(template.tags)
+      ? template.tags
+        .map((tag) => String(tag || '').trim())
+        .filter((tag) => tag && !/付费|收费|会员|VIP|premium|paid/i.test(tag))
+      : [];
+    if (
+      !tags.includes('免费')
+      && (template.source === 'catalog' || template.builtin || template.source === 'builtin')
+    ) {
+      tags.push('免费');
+    }
+    const steps = RpaStore.sanitizeOptionalOverlaySteps(
+      JSON.parse(JSON.stringify(Array.isArray(template.steps) ? template.steps : []))
+    );
+    return {
+      ...template,
+      pay_type: 1,
+      price: 0,
+      tags,
+      steps,
+    };
+  }
+
+  /** Force open-source free flags on every stored template (catalog/user/builtin). */
+  forceFreeAllTemplates() {
+    this.data.templates = this.data.templates.map((template) => this.forceFreeTemplate(template));
+  }
+
+  enforceFreeTemplates() {
+    this.forceFreeAllTemplates();
   }
 
   static localTemplateDescription(name, description) {
@@ -413,8 +485,7 @@ class RpaStore {
     }
     if (filter.source === 'custom') items = items.filter((t) => !t.builtin && t.source !== 'builtin' && t.source !== 'catalog');
     if (filter.source === 'builtin') items = items.filter((t) => t.builtin || t.source === 'builtin');
-    if (filter.pay_type === '1' || filter.pay_type === 1) items = items.filter((t) => Number(t.pay_type || 1) === 1);
-    if (filter.pay_type === '2' || filter.pay_type === 2) items = items.filter((t) => Number(t.pay_type) === 2);
+    // Open-source build: all templates are free; pay_type filters are ignored.
 
     const sort = String(filter.sort || 'use_num');
     items.sort((a, b) => {
@@ -428,10 +499,13 @@ class RpaStore {
       return String(b.update_time || '').localeCompare(String(a.update_time || ''));
     });
     const evaluated = items.map((template) => {
-      const unsupported = findUnsupportedSteps(template.steps || []);
+      const free = this.forceFreeTemplate(template);
+      const unsupported = findUnsupportedSteps(free.steps || []);
       return {
-        ...template,
-        runnable: unsupported.length === 0 && Array.isArray(template.steps) && template.steps.length > 0,
+        ...free,
+        pay_type: 1,
+        price: null,
+        runnable: unsupported.length === 0 && Array.isArray(free.steps) && free.steps.length > 0,
         unsupported_steps: unsupported,
       };
     });
@@ -460,7 +534,8 @@ class RpaStore {
   }
 
   getTemplate(id) {
-    return this.data.templates.find((item) => item.id === id) || null;
+    const item = this.data.templates.find((entry) => entry.id === id) || null;
+    return item ? this.forceFreeTemplate(item) : null;
   }
 
   normalizeTemplate(input = {}, existing = null) {
