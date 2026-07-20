@@ -497,7 +497,7 @@ async function extractDmg(dmgPath, destDir) {
     await fsp.rm(targetApp, { recursive: true, force: true }).catch(() => {});
     // ditto preserves resource forks / codesign better than cp -R
     await execFileAsync('ditto', [apps[0], targetApp]);
-    await assertSafeExtractedTree(destDir);
+    await assertSafeExtractedTree(targetApp);
   } finally {
     // detach everything under mountRoot
     try {

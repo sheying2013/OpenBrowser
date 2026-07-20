@@ -70,7 +70,7 @@ async function main() {
 
     const binary = await resolveWayfernBinary(extractRoot);
     if (!binary) throw new Error('Wayfern archive does not contain a browser executable');
-    await fsp.cp(extractRoot, outputRoot, { recursive: true, force: true });
+    await fsp.cp(extractRoot, outputRoot, { recursive: true, force: true, verbatimSymlinks: true });
     if (process.platform !== 'win32') await fsp.chmod(path.join(outputRoot, path.relative(extractRoot, binary)), 0o755);
     await fsp.writeFile(path.join(outputRoot, 'kernel.json'), JSON.stringify({
       source: 'donut-wayfern',
