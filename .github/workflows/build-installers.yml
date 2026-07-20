@@ -28,6 +28,10 @@ env:
 
     - 修复若干问题，优化稳定性。
     - 优化跨平台封装与发行版上传流程。
+    - 除 macOS x86 用户外，其他用户首次运行后会在后台下载浏览器内核；若未开始下载，请到“本地设置”手动下载内核。
+    - Fixed several issues and improved stability.
+    - Improved cross-platform packaging and release upload flow.
+    - Except for macOS x86 users, the browser kernel downloads in the background after the first launch. If the download does not start, download the kernel manually from “Local Settings”.
 
 jobs:
   prepare-release:
