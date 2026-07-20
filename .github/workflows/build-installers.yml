@@ -148,16 +148,20 @@ jobs:
           test -f "$APP/kernels/windows-x64/chrome.dll"
           test ! -e "$APP/kernels/macos-x64"
           test ! -e "$APP/kernels/macos-arm64"
-          test -f "dist/${STEM}.exe"
           test -f "dist/${STEM}.zip"
+          if [ ! -f "dist/${STEM}.exe" ]; then
+            echo "WARN: NSIS installer missing; portable zip will be uploaded"
+          fi
       - name: Upload to release
         run: |
           set -euo pipefail
           notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
           printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
-          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
-            dist/OpenBrowser-Windows-x86_64-with-kernel.exe \
-            dist/OpenBrowser-Windows-x86_64-with-kernel.zip
+          assets=(dist/OpenBrowser-Windows-x86_64-with-kernel.zip)
+          if [ -f dist/OpenBrowser-Windows-x86_64-with-kernel.exe ]; then
+            assets=(dist/OpenBrowser-Windows-x86_64-with-kernel.exe dist/OpenBrowser-Windows-x86_64-with-kernel.zip)
+          fi
+          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" "${assets[@]}"
 
   macos-x86_64:
     name: macOS x86_64 (with kernel)
