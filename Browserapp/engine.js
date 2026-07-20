@@ -22,7 +22,7 @@ const {
   fingerprintForNativeKernelInject,
 } = require('./automation/kernel-init-sync');
 
-const KERNEL_POLICY_VERSION = 2;
+const KERNEL_POLICY_VERSION = 4;
 
 /** Kill options that match both kernel binary and macOS env Dock shell (OpenBrowser.bin). */
 function managedBrowserKillOptions(itemOrBrowser, root, launchBinary = null) {
@@ -160,6 +160,7 @@ class BrowserEngine {
     this.preferIndependentKernel = options.preferIndependentKernel !== false;
     // A fingerprint environment must never launch the user's installed browser.
     this.allowSystemBrowserFallback = false;
+    this.systemBrowserPath = null;
     this.kernelBootstrapPromise = null;
     this.startPageServer = null;
   }
@@ -180,31 +181,32 @@ class BrowserEngine {
     const independent = this.kernelManager.resolveInstalled();
     if (independent) list.push({ name: independent.name, path: independent.path, independent: true, version: independent.version, source: independent.source });
 
-    // 2) Optional system browsers (fallback only if allowed)
-    if (this.allowSystemBrowserFallback) {
-      const home = process.env.HOME || '';
-      const local = process.env.LOCALAPPDATA || '';
-      const pf = process.env.PROGRAMFILES || 'C:\\Program Files';
-      const pfx = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
-      const system = process.platform === 'darwin' ? [
-        { name: 'Google Chrome', path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
-        { name: 'Google Chrome', path: path.join(home, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome') },
-        { name: 'Chromium', path: '/Applications/Chromium.app/Contents/MacOS/Chromium' },
-        { name: 'Microsoft Edge', path: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' }
-      ] : process.platform === 'linux' ? [
-        { name: 'Google Chrome', path: '/usr/bin/google-chrome' },
-        { name: 'Google Chrome', path: '/usr/bin/google-chrome-stable' },
-        { name: 'Chromium', path: '/usr/bin/chromium' },
-        { name: 'Chromium', path: '/usr/bin/chromium-browser' }
-      ] : [
-        { name: 'Google Chrome', path: path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe') },
-        { name: 'Google Chrome', path: path.join(local, 'Google', 'Chrome', 'Application', 'chrome.exe') },
-        { name: 'Chromium', path: path.join(local, 'Chromium', 'Application', 'chrome.exe') },
-        { name: 'Microsoft Edge', path: path.join(pfx, 'Microsoft', 'Edge', 'Application', 'msedge.exe') }
-      ];
-      for (const item of system) list.push({ ...item, independent: false });
-    }
+    // 2) System browsers are exposed for explicit manual selection only.
+    for (const item of this.systemBrowserCandidates()) list.push({ ...item, independent: false });
     return list.filter((item, index, all) => fs.existsSync(item.path) && all.findIndex((other) => other.path === item.path) === index);
+  }
+
+  systemBrowserCandidates() {
+    const home = process.env.HOME || '';
+    const local = process.env.LOCALAPPDATA || '';
+    const pf = process.env.PROGRAMFILES || 'C:\\Program Files';
+    const pfx = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
+    return process.platform === 'darwin' ? [
+      { name: 'Google Chrome', path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+      { name: 'Google Chrome', path: path.join(home, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome') },
+      { name: 'Chromium', path: '/Applications/Chromium.app/Contents/MacOS/Chromium' },
+      { name: 'Microsoft Edge', path: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' },
+    ] : process.platform === 'linux' ? [
+      { name: 'Google Chrome', path: '/usr/bin/google-chrome' },
+      { name: 'Google Chrome', path: '/usr/bin/google-chrome-stable' },
+      { name: 'Chromium', path: '/usr/bin/chromium' },
+      { name: 'Chromium', path: '/usr/bin/chromium-browser' },
+    ] : [
+      { name: 'Google Chrome', path: path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe') },
+      { name: 'Google Chrome', path: path.join(local, 'Google', 'Chrome', 'Application', 'chrome.exe') },
+      { name: 'Chromium', path: path.join(local, 'Chromium', 'Application', 'chrome.exe') },
+      { name: 'Microsoft Edge', path: path.join(pfx, 'Microsoft', 'Edge', 'Application', 'msedge.exe') },
+    ];
   }
 
   async init(bundledExtensionPath) {
@@ -225,11 +227,15 @@ class BrowserEngine {
         }
       }
       if (typeof saved.preferIndependentKernel === 'boolean') this.preferIndependentKernel = saved.preferIndependentKernel;
-      if (saved.kernelPolicyVersion !== KERNEL_POLICY_VERSION || saved.allowSystemBrowserFallback === true) {
-        // Prior releases enabled fallback by default. Do not silently launch a
-        // local browser after the OpenBrowser migration.
+      if (saved.kernelPolicyVersion !== KERNEL_POLICY_VERSION) {
+        // Prior releases could select a system browser implicitly. Migrate to
+        // the explicit-selection policy and keep fallback disabled by default.
         this.allowSystemBrowserFallback = false;
+        this.systemBrowserPath = null;
         migrateKernelPolicy = true;
+      } else if (typeof saved.allowSystemBrowserFallback === 'boolean') {
+        this.allowSystemBrowserFallback = saved.allowSystemBrowserFallback;
+        if (typeof saved.systemBrowserPath === 'string') this.systemBrowserPath = saved.systemBrowserPath;
       }
     } catch (_) {}
     if (bundledExtensionPath && fs.existsSync(path.join(bundledExtensionPath, 'manifest.json'))) {
@@ -262,6 +268,7 @@ class BrowserEngine {
       kernelPolicyVersion: KERNEL_POLICY_VERSION,
       preferIndependentKernel: this.preferIndependentKernel,
       allowSystemBrowserFallback: this.allowSystemBrowserFallback,
+      systemBrowserPath: this.systemBrowserPath,
     }, null, 2), 'utf8');
   }
 
@@ -299,13 +306,21 @@ class BrowserEngine {
     return kernel;
   }
 
-  async setKernelPolicy({ preferIndependentKernel, allowSystemBrowserFallback } = {}) {
+  async setKernelPolicy({ preferIndependentKernel, allowSystemBrowserFallback, systemBrowserPath } = {}) {
     if (typeof preferIndependentKernel === 'boolean') this.preferIndependentKernel = preferIndependentKernel;
-    this.allowSystemBrowserFallback = false;
+    if (typeof allowSystemBrowserFallback === 'boolean') this.allowSystemBrowserFallback = allowSystemBrowserFallback;
+    if (systemBrowserPath !== undefined) {
+      const candidate = String(systemBrowserPath || '').trim();
+      if (candidate && !this.systemBrowserCandidates().some((item) => item.path === candidate)) {
+        throw new Error('所选本机浏览器不存在或不是支持的浏览器');
+      }
+      this.systemBrowserPath = candidate || null;
+    }
     await this.persist();
     return {
       preferIndependentKernel: this.preferIndependentKernel,
       allowSystemBrowserFallback: this.allowSystemBrowserFallback,
+      systemBrowserPath: this.systemBrowserPath,
       status: this.kernelStatus(),
     };
   }
@@ -569,27 +584,30 @@ class BrowserEngine {
   browserSelection() {
     const list = this.candidates();
     const independent = list.find((item) => item.independent);
+    if (this.allowSystemBrowserFallback && this.systemBrowserPath) {
+      const manual = list.find((item) => !item.independent && item.path === this.systemBrowserPath);
+      if (manual) return { mode: 'system-manual', browser: manual };
+    }
     if (this.preferIndependentKernel) {
       if (independent) return { mode: 'independent', browser: independent };
-      if (this.allowSystemBrowserFallback) {
-        const fallback = list.find((item) => !item.independent) || list[0];
-        if (fallback) return { mode: 'system-fallback', browser: fallback };
-      }
       return { mode: 'blocked', browser: null, message: '未安装独立浏览器内核。请到「本地设置」下载或选择独立内核。' };
     }
     const browser = independent || list[0];
     if (!browser) return { mode: 'blocked', browser: null, message: '未找到可用浏览器内核' };
-    return { mode: browser.independent ? 'independent' : 'system', browser };
+    if (!browser.independent && (!this.allowSystemBrowserFallback || browser.path !== this.systemBrowserPath)) {
+      return { mode: 'blocked', browser: null, message: '未安装独立浏览器内核。请到「本地设置」下载或选择独立内核。' };
+    }
+    return { mode: browser.independent ? 'independent' : 'system-manual', browser };
   }
 
   chooseBrowser() {
     const selection = this.browserSelection();
     if (selection.browser) {
-      if (!selection.browser.independent || isSystemBrowserExecutable(selection.browser.path)) {
+      if (isSystemBrowserExecutable(selection.browser.path) && !this.allowSystemBrowserFallback) {
         throw new Error('已阻止使用本机浏览器。请安装或选择独立 Chromium 内核。');
       }
-      if (selection.mode === 'system-fallback') {
-        this.emit({ type: 'kernel-fallback', message: '独立内核未安装，临时使用系统浏览器。请到「本地设置」下载独立内核。', browser: selection.browser.path });
+      if (selection.mode === 'system-manual') {
+        this.emit({ type: 'kernel-fallback', message: '用户已手动选择本机浏览器回退。', browser: selection.browser.path });
       }
       return selection.browser;
     }

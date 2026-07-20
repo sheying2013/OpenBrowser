@@ -13,7 +13,7 @@
  *
  * Wayfern is a third-party binary distributed by Wayfern/Donut; first use is
  * subject to Wayfern Terms of Service (https://wayfern.com/tos). OpenBrowser
- * only mirrors the public update feed and does not redistribute the engine.
+ * obtains it from the official feed for local installation or platform builds.
  */
 
 const fs = require('fs');
@@ -576,6 +576,63 @@ async function resolveWayfernBinary(installDir) {
   return findExecutable(installDir, names.map((n) => n.replace(/\.exe$/i, '')));
 }
 
+function findWayfernKernelBinary(root) {
+  const base = path.resolve(String(root || ''));
+  if (!fs.existsSync(base)) return null;
+  const names = process.platform === 'win32'
+    ? ['wayfern.exe', 'chromium.exe', 'chrome.exe']
+    : ['wayfern', 'chromium', 'chrome', 'Wayfern', 'Chromium'];
+  const walk = (dir, depth) => {
+    if (depth > 8) return null;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return null; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory() && entry.name.endsWith('.app')) {
+        const macos = path.join(full, 'Contents', 'MacOS');
+        const hit = fs.existsSync(macos) ? walk(macos, depth + 1) : null;
+        if (hit) return hit;
+      } else if (entry.isFile() && names.some((name) => entry.name.toLowerCase() === name.toLowerCase())) {
+        return full;
+      } else if (entry.isDirectory() && !['Frameworks', 'Helpers', 'resources', 'locales', 'Resources'].includes(entry.name)) {
+        const hit = walk(full, depth + 1);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  return walk(base, 0);
+}
+
+function findBundledWayfernKernel(resourceRoots = []) {
+  const roots = [];
+  const addRoot = (root) => {
+    if (!root) return;
+    const value = path.resolve(String(root));
+    if (!roots.includes(value)) roots.push(value);
+  };
+  for (const root of resourceRoots || []) {
+    addRoot(path.join(root, 'kernels', 'wayfern'));
+    addRoot(path.join(root, 'app', 'kernels', 'wayfern'));
+    addRoot(path.join(root, 'bundled-kernels', 'wayfern'));
+    addRoot(path.join(root, 'app', 'bundled-kernels', 'wayfern'));
+  }
+  for (const root of roots) {
+    const binary = findWayfernKernelBinary(root);
+    if (binary) return { binary, root };
+  }
+  return null;
+}
+
+function bundledKernelVersion(root) {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'kernel.json'), 'utf8'));
+    return String(manifest.version || '').trim() || 'bundled';
+  } catch (_) {
+    return 'bundled';
+  }
+}
+
 function archiveKindFromUrl(url) {
   const u = String(url || '').toLowerCase();
   if (u.endsWith('.dmg')) return 'dmg';
@@ -668,6 +725,20 @@ class BrowserKernelManager {
             source: src,
           };
         }
+      }
+    }
+
+    const bundled = findBundledWayfernKernel(this.resourceRoots);
+    if (bundled) {
+      const trustedBundled = safeInstalledBinary(bundled.binary, bundled.root);
+      if (trustedBundled) {
+        return {
+          name: kernelDisplayName(SOURCE_WAYFERN),
+          path: trustedBundled,
+          version: bundledKernelVersion(bundled.root),
+          independent: true,
+          source: SOURCE_WAYFERN,
+        };
       }
     }
 
@@ -1179,4 +1250,14 @@ module.exports = {
   compareVersions,
   validateArchiveMemberName,
   safeInstalledBinary,
+  findWayfernKernelBinary,
+  findBundledWayfernKernel,
+  bundledKernelVersion,
+  downloadFile,
+  extractZip,
+  extractDmg,
+  extractTarXz,
+  extractTarGz,
+  archiveKindFromUrl,
+  resolveWayfernBinary,
 };

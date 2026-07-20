@@ -130,7 +130,7 @@ OpenBrowser/
 └── README_CN.md           # Chinese documentation
 ```
 
-This repository contains source code and documentation only. It does not include profiles, cookies, proxy credentials, kernel binaries, or installers.
+This repository contains source code and documentation only. It does not include profiles, cookies, proxy credentials, bundled kernel binaries, or installers. Official Windows x64 and macOS arm64 builds download the matching Wayfern kernel during CI packaging; macOS x86_64 builds include the OpenBrowser 148 kernel.
 
 ## Data and security
 
@@ -154,7 +154,7 @@ This repository contains source code and documentation only. It does not include
 
 The independent kernel comes from [Donut Browser](https://github.com/zhom/donutbrowser) / [Wayfern](https://wayfern.com/) by [zhom](https://github.com/zhom). Update feed: [wayfern.json](https://donutbrowser.com/wayfern.json). Terms: [Wayfern ToS](https://wayfern.com/tos).
 
-This repository does not redistribute the kernel.
+The repository does not store kernel binaries. Official platform packages obtain the matching Wayfern kernel from the official feed during CI packaging; macOS x86_64 packages use the checked-in OpenBrowser 148 runtime.
 
 </details>
 

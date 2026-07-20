@@ -1399,8 +1399,10 @@ app.whenReady().then(async () => {
     startPage: engine.startPageServer?.info?.() || null,
     kernel: engine.kernelStatus(),
     kernelSelection: engine.browserSelection(),
+    systemBrowsers: engine.systemBrowserCandidates().filter((item) => fs.existsSync(item.path)),
     preferIndependentKernel: engine.preferIndependentKernel,
     allowSystemBrowserFallback: engine.allowSystemBrowserFallback,
+    systemBrowserPath: engine.systemBrowserPath,
     titleBarIntegrated: process.platform === 'darwin' || process.platform === 'win32',
     platform: process.platform,
   }));

@@ -932,7 +932,7 @@
 
   // Chinese UI chrome → English when locale is not zh-CN (full-page pass).
   const UI_ZH_EN = Object.freeze({
-    "首次约 150–250MB，从 Donut/Wayfern CDN 拉取。当前平台无 Wayfern 包时自动回退 Chrome for Testing。使用 Wayfern 即同意其服务条款（wayfern.com/tos）。": "First download ~150–250MB from Donut/Wayfern CDN. Falls back to Chrome for Testing when Wayfern is unavailable. Using Wayfern accepts its ToS (wayfern.com/tos).",
+    "Windows x64 与 macOS arm64 安装包已内置对应内核。默认不会自动回退到本机浏览器；只有手动选择并开启后才会使用本机浏览器。使用 Wayfern 即同意其服务条款（wayfern.com/tos）。": "Windows x64 and macOS arm64 packages include the matching kernel. The system browser is used only after you select it manually and enable fallback. Using Wayfern accepts its ToS (wayfern.com/tos).",
     "此接口为软件本体自带。OpenBrowser 启动时会在本机开一个 HTTP 接口，方便 Python / 脚本 / AI 工具用代码启动环境、同步窗口。只监听本机（127.0.0.1），不连外网。普通用界面的话可以忽略本页。": "Built-in local HTTP API for scripts and AI to start profiles and sync windows. Listens on 127.0.0.1 only. You can ignore this page if you only use the UI.",
     "对接 Donut Browser 官方更新源，下载 Wayfern（引擎级反检测 Chromium）。与 Donut 使用同一 feed：donutbrowser.com/wayfern.json。": "Uses the official Donut Browser feed to download Wayfern (anti-detect Chromium). Same feed: donutbrowser.com/wayfern.json.",
     "微软云 OneDrive：用 Alist / OpenList 挂载 OneDrive 后，填 WebDAV 地址。示例：https://alist.xxx.com/dav/onedrive": "OneDrive: mount in Alist/OpenList, then enter WebDAV URL. Example: https://alist.xxx.com/dav/onedrive",
@@ -1030,7 +1030,16 @@
     "可与平台「指定地址」叠加，换行分隔": "Can stack with platform URL; one per line",
     "每个环境的「偏好设置 → 云备份」": "each profile’s Preferences → Cloud backup",
     "退出软件时同步已开启云备份的环境": "Sync opted-in profiles on quit",
-    "禁止回退到本机浏览器（强制隔离）": "Do not fall back to system browser (forced isolation)",
+    "允许手动回退到本机浏览器（默认关闭）": "Allow manual fallback to system browser (off by default)",
+    "手动选择回退浏览器": "Manually select fallback browser",
+    "未选择": "Not selected",
+    "只有手动选择并开启后才会使用本机浏览器。使用 Wayfern 即同意其服务条款（wayfern.com/tos）。": "The system browser is used only after you select it manually and enable fallback. Using Wayfern accepts its ToS (wayfern.com/tos).",
+    "请先手动选择回退浏览器": "Select a fallback browser manually first",
+    "已选择手动回退浏览器": "Manual fallback browser selected",
+    "已清除手动回退浏览器": "Manual fallback browser cleared",
+    "手动选择本机浏览器": "Manually selected system browser",
+    "已允许在独立内核不可用时回退本机浏览器": "Manual fallback to the system browser is enabled when no independent kernel is available",
+    "已禁止自动回退本机浏览器": "Automatic fallback to the system browser is disabled",
     "信息页面 — 展示默认启动信息页": "Info page — show default start info page",
     "未填写代理，已自动切换为本地直连": "No proxy; switched to direct",
     "Cookie JSON 格式错误": "Invalid cookie JSON",

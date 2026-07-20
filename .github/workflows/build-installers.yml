@@ -28,10 +28,10 @@ env:
 
     - 修复若干问题，优化稳定性。
     - 优化跨平台封装与发行版上传流程。
-    - 除 macOS x86 用户外，其他用户首次运行后会在后台下载浏览器内核；若未开始下载，请到“本地设置”手动下载内核。
+    - Windows x64 与 macOS arm64 安装包已内置对应浏览器内核；所有平台默认不会自动回退到本机浏览器，需在“本地设置”手动选择并开启回退。
     - Fixed several issues and improved stability.
     - Improved cross-platform packaging and release upload flow.
-    - Except for macOS x86 users, the browser kernel downloads in the background after the first launch. If the download does not start, download the kernel manually from “Local Settings”.
+    - Windows x64 and macOS arm64 packages include their matching browser kernels; all platforms keep system-browser fallback off by default and require manual selection and enablement in “Local Settings”.
 
 jobs:
   prepare-release:
@@ -94,6 +94,8 @@ jobs:
           cache-dependency-path: Browserapp/package-lock.json
       - name: Install dependencies
         run: npm ci --include=dev
+      - name: Prepare bundled macOS arm64 kernel
+        run: npm run prepare:bundled-kernel
       - name: Prepare release notes
         run: printf '%s\n' "$RELEASE_NOTES" > "$RUNNER_TEMP/openbrowser-release-notes.md"
       - name: Run self-tests
@@ -109,11 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           APP="dist/OpenBrowser-macOS-arm64/OpenBrowser.app/Contents/Resources/app"
-          if [[ -d "$APP/kernels" ]]; then
-            echo "ERROR: macOS arm64 package contains an unsupported kernel directory" >&2
-            find "$APP/kernels" -maxdepth 3 -type f 2>/dev/null | head -20
-            exit 1
-          fi
+          test -d "$APP/bundled-kernels/wayfern"
           test -f "dist/OpenBrowser-macOS-arm64.dmg"
       - name: Upload package to release
         run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-macOS-arm64.dmg"
@@ -192,6 +190,8 @@ jobs:
           cache-dependency-path: Browserapp/package-lock.json
       - name: Install dependencies
         run: npm ci --include=dev
+      - name: Prepare bundled Windows x64 kernel
+        run: npm run prepare:bundled-kernel
       - name: Prepare release notes
         shell: bash
         run: printf '%s\n' "$RELEASE_NOTES" > "$RUNNER_TEMP/openbrowser-release-notes.md"
@@ -211,11 +211,7 @@ jobs:
         run: |
           set -euo pipefail
           APP="dist/OpenBrowser-Windows-x86_64/runtime/resources/app"
-          if [[ -d "$APP/kernels" ]]; then
-            echo "ERROR: Windows package contains an unsupported kernel directory" >&2
-            find "$APP/kernels" -maxdepth 3 -type f 2>/dev/null | head -20
-            exit 1
-          fi
+          test -d "$APP/bundled-kernels/wayfern"
           test -f "dist/OpenBrowser-Windows-x86_64.exe"
           test -f "dist/OpenBrowser-Windows-x86_64.zip"
       - name: Upload package to release
