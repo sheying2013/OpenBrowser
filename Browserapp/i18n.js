@@ -1032,6 +1032,7 @@
     "退出软件时同步已开启云备份的环境": "Sync opted-in profiles on quit",
     "允许手动回退到本机浏览器（默认关闭）": "Allow manual fallback to system browser (off by default)",
     "手动选择回退浏览器": "Manually select fallback browser",
+    "手动选择回退浏览器（Windows 可选 Chrome 或 Edge）": "Manually select fallback browser (Windows: Chrome or Edge)",
     "未选择": "Not selected",
     "只有手动选择并开启后才会使用本机浏览器。使用 Wayfern 即同意其服务条款（wayfern.com/tos）。": "The system browser is used only after you select it manually and enable fallback. Using Wayfern accepts its ToS (wayfern.com/tos).",
     "请先手动选择回退浏览器": "Select a fallback browser manually first",

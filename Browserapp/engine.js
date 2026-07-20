@@ -38,6 +38,41 @@ function managedBrowserKillOptions(itemOrBrowser, root, launchBinary = null) {
 
 const STARTUP_DIAGNOSTIC_LIMIT = 16 * 1024;
 
+function systemBrowserCandidatesForPlatform(platform = process.platform, environment = process.env) {
+  const home = environment.HOME || '';
+  if (platform === 'darwin') {
+    return [
+      { name: 'Google Chrome', path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+      { name: 'Google Chrome', path: path.join(home, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome') },
+      { name: 'Chromium', path: '/Applications/Chromium.app/Contents/MacOS/Chromium' },
+      { name: 'Microsoft Edge', path: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' },
+    ];
+  }
+  if (platform === 'linux') {
+    return [
+      { name: 'Google Chrome', path: '/usr/bin/google-chrome' },
+      { name: 'Google Chrome', path: '/usr/bin/google-chrome-stable' },
+      { name: 'Chromium', path: '/usr/bin/chromium' },
+      { name: 'Chromium', path: '/usr/bin/chromium-browser' },
+    ];
+  }
+
+  const windowsPath = path.win32;
+  const programFiles = [
+    environment.PROGRAMFILES,
+    environment['PROGRAMFILES(X86)'],
+    environment.PROGRAMW6432,
+    'C:\\Program Files',
+    'C:\\Program Files (x86)',
+  ].filter(Boolean);
+  const localAppData = environment.LOCALAPPDATA ? [environment.LOCALAPPDATA] : [];
+  const roots = [...new Set([...programFiles, ...localAppData])];
+  return [
+    ...roots.map((root) => ({ name: 'Google Chrome', path: windowsPath.join(root, 'Google', 'Chrome', 'Application', 'chrome.exe') })),
+    ...roots.map((root) => ({ name: 'Microsoft Edge', path: windowsPath.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe') })),
+  ].filter((item, index, all) => all.findIndex((other) => other.path.toLowerCase() === item.path.toLowerCase()) === index);
+}
+
 function appendDiagnosticOutput(current, chunk) {
   const value = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
   return (String(current || '') + value).slice(-STARTUP_DIAGNOSTIC_LIMIT);
@@ -187,26 +222,7 @@ class BrowserEngine {
   }
 
   systemBrowserCandidates() {
-    const home = process.env.HOME || '';
-    const local = process.env.LOCALAPPDATA || '';
-    const pf = process.env.PROGRAMFILES || 'C:\\Program Files';
-    const pfx = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
-    return process.platform === 'darwin' ? [
-      { name: 'Google Chrome', path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
-      { name: 'Google Chrome', path: path.join(home, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome') },
-      { name: 'Chromium', path: '/Applications/Chromium.app/Contents/MacOS/Chromium' },
-      { name: 'Microsoft Edge', path: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' },
-    ] : process.platform === 'linux' ? [
-      { name: 'Google Chrome', path: '/usr/bin/google-chrome' },
-      { name: 'Google Chrome', path: '/usr/bin/google-chrome-stable' },
-      { name: 'Chromium', path: '/usr/bin/chromium' },
-      { name: 'Chromium', path: '/usr/bin/chromium-browser' },
-    ] : [
-      { name: 'Google Chrome', path: path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe') },
-      { name: 'Google Chrome', path: path.join(local, 'Google', 'Chrome', 'Application', 'chrome.exe') },
-      { name: 'Chromium', path: path.join(local, 'Chromium', 'Application', 'chrome.exe') },
-      { name: 'Microsoft Edge', path: path.join(pfx, 'Microsoft', 'Edge', 'Application', 'msedge.exe') },
-    ];
+    return systemBrowserCandidatesForPlatform();
   }
 
   async init(bundledExtensionPath) {
@@ -2177,4 +2193,4 @@ class BrowserEngine {
   async sessions() { const result = []; for (const { id, item } of this.runningWithCdp([...this.running.keys()])) { try { result.push({ id, profile: this.profiles.get(id), port: item.port, browser: item.browser.name, tabs: await cdp.tabs(item.port) }); } catch (error) { result.push({ id, profile: this.profiles.get(id), port: item.port, browser: item.browser.name, tabs: [], error: error.message }); } } return result; }
 }
 
-module.exports = { BrowserEngine, appendDiagnosticOutput, formatBrowserStartupError };
+module.exports = { BrowserEngine, appendDiagnosticOutput, formatBrowserStartupError, systemBrowserCandidatesForPlatform };
