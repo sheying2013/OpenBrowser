@@ -18,8 +18,10 @@ const {
   isOpenBrowser148SupportedHost,
   isMacX64Host,
   isWayfernKernel,
+  isIntegratedKernelCdpReady,
   termsAcceptanceArgsForKernel,
   SOURCE_OPENBROWSER,
+  SOURCE_WAYFERN,
 } = require('./browser-kernel');
 const { BrowserEngine, systemBrowserCandidatesForPlatform } = require('../engine');
 
@@ -178,15 +180,23 @@ async function main() {
     assert.strictEqual(engine.allowSystemBrowserFallback, false);
     assert.strictEqual(engine.browserSelection().mode, 'independent');
     const chosen = engine.chooseBrowser();
-    // On mac x64 with in-repo 148 kernel, engine prefers openbrowser-148 over temp CfT.
+    // Prefer integrated product kernels over temporary Chrome-for-Testing fixtures.
     if (repoKernel && isOpenBrowser148SupportedHost()) {
       assert.strictEqual(chosen.path, path.resolve(repoKernel));
       assert.strictEqual(chosen.source, SOURCE_OPENBROWSER);
       console.log('  PASS  engine prefers source OpenBrowser 148 on mac x64');
     } else {
       assert.notStrictEqual(chosen.source, SOURCE_OPENBROWSER);
-      assert.strictEqual(chosen.path, binary);
-      console.log('  PASS  legacy fallback policy migrates to independent-only');
+      const appRoot = path.join(__dirname, '..');
+      const integrated = findBundledWayfernKernel([appRoot, path.join(appRoot, 'kernels')]);
+      if (integrated && integrated.binary && isIntegratedKernelCdpReady({ path: integrated.binary, source: SOURCE_WAYFERN })) {
+        assert.strictEqual(path.resolve(chosen.path), path.resolve(integrated.binary));
+        assert.strictEqual(chosen.source, SOURCE_WAYFERN);
+        console.log('  PASS  engine prefers integrated independent kernel over temporary CfT');
+      } else {
+        assert.strictEqual(chosen.path, binary);
+        console.log('  PASS  legacy fallback policy migrates to independent-only');
+      }
     }
 
     await engine.setKernelPolicy({ allowSystemBrowserFallback: true });
