@@ -56,23 +56,25 @@ jobs:
     steps:
       - name: Create or update release shell
         shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
           printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            edit_args=("$RELEASE_TAG" --title "OpenBrowser $RELEASE_TAG" --notes-file "$notes_file")
+          if gh release view "$RELEASE_TAG" -R "$GH_REPO" >/dev/null 2>&1; then
+            edit_args=("$RELEASE_TAG" --repo "$GH_REPO" --title "OpenBrowser $RELEASE_TAG" --notes-file "$notes_file")
             if [[ "${{ inputs.prerelease }}" == "true" ]]; then
               edit_args+=(--prerelease)
             fi
             gh release edit "${edit_args[@]}" || true
           else
-            args=("$RELEASE_TAG" --target "${{ github.sha }}" --title "OpenBrowser $RELEASE_TAG" --notes-file "$notes_file")
+            args=("$RELEASE_TAG" --repo "$GH_REPO" --target "${{ github.sha }}" --title "OpenBrowser $RELEASE_TAG" --notes-file "$notes_file")
             if [[ "${{ inputs.prerelease }}" == "true" ]]; then
               args+=(--prerelease)
             fi
             gh release create "${args[@]}" || true
-            gh release view "$RELEASE_TAG" >/dev/null
+            gh release view "$RELEASE_TAG" -R "$GH_REPO" >/dev/null
           fi
 
   windows-x86_64:
