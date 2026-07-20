@@ -23,6 +23,30 @@ let hostDist = (() => {
 })();
 const distRoot = path.join(appRoot, 'dist');
 
+function bundleKernelVariantEnabled() {
+  const variant = String(process.env.OPENBROWSER_PACKAGE_VARIANT || '').trim().toLowerCase();
+  if (variant === 'with-kernel') return true;
+  if (variant === 'without-kernel') return false;
+  return String(process.env.OPENBROWSER_BUNDLE_KERNEL || 'true').toLowerCase() === 'true';
+}
+
+function packageVariantSuffix(platform = process.platform, arch = packageArch) {
+  const p = String(platform || '').toLowerCase();
+  const a = String(arch || '').toLowerCase();
+  const isVariantPlatform = p === 'win32' || (p === 'darwin' && a === 'arm64');
+  if (!isVariantPlatform) return '';
+  const variant = String(process.env.OPENBROWSER_PACKAGE_VARIANT || '').trim().toLowerCase();
+  if (variant === 'with-kernel') return '-with-kernel';
+  if (variant === 'without-kernel') return '-without-kernel';
+  throw new Error('OPENBROWSER_PACKAGE_VARIANT must be with-kernel or without-kernel for this package');
+}
+
+function packageArtifactStem(platform = process.platform, arch = packageArch) {
+  const p = String(platform || '').toLowerCase();
+  const productPlatform = p === 'win32' ? 'Windows' : 'macOS';
+  return `OpenBrowser-${productPlatform}-${arch}${packageVariantSuffix(platform, arch)}`;
+}
+
 function resolvePackageArch() {
   const raw = process.env.OPENBROWSER_PACKAGE_ARCH
     || process.env.npm_config_target_arch
@@ -75,8 +99,9 @@ function shouldShipOpenBrowser148Kernel(platform = process.platform, arch = pack
 function shouldShipBundledWayfern(platform = process.platform, arch = packageArch) {
   const p = String(platform || '').toLowerCase();
   const a = String(arch || '').toLowerCase();
-  return (p === 'win32' && ['x86_64', 'x64', 'amd64'].includes(a))
+  const supportedPlatform = (p === 'win32' && ['x86_64', 'x64', 'amd64'].includes(a))
     || (p === 'darwin' && a === 'arm64');
+  return supportedPlatform && bundleKernelVariantEnabled();
 }
 
 /**
@@ -163,7 +188,7 @@ function nsisGlob(value) {
 }
 
 function packageWindowsInstaller(packageRoot) {
-  const output = path.join(distRoot, `OpenBrowser-Windows-${packageArch}.exe`);
+  const output = path.join(distRoot, `${packageArtifactStem()}.exe`);
   const script = path.join(distRoot, 'OpenBrowser-Windows-installer.nsi');
   const installSource = nsisGlob(packageRoot);
   const installDir = '$LOCALAPPDATA\\OpenBrowser';
@@ -222,7 +247,7 @@ function packageWindows() {
 
   run(process.execPath, [path.join(__dirname, 'build-native.js'), appRoot]);
 
-  const packageRoot = path.join(distRoot, `OpenBrowser-Windows-${packageArch}`);
+  const packageRoot = path.join(distRoot, packageArtifactStem());
   const runtimeRoot = path.join(packageRoot, 'runtime');
   const resourceApp = path.join(runtimeRoot, 'resources', 'app');
   removeIfExists(packageRoot);
@@ -263,7 +288,9 @@ function packageWindows() {
     '1. 解压完整压缩包，不要只复制单个 EXE。',
     '2. 双击 START.cmd 启动。',
     '3. 本目录 runtime 内含 OpenBrowser 桌面主机与 Chromium 组件。',
-    '4. 本 Windows x64 包已内置对应 Wayfern 独立内核；默认不会自动回退到本机浏览器，如需回退请在“本地设置”手动选择浏览器并开启。',
+    bundleKernelVariantEnabled()
+      ? '4. 本 Windows x64 包已内置对应 Wayfern 独立内核；默认不会自动回退到本机浏览器，如需回退请在“本地设置”手动选择浏览器并开启。'
+      : '4. 本 Windows x64 包不包含独立浏览器内核；首次运行后可在“本地设置”手动下载内核。默认不会自动回退到本机浏览器。',
     '5. 环境数据默认保存在当前 Windows 用户的 AppData\\Roaming\\openbrowser 中；也可在“本地设置”修改。',
     '6. 请勿把 Cookies、代理密码或浏览器 Profile 上传到 GitHub。',
     '',
@@ -271,7 +298,7 @@ function packageWindows() {
     '',
   ].join('\r\n'));
 
-  const zip = path.join(distRoot, `OpenBrowser-Windows-${packageArch}.zip`);
+  const zip = path.join(distRoot, `${packageArtifactStem()}.zip`);
   removeIfExists(zip);
   run('powershell', ['-NoProfile', '-Command', `Compress-Archive -LiteralPath '${packageRoot.replace(/'/g, "''")}' -DestinationPath '${zip.replace(/'/g, "''")}' -CompressionLevel Optimal`]);
   console.log('便携版压缩包：' + zip);
@@ -285,7 +312,7 @@ function packageMac() {
 
   run(process.execPath, [path.join(__dirname, 'build-native.js'), appRoot]);
 
-  const packageRoot = path.join(distRoot, `OpenBrowser-macOS-${packageArch}`);
+  const packageRoot = path.join(distRoot, packageArtifactStem());
   const appBundle = path.join(packageRoot, 'OpenBrowser.app');
   const contents = path.join(appBundle, 'Contents');
   const macosDir = path.join(contents, 'MacOS');
@@ -349,7 +376,9 @@ function packageMac() {
 
   const kernelNote = packageArch === 'x86_64'
     ? '3. 本包（macOS x86_64 / Intel）已内置 OpenBrowser 148 默认独立内核。'
-    : '3. 本包（macOS arm64）已内置对应 Wayfern 独立内核。';
+    : bundleKernelVariantEnabled()
+      ? '3. 本包（macOS arm64）已内置对应 Wayfern 独立内核。'
+      : '3. 本包（macOS arm64）不包含独立浏览器内核；首次运行后可在“本地设置”手动下载内核。';
   writeText(path.join(packageRoot, '运行说明.txt'), [
     'OpenBrowser macOS 版（' + packageArch + '）',
     '',
@@ -364,7 +393,7 @@ function packageMac() {
     '',
   ].join('\n'));
 
-  const dmg = path.join(distRoot, `OpenBrowser-macOS-${packageArch}.dmg`);
+  const dmg = path.join(distRoot, `${packageArtifactStem()}.dmg`);
   removeIfExists(dmg);
   run('hdiutil', ['create', '-volname', 'OpenBrowser', '-srcfolder', packageRoot, '-ov', '-format', 'UDZO', dmg]);
   console.log('macOS 安装映像：' + dmg);

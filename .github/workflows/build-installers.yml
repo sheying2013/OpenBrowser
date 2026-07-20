@@ -28,10 +28,10 @@ env:
 
     - 修复若干问题，优化稳定性。
     - 优化跨平台封装与发行版上传流程。
-    - Windows x64 与 macOS arm64 安装包已内置对应浏览器内核；所有平台默认不会自动回退到本机浏览器，需在“本地设置”手动选择并开启回退。
+    - Windows x64 与 macOS arm64 分别提供“内置内核”和“未内置内核”两种安装包；macOS x86_64 保持单独的内置 OpenBrowser 148 内核版本。所有平台默认不会自动回退到本机浏览器，需在“本地设置”手动选择并开启回退。
     - Fixed several issues and improved stability.
     - Improved cross-platform packaging and release upload flow.
-    - Windows x64 and macOS arm64 packages include their matching browser kernels; all platforms keep system-browser fallback off by default and require manual selection and enablement in “Local Settings”.
+    - Windows x64 and macOS arm64 each provide bundled-kernel and kernel-free packages; macOS x86_64 remains the separate package with its built-in OpenBrowser 148 kernel. All platforms keep system-browser fallback off by default and require manual selection and enablement in “Local Settings”.
 
 jobs:
   prepare-release:
@@ -72,11 +72,17 @@ jobs:
     name: macOS arm64
     needs: prepare-release
     runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [with-kernel, without-kernel]
     defaults:
       run:
         working-directory: Browserapp
     env:
       OPENBROWSER_PACKAGE_ARCH: arm64
+      OPENBROWSER_PACKAGE_VARIANT: ${{ matrix.variant }}
+      OPENBROWSER_BUNDLE_KERNEL: ${{ matrix.variant == 'with-kernel' && 'true' || 'false' }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -95,6 +101,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=dev
       - name: Prepare bundled macOS arm64 kernel
+        if: ${{ matrix.variant == 'with-kernel' }}
         run: npm run prepare:bundled-kernel
       - name: Prepare release notes
         run: printf '%s\n' "$RELEASE_NOTES" > "$RUNNER_TEMP/openbrowser-release-notes.md"
@@ -110,11 +117,16 @@ jobs:
       - name: Verify package
         run: |
           set -euo pipefail
-          APP="dist/OpenBrowser-macOS-arm64/OpenBrowser.app/Contents/Resources/app"
-          test -d "$APP/bundled-kernels/wayfern"
-          test -f "dist/OpenBrowser-macOS-arm64.dmg"
+          PACKAGE_STEM="OpenBrowser-macOS-arm64-${OPENBROWSER_PACKAGE_VARIANT}"
+          APP="dist/${PACKAGE_STEM}/OpenBrowser.app/Contents/Resources/app"
+          if [[ "$OPENBROWSER_PACKAGE_VARIANT" == "with-kernel" ]]; then
+            test -d "$APP/bundled-kernels/wayfern"
+          else
+            test ! -e "$APP/bundled-kernels"
+          fi
+          test -f "dist/${PACKAGE_STEM}.dmg"
       - name: Upload package to release
-        run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-macOS-arm64.dmg"
+        run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-macOS-arm64-${OPENBROWSER_PACKAGE_VARIANT}.dmg"
 
   macos-x86_64:
     name: macOS x86_64
@@ -168,11 +180,17 @@ jobs:
     name: Windows x86_64
     needs: prepare-release
     runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [with-kernel, without-kernel]
     defaults:
       run:
         working-directory: Browserapp
     env:
       OPENBROWSER_PACKAGE_ARCH: x86_64
+      OPENBROWSER_PACKAGE_VARIANT: ${{ matrix.variant }}
+      OPENBROWSER_BUNDLE_KERNEL: ${{ matrix.variant == 'with-kernel' && 'true' || 'false' }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -191,6 +209,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=dev
       - name: Prepare bundled Windows x64 kernel
+        if: ${{ matrix.variant == 'with-kernel' }}
         run: npm run prepare:bundled-kernel
       - name: Prepare release notes
         shell: bash
@@ -210,10 +229,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APP="dist/OpenBrowser-Windows-x86_64/runtime/resources/app"
-          test -d "$APP/bundled-kernels/wayfern"
-          test -f "dist/OpenBrowser-Windows-x86_64.exe"
-          test -f "dist/OpenBrowser-Windows-x86_64.zip"
+          PACKAGE_STEM="OpenBrowser-Windows-x86_64-${OPENBROWSER_PACKAGE_VARIANT}"
+          APP="dist/${PACKAGE_STEM}/runtime/resources/app"
+          if [[ "$OPENBROWSER_PACKAGE_VARIANT" == "with-kernel" ]]; then
+            test -d "$APP/bundled-kernels/wayfern"
+          else
+            test ! -e "$APP/bundled-kernels"
+          fi
+          test -f "dist/${PACKAGE_STEM}.exe"
+          test -f "dist/${PACKAGE_STEM}.zip"
       - name: Upload package to release
         shell: bash
-        run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-Windows-x86_64.exe" "dist/OpenBrowser-Windows-x86_64.zip"
+        run: bash scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/openbrowser-release-notes.md" "dist/OpenBrowser-Windows-x86_64-${OPENBROWSER_PACKAGE_VARIANT}.exe" "dist/OpenBrowser-Windows-x86_64-${OPENBROWSER_PACKAGE_VARIANT}.zip"
