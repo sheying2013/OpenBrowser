@@ -94,11 +94,17 @@ jobs:
       OPENBROWSER_PACKAGE_VARIANT: with-kernel
       OPENBROWSER_BUNDLE_KERNEL: 'true'
     steps:
+      # defaults.working-directory is Browserapp; before checkout use workspace root.
       - name: Enable Windows long paths for git
+        working-directory: ${{ github.workspace }}
         shell: pwsh
         run: |
-          git config --system core.longpaths true
-          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force | Out-Null
+          git config --global core.longpaths true
+          try {
+            New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force | Out-Null
+          } catch {
+            Write-Host "LongPathsEnabled registry write skipped: $_"
+          }
       - uses: actions/checkout@v4
         with:
           lfs: true
