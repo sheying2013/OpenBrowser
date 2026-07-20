@@ -49,6 +49,17 @@ env:
     - UI polish
     - Platform packages ship with integrated kernels
 
+    ### 下载 / Downloads
+
+    | 标签 / Tag | 文件 / File |
+    | --- | --- |
+    | **Windows x86_64 · 内置内核** | `OpenBrowser-Windows-x86_64-with-kernel.exe` |
+    | **Windows x86_64 · 便携包** | `OpenBrowser-Windows-x86_64-with-kernel.zip` |
+    | **macOS x86_64 · 内置内核** | `OpenBrowser-macOS-x86_64.dmg` |
+    | **macOS arm64 · 内置内核** | `OpenBrowser-macOS-arm64-with-kernel.dmg` |
+
+    > 标签说明：`with-kernel` = 安装包内置独立浏览器内核，运行时无需再下载内核。
+
 jobs:
   ensure-release:
     name: Ensure GitHub Release
