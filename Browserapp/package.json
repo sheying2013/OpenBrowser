@@ -1,7 +1,7 @@
 {
   "name": "openbrowser",
   "productName": "OpenBrowser",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "OpenBrowser：本地浏览器环境、扩展与窗口同步管理器",
   "main": "main.js",
   "private": true,

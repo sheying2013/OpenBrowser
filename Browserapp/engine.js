@@ -14,7 +14,7 @@ const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = re
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
 const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
 const { acquireProfileLock, releaseProfileLock, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = require('./automation/isolation');
-const { BrowserKernelManager, ensureKernelReadyForLaunch, termsAcceptanceArgsForKernel } = require('./automation/browser-kernel');
+const { BrowserKernelManager, ensureKernelReadyForLaunch } = require('./automation/browser-kernel');
 const { ensureStartPageServer, getStartPageServer } = require('./automation/start-page-server');
 const {
   isOpenBrowser148,
@@ -1873,12 +1873,11 @@ class BrowserEngine {
       loadPaths.push(markerExtensionPath);
     }
     const finalArgs = loadPaths.length ? mergeLoadExtensionArgs(args, loadPaths) : args;
-    const kernelArgs = termsAcceptanceArgsForKernel(browser);
-    if (kernelArgs.length) {
-      const existing = new Set(finalArgs);
-      for (const arg of kernelArgs) {
-        if (!existing.has(arg)) finalArgs.unshift(arg);
-      }
+    // Never put --accept-terms-and-conditions on the long-lived browser spawn.
+    // Wayfern treats that flag as a one-shot accept-and-exit command; pre-accept via
+    // ensureKernelReadyForLaunch() below, then launch without it so CDP can come up.
+    for (let i = finalArgs.length - 1; i >= 0; i -= 1) {
+      if (String(finalArgs[i]) === '--accept-terms-and-conditions') finalArgs.splice(i, 1);
     }
 
     // macOS + openbrowser-148 only: Dock wrapper so process shows logo-native+number.
