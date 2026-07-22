@@ -43,7 +43,6 @@ class RpaStore {
     await this.ensureLocalCatalogTemplates();
     this.scrubLegacyFieldsFromTemplates();
     this.forceFreeAllTemplates();
-    this.enforceFreeTemplates();
     if (this.data.version < 4) this.resetSeedTemplateUsage();
     this.data.version = 4;
     await this.save();
@@ -251,8 +250,8 @@ class RpaStore {
     return steps;
   }
 
-  /** Strip paid metadata from one template (open-source: always free). */
-  forceFreeTemplate(template = {}) {
+  /** In-place free-flag + optional-overlay sanitize (mutates stored object). */
+  applyFreeTemplateInPlace(template = {}) {
     if (!template || typeof template !== 'object') return template;
     const tags = Array.isArray(template.tags)
       ? template.tags
@@ -265,25 +264,54 @@ class RpaStore {
     ) {
       tags.push('免费');
     }
-    const steps = RpaStore.sanitizeOptionalOverlaySteps(
-      JSON.parse(JSON.stringify(Array.isArray(template.steps) ? template.steps : []))
-    );
+    template.tags = tags;
+    template.pay_type = 1;
+    template.price = 0;
+    if (Array.isArray(template.steps)) {
+      template.steps = RpaStore.sanitizeOptionalOverlaySteps(template.steps);
+    }
+    return template;
+  }
+
+  /** Public free view (shallow copy of metadata; steps shared after in-place sanitize). */
+  forceFreeTemplate(template = {}) {
+    if (!template || typeof template !== 'object') return template;
+    this.applyFreeTemplateInPlace(template);
     return {
       ...template,
       pay_type: 1,
       price: 0,
-      tags,
-      steps,
+      tags: Array.isArray(template.tags) ? [...template.tags] : [],
     };
   }
 
   /** Force open-source free flags on every stored template (catalog/user/builtin). */
   forceFreeAllTemplates() {
-    this.data.templates = this.data.templates.map((template) => this.forceFreeTemplate(template));
+    for (const template of this.data.templates) this.applyFreeTemplateInPlace(template);
   }
 
   enforceFreeTemplates() {
     this.forceFreeAllTemplates();
+  }
+
+  /** Stored template object (mutable). Prefer this for install/upsert mutations. */
+  getStoredTemplate(id) {
+    return this.data.templates.find((entry) => entry.id === id) || null;
+  }
+
+  /** Extract startNode defaults so plans still work after process_content is cleared. */
+  static extractTemplateVariables(template = {}) {
+    const variables = {};
+    let process = template.process_content;
+    if (typeof process === 'string') {
+      try { process = JSON.parse(process); } catch (_) { process = null; }
+    }
+    const start = process?.nodes?.find((node) => node.type === 'startNode');
+    const definitions = start?.globalVariable || start?.config?.variableObjList || [];
+    for (const item of definitions) {
+      if (item?.key) variables[String(item.key)] = item.value ?? '';
+    }
+    return variables;
   }
 
   static localTemplateDescription(name, description) {
@@ -373,6 +401,9 @@ class RpaStore {
     const now = new Date().toISOString();
     const id = String(input.id || crypto.randomUUID());
     const existing = this.getPlan(id);
+    const variables = input.variables && typeof input.variables === 'object' && !Array.isArray(input.variables)
+      ? { ...input.variables }
+      : (existing?.variables && typeof existing.variables === 'object' ? { ...existing.variables } : {});
     const next = {
       id,
       plan_name: String(input.plan_name || input.name || 'untitled').slice(0, 120),
@@ -382,6 +413,7 @@ class RpaStore {
       process_content: input.process_content !== undefined
         ? input.process_content
         : (existing?.process_content || null),
+      variables,
       status: String(input.status || existing?.status || 'idle'),
       create_time: existing?.create_time || now,
       update_time: now,
@@ -418,6 +450,9 @@ class RpaStore {
 
   async createTask(input = {}) {
     const now = new Date().toISOString();
+    const variables = input.variables && typeof input.variables === 'object' && !Array.isArray(input.variables)
+      ? { ...input.variables }
+      : {};
     const task = {
       id: String(input.id || crypto.randomUUID()),
       plan_id: input.plan_id ? String(input.plan_id) : null,
@@ -426,6 +461,7 @@ class RpaStore {
       status: 'pending',
       steps: Array.isArray(input.steps) ? input.steps : [],
       process_content: input.process_content !== undefined ? input.process_content : null,
+      variables,
       process_logs: [],
       process_result: null,
       create_time: now,
@@ -449,6 +485,9 @@ class RpaStore {
       status: 'pending',
       steps: Array.isArray(input.steps) ? input.steps : [],
       process_content: input.process_content !== undefined ? input.process_content : null,
+      variables: input.variables && typeof input.variables === 'object' && !Array.isArray(input.variables)
+        ? { ...input.variables }
+        : {},
       process_logs: [],
       process_result: null,
       create_time: now,
@@ -499,13 +538,14 @@ class RpaStore {
       return String(b.update_time || '').localeCompare(String(a.update_time || ''));
     });
     const evaluated = items.map((template) => {
-      const free = this.forceFreeTemplate(template);
-      const unsupported = findUnsupportedSteps(free.steps || []);
+      this.applyFreeTemplateInPlace(template);
+      const unsupported = findUnsupportedSteps(template.steps || []);
       return {
-        ...free,
+        ...template,
         pay_type: 1,
-        price: null,
-        runnable: unsupported.length === 0 && Array.isArray(free.steps) && free.steps.length > 0,
+        price: 0,
+        tags: Array.isArray(template.tags) ? [...template.tags] : [],
+        runnable: unsupported.length === 0 && Array.isArray(template.steps) && template.steps.length > 0,
         unsupported_steps: unsupported,
       };
     });
@@ -534,7 +574,7 @@ class RpaStore {
   }
 
   getTemplate(id) {
-    const item = this.data.templates.find((entry) => entry.id === id) || null;
+    const item = this.getStoredTemplate(id);
     return item ? this.forceFreeTemplate(item) : null;
   }
 
@@ -580,7 +620,8 @@ class RpaStore {
 
   async upsertTemplate(input = {}) {
     const id = input.id ? String(input.id) : null;
-    const existing = id ? this.getTemplate(id) : null;
+    // Must use stored reference — getTemplate() returns a free view clone.
+    const existing = id ? this.getStoredTemplate(id) : null;
     if (existing?.builtin && input.force !== true) {
       if (Array.isArray(input.steps) || input.name) {
         throw new Error('内置模版不可修改，请「使用模版」后另存为流程，或另存为自定义模版');
@@ -595,16 +636,18 @@ class RpaStore {
         next.name = existing.name;
       }
       Object.assign(existing, next);
+      this.applyFreeTemplateInPlace(existing);
       await this.save();
-      return existing;
+      return this.forceFreeTemplate(existing);
     }
+    this.applyFreeTemplateInPlace(next);
     this.data.templates.push(next);
     await this.save();
-    return next;
+    return this.forceFreeTemplate(next);
   }
 
   async deleteTemplate(id) {
-    const item = this.getTemplate(id);
+    const item = this.getStoredTemplate(id);
     if (!item) throw new Error('模版不存在: ' + id);
     if (item.builtin || item.source === 'builtin' || item.source === 'catalog') {
       throw new Error('内置模版不可删除');
@@ -619,12 +662,13 @@ class RpaStore {
    * 若模版仅有 process_content，会先线性化为 steps。
    */
   async installTemplate(id, options = {}) {
-    const tpl = this.getTemplate(id);
-    if (!tpl) throw new Error('模版不存在: ' + id);
-    let steps = Array.isArray(tpl.steps) ? JSON.parse(JSON.stringify(tpl.steps)) : [];
-    if ((!steps || !steps.length) && tpl.process_content) {
-      steps = parseProcessContent(tpl.process_content);
-      tpl.steps = steps;
+    const stored = this.getStoredTemplate(id);
+    if (!stored) throw new Error('模版不存在: ' + id);
+    this.applyFreeTemplateInPlace(stored);
+    let steps = Array.isArray(stored.steps) ? JSON.parse(JSON.stringify(stored.steps)) : [];
+    if ((!steps || !steps.length) && stored.process_content) {
+      steps = parseProcessContent(stored.process_content);
+      stored.steps = RpaStore.sanitizeOptionalOverlaySteps(JSON.parse(JSON.stringify(steps)));
     }
     // Always re-mark optional overlays so installed plans never hard-fail on geo/cookie chrome.
     steps = RpaStore.sanitizeOptionalOverlaySteps(steps);
@@ -634,20 +678,22 @@ class RpaStore {
       const summary = unsupported.slice(0, 4).map((item) => `${item.path.join('.')}: ${item.type}`).join(', ');
       throw new Error(`模版包含当前版本未支持的步骤，不能创建不可运行流程：${summary}`);
     }
-    const planName = String(options.plan_name || options.name || tpl.name || '来自模版').slice(0, 120);
+    const variables = RpaStore.extractTemplateVariables(stored);
+    const planName = String(options.plan_name || options.name || stored.name || '来自模版').slice(0, 120);
     const plan = await this.upsertPlan({
       plan_name: planName,
       process_name: planName,
       profile_ids: Array.isArray(options.profile_ids) ? options.profile_ids.map(String) : [],
       steps,
-      // Prefer sanitized steps at runtime; do not rehydrate unpaid/legacy graph as-is.
+      // Prefer sanitized steps at runtime; keep extracted defaults as plan variables.
       process_content: null,
-      template_id: tpl.id,
+      variables,
+      template_id: stored.id,
     });
-    tpl.uses = (Number(tpl.uses) || 0) + 1;
-    tpl.update_time = new Date().toISOString();
+    stored.uses = (Number(stored.uses) || 0) + 1;
+    stored.update_time = new Date().toISOString();
     await this.save();
-    return { plan, template: tpl };
+    return { plan, template: this.forceFreeTemplate(stored) };
   }
 
   /**
