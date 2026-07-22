@@ -1684,6 +1684,10 @@ app.whenReady().then(async () => {
   });
 
   registerTrustedIpc('automation:local-api', () => automation?.info || null);
+  registerTrustedIpc('automation:local-api-version', async () => {
+    if (!automation?.localApi) throw new Error('Local API is not ready');
+    return automation.localApi.route('GET', '/api/getVersion', {});
+  });
   registerTrustedIpc('automation:fingerprint', (_event, id) => engine.fingerprintFor(String(id || '')));
   registerTrustedIpc('automation:isolation-audit', () => engine.isolationAudit());
   registerTrustedIpc('automation:build-ua', (_event, payload = {}) => {

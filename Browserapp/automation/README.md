@@ -46,29 +46,32 @@ node scripts/read-rpa-log.js --tail 120
 环境变量：
 
 - `OPENBROWSER_API_PORT`（默认 `50325`）
-- `OPENBROWSER_API_KEY`（可选；设置后请求需带 `api-key` 头）
+- `OPENBROWSER_API_KEY`（可选；不设置时会在本次启动中自动生成，请以 UI 的 API & MCP 页面显示为准）
 
 ## HTTP 示例
 
 ```bash
 # 版本
-curl -s http://127.0.0.1:50325/api/getVersion
+curl -s -H 'api-key: YOUR_API_KEY' http://127.0.0.1:50325/api/getVersion
 
 # 环境列表
-curl -s http://127.0.0.1:50325/api/v1/user/list
+curl -s -H 'api-key: YOUR_API_KEY' http://127.0.0.1:50325/api/v1/user/list
 
 # 启动环境
 curl -s -X POST http://127.0.0.1:50325/api/v1/browser/start \
+  -H 'api-key: YOUR_API_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"user_id":"PROFILE_ID"}'
 
 # 窗口同步（第一个为主控）
 curl -s -X POST http://127.0.0.1:50325/api/sync/start \
+  -H 'api-key: YOUR_API_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"profile_ids":["A","B","C"],"operate":"click,move,scroll,keyboard"}'
 
 # RPA 步骤
 curl -s -X POST http://127.0.0.1:50325/api/rpa/run \
+  -H 'api-key: YOUR_API_KEY' \
   -H 'Content-Type: application/json' \
   -d '{
     "profile_id":"A",
@@ -84,7 +87,7 @@ curl -s -X POST http://127.0.0.1:50325/api/rpa/run \
 ## MCP
 
 ```bash
-OPENBROWSER_API_PORT=50325 node automation/mcp-server.js
+OPENBROWSER_API_PORT=50325 OPENBROWSER_API_KEY=YOUR_API_KEY node automation/mcp-server.js
 ```
 
-Cursor 配置示例见 `mcp-server.js` 文件头注释。
+`YOUR_API_KEY` 从 UI 的 API & MCP 页面复制；Cursor 配置示例见 `mcp-server.js` 文件头注释。

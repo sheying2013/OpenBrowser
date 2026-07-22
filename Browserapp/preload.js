@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('ops', Object.freeze({
   batchTextAction: (ids, texts, delayMin, delayMax) => ipcRenderer.invoke('sync:text-batch', { ids, texts, delayMin, delayMax }),
   tabAction: (ids, action, payload) => ipcRenderer.invoke('sync:tabs', { ids, action, payload }),
   localApiInfo: () => ipcRenderer.invoke('automation:local-api'),
+  localApiVersion: () => ipcRenderer.invoke('automation:local-api-version'),
   appCenterList: (filter) => ipcRenderer.invoke('automation:app-center', filter || {}),
   appCenterMetadata: (storeIds) => ipcRenderer.invoke('automation:app-center-metadata', storeIds || []),
   appCenterIcons: (storeIds) => ipcRenderer.invoke('automation:app-center-icons', storeIds || []),

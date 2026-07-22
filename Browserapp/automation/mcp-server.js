@@ -5,7 +5,7 @@
  * Protocol subset: initialize, tools/list, tools/call (JSON-RPC 2.0 over NDJSON/stdio).
  *
  * Run standalone:
- *   OPENBROWSER_API_PORT=50325 node automation/mcp-server.js
+ *   OPENBROWSER_API_PORT=50325 OPENBROWSER_API_KEY=your_api_key node automation/mcp-server.js
  *
  * Cursor / Claude Desktop config example:
  * {
@@ -13,7 +13,7 @@
  *     "openbrowser-local-api": {
  *       "command": "node",
  *       "args": ["/path/to/Browserapp/automation/mcp-server.js"],
- *       "env": { "OPENBROWSER_API_PORT": "50325", "OPENBROWSER_API_KEY": "" }
+ *       "env": { "OPENBROWSER_API_PORT": "50325", "OPENBROWSER_API_KEY": "your_api_key" }
  *     }
  *   }
  * }
