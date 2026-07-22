@@ -86,7 +86,11 @@ function main() {
   // --- RPA path sandbox ---
   const rpaSrc = fs.readFileSync(path.join(__dirname, 'automation/rpa-engine.js'), 'utf8');
   assert.ok(rpaSrc.includes('resolveSafeRpaPath'), 'RPA must define path sandbox helper');
-  assert.ok(rpaSrc.includes("if (type === 'useexcel')") && rpaSrc.includes('resolveSafeRpaPath(filePath)'), 'useExcel sandboxed');
+  assert.ok(
+    rpaSrc.includes("if (type === 'useexcel')")
+    && (rpaSrc.includes('resolveSafeRpaPath(filePath)') || rpaSrc.includes('resolveSpreadsheetPath')),
+    'useExcel sandboxed'
+  );
   assert.ok(rpaSrc.includes("if (type === 'uploadattachment')") && rpaSrc.includes('resolveSafeRpaPath(filePath)'), 'uploadAttachment sandboxed');
 
   // Runtime sandbox check via re-require internals is hard; unit-test helper by eval of function source

@@ -18,19 +18,26 @@ const CDP_AUTOMATION_BLOCKED = 'Browser automation requires a paid Donut Browser
 
 /** True when a missing element should not fail the whole flow. */
 function isOptionalElementStep(params = {}) {
+  // Explicit optional only. Do NOT treat isShow=0 as optional: catalog often uses
+  // isShow for visibility mode, not "skip if missing".
   if (params.optional === true || params.optional === 1 || params.optional === '1' || params.optional === 'true') {
     return true;
   }
-  // Legacy catalog: isShow "0"/false means "do not require visible"
-  if (params.isShow === false || params.isShow === 0 || params.isShow === '0' || params.isShow === 'false') {
-    return true;
-  }
-  const selector = String(params.selector || params.content || '');
-  // Common interstitial / geo / consent chrome — skip quietly if absent on the current locale page.
-  if (/redir-overlay|redir-dismiss|cookie[-_ ]?(banner|accept|consent)|consent[-_ ]?dismiss|#sp-cc-accept|gdpr|onetrust|nav-global-location|GLUXZip|GLUXZipUpdateInput|GLUXZipInputSection|GLUXConfirmClose|glow-ingress|a-popover-close|icp-nav-flyout|nav-link-accountList/i.test(selector)) {
+  const selector = String(params.selector || '');
+  // Known ephemeral overlays / geo chrome that commonly absents on locale pages.
+  // Keep this list narrow; prefer step.optional=true from sanitizeOptionalOverlaySteps.
+  if (/redir-overlay|redir-dismiss|nav-global-location|GLUXZip|GLUXZipUpdateInput|GLUXZipInputSection|GLUXConfirmClose|glow-ingress|#sp-cc-accept/i.test(selector)) {
     return true;
   }
   return false;
+}
+
+/** Optional steps may skip only element-missing errors, never CDP/session failures. */
+function isMissingElementError(error) {
+  const message = String(error?.message || error || '');
+  if (!message) return false;
+  if (message.includes(CDP_AUTOMATION_BLOCKED)) return false;
+  return /Element not found|Selector not found|selectElement failed|No page tab for CDP|useExcel file not found|file path required/i.test(message);
 }
 
 function isPathInsideRoot(candidate, root) {
@@ -212,6 +219,9 @@ class RpaEngine {
       : (plan.profile_ids || []);
     if (!profileIds.length) throw new Error('No profile_ids on plan');
 
+    const planVariables = plan.variables && typeof plan.variables === 'object' && !Array.isArray(plan.variables)
+      ? plan.variables
+      : {};
     const tasks = typeof this.store.createTasks === 'function'
       ? await this.store.createTasks(profileIds.map((profileId) => ({
         plan_id: plan.id,
@@ -219,6 +229,7 @@ class RpaEngine {
         process_name: plan.process_name || plan.plan_name,
         steps: plan.steps,
         process_content: plan.process_content || null,
+        variables: planVariables,
       })))
       : await Promise.all(profileIds.map((profileId) => this.store.createTask({
         plan_id: plan.id,
@@ -226,6 +237,7 @@ class RpaEngine {
         process_name: plan.process_name || plan.plan_name,
         steps: plan.steps,
         process_content: plan.process_content || null,
+        variables: planVariables,
       })));
     const results = await Promise.all(tasks.map((task) => this.runTask(task.id, options)));
     return { success: results.every((item) => item.success), results };
@@ -429,7 +441,7 @@ class RpaEngine {
             }
           });
         } catch (error) {
-          if (optional) {
+          if (optional && isMissingElementError(error)) {
             if (ctx?.log) await ctx.log('optional input skipped (not found): ' + params.selector);
             return;
           }
@@ -473,20 +485,35 @@ class RpaEngine {
     }
 
     if (type === 'selectelement') {
+      const optional = isOptionalElementStep(params);
       const selector = text(params.selector || variables[params.element]?.selector);
       const selectedValue = text(params.value);
-      if (!selector) throw new Error('selectElement requires selector or a stored element');
-      await this.withPage(port, async (ws) => {
-        const expression = this.elementExpression(selector, params.selectorRadio, `el => {
-          if (!(el instanceof HTMLSelectElement)) return false;
-          el.value = ${JSON.stringify(selectedValue)};
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-          return el.value === ${JSON.stringify(selectedValue)};
-        }`);
-        const result = await cdp.call(ws, 'Runtime.evaluate', { expression, returnByValue: true });
-        if (result.result?.value !== true) throw new Error('selectElement failed: ' + selector);
-      });
+      if (!selector) {
+        if (optional) {
+          if (ctx?.log) await ctx.log('optional selectElement skipped (no selector)');
+          return;
+        }
+        throw new Error('selectElement requires selector or a stored element');
+      }
+      try {
+        await this.withPage(port, async (ws) => {
+          const expression = this.elementExpression(selector, params.selectorRadio, `el => {
+            if (!(el instanceof HTMLSelectElement)) return false;
+            el.value = ${JSON.stringify(selectedValue)};
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            return el.value === ${JSON.stringify(selectedValue)};
+          }`);
+          const result = await cdp.call(ws, 'Runtime.evaluate', { expression, returnByValue: true });
+          if (result.result?.value !== true) throw new Error('selectElement failed: ' + selector);
+        });
+      } catch (error) {
+        if (optional && isMissingElementError(error)) {
+          if (ctx?.log) await ctx.log('optional selectElement skipped (not found): ' + selector);
+          return;
+        }
+        throw error;
+      }
       return;
     }
 
@@ -572,7 +599,7 @@ class RpaEngine {
         try {
           await this.withPage(port, (ws) => this.focusSelector(ws, selector || referenced.selector, params.selectorRadio));
         } catch (error) {
-          if (optional) {
+          if (optional && isMissingElementError(error)) {
             if (ctx?.log) await ctx.log('optional focus skipped: ' + (selector || referenced.selector));
             return;
           }
@@ -670,6 +697,7 @@ class RpaEngine {
         || params.isSkip === 'true'
         || params.optional === true
         || params.optional === '1'
+        || params.optional === 'true'
       );
       let filePath = text(
         params.path
@@ -681,13 +709,16 @@ class RpaEngine {
       ).trim();
       // Unresolved ${var} placeholders mean the user has not configured a spreadsheet yet.
       if (!filePath || /\$\{[^}]+\}/.test(filePath)) {
+        if (!skippable) {
+          throw new Error(
+            filePath
+              ? 'useExcel path is unresolved (' + filePath + '); set the template variable to a local CSV/JSON file'
+              : 'useExcel requires a CSV or JSON file path'
+          );
+        }
         variables[targetVar] = [];
         if (ctx?.log) {
-          await ctx.log(
-            skippable || !filePath
-              ? 'useExcel skipped: no spreadsheet path configured (set a CSV/JSON path in template variables)'
-              : 'useExcel skipped: path variable is still a placeholder (configure the file path first)'
-          );
+          await ctx.log('useExcel skipped: no spreadsheet path configured (set a CSV/JSON path in template variables)');
         }
         return;
       }
@@ -706,9 +737,9 @@ class RpaEngine {
 
       const extension = path.extname(safePath).toLowerCase();
       if (extension === '.xlsx' || extension === '.xls') {
-        variables[targetVar] = [];
         const message = 'useExcel does not read .xlsx/.xls yet; convert to .csv or .json and set the path variable';
         if (skippable) {
+          variables[targetVar] = [];
           if (ctx?.log) await ctx.log('useExcel skipped: ' + message);
           return;
         }

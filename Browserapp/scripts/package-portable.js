@@ -336,6 +336,7 @@ function nsisGlob(value) {
 }
 
 function packageWindowsInstaller(packageRoot) {
+  const appVersion = require('../package.json').version || '1.0.0';
   const output = path.join(distRoot, `${packageArtifactStem()}.exe`);
   const script = path.join(distRoot, 'OpenBrowser-Windows-installer.nsi');
   const installSource = nsisGlob(packageRoot);
@@ -364,8 +365,18 @@ function packageWindowsInstaller(packageRoot) {
     '  CreateShortCut "$SMPROGRAMS\\OpenBrowser\\OpenBrowser.lnk" "$INSTDIR\\runtime\\OpenBrowser.exe" "" "$INSTDIR\\runtime\\OpenBrowser.exe" 0',
     '  CreateShortCut "$DESKTOP\\OpenBrowser.lnk" "$INSTDIR\\runtime\\OpenBrowser.exe" "" "$INSTDIR\\runtime\\OpenBrowser.exe" 0',
     '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
+    '  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenBrowser" "DisplayName" "OpenBrowser"',
+    '  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenBrowser" "UninstallString" \'"$INSTDIR\\Uninstall.exe"\'',
+    '  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenBrowser" "QuietUninstallString" \'"$INSTDIR\\Uninstall.exe" /S\'',
+    '  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenBrowser" "InstallLocation" "$INSTDIR"',
+    '  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenBrowser" "DisplayIcon" "$INSTDIR\\runtime\\OpenBrowser.exe,0"',
+    '  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenBrowser" "Publisher" "OpenBrowser"',
+    `  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenBrowser" "DisplayVersion" "${appVersion}"`,
+    '  WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenBrowser" "NoModify" 1',
+    '  WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenBrowser" "NoRepair" 1',
     'SectionEnd',
     'Section "Uninstall"',
+    '  DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenBrowser"',
     '  Delete "$SMPROGRAMS\\OpenBrowser\\OpenBrowser.lnk"',
     '  RMDir "$SMPROGRAMS\\OpenBrowser"',
     '  Delete "$DESKTOP\\OpenBrowser.lnk"',
