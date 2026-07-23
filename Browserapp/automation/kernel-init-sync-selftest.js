@@ -32,6 +32,9 @@ async function main() {
     name: 'sync-test',
     language: 'ja-JP',
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+    exitIp: '203.0.113.44',
+    exitLatitude: 35.6762,
+    exitLongitude: 139.6503,
     privacy: {
       canvas: 'noise',
       webgl: 'noise',
@@ -40,10 +43,19 @@ async function main() {
       webrtc: 'proxy',
       cores: 8,
       memory: 16,
+      speech: 'noise',
+      deviceNameMode: 'custom',
+      deviceName: 'OB-Test-Host-01',
+      fontFingerprinting: true,
+      geoMode: 'ip',
+      accuracy: 50,
     },
     kernelVersion: '148.0.7778.165',
   };
   const fp = buildFingerprint(profile);
+  assert.strictEqual(fp.deviceName, 'OB-Test-Host-01');
+  assert.ok(fp.webrtcLocalIp);
+  assert.ok(Array.isArray(fp.speech.voices) && fp.speech.voices.length >= 18);
   const fields = mapFingerprintToInitFields(fp, profile);
   assert.strictEqual(fields.platform, 'Win32');
   assert.ok(String(fields.accept_languages).includes('ja'));
@@ -51,6 +63,11 @@ async function main() {
   assert.strictEqual(fields.deviceMemory, 16);
   assert.strictEqual(fields.webrtc_policy, 3);
   assert.strictEqual(fields.is_webgl_finger_printing_enable, true);
+  assert.strictEqual(fields.machine, 'OB-Test-Host-01');
+  assert.strictEqual(fields.webrtc_fake_ip, '203.0.113.44');
+  assert.strictEqual(fields.webrtc_local_ip, fp.webrtcLocalIp);
+  assert.strictEqual(fields.geoposition, '35.6762,139.6503,50');
+  assert.strictEqual(fields.is_font_finger_printing_enable, true);
   assert.ok(fields.user_agent_data.uaFullVersion);
   assert.ok(fields.user_agent_data.brands.length >= 2);
   assert.ok(fields._cmdLinePatch['user-agent'].includes('Windows NT'));
@@ -85,6 +102,11 @@ async function main() {
     assert.strictEqual(init.ipc.browser_window_name, written.windowName);
     assert.ok(String(init.cmd_line['user-agent']).includes('Windows NT'));
     assert.strictEqual(init.webrtc_policy, 3);
+    assert.strictEqual(init.machine, 'OB-Test-Host-01');
+    assert.strictEqual(init.webrtc_fake_ip, '203.0.113.44');
+    assert.strictEqual(init.webrtc_local_ip, fp.webrtcLocalIp);
+    assert.strictEqual(init.geoposition, '35.6762,139.6503,50');
+    assert.strictEqual(init.is_font_finger_printing_enable, true);
     assert.ok(init.user_agent_data.platform === 'Windows' || init.user_agent_data.platform);
     // second write preserves unique window name
     const written2 = await writeOpenBrowserKernelInit(tmp, {
