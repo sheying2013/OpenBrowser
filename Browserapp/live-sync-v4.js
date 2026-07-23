@@ -66,6 +66,8 @@ class LiveSyncController {
     this.forwardQueue = []; this.forwardQueueRunning = false; this.coalescedForwards = new Map();
     this.forwardStats = { coalesced: 0, dropped: 0, processed: 0, lastLatencyMs: 0 }; this.lastHealthEmitAt = 0;
     this.lastWatchErrorAt = 0; this.refreshInFlight = false; this.skippedRefreshes = 0;
+    // Adaptive sync poll: active input stays fast; idle stretches to save CPU/CDP load.
+    this.lastActivityAt = 0; this.refreshIntervalMs = 700; this.tickCount = 0;
   }
 
   async start(ids) {
@@ -73,16 +75,29 @@ class LiveSyncController {
     const entries = this.engine.runningWithCdp(ids);
     if (entries.length < 2) throw new Error('至少需要两个具有 CDP 会话的运行环境');
     this.master = entries[0]; this.slaves = entries.slice(1).map(({ id, item }) => ({ id, port: item.port }));
+    this.lastActivityAt = Date.now(); this.refreshIntervalMs = 700; this.tickCount = 0;
     await this.refreshMasterTabs();
     if (!this.connections.size) throw new Error('主控环境没有可同步的网页标签');
-    this.timer = setInterval(() => this.runRefreshTick(), 650);
+    this.scheduleRefreshTick();
     this.emit({ type: 'live-sync', active: true, master: this.master.id, slaves: this.slaves.map((item) => item.id), tabs: this.connections.size });
     return { active: true, master: this.master.id, slaves: this.slaves.map((item) => item.id), tabs: this.connections.size };
   }
 
+  scheduleRefreshTick() {
+    if (this.timer) clearTimeout(this.timer);
+    if (!this.master) return;
+    const idleMs = Date.now() - (this.lastActivityAt || 0);
+    // Active: ~450ms; recent: ~700ms; idle: ~1400ms. Caps CDP churn when user is not driving.
+    this.refreshIntervalMs = idleMs < 2500 ? 450 : idleMs < 12000 ? 700 : 1400;
+    this.timer = setTimeout(() => { this.runRefreshTick().finally(() => this.scheduleRefreshTick()); }, this.refreshIntervalMs);
+    this.timer.unref?.();
+  }
+
+  markActivity() { this.lastActivityAt = Date.now(); }
+
   async runRefreshTick() {
     if (!this.master || this.refreshInFlight) { if (this.refreshInFlight) this.skippedRefreshes += 1; return; }
-    this.refreshInFlight = true;
+    this.refreshInFlight = true; this.tickCount = (this.tickCount || 0) + 1;
     try { await this.refreshMasterTabs(); } catch (error) { this.handleWatchError(error); }
     finally { this.refreshInFlight = false; }
   }
@@ -102,7 +117,7 @@ class LiveSyncController {
   stop() {
     this.lastWatchErrorAt = 0; this.refreshInFlight = false; this.skippedRefreshes = 0;
     this.forwardQueue.length = 0; this.coalescedForwards.clear(); this.forwardQueueRunning = false;
-    if (this.timer) clearInterval(this.timer); this.timer = null;
+    if (this.timer) clearTimeout(this.timer); this.timer = null; this.tickCount = 0;
     for (const value of this.connections.values()) value.connection.close(); this.connections.clear();
     const previous = { master: this.master?.id || null, slaves: this.slaves.map((item) => item.id) };
     this.master = null; this.slaves = []; this.masterTabs = [];
@@ -149,6 +164,7 @@ class LiveSyncController {
   }
 
   enqueueForward(tabId, payload, action = 'forward') {
+    this.markActivity();
     const key = this.forwardKey(tabId, payload, action); const now = Date.now();
     if (key && this.coalescedForwards.has(key)) {
       const entry = this.coalescedForwards.get(key);
