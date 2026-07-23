@@ -474,6 +474,42 @@ function packageWindows() {
   console.log('便携版目录：' + packageRoot);
 }
 
+
+function readProductVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8'));
+    return String(pkg.version || '1.0.0').trim() || '1.0.0';
+  } catch (_) {
+    return '1.0.0';
+  }
+}
+
+/**
+ * After rewriting Info.plist / Resources, the stock Electron linker-signed
+ * signature is invalid ("code has no resources but signature indicates they
+ * must be present"). Re-sign ad-hoc so Gatekeeper can open the app on Apple Silicon.
+ * Optional: set OPENBROWSER_CODESIGN_IDENTITY to a Developer ID for production.
+ */
+function signMacAppBundle(appBundle) {
+  if (process.platform !== 'darwin') return;
+  if (!fs.existsSync(appBundle)) throw new Error('Missing app bundle for codesign: ' + appBundle);
+  const identity = String(process.env.OPENBROWSER_CODESIGN_IDENTITY || '-').trim() || '-';
+  const args = ['--force', '--deep', '--sign', identity, '--timestamp=none'];
+  if (identity === '-') {
+    // ad-hoc: no hardened runtime / entitlements required
+  } else {
+    args.push('--options', 'runtime');
+  }
+  args.push(appBundle);
+  console.log('[package] codesign', identity === '-' ? 'ad-hoc' : identity, appBundle);
+  run('codesign', args);
+  const verify = spawnSync('codesign', ['--verify', '--deep', '--strict', appBundle], { encoding: 'utf8' });
+  if (verify.status !== 0) {
+    throw new Error('codesign verify failed: ' + String(verify.stderr || verify.stdout || verify.status));
+  }
+  console.log('[package] codesign verify ok');
+}
+
 function packageMac() {
   const resolvedHostDist = ensureResolvedHostDist();
   const hostApp = findHostAppBundle(resolvedHostDist);
@@ -497,6 +533,7 @@ function packageMac() {
     fs.renameSync(hostBinary, appBinary);
   }
 
+  const productVersion = readProductVersion();
   const infoPlist = path.join(contents, 'Info.plist');
   if (fs.existsSync(infoPlist)) {
     let plist = fs.readFileSync(infoPlist, 'utf8');
@@ -505,7 +542,9 @@ function packageMac() {
       .replace(/<key>CFBundleName<\/key>\s*<string>[^<]*<\/string>/, '<key>CFBundleName</key>\n\t<string>OpenBrowser</string>')
       .replace(/<key>CFBundleExecutable<\/key>\s*<string>[^<]*<\/string>/, '<key>CFBundleExecutable</key>\n\t<string>OpenBrowser</string>')
       .replace(/<key>CFBundleIdentifier<\/key>\s*<string>[^<]*<\/string>/, '<key>CFBundleIdentifier</key>\n\t<string>com.openbrowser.app</string>')
-      .replace(/<key>CFBundleIconFile<\/key>\s*<string>[^<]*<\/string>/, '<key>CFBundleIconFile</key>\n\t<string>logo</string>');
+      .replace(/<key>CFBundleIconFile<\/key>\s*<string>[^<]*<\/string>/, '<key>CFBundleIconFile</key>\n\t<string>logo</string>')
+      .replace(/<key>CFBundleShortVersionString<\/key>\s*<string>[^<]*<\/string>/, `<key>CFBundleShortVersionString</key>\n\t<string>${productVersion}</string>`)
+      .replace(/<key>CFBundleVersion<\/key>\s*<string>[^<]*<\/string>/, `<key>CFBundleVersion</key>\n\t<string>${productVersion}</string>`);
     if (!plist.includes('CFBundleIconFile')) {
       plist = plist.replace('</dict>\n</plist>', '\t<key>CFBundleIconFile</key>\n\t<string>logo</string>\n</dict>\n</plist>');
     }
@@ -535,12 +574,24 @@ function packageMac() {
 
   writeText(path.join(packageRoot, '启动.command'), [
     '#!/bin/bash',
+    'set -euo pipefail',
     'cd "$(dirname "$0")"',
-    'open "./OpenBrowser.app"',
+    'APP="./OpenBrowser.app"',
+    'if [ ! -d "$APP" ]; then',
+    '  echo "未找到 OpenBrowser.app"',
+    '  exit 1',
+    'fi',
+    '# Clear quarantine from browser-downloaded copies (common "无法打开/已损坏" cause).',
+    'xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true',
+    'xattr -dr com.apple.quarantine "$0" 2>/dev/null || true',
+    'open "$APP"',
     '',
   ].join('\n'));
   fs.chmodSync(path.join(packageRoot, '启动.command'), 0o755);
   if (fs.existsSync(appBinary)) fs.chmodSync(appBinary, 0o755);
+
+  // Must re-sign AFTER Info.plist / Resources mutations, otherwise Apple Silicon Gatekeeper rejects the app.
+  signMacAppBundle(appBundle);
 
   const kernelNote = packageArch === 'x86_64'
     ? '3. 本包（macOS x86_64 / Intel）已内置 OpenBrowser 148 独立内核（kernels/macos-x64）；运行时不再自动下载内核。'
@@ -550,9 +601,12 @@ function packageMac() {
   writeText(path.join(packageRoot, '运行说明.txt'), [
     'OpenBrowser macOS 版（' + packageArch + '）',
     '',
-    '1. 双击“启动.command”，或直接打开“OpenBrowser.app”。',
-    '2. 首次打开若被 Gatekeeper 拦截，请到“系统设置 > 隐私与安全性”允许运行，或执行：',
-    '   xattr -dr com.apple.quarantine "OpenBrowser.app"',
+    '1. 推荐双击“启动.command”（会自动清除隔离属性），或把 OpenBrowser.app 拖到“应用程序”后再打开。',
+    '2. 若提示“已损坏/无法打开”：',
+    '   a) 先运行“启动.command”',
+    '   b) 或在终端执行：xattr -dr com.apple.quarantine "/Applications/OpenBrowser.app"',
+    '   c) 或：右键 OpenBrowser.app → 打开 → 仍要打开',
+    '   d) 系统设置 → 隐私与安全性 → 仍要打开',
     kernelNote,
     '4. 默认不会自动回退到本机浏览器；如需回退，请在“本地设置”手动选择浏览器并开启。',
     '5. 环境数据默认保存在 ~/Library/Application Support/openbrowser。',
