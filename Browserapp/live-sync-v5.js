@@ -52,6 +52,7 @@ class LiveSyncController extends LiveSyncV4 {
   constructor(engine, emit) {
     super(engine, emit);
     this.tabMap = new Map();
+    this.desiredUrlMap = new Map();
     this.extensionMap = new Map(); this.extensionConnections = new Map();
     this.mappingReady = false;
     this.activeMasterTab = null; this.lastWindowSync = 0; this.lastHealthCheck = 0; this.nativeInputMirror = null;
@@ -199,7 +200,7 @@ class LiveSyncController extends LiveSyncV4 {
   stop() {
     this.stopNativeInputMirror();
     this.unsubscribeMasterClose?.(); this.unsubscribeMasterClose = null;
-    this.tabMap?.clear(); this.mappingReady = false; this.activeMasterTab = null;
+    this.tabMap?.clear(); this.desiredUrlMap?.clear(); this.mappingReady = false; this.activeMasterTab = null;
     for (const value of this.extensionConnections.values()) value.connection.close();
     this.extensionConnections.clear(); this.extensionMap.clear();
     super.stop();
@@ -315,28 +316,41 @@ class LiveSyncController extends LiveSyncV4 {
 
   async ensureMapping(masterTab, index = -1, initialLists = null) {
     const mapping = this.tabMap.get(masterTab.id) || new Map();
+    if (!this.desiredUrlMap) this.desiredUrlMap = new Map();
     const isStart = isEnvironmentStartUrl;
     const isBlank = (url) => /^(about:blank|chrome:\/\/(newtab|new-tab-page)\/?)/i.test(String(url || ''));
-    const equivalent = (a, b) => String(a || '').replace(/\/$/, '') === String(b || '').replace(/\/$/, '') || (isStart(a) && isStart(b)) || (isBlank(a) && isBlank(b));
+    const equivalent = (a, b) => this.urlsMatch(a, b) || (isStart(a) && isStart(b)) || (isBlank(a) && isBlank(b));
     await Promise.all(this.slaves.map(async (slave) => {
       const available = initialLists?.get(slave.id) || normalTabs(await cdp.tabs(slave.port));
       const mappedId = mapping.get(slave.id);
-      if (mappedId && available.some((tab) => tab.id === mappedId)) return;
-      if (mappedId) mapping.delete(slave.id);
-      const used = new Set([...this.tabMap.values()].map((value) => value.get(slave.id)).filter(Boolean));
-      const candidates = available.filter((tab) => !used.has(tab.id));
-      let target = candidates.find((tab) => tab.url === masterTab.url)
-        || (isStart(masterTab.url) ? candidates.find((tab) => isStart(tab.url)) : null)
-        || (isBlank(masterTab.url) ? candidates.find((tab) => isBlank(tab.url)) : null);
-      if (!target && index >= 0 && available[index] && !used.has(available[index].id)) target = available[index];
-      if (!target && candidates.length) target = candidates.find((tab) => isBlank(tab.url)) || candidates[candidates.length - 1];
+      const alreadyMapped = mappedId && available.some((tab) => tab.id === mappedId);
+      let target = alreadyMapped ? available.find((tab) => tab.id === mappedId) : null;
+      if (!alreadyMapped) {
+        if (mappedId) mapping.delete(slave.id);
+        const used = new Set([...this.tabMap.values()].map((value) => value.get(slave.id)).filter(Boolean));
+        const candidates = available.filter((tab) => !used.has(tab.id));
+        target = candidates.find((tab) => this.urlsMatch(tab.url, masterTab.url))
+          || (isStart(masterTab.url) ? candidates.find((tab) => isStart(tab.url)) : null)
+          || (isBlank(masterTab.url) ? candidates.find((tab) => isBlank(tab.url)) : null);
+        if (!target && index >= 0 && available[index] && !used.has(available[index].id)) target = available[index];
+        if (!target && candidates.length) target = candidates.find((tab) => isBlank(tab.url)) || candidates[candidates.length - 1];
+      }
       const desiredUrl = isStart(masterTab.url) ? (environmentStartUrl(this.engine, slave.id) || masterTab.url) : masterTab.url;
       if (!target) target = await cdp.newTab(slave.port, desiredUrl || 'about:blank');
-      mapping.set(slave.id, target.id); await this.markSlave(target, slave.id);
-      const needsNavigation = isStart(desiredUrl)
-        ? String(target.url || '').replace(/\/$/, '') !== String(desiredUrl).replace(/\/$/, '')
-        : !equivalent(target.url, desiredUrl);
-      if (desiredUrl && needsNavigation) await cdp.call(target.webSocketDebuggerUrl, 'Page.navigate', { url: desiredUrl }).catch(() => {});
+      mapping.set(slave.id, target.id);
+      if (!alreadyMapped) await this.markSlave(target, slave.id);
+      // Only navigate when the *master* desired URL changed. Re-driving navigation every tick
+      // (e.g. after a redirect) causes continuous slave reloads.
+      const desireKey = `${masterTab.id}:${slave.id}`;
+      const previousDesired = this.desiredUrlMap.get(desireKey);
+      const masterDesiredChanged = previousDesired !== this.urlKey(desiredUrl);
+      const needsNavigation = desiredUrl && !equivalent(target.url, desiredUrl) && (masterDesiredChanged || !alreadyMapped);
+      if (needsNavigation) {
+        await cdp.call(target.webSocketDebuggerUrl, 'Page.navigate', { url: desiredUrl }).catch(() => {});
+        this.desiredUrlMap.set(desireKey, this.urlKey(desiredUrl));
+      } else if (desiredUrl) {
+        this.desiredUrlMap.set(desireKey, this.urlKey(desiredUrl));
+      }
     }));
     this.tabMap.set(masterTab.id, mapping);
   }
@@ -377,7 +391,7 @@ class LiveSyncController extends LiveSyncV4 {
     if (!isEnvironmentStartUrl(url)) return super.navigateSlaves(masterTabId, url);
     await this.eachSlave(masterTabId, async (tab, slave) => {
       const desiredUrl = environmentStartUrl(this.engine, slave.id) || url;
-      if (String(tab.url || '').replace(/\/$/, '') === String(desiredUrl).replace(/\/$/, '')) return;
+      if (this.urlsMatch(tab.url, desiredUrl)) return;
       await cdp.call(tab.webSocketDebuggerUrl, 'Page.navigate', { url: desiredUrl }).catch(() => {});
     });
   }
@@ -436,10 +450,20 @@ class LiveSyncController extends LiveSyncV4 {
   }
 
   async syncWindowGeometry() {
+    // Mirror only size (for coordinate mapping), never left/top — so tile/cascade layouts stay put.
     if (!this.master || Date.now() - this.lastWindowSync < 1200) return; this.lastWindowSync = Date.now();
     const source = await cdp.windowForPort(this.master.item.port); const bounds = source.bounds || {}; if (bounds.windowState && bounds.windowState !== 'normal') return;
     if (!Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) return;
-    await Promise.all(this.slaves.map(async (slave) => { const current = await cdp.windowForPort(slave.port); const own = current.bounds || {}; if (own.width === bounds.width && own.height === bounds.height) return; await cdp.setWindowBounds(slave.port, { left: Number.isFinite(own.left) ? own.left : 0, top: Number.isFinite(own.top) ? own.top : 0, width: bounds.width, height: bounds.height }); }));
+    await Promise.all(this.slaves.map(async (slave) => {
+      const current = await cdp.windowForPort(slave.port); const own = current.bounds || {};
+      if (Math.abs((own.width || 0) - bounds.width) < 8 && Math.abs((own.height || 0) - bounds.height) < 8) return;
+      await cdp.setWindowBounds(slave.port, {
+        left: Number.isFinite(own.left) ? own.left : 0,
+        top: Number.isFinite(own.top) ? own.top : 0,
+        width: bounds.width,
+        height: bounds.height,
+      });
+    }));
   }
 
   async pollTabState(value) {
@@ -448,10 +472,16 @@ class LiveSyncController extends LiveSyncV4 {
     const metrics = await value.connection.command('Page.getLayoutMetrics'); const viewport = metrics.cssVisualViewport || metrics.visualViewport || {}; const zoom = (Number(viewport.scale) || 1) * (Number(viewport.zoom) || 1);
     value.zoom = zoom; await this.syncZoom(value.tab.id, zoom);
     if (state.visible) {
-      if (state.url && !/^(chrome|edge|devtools|chrome-extension|edge-extension):/i.test(state.url)) await this.navigateSlaves(value.tab.id, state.url);
+      // Drive navigation only when the master URL actually changed (not every 650ms tick).
+      const urlKey = this.urlKey(state.url);
+      if (state.url && !/^(chrome|edge|devtools|chrome-extension|edge-extension):/i.test(state.url) && value.lastSyncedUrl !== urlKey) {
+        value.lastSyncedUrl = urlKey;
+        await this.navigateSlaves(value.tab.id, state.url);
+      }
       if (this.activeMasterTab !== value.tab.id) { this.activeMasterTab = value.tab.id; await this.activateMapped(value.tab.id); }
     }
     if (state.x !== value.scroll.x || state.y !== value.scroll.y) { value.scroll = { x: state.x, y: state.y }; await this.forward(value.tab.id, { type: 'scroll', x: state.x, y: state.y }); }
-  }}
+  }
+}
 
 module.exports = { LiveSyncController };

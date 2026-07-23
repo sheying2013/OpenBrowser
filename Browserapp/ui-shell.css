@@ -1106,6 +1106,14 @@ html.reduce-transparency .sidebar, html.reduce-transparency .content > header, h
   min-width: 0;
 }
 
+#view-sync .action-grid button[data-window].active {
+  background: color-mix(in srgb, var(--ui-accent, #1677ff) 12%, #fff);
+  border-color: var(--ui-accent, #1677ff);
+  color: var(--ui-accent, #1677ff);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--ui-accent, #1677ff);
+}
+
 #view-sync .wide-action {
   grid-column: 1 / -1;
 }

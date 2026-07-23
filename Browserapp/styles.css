@@ -180,6 +180,15 @@
   font-size: 11px;
 }
 
+/* Window arrange mode highlight (tile / cascade / maximized / …) */
+#view-sync .action-grid button[data-window].active {
+  background: var(--blue2, #edf2ff);
+  border-color: var(--blue, #245cff);
+  color: var(--blue, #245cff);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--blue, #245cff);
+}
+
 #view-sync .sync-empty div { font-size: 28px; }
 #view-sync .sync-empty div svg {
   width: 28px !important;

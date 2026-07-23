@@ -821,10 +821,29 @@ function emit(value) {
   for (const win of windows) if (!win.isDestroyed()) win.webContents.send('engine:event', value);
 }
 
+function pickWorkArea() {
+  try {
+    const point = screen.getCursorScreenPoint?.();
+    if (point) return screen.getDisplayNearestPoint(point).workArea;
+  } catch (_) {}
+  return screen.getPrimaryDisplay().workArea;
+}
+
+function normalizeBounds(bounds) {
+  return {
+    left: Math.round(Number(bounds.left) || 0),
+    top: Math.round(Number(bounds.top) || 0),
+    width: Math.max(320, Math.round(Number(bounds.width) || 800)),
+    height: Math.max(240, Math.round(Number(bounds.height) || 600)),
+  };
+}
+
 async function tile(ids, cascade = false) {
   const entries = engine.runningWithCdp(sanitizeIds(ids));
   if (!entries.length) throw new Error('No selected browser has a CDP session');
-  const work = screen.getPrimaryDisplay().workArea;
+  const work = pickWorkArea();
+  // Pause geometry mirroring while we rearrange so live-sync does not fight tile layout.
+  if (liveSync) liveSync.lastWindowSync = Date.now() + 2500;
   if (cascade) {
     // Cascade layout: left + vs * index
     const { computeCascadeBounds } = require('./automation/protocol/window-sync-protocol');
@@ -834,15 +853,28 @@ async function tile(ids, cascade = false) {
       left: work.x, top: work.y, width, height, vs: 38,
     });
     await Promise.all(entries.map(({ item }, index) => {
-      const bounds = layout[index]?.bounds || { left: work.x + index * 38, top: work.y + index * 34, width, height };
-      return cdp.setWindowBounds(item.port, bounds);
+      const raw = layout[index]?.bounds || { left: work.x + index * 38, top: work.y + index * 34, width, height };
+      return cdp.setWindowBounds(item.port, normalizeBounds(raw));
     }));
   } else {
-    const cols = Math.ceil(Math.sqrt(entries.length)); const rows = Math.ceil(entries.length / cols);
-    const width = Math.floor(work.width / cols); const height = Math.floor(work.height / rows);
-    await Promise.all(entries.map(({ item }, index) => cdp.setWindowBounds(item.port, { left: work.x + (index % cols) * width, top: work.y + Math.floor(index / cols) * height, width, height })));
+    // Prefer side-by-side for 2 windows; otherwise use a near-square grid.
+    const count = entries.length;
+    const cols = count === 2 ? 2 : Math.ceil(Math.sqrt(count));
+    const rows = Math.ceil(count / cols);
+    const width = Math.floor(work.width / cols);
+    const height = Math.floor(work.height / rows);
+    await Promise.all(entries.map(({ item }, index) => {
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      return cdp.setWindowBounds(item.port, normalizeBounds({
+        left: work.x + col * width,
+        top: work.y + row * height,
+        width,
+        height,
+      }));
+    }));
   }
-  return { success: true, count: entries.length, mode: cascade ? 'cascade' : 'tile', platform: process.platform };
+  return { success: true, count: entries.length, mode: cascade ? 'cascade' : 'tile', platform: process.platform, workArea: work };
 }
 
 function isEnvironmentStartUrl(value) {

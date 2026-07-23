@@ -267,9 +267,25 @@ async function setWindowState(port, state) {
 
 async function setWindowBounds(port, bounds) {
   const value = await windowForPort(port);
+  const next = {
+    left: Math.round(Number(bounds.left) || 0),
+    top: Math.round(Number(bounds.top) || 0),
+    width: Math.max(320, Math.round(Number(bounds.width) || 800)),
+    height: Math.max(240, Math.round(Number(bounds.height) || 600)),
+  };
+  // Maximized / fullscreen windows ignore position; force normal first, then apply bounds.
   try { await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: 'normal' } }); } catch (_) {}
-  await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds });
-  return { windowId: value.windowId, bounds };
+  await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: next });
+  // Some Chromium builds need a second pass after leaving maximized state.
+  try {
+    const current = await call(value.socket, 'Browser.getWindowBounds', { windowId: value.windowId });
+    const actual = current?.bounds || {};
+    if (Math.abs((actual.width || 0) - next.width) > 24 || Math.abs((actual.height || 0) - next.height) > 24
+      || Math.abs((actual.left || 0) - next.left) > 24 || Math.abs((actual.top || 0) - next.top) > 24) {
+      await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: next });
+    }
+  } catch (_) {}
+  return { windowId: value.windowId, bounds: next };
 }
 
 module.exports = { json, call, connect, PersistentConnection, targets, tabs, browserSocket, newTab, closeTab, activateTab, firstTab, focusedEditableTab, insertText, clearFocused, navigate, reload, windowForPort, setWindowState, setWindowBounds, __test: { focusedEditableExpression, chooseFocusedEditable, textWasInserted } };

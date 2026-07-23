@@ -208,7 +208,23 @@ class LiveSyncController {
 
   async eachSlave(tabId, action) { await Promise.all(this.slaves.map(async (slave) => { const tab = await this.slaveTab(slave, tabId); if (tab) await action(tab, slave); })); }
 
-  async navigateSlaves(tabId, url) { await this.eachSlave(tabId, (tab) => tab.url === url ? Promise.resolve() : cdp.call(tab.webSocketDebuggerUrl, 'Page.navigate', { url })); }
+  urlKey(url) {
+    return String(url || '').replace(/\/$/, '').toLowerCase();
+  }
+
+  urlsMatch(a, b) {
+    const x = this.urlKey(a); const y = this.urlKey(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const blank = (v) => v === 'about:blank' || v === 'chrome://newtab' || v === 'chrome://new-tab-page' || v === 'edge://newtab';
+    return blank(x) && blank(y);
+  }
+
+  async navigateSlaves(tabId, url) {
+    await this.eachSlave(tabId, (tab) => this.urlsMatch(tab.url, url)
+      ? Promise.resolve()
+      : cdp.call(tab.webSocketDebuggerUrl, 'Page.navigate', { url }));
+  }
 
   async mappedMousePoint(tab, payload, focus = false) {
     const selector = JSON.stringify(String(payload.selector || '')); const fallbackX = Number(payload.x) || 0; const fallbackY = Number(payload.y) || 0;
