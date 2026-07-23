@@ -78,10 +78,15 @@ async function releaseProfileLock(profileRoot, owner = null) {
 }
 
 function isPidAlive(pid) {
+  const numeric = Number(pid);
+  if (!Number.isSafeInteger(numeric) || numeric <= 0) return false;
   try {
-    process.kill(pid, 0);
+    process.kill(numeric, 0);
     return true;
-  } catch (_) {
+  } catch (error) {
+    // Windows/Linux: process exists but we cannot signal it (different session / elevation).
+    // Treat as alive so we never steal a live profile lock.
+    if (error && (error.code === 'EPERM' || error.code === 'EACCES')) return true;
     return false;
   }
 }

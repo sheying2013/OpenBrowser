@@ -137,10 +137,28 @@ function main() {
   // --- IPC sender trust: exact app index.html path, not any file:…/index.html ---
   const mainSrc = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
   assert.ok(mainSrc.includes('function trustedAppIndexUrl'), 'main must pin trusted UI path');
+  assert.ok(mainSrc.includes('function isTrustedAppIndexUrl'), 'main must compare trusted UI path case-insensitively on Windows');
   assert.ok(mainSrc.includes("path.join(__dirname, 'index.html')"), 'trusted URL must be app index.html under __dirname');
   assert.ok(!/senderUrl\.startsWith\('file:'\)\s*\|\|\s*!senderUrl\.endsWith\('\/index\.html'\)/.test(mainSrc)
     && !/!senderUrl\.startsWith\('file:'\)\s*\|\|\s*!senderUrl\.endsWith\('\/index\.html'\)/.test(mainSrc),
     'must not accept any file:…/index.html');
+
+  // Runtime: drive-letter case must not break trusted check (Windows)
+  const { pathToFileURL } = require('url');
+  function isTrustedAppIndexUrlLocal(senderUrl, expected) {
+    const raw = String(senderUrl || '');
+    if (raw === expected || raw.startsWith(expected + '?') || raw.startsWith(expected + '#')) return true;
+    const lower = raw.toLowerCase();
+    const expectedLower = expected.toLowerCase();
+    return lower === expectedLower || lower.startsWith(expectedLower + '?') || lower.startsWith(expectedLower + '#');
+  }
+  const expectedIdx = pathToFileURL(path.join(__dirname, 'index.html')).href;
+  const flipped = expectedIdx.replace('file:///C:', 'file:///c:').replace('file:///c:', 'file:///C:') === expectedIdx
+    ? expectedIdx.replace(/^file:\/\/\/([A-Za-z]):/, (_, d) => `file:///${d === d.toUpperCase() ? d.toLowerCase() : d.toUpperCase()}:`)
+    : expectedIdx.replace(/^file:\/\/\/([A-Za-z]):/, (_, d) => `file:///${d === d.toUpperCase() ? d.toLowerCase() : d.toUpperCase()}:`);
+  assert.ok(isTrustedAppIndexUrlLocal(expectedIdx, expectedIdx), 'exact trusted URL ok');
+  assert.ok(isTrustedAppIndexUrlLocal(flipped, expectedIdx), 'drive-letter case flip must still be trusted on Windows');
+  assert.ok(!isTrustedAppIndexUrlLocal('file:///C:/tmp/malicious/index.html', expectedIdx), 'foreign index.html rejected');
 
   // --- proxy-forwarder exports ---
   assert.ok(typeof assertSafeOutboundUrl === 'function');

@@ -434,6 +434,12 @@ function packageWindows() {
   writeText(path.join(packageRoot, 'START.cmd'), [
     '@echo off',
     'setlocal',
+    'chcp 65001 >nul',
+    // Prefer the branded host; fall back only if rename failed in packaging.
+    'if exist "%~dp0runtime\\OpenBrowser.exe" (',
+    '  start "" "%~dp0runtime\\OpenBrowser.exe"',
+    '  exit /b 0',
+    ')',
     'for %%F in ("%~dp0runtime\\*.exe") do (',
     '  start "" "%%~fF"',
     '  exit /b 0',
