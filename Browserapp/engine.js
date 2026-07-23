@@ -1536,8 +1536,9 @@ class BrowserEngine {
       if (item.pid) {
         try {
           process.kill(item.pid, 0);
-        } catch (_) {
-          processAlive = false;
+        } catch (error) {
+          // Windows: EPERM/EACCES means the PID still exists but is not signalable — keep watching.
+          processAlive = Boolean(error && (error.code === 'EPERM' || error.code === 'EACCES'));
         }
       }
       try {
@@ -2278,7 +2279,22 @@ class BrowserEngine {
         const profileRoot = this.profileRoot(id);
         const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, profileRoot, id);
         if (!rootCheck.ok) throw new Error('Isolation error: ' + rootCheck.message);
-        if (fs.existsSync(profileRoot)) await fsp.rm(profileRoot, { recursive: true, force: true });
+        if (fs.existsSync(profileRoot)) {
+          // Windows often holds Chrome locks (EBUSY/EPERM) briefly after Browser.close / taskkill.
+          let lastError = null;
+          for (let attempt = 0; attempt < 8; attempt += 1) {
+            try {
+              await fsp.rm(profileRoot, { recursive: true, force: true });
+              lastError = null;
+              break;
+            } catch (error) {
+              lastError = error;
+              if (!error || !['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(error.code)) throw error;
+              await new Promise((resolve) => setTimeout(resolve, 120 * (attempt + 1)));
+            }
+          }
+          if (lastError) throw lastError;
+        }
       }
     }
     await this.persist();

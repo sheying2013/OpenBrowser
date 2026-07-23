@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const { pathToFileURL } = require('url');
 const { spawn, execFileSync } = require('child_process');
 
 /**
@@ -45,14 +46,13 @@ function pathJoin(...parts) {
   return path.join(...parts);
 }
 
-/** Normalize file URL for both platforms */
+/**
+ * Normalize file URL for both platforms.
+ * Must percent-encode spaces / non-ASCII / #? etc. — raw `file:///C:/Users/Test User/...`
+ * breaks Chromium Page.navigate and CDP on Windows (common when user profile has spaces).
+ */
 function toFileUrl(filePath) {
-  const normalized = path.resolve(filePath).replace(/\\/g, '/');
-  if (isWindows()) {
-    // file:///C:/...
-    return 'file:///' + normalized;
-  }
-  return 'file://' + normalized;
+  return pathToFileURL(path.resolve(filePath)).href;
 }
 
 /**

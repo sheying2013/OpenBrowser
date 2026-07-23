@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 const cdp = require('./cdp');
 const { LiveSyncController: LiveSyncV4, PersistentCdp, injection } = require('./live-sync-v4');
@@ -41,7 +42,9 @@ function environmentStartUrl(engine, id) {
     }
   } catch (_) {}
   const root = running?.root;
-  return root ? 'file:///' + path.join(root, 'openbrowser-start.html').replace(/\\/g, '/') : null;
+  if (!root) return null;
+  // Must percent-encode spaces / non-ASCII (Windows user profiles often contain them).
+  return pathToFileURL(path.join(root, 'openbrowser-start.html')).href;
 }
 function environmentNumber(engine, id) {
   const profile = engine.running?.get?.(id)?.profile || engine.profiles?.get?.(id);

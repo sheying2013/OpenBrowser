@@ -2,6 +2,7 @@
 
 const cdp = require('../cdp');
 const fs = require('fs/promises');
+const fssync = require('fs');
 const path = require('path');
 const os = require('os');
 const {
@@ -1076,6 +1077,7 @@ class RpaEngine {
    * Resolve spreadsheet paths for useExcel.
    * Allows RPA output dir plus common user folders (Desktop/Documents/Downloads/home),
    * because catalog templates expect user-picked absolute paths.
+   * On Windows also accepts OneDrive-redirected Desktop/Documents and realpath-resolved trees.
    */
   async resolveSpreadsheetPath(filePath) {
     const raw = String(filePath || '').trim();
@@ -1083,38 +1085,66 @@ class RpaEngine {
     if (raw.includes('\0')) throw new Error('invalid file path');
 
     const home = os.homedir();
+    const userProfile = process.env.USERPROFILE || home;
+    const folderNames = ['Desktop', 'Documents', 'Downloads'];
+    const expandFolderRoots = (base) => {
+      const roots = [base];
+      for (const name of folderNames) {
+        roots.push(path.join(base, name));
+        // OneDrive Known Folder Move: Desktop may live under OneDrive\Desktop
+        roots.push(path.join(base, 'OneDrive', name));
+        roots.push(path.join(base, 'OneDrive - Personal', name));
+      }
+      return roots;
+    };
+
     const candidates = [];
     if (path.isAbsolute(raw)) {
       candidates.push(path.resolve(raw));
     } else {
       candidates.push(path.resolve(OUTPUT_DIRECTORY, raw));
       candidates.push(path.resolve(home, raw));
-      candidates.push(path.resolve(home, 'Desktop', raw));
-      candidates.push(path.resolve(home, 'Documents', raw));
-      candidates.push(path.resolve(home, 'Downloads', raw));
+      for (const name of folderNames) {
+        candidates.push(path.resolve(home, name, raw));
+      }
       if (process.platform === 'win32') {
-        const userProfile = process.env.USERPROFILE || home;
-        candidates.push(path.resolve(userProfile, 'Desktop', raw));
-        candidates.push(path.resolve(userProfile, 'Documents', raw));
-        candidates.push(path.resolve(userProfile, 'Downloads', raw));
+        candidates.push(path.resolve(userProfile, raw));
+        for (const name of folderNames) {
+          candidates.push(path.resolve(userProfile, name, raw));
+          candidates.push(path.resolve(userProfile, 'OneDrive', name, raw));
+          candidates.push(path.resolve(userProfile, 'OneDrive - Personal', name, raw));
+        }
       }
     }
 
     const allowedRoots = [
       OUTPUT_DIRECTORY,
-      home,
-      path.join(home, 'Desktop'),
-      path.join(home, 'Documents'),
-      path.join(home, 'Downloads'),
+      ...expandFolderRoots(home),
     ];
     if (process.platform === 'win32') {
-      const userProfile = process.env.USERPROFILE || home;
-      allowedRoots.push(userProfile, path.join(userProfile, 'Desktop'), path.join(userProfile, 'Documents'), path.join(userProfile, 'Downloads'));
+      for (const root of expandFolderRoots(userProfile)) {
+        if (!allowedRoots.includes(root)) allowedRoots.push(root);
+      }
+    }
+    // realpath so junctions/symlinks (OneDrive Desktop) still pass the sandbox
+    const resolvedAllowed = [];
+    for (const root of allowedRoots) {
+      resolvedAllowed.push(root);
+      try {
+        const real = fssync.realpathSync.native ? fssync.realpathSync.native(root) : fssync.realpathSync(root);
+        if (real && !resolvedAllowed.includes(real)) resolvedAllowed.push(real);
+      } catch (_) {}
     }
 
     let lastError = null;
     for (const candidate of candidates) {
-      const okRoot = allowedRoots.some((root) => isPathInsideRoot(candidate, root));
+      let realCandidate = candidate;
+      try {
+        realCandidate = fssync.realpathSync.native ? fssync.realpathSync.native(candidate) : fssync.realpathSync(candidate);
+      } catch (_) {
+        // file may not exist yet — still check lexical containment
+      }
+      const okRoot = resolvedAllowed.some((root) => isPathInsideRoot(candidate, root) || isPathInsideRoot(realCandidate, root));
       if (!okRoot) {
         lastError = new Error('useExcel path is outside allowed folders (home/Desktop/Documents/Downloads/rpa-output)');
         continue;
@@ -1123,7 +1153,12 @@ class RpaEngine {
         await fs.access(candidate);
         return candidate;
       } catch (error) {
-        lastError = new Error('useExcel file not found: ' + candidate);
+        try {
+          await fs.access(realCandidate);
+          return realCandidate;
+        } catch (_) {
+          lastError = new Error('useExcel file not found: ' + candidate);
+        }
       }
     }
     throw lastError || new Error('useExcel requires a CSV or JSON file path');

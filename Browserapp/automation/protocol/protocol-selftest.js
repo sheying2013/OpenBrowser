@@ -230,6 +230,14 @@ async function main() {
   assert.strictEqual(caps.nativeOsInputMirror, process.platform === 'win32');
   assert.ok(LOCAL_API_PORTS.includes(50325));
   assert.ok(toFileUrl(__filename).startsWith('file:'));
+  // Windows path with spaces / CJK must be percent-encoded (pathToFileURL).
+  const spacedStart = path.win32.join('C:\\Users\\Test User', 'OpenBrowser Data', 'openbrowser-start.html');
+  const spacedUrl = toFileUrl(spacedStart);
+  assert.ok(spacedUrl.startsWith('file:///'), 'toFileUrl must produce file URL');
+  assert.ok(spacedUrl.includes('Test%20User'), 'toFileUrl must encode spaces: ' + spacedUrl);
+  assert.ok(!spacedUrl.includes('Test User'), 'toFileUrl must not leave raw spaces: ' + spacedUrl);
+  assert.ok(spacedUrl.includes('OpenBrowser%20Data'), 'toFileUrl must encode folder spaces');
+  pass('toFileUrl percent-encodes Windows spaces');
   assert.strictEqual(
     extractUserDataDir('"C:\\Program Files\\Browser\\browser.exe" "--user-data-dir=C:\\OpenBrowser Data\\env-001" --remote-debugging-port=9222'),
     'C:\\OpenBrowser Data\\env-001'

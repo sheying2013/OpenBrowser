@@ -800,14 +800,23 @@ function trustedAppIndexUrl() {
   return pathToFileURL(path.join(__dirname, 'index.html')).href;
 }
 
+/** Windows file: URLs may differ only by drive-letter case (C: vs c:). Compare paths case-insensitively. */
+function isTrustedAppIndexUrl(senderUrl) {
+  const expected = trustedAppIndexUrl();
+  const raw = String(senderUrl || '');
+  if (raw === expected || raw.startsWith(expected + '?') || raw.startsWith(expected + '#')) return true;
+  if (process.platform !== 'win32') return false;
+  const lower = raw.toLowerCase();
+  const expectedLower = expected.toLowerCase();
+  return lower === expectedLower || lower.startsWith(expectedLower + '?') || lower.startsWith(expectedLower + '#');
+}
+
 function assertTrustedIpcSender(event) {
   if (!mainWindow || mainWindow.isDestroyed() || event?.sender !== mainWindow.webContents) {
     throw new Error('untrusted IPC sender');
   }
   const senderUrl = String(event.sender.getURL?.() || '');
-  const expected = trustedAppIndexUrl();
-  // Exact match, or same path with query/hash (Electron may append ? or # after loadFile).
-  if (senderUrl !== expected && !senderUrl.startsWith(expected + '?') && !senderUrl.startsWith(expected + '#')) {
+  if (!isTrustedAppIndexUrl(senderUrl)) {
     throw new Error('untrusted IPC document');
   }
 }
@@ -910,7 +919,9 @@ function environmentStartUrl(entry) {
     }
   } catch (_) {}
   const root = entry?.item?.root || entry?.root;
-  return root ? 'file:///' + path.join(root, 'openbrowser-start.html').replace(/\\/g, '/') : null;
+  if (!root) return null;
+  // pathToFileURL percent-encodes spaces / CJK so Windows profiles under "C:\Users\Foo Bar\..." work.
+  return pathToFileURL(path.join(root, 'openbrowser-start.html')).href;
 }
 
 async function syncTabsFromMaster(ids) {
