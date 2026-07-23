@@ -233,6 +233,8 @@ jobs:
           test ! -e "$APP/kernels/windows-x64"
           test ! -e "$APP/kernels/macos-arm64"
           test -f "dist/OpenBrowser-macOS-x86_64.dmg"
+          codesign --verify --deep --strict "dist/OpenBrowser-macOS-x86_64/OpenBrowser.app"
+          codesign -dv --verbose=2 "dist/OpenBrowser-macOS-x86_64/OpenBrowser.app" | head -20 || true
       - name: Upload to release
         run: |
           set -euo pipefail
@@ -297,6 +299,8 @@ jobs:
           test ! -e "$APP/kernels/macos-x64"
           test ! -e "$APP/kernels/windows-x64"
           test -f "dist/OpenBrowser-macOS-arm64-with-kernel.dmg"
+          codesign --verify --deep --strict "dist/OpenBrowser-macOS-arm64-with-kernel/OpenBrowser.app"
+          codesign -dv --verbose=2 "dist/OpenBrowser-macOS-arm64-with-kernel/OpenBrowser.app" | head -20 || true
       - name: Upload to release
         run: |
           set -euo pipefail
