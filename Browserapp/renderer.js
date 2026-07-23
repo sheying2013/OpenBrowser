@@ -3341,7 +3341,12 @@ document.addEventListener('click', async (event) => {
 
   const assign = event.target.closest('[data-extension-assign]'); if (assign) openAssign(assign.dataset.extensionAssign);
   const remove = event.target.closest('[data-extension-remove]'); if (remove) { try { await window.ops.removeExtension(remove.dataset.extensionRemove); await refreshExtensions(); } catch (error) { toast(error.message); } }
-  const windowButton = event.target.closest('[data-window]'); if (windowButton) runSyncAction('窗口操作', () => window.ops.windowAction(selectedSessionIds(), windowButton.dataset.window));
+  const windowButton = event.target.closest('[data-window]');
+  if (windowButton) {
+    const action = windowButton.dataset.window;
+    $$('[data-window]').forEach((btn) => btn.classList.toggle('active', btn === windowButton));
+    runSyncAction('窗口操作', () => window.ops.windowAction(selectedSessionIds(), action));
+  }
   const masterSelect = event.target.closest('[data-master-select]'); if (masterSelect && !syncState.active && selectedSessions.has(masterSelect.dataset.masterSelect)) { preferredMasterId = masterSelect.dataset.masterSelect; pushSyncSelection(); renderSessions(); }
   const showWindow = event.target.closest('[data-show-window]'); if (showWindow) runSyncAction('\u663e\u793a\u7a97\u53e3', () => window.ops.windowAction([showWindow.dataset.showWindow], 'normal'));
   const proxyCheck = event.target.closest('[data-proxy-check]'); if (proxyCheck) checkProfileProxy(proxyCheck.dataset.proxyCheck);
