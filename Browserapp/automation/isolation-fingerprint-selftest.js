@@ -22,6 +22,8 @@ const {
   fingerprintConsistencyIssues,
   createMediaDevicesFromSeed,
   createSpeechVoicesFromSeed,
+  createDeviceNameFromSeed,
+  createLocalIpFromSeed,
   buildWebglFpPayload,
   audioMarkFromSeed,
   clientRectMarkFromSeed,
@@ -200,8 +202,26 @@ async function main() {
   assert.strictEqual(typeof audioMarkFromSeed('abc'), 'number');
   assert.ok(Math.abs(clientRectMarkFromSeed('abc')) <= 10000);
   const voices = createSpeechVoicesFromSeed('env-aaa', ['zh-CN'], 'noise');
-  assert.ok(Array.isArray(voices) && voices.length >= 1);
+  assert.ok(Array.isArray(voices) && voices.length >= 18);
   assert.ok(voices.some((v) => v.default === true));
+  assert.ok(voices.some((v) => String(v.lang || '').startsWith('zh')));
+  const deviceA = createDeviceNameFromSeed('env-aaa', { mode: 'noise' });
+  const deviceB = createDeviceNameFromSeed('env-aaa', { mode: 'noise' });
+  const deviceC = createDeviceNameFromSeed('env-bbb', { mode: 'noise' });
+  assert.strictEqual(deviceA, deviceB);
+  assert.notStrictEqual(deviceA, deviceC);
+  assert.strictEqual(createDeviceNameFromSeed('x', { mode: 'custom', custom: 'My-Host' }), 'My-Host');
+  assert.strictEqual(createDeviceNameFromSeed('x', { mode: 'real' }), null);
+  const localIp = createLocalIpFromSeed('env-aaa');
+  assert.ok(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(localIp));
+  const named = buildFingerprint({
+    id: 'env-device',
+    privacy: { deviceNameMode: 'custom', deviceName: 'Studio-Alpha', speech: 'noise' },
+  });
+  assert.strictEqual(named.deviceName, 'Studio-Alpha');
+  assert.strictEqual(named.staticConfig.deviceName, 'Studio-Alpha');
+  assert.ok(named.webrtcLocalIp);
+  assert.ok(named.speech.voices.length >= 18);
   const blockedSpeech = buildFingerprint({ id: 'env-speech', privacy: { speech: 'blocked' } });
   assert.strictEqual(blockedSpeech.speech.mode, 'blocked');
   assert.deepStrictEqual(blockedSpeech.speech.voices, []);

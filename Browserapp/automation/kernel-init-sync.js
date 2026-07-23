@@ -144,6 +144,7 @@ function consistencyFromFp(fp, kind) {
  */
 function mapFingerprintToInitFields(fp = {}, profile = {}) {
   const meta = fp.userAgentMetadata || fp.uaProfile?.metadata || {};
+  const privacy = profile.privacy || {};
   const langs = Array.isArray(fp.languages) && fp.languages.length
     ? fp.languages
     : String(profile.language || 'en-US').split(',').map((s) => s.trim()).filter(Boolean);
@@ -156,6 +157,11 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
   const clientRectsMode = fp.clientRects?.mode || 'noise';
   const mediaMode = fp.mediaDevices?.mode || 'noise';
   const speechMode = fp.speech?.mode || 'real';
+  const fontMode = String(privacy.fontMode || privacy.fonts || fp.fontMode || 'default').toLowerCase();
+  const fontFingerprinting = fontMode === 'noise' || fontMode === 'spoof'
+    || privacy.fontFingerprinting === true
+    || privacy.isFontFingerprinting === true
+    || fp.fontFingerprinting === true;
 
   const fields = {
     platform: String(fp.platform || meta.platform || 'Win32'),
@@ -166,7 +172,7 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
     is_audio_finger_printing_enable: audioMode === 'noise',
     is_clientrects_finger_printing_enable: clientRectsMode === 'noise',
     is_enumerate_devices_enable: mediaMode !== 'real',
-    is_font_finger_printing_enable: false,
+    is_font_finger_printing_enable: fontFingerprinting,
     GoogleSpeechSynthesis: speechMode !== 'blocked',
     webrtc_media_labels: mediaLabelsFromFp(fp),
     battery: batteryFromFp(fp),
@@ -203,6 +209,63 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
 
   const webgpu = webgpuFromFp(fp);
   if (webgpu) fields.webgpu_parameter = webgpu;
+
+  // Device / host name surface used by native identity fields.
+  const deviceName = String(fp.deviceName || fp.staticConfig?.deviceName || '').trim();
+  if (deviceName && fp.deviceNameMode !== 'real') {
+    fields.machine = deviceName.slice(0, 120);
+  }
+
+  // WebRTC IP surfaces: public (proxy/exit) + private local candidate.
+  const publicIp = String(
+    fp.webrtcAddress
+    || fp.dynamicConfig?.webrtcAddress
+    || privacy.webrtcAddress
+    || profile.exitIp
+    || profile.exitIP
+    || ''
+  ).trim();
+  const localIp = String(
+    fp.webrtcLocalIp
+    || fp.staticConfig?.webrtcLocalIp
+    || fp.dynamicConfig?.webrtcLocalIp
+    || privacy.webrtcLocalIp
+    || ''
+  ).trim();
+  if (webrtcMode === 'disabled') {
+    fields.webrtc_fake_ip = '';
+    fields.webrtc_local_ip = '';
+  } else {
+    if (publicIp) fields.webrtc_fake_ip = publicIp;
+    if (localIp) fields.webrtc_local_ip = localIp;
+  }
+  const stunServers = Array.isArray(privacy.webrtcStunServers)
+    ? privacy.webrtcStunServers
+    : (Array.isArray(fp.webrtcStunServers) ? fp.webrtcStunServers : null);
+  if (stunServers && stunServers.length) {
+    fields.webrtc_stun_servers = stunServers.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+
+  // Geo as "lat,lon,accuracy" string accepted by Framework geoposition parser.
+  const geoObj = fp.dynamicConfig?.geoposition || fp.geoposition || null;
+  let geoText = String(fp.dynamicConfig?.geopositionText || '').trim();
+  if (!geoText && geoObj && typeof geoObj === 'object') {
+    const lat = Number(geoObj.latitude);
+    const lon = Number(geoObj.longitude);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      const accuracy = Number.isFinite(Number(geoObj.accuracy)) ? Number(geoObj.accuracy) : 1000;
+      geoText = `${lat},${lon},${accuracy}`;
+    }
+  }
+  if (!geoText) {
+    const lat = Number(privacy.latitude ?? profile.exitLatitude);
+    const lon = Number(privacy.longitude ?? profile.exitLongitude);
+    if (Number.isFinite(lat) && Number.isFinite(lon) && privacy.geoMode !== 'disabled' && privacy.geoMode !== 'prompt') {
+      const accuracy = Number.isFinite(Number(privacy.accuracy)) ? Number(privacy.accuracy) : 1000;
+      geoText = `${lat},${lon},${accuracy}`;
+    }
+  }
+  if (geoText) fields.geoposition = geoText;
 
   // Preserve existing check_url lists when merging; only patch enable/metrics.
   fields._canvasConsistencyPatch = consistencyFromFp(fp, 'canvas');

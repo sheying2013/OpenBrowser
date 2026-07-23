@@ -76,12 +76,71 @@ const MEDIA_DEVICE_TEMPLATES = [
 ];
 
 const SPEECH_VOICE_POOL = [
-  { name: 'Alex', lang: 'en-US' }, { name: 'Daniel', lang: 'en-GB' }, { name: 'Samantha', lang: 'en-US' },
-  { name: 'Ting-Ting', lang: 'zh-CN' }, { name: 'Mei-Jia', lang: 'zh-TW' }, { name: 'Kyoko', lang: 'ja-JP' },
-  { name: 'Yuna', lang: 'ko-KR' }, { name: 'Thomas', lang: 'fr-FR' }, { name: 'Anna', lang: 'de-DE' },
-  { name: 'Monica', lang: 'es-ES' }, { name: 'Alice', lang: 'it-IT' }, { name: 'Zira', lang: 'en-US' },
-  { name: 'Google US English', lang: 'en-US' }, { name: 'Google 普通话（中国大陆）', lang: 'zh-CN' },
+  { name: 'Alex', lang: 'en-US' }, { name: 'Samantha', lang: 'en-US' }, { name: 'Victoria', lang: 'en-US' },
+  { name: 'Fred', lang: 'en-US' }, { name: 'Junior', lang: 'en-US' }, { name: 'Kathy', lang: 'en-US' },
+  { name: 'Daniel', lang: 'en-GB' }, { name: 'Kate', lang: 'en-GB' }, { name: 'Oliver', lang: 'en-GB' },
+  { name: 'Serena', lang: 'en-GB' }, { name: 'Moira', lang: 'en-IE' }, { name: 'Fiona', lang: 'en-GB' },
+  { name: 'Karen', lang: 'en-AU' }, { name: 'Lee', lang: 'en-AU' }, { name: 'Tessa', lang: 'en-ZA' },
+  { name: 'Google US English', lang: 'en-US' }, { name: 'Google UK English Female', lang: 'en-GB' },
+  { name: 'Google UK English Male', lang: 'en-GB' },
   { name: 'Microsoft David - English (United States)', lang: 'en-US' },
+  { name: 'Microsoft Zira - English (United States)', lang: 'en-US' },
+  { name: 'Microsoft Mark - English (United States)', lang: 'en-US' },
+  { name: 'Ting-Ting', lang: 'zh-CN' }, { name: 'Sin-ji', lang: 'zh-HK' }, { name: 'Mei-Jia', lang: 'zh-TW' },
+  { name: 'Google 普通话（中国大陆）', lang: 'zh-CN' }, { name: 'Google 粤語（香港）', lang: 'zh-HK' },
+  { name: 'Google 國語（臺灣）', lang: 'zh-TW' },
+  { name: 'Microsoft Huihui - Chinese (Simplified, PRC)', lang: 'zh-CN' },
+  { name: 'Microsoft Yaoyao - Chinese (Simplified, PRC)', lang: 'zh-CN' },
+  { name: 'Microsoft Kangkang - Chinese (Simplified, PRC)', lang: 'zh-CN' },
+  { name: 'Microsoft Hanhan - Chinese (Traditional, Taiwan)', lang: 'zh-TW' },
+  { name: 'Microsoft Tracy - Chinese (Traditional, Hong Kong S.A.R.)', lang: 'zh-HK' },
+  { name: 'Kyoko', lang: 'ja-JP' }, { name: 'Otoya', lang: 'ja-JP' },
+  { name: 'Google 日本語', lang: 'ja-JP' },
+  { name: 'Microsoft Haruka - Japanese', lang: 'ja-JP' },
+  { name: 'Microsoft Ichiro - Japanese', lang: 'ja-JP' },
+  { name: 'Yuna', lang: 'ko-KR' }, { name: 'Google 한국의', lang: 'ko-KR' },
+  { name: 'Microsoft Heami - Korean', lang: 'ko-KR' },
+  { name: 'Thomas', lang: 'fr-FR' }, { name: 'Amelie', lang: 'fr-CA' }, { name: 'Audrey', lang: 'fr-FR' },
+  { name: 'Google français', lang: 'fr-FR' },
+  { name: 'Microsoft Hortense - French', lang: 'fr-FR' },
+  { name: 'Anna', lang: 'de-DE' }, { name: 'Helena', lang: 'de-DE' }, { name: 'Markus', lang: 'de-DE' },
+  { name: 'Google Deutsch', lang: 'de-DE' },
+  { name: 'Microsoft Hedda - German', lang: 'de-DE' },
+  { name: 'Monica', lang: 'es-ES' }, { name: 'Paulina', lang: 'es-MX' }, { name: 'Jorge', lang: 'es-ES' },
+  { name: 'Google español', lang: 'es-ES' }, { name: 'Google español de Estados Unidos', lang: 'es-US' },
+  { name: 'Microsoft Helena - Spanish', lang: 'es-ES' },
+  { name: 'Alice', lang: 'it-IT' }, { name: 'Luca', lang: 'it-IT' },
+  { name: 'Google italiano', lang: 'it-IT' },
+  { name: 'Microsoft Cosimo - Italian', lang: 'it-IT' },
+  { name: 'Luciana', lang: 'pt-BR' }, { name: 'Joana', lang: 'pt-PT' },
+  { name: 'Google português do Brasil', lang: 'pt-BR' },
+  { name: 'Microsoft Maria - Portuguese (Brazil)', lang: 'pt-BR' },
+  { name: 'Milena', lang: 'ru-RU' }, { name: 'Yuri', lang: 'ru-RU' },
+  { name: 'Google русский', lang: 'ru-RU' },
+  { name: 'Microsoft Irina - Russian', lang: 'ru-RU' },
+  { name: 'Xander', lang: 'nl-NL' }, { name: 'Ellen', lang: 'nl-BE' },
+  { name: 'Google Nederlands', lang: 'nl-NL' },
+  { name: 'Alva', lang: 'sv-SE' }, { name: 'Oskar', lang: 'sv-SE' },
+  { name: 'Google svenska', lang: 'sv-SE' },
+  { name: 'Satu', lang: 'fi-FI' }, { name: 'Google suomi', lang: 'fi-FI' },
+  { name: 'Nora', lang: 'nb-NO' }, { name: 'Google norsk bokmål', lang: 'nb-NO' },
+  { name: 'Zosia', lang: 'pl-PL' }, { name: 'Google polski', lang: 'pl-PL' },
+  { name: 'Zuzana', lang: 'cs-CZ' }, { name: 'Google čeština', lang: 'cs-CZ' },
+  { name: 'Lekha', lang: 'hi-IN' }, { name: 'Google हिन्दी', lang: 'hi-IN' },
+  { name: 'Kanya', lang: 'th-TH' }, { name: 'Google ไทย', lang: 'th-TH' },
+  { name: 'Damayanti', lang: 'id-ID' }, { name: 'Google Bahasa Indonesia', lang: 'id-ID' },
+  { name: 'Melina', lang: 'el-GR' }, { name: 'Google ελληνικά', lang: 'el-GR' },
+  { name: 'Carmit', lang: 'he-IL' }, { name: 'Google עברית', lang: 'he-IL' },
+  { name: 'Maged', lang: 'ar-SA' }, { name: 'Google العربية', lang: 'ar-SA' },
+  { name: 'Tarik', lang: 'ar-SA' },
+];
+
+const DEVICE_NAME_PREFIXES = [
+  'DESKTOP', 'LAPTOP', 'PC', 'WIN', 'MAC', 'HOME', 'WORK', 'OFFICE', 'STUDIO', 'DEV',
+];
+const DEVICE_NAME_SUFFIXES = [
+  'Alpha', 'Nova', 'Orbit', 'Pulse', 'Ridge', 'Summit', 'Vertex', 'Atlas', 'Cedar', 'Delta',
+  'Echo', 'Flint', 'Grove', 'Harbor', 'Ivory', 'Jade', 'Kepler', 'Lumen', 'Maple', 'Nimbus',
 ];
 
 
@@ -363,15 +422,33 @@ function createMediaDevicesFromSeed(seedInput, options = {}) {
 function createSpeechVoicesFromSeed(seedInput, languages = ['en-US'], mode = 'noise') {
   if (mode === 'blocked') return [];
   if (mode === 'real') return null;
-  const primary = String(languages[0] || 'en-US');
+  const langs = (Array.isArray(languages) ? languages : [languages])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+  const primary = langs[0] || 'en-US';
   const primaryLang = primary.split('-')[0].toLowerCase();
+  const langSet = new Set(langs.map((item) => item.toLowerCase()));
+  const langPrefixSet = new Set(langs.map((item) => item.split('-')[0].toLowerCase()));
   const seed = hashSeed(String(seedInput || primary));
-  const count = 4 + (u32(seed, 4) % 5);
+  const count = 18 + (u32(seed, 4) % 15); // 18-32 voices, closer to full system tables
+  const scored = SPEECH_VOICE_POOL.map((base, index) => {
+    let score = 0;
+    const lang = String(base.lang || '').toLowerCase();
+    const prefix = lang.split('-')[0];
+    if (lang === primary.toLowerCase()) score += 100;
+    else if (langSet.has(lang)) score += 80;
+    else if (prefix === primaryLang) score += 60;
+    else if (langPrefixSet.has(prefix)) score += 40;
+    else if (prefix === 'en') score += 10;
+    score += (u32(seed, 8 + (index % 24)) % 7);
+    return { base, score, index };
+  }).sort((a, b) => b.score - a.score || a.index - b.index);
+
   const picked = [];
   const used = new Set();
-  for (let i = 0; i < SPEECH_VOICE_POOL.length && picked.length < count; i += 1) {
-    const idx = (u32(seed, 8 + i) + i * 3) % SPEECH_VOICE_POOL.length;
-    const base = SPEECH_VOICE_POOL[idx];
+  for (const item of scored) {
+    if (picked.length >= count) break;
+    const base = item.base;
     const key = `${base.name}|${base.lang}`;
     if (used.has(key)) continue;
     used.add(key);
@@ -379,17 +456,54 @@ function createSpeechVoicesFromSeed(seedInput, languages = ['en-US'], mode = 'no
       name: base.name,
       lang: base.lang,
       default: false,
-      localService: true,
+      localService: !/^Google\s/i.test(base.name),
       voiceURI: `ob-voice://${encodeURIComponent(base.name)}/${base.lang}`,
     });
   }
-  let def = picked.find((v) => v.lang === primary) || picked.find((v) => v.lang.toLowerCase().startsWith(primaryLang));
-  if (!def && picked.length) def = picked[0];
+  let def = picked.find((v) => v.lang === primary)
+    || picked.find((v) => v.lang.toLowerCase().startsWith(primaryLang))
+    || picked[0];
   if (def) {
     def.default = true;
-    def.localService = true;
+    if (def.localService == null) def.localService = true;
   }
   return picked;
+}
+
+/** Seeded host-style device name for machine / product surfaces. */
+function createDeviceNameFromSeed(seedInput, options = {}) {
+  const mode = String(options.mode || 'noise');
+  const custom = String(options.custom || '').trim().slice(0, 120);
+  if (mode === 'real') return null;
+  if (mode === 'custom' && custom) return custom;
+  const seed = hashSeed(String(seedInput || 'device'));
+  const prefix = DEVICE_NAME_PREFIXES[u32(seed, 0) % DEVICE_NAME_PREFIXES.length];
+  const suffix = DEVICE_NAME_SUFFIXES[u32(seed, 4) % DEVICE_NAME_SUFFIXES.length];
+  const num = 1000 + (u32(seed, 8) % 9000);
+  if ((u32(seed, 12) % 3) === 0) return `${suffix}-${num}`;
+  return `${prefix}-${suffix}${String(num).slice(0, 3)}`;
+}
+
+/** Deterministic private IPv4 used as the local ICE candidate surface. */
+function createLocalIpFromSeed(seedInput) {
+  const seed = hashSeed(String(seedInput || 'local-ip'));
+  const classPick = u32(seed, 0) % 3;
+  if (classPick === 0) {
+    return `10.${u32(seed, 4) % 256}.${u32(seed, 8) % 256}.${1 + (u32(seed, 12) % 254)}`;
+  }
+  if (classPick === 1) {
+    return `192.168.${u32(seed, 4) % 256}.${1 + (u32(seed, 8) % 254)}`;
+  }
+  return `172.${16 + (u32(seed, 4) % 16)}.${u32(seed, 8) % 256}.${1 + (u32(seed, 12) % 254)}`;
+}
+
+function formatGeopositionValue(geo) {
+  if (!geo || typeof geo !== 'object') return null;
+  const lat = Number(geo.latitude);
+  const lon = Number(geo.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const accuracy = Number.isFinite(Number(geo.accuracy)) ? Number(geo.accuracy) : 1000;
+  return `${lat},${lon},${accuracy}`;
 }
 
 /** Audio noise mark: sum(charCode) % 2000 - 1000 */
@@ -598,6 +712,19 @@ function buildFingerprint(profile = {}) {
     Array.isArray(fpIn.languages) ? fpIn.languages : languages,
     speechMode
   );
+  const deviceNameMode = mode('deviceNameMode', ['noise', 'custom', 'real'], privacy.deviceNameMode || 'noise');
+  const deviceName = createDeviceNameFromSeed(
+    stableIdentity + ':device:' + seed.toString('hex').slice(0, 8),
+    {
+      mode: deviceNameMode,
+      custom: fpIn.deviceName || privacy.deviceName || '',
+    }
+  );
+  const webrtcLocalIp = String(
+    fpIn.webrtcLocalIp
+    || privacy.webrtcLocalIp
+    || ''
+  ).trim() || createLocalIpFromSeed(stableIdentity + ':webrtc-local:' + seed.toString('hex').slice(0, 8));
 
   // Dynamic layer: may change with proxy/exit IP without rebuilding static seeds
   const webrtcAddress = String(
@@ -686,6 +813,9 @@ function buildFingerprint(profile = {}) {
     webrtc: webrtcMode,
     webrtcPolicy,
     webrtcAddress,
+    webrtcLocalIp,
+    deviceName,
+    deviceNameMode,
     battery: {
       mode: batteryMode,
       value: battery,
@@ -722,6 +852,8 @@ function buildFingerprint(profile = {}) {
       mediaLabels: mediaLabelTemplates,
       battery,
       webrtcPolicy,
+      webrtcLocalIp,
+      deviceName,
       stability,
       userAgentMetadata: uaProfile.metadata,
       webglFp: webgl.fpPayload,
@@ -729,7 +861,9 @@ function buildFingerprint(profile = {}) {
     dynamicConfig: {
       timezone: timezoneDynamic,
       geoposition,
+      geopositionText: formatGeopositionValue(geoposition),
       webrtcAddress,
+      webrtcLocalIp,
       webrtc: webrtcMode,
     },
     // deterministic random for scripts
@@ -1980,6 +2114,9 @@ module.exports = {
   hashSeed,
   createMediaDevicesFromSeed,
   createSpeechVoicesFromSeed,
+  createDeviceNameFromSeed,
+  createLocalIpFromSeed,
+  formatGeopositionValue,
   createBatteryFromSeed,
   buildWebglFpPayload,
   audioMarkFromSeed,
