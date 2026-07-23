@@ -1595,7 +1595,8 @@ class BrowserEngine {
           }
         }
       }
-      item.watchTimer = setTimeout(tick, 1200);
+      // 2.4s is enough for new-tab FP inject without burning CDP every 1.2s across fleets.
+      item.watchTimer = setTimeout(tick, 2400);
     };
     // Delay first check so startup tabs can settle
     item.watchTimer = setTimeout(tick, 2500);
@@ -1844,9 +1845,40 @@ class BrowserEngine {
       else if (customStartUrls.length) args.push('about:blank');
       for (const extra of customStartUrls.slice(1)) args.push(extra);
     }
+    // Cross-platform process overhead reducers (safe for multi-profile fleets).
+    // Applied for all envs — not only proxied ones — so Win/mac idle CPU stays low.
+    const perfFlags = [
+      '--disable-background-networking',
+      '--disable-component-update',
+      '--disable-default-apps',
+      '--disable-client-side-phishing-detection',
+      '--disable-domain-reliability',
+      '--disable-breakpad',
+      '--disable-hang-monitor',
+      '--disable-ipc-flooding-protection',
+      '--metrics-recording-only',
+      '--no-pings',
+      '--dns-prefetch-disable',
+    ];
+    for (const flag of perfFlags) {
+      if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) args.push(flag);
+    }
+    disabledFeatures.push(
+      'OptimizationHints',
+      'MediaRouter',
+      'Translate',
+      'AutofillServerCommunication',
+      'NetworkPrediction',
+      'InterestFeedContentSuggestions',
+      'CalculateNativeWinOcclusion',
+    );
     if (proxyConfig) {
-      args.push('--disable-background-networking', '--disable-component-update', '--disable-default-apps', '--disable-client-side-phishing-detection', '--disable-domain-reliability', '--disable-quic', '--dns-prefetch-disable', '--no-pings', '--metrics-recording-only');
-      disabledFeatures.push('OptimizationHints', 'MediaRouter', 'Translate', 'AutofillServerCommunication', 'NetworkPrediction');
+      // Extra hardening when traffic already goes through a bridge.
+      if (!args.includes('--disable-quic')) args.push('--disable-quic');
+    }
+    // Prefer process reuse when many profiles are open (lower RAM; still one renderer isolation base).
+    if (!args.some((a) => a.startsWith('--renderer-process-limit='))) {
+      args.push('--renderer-process-limit=4');
     }
     if (disabledFeatures.length) {
       const existing = args.findIndex((a) => a.startsWith('--disable-features='));

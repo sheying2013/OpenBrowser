@@ -2962,15 +2962,25 @@ function renderTabInventory() {
   for (const value of sessions.filter((item) => selectedSessions.has(item.id))) { const group = element('div', 'tab-group'); group.append(element('strong', '', `${t('profiles.envName', { n: displayProfileNumber(value.profile || { id: value.id }) })} · ${value.tabs.length} ${t('common.tabs')}`)); for (const tab of value.tabs.slice(0, 6)) group.append(element('span', '', `${tab.title || 'Untitled'} — ${tab.url}`)); target.append(group); }
 }
 
+let __refreshSessionsInFlight = null;
+let __refreshSessionsQueued = false;
 async function refreshSessions() {
-  try {
-    const previous = new Set(selectedSessions); sessions = await window.ops.syncSessions(); const live = new Set(sessions.map((item) => item.id));
-    if (syncState.active) selectedSessions = new Set((syncState.selected || []).filter((id) => live.has(id)));
-    else if (!sessionsInitialized) selectedSessions = new Set(sessions.map((item) => item.id));
-    else selectedSessions = new Set([...previous].filter((id) => live.has(id)));
-    sessionsInitialized = true; if (!selectedSessions.has(preferredMasterId)) preferredMasterId = orderedSelectedSessionIds()[0] || null;
-    if (!syncState.active) pushSyncSelection(); renderSessions();
-  } catch (error) { log('CDP', error.message); }
+  if (__refreshSessionsInFlight) { __refreshSessionsQueued = true; return __refreshSessionsInFlight; }
+  __refreshSessionsInFlight = (async () => {
+    try {
+      const previous = new Set(selectedSessions); sessions = await window.ops.syncSessions(); const live = new Set(sessions.map((item) => item.id));
+      if (syncState.active) selectedSessions = new Set((syncState.selected || []).filter((id) => live.has(id)));
+      else if (!sessionsInitialized) selectedSessions = new Set(sessions.map((item) => item.id));
+      else selectedSessions = new Set([...previous].filter((id) => live.has(id)));
+      sessionsInitialized = true; if (!selectedSessions.has(preferredMasterId)) preferredMasterId = orderedSelectedSessionIds()[0] || null;
+      if (!syncState.active) pushSyncSelection(); renderSessions();
+    } catch (error) { log('CDP', error.message); }
+    finally {
+      __refreshSessionsInFlight = null;
+      if (__refreshSessionsQueued) { __refreshSessionsQueued = false; refreshSessions(); }
+    }
+  })();
+  return __refreshSessionsInFlight;
 }
 function selectedSessionIds(minimum = 1) { const ids = orderedSelectedSessionIds(); if (ids.length < minimum) throw new Error(`请至少选择 ${minimum} 个运行环境`); return ids; }
 function specifiedTextItems(value) {
@@ -4016,7 +4026,16 @@ window.ops.onEvent(async (value) => {
     else syncHealth = { queueDepth: 0, coalesced: 0, dropped: 0, lastLatencyMs: 0, recovering: false };
     renderSessions(); log('Sync', value.active ? '同步已启动' : '同步已停止');
   }
-  if (value.type === 'sync-health') { syncHealth = { ...syncHealth, ...value, recovering: false }; renderSyncState(); }
+  if (value.type === 'sync-health') {
+    syncHealth = { ...syncHealth, ...value, recovering: false };
+    // Throttle status paints — health events can fire ~1Hz while syncing.
+    if (!window.__syncHealthPaintTimer) {
+      window.__syncHealthPaintTimer = setTimeout(() => {
+        window.__syncHealthPaintTimer = null;
+        renderSyncState();
+      }, 400);
+    }
+  }
   if (value.type === 'sync-recovering') { syncHealth.recovering = true; renderSyncState(); log('Sync', `输入桥自动恢复，第 ${value.attempt} 次`); }
   if (value.type === 'native-input' && value.active) { syncHealth.recovering = false; renderSyncState(); }
   if (value.type === 'sync-error') { toast(value.message); log('Error', value.message); }

@@ -8,6 +8,18 @@ const { randomUUID } = require('crypto');
 const cdp = require('./cdp');
 const { BrowserEngine } = require('./engine');
 const { LiveSyncController } = require('./live-sync-v5');
+
+// Host process performance (Win / macOS / Linux): cut background timers and idle GPU work.
+try {
+  app.commandLine.appendSwitch('disable-renderer-backgrounding');
+  app.commandLine.appendSwitch('disable-background-timer-throttling');
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+  if (process.env.OPENBROWSER_LOW_POWER === '1') {
+    app.commandLine.appendSwitch('disable-gpu');
+    app.commandLine.appendSwitch('disable-software-rasterizer');
+  }
+} catch (_) {}
+
 const { startAutomation } = require('./automation');
 const cloudSync = require('./automation/cloud-sync');
 const { validateDataRootIsolationSecure, ensureDataRootIsolationSecure, assertProfileId } = require('./automation/isolation');
@@ -1330,7 +1342,7 @@ async function createWindow() {
     backgroundColor: chrome.bg,
     show: false,
     autoHideMenuBar: true,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: true, spellcheck: false },
   };
 
   // Fuse system title bar with in-app chrome (shipping-app style)

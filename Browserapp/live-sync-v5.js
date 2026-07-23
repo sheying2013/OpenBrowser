@@ -215,13 +215,12 @@ class LiveSyncController extends LiveSyncV4 {
 
   async refreshMasterTabs() {
     if (!this.master) return;
+    const tick = (this.tickCount || 0);
+    // Heavy work (extension pages / geometry / zoom) only every N ticks to cut CDP load.
+    const doHeavy = tick % 3 === 0;
     const allMasterTargets = await cdp.targets(this.master.item.port);
     const tabs = normalTabs(allMasterTargets.filter((target) => target.type === 'page'));
-    const masterExtensionPages = extensionPages(allMasterTargets);
-    if (Date.now() - this.lastHealthCheck >= 2000) {
-      this.lastHealthCheck = Date.now();
-      await Promise.all(this.slaves.map((slave) => cdp.tabs(slave.port)));
-    }
+    const masterExtensionPages = doHeavy ? extensionPages(allMasterTargets) : null;
     const live = new Set(tabs.map((tab) => tab.id));
 
     for (const [id, value] of this.connections) {
@@ -234,26 +233,30 @@ class LiveSyncController extends LiveSyncV4 {
     for (const id of [...this.tabMap.keys()]) if (!live.has(id)) { await this.closeMappedTabs(id); this.tabMap.delete(id); }
     this.masterTabs = tabs;
     const slaveLists = new Map(); const slaveExtensionLists = new Map();
-    for (const slave of this.slaves) {
+    // Parallel slave target fetch (was sequential).
+    await Promise.all(this.slaves.map(async (slave) => {
       const targets = await cdp.targets(slave.port);
       slaveLists.set(slave.id, normalTabs(targets.filter((target) => target.type === 'page')));
-      slaveExtensionLists.set(slave.id, extensionPages(targets));
-    }
+      if (doHeavy) slaveExtensionLists.set(slave.id, extensionPages(targets));
+    }));
     for (let index = 0; index < tabs.length; index += 1) await this.ensureMapping(tabs[index], index, slaveLists);
     this.mappingReady = true;
 
-    await this.reconcileSlaveTabs(tabs, slaveLists);
+    // Reconcile extras less often unless tab count changed.
+    const tabCountChanged = !this._lastMasterTabCount || this._lastMasterTabCount !== tabs.length;
+    this._lastMasterTabCount = tabs.length;
+    if (doHeavy || tabCountChanged) await this.reconcileSlaveTabs(tabs, slaveLists);
     for (const tab of tabs) if (!this.connections.has(tab.id)) await this.attach(tab);
-    await this.refreshExtensionConnections(masterExtensionPages, slaveExtensionLists);
+    if (doHeavy && masterExtensionPages) await this.refreshExtensionConnections(masterExtensionPages, slaveExtensionLists);
     await Promise.all([...this.connections.entries()].map(async ([id, value]) => {
-      try { await this.pollTabState(value); }
+      try { await this.pollTabState(value, { heavy: doHeavy }); }
       catch (error) {
         if (this.connections.get(id) !== value) return;
         value.connection.close(); this.connections.delete(id);
         this.emit({ type: 'live-sync-reattach', targetId: id, message: String(error?.message || error) });
       }
     }));
-    await this.syncWindowGeometry().catch(() => {});
+    if (doHeavy) await this.syncWindowGeometry().catch(() => {});
   }
 
   async refreshExtensionConnections(masterTargets, slaveLists) {
@@ -451,7 +454,7 @@ class LiveSyncController extends LiveSyncV4 {
 
   async syncWindowGeometry() {
     // Mirror only size (for coordinate mapping), never left/top — so tile/cascade layouts stay put.
-    if (!this.master || Date.now() - this.lastWindowSync < 1200) return; this.lastWindowSync = Date.now();
+    if (!this.master || Date.now() - this.lastWindowSync < 2800) return; this.lastWindowSync = Date.now();
     const source = await cdp.windowForPort(this.master.item.port); const bounds = source.bounds || {}; if (bounds.windowState && bounds.windowState !== 'normal') return;
     if (!Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) return;
     await Promise.all(this.slaves.map(async (slave) => {
@@ -466,21 +469,39 @@ class LiveSyncController extends LiveSyncV4 {
     }));
   }
 
-  async pollTabState(value) {
+  async pollTabState(value, options = {}) {
+    const heavy = options.heavy !== false;
     const result = await value.connection.command('Runtime.evaluate', { expression: "({x:scrollX,y:scrollY,visible:document.visibilityState==='visible',url:location.href})", returnByValue: true });
     const state = result.result?.value; if (!state) return;
-    const metrics = await value.connection.command('Page.getLayoutMetrics'); const viewport = metrics.cssVisualViewport || metrics.visualViewport || {}; const zoom = (Number(viewport.scale) || 1) * (Number(viewport.zoom) || 1);
-    value.zoom = zoom; await this.syncZoom(value.tab.id, zoom);
+    // LayoutMetrics + zoom sync only on heavy ticks (zoom rarely changes mid-session).
+    if (heavy) {
+      try {
+        const metrics = await value.connection.command('Page.getLayoutMetrics');
+        const viewport = metrics.cssVisualViewport || metrics.visualViewport || {};
+        const zoom = (Number(viewport.scale) || 1) * (Number(viewport.zoom) || 1);
+        if (!value.zoom || Math.abs((value.zoom || 1) - zoom) > 0.01) {
+          value.zoom = zoom;
+          await this.syncZoom(value.tab.id, zoom);
+        } else {
+          value.zoom = zoom;
+        }
+      } catch (_) {}
+    }
     if (state.visible) {
-      // Drive navigation only when the master URL actually changed (not every 650ms tick).
+      // Drive navigation only when the master URL actually changed.
       const urlKey = this.urlKey(state.url);
       if (state.url && !/^(chrome|edge|devtools|chrome-extension|edge-extension):/i.test(state.url) && value.lastSyncedUrl !== urlKey) {
         value.lastSyncedUrl = urlKey;
+        this.markActivity?.();
         await this.navigateSlaves(value.tab.id, state.url);
       }
       if (this.activeMasterTab !== value.tab.id) { this.activeMasterTab = value.tab.id; await this.activateMapped(value.tab.id); }
     }
-    if (state.x !== value.scroll.x || state.y !== value.scroll.y) { value.scroll = { x: state.x, y: state.y }; await this.forward(value.tab.id, { type: 'scroll', x: state.x, y: state.y }); }
+    if (state.x !== value.scroll.x || state.y !== value.scroll.y) {
+      value.scroll = { x: state.x, y: state.y };
+      this.markActivity?.();
+      await this.forward(value.tab.id, { type: 'scroll', x: state.x, y: state.y });
+    }
   }
 }
 
