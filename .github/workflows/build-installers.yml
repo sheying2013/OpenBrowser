@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.2'
+        default: 'v1.0.3'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -39,15 +39,9 @@ env:
   RELEASE_NOTES: |
     ## OpenBrowser ${{ inputs.release_tag }}
 
-    - 修复了一些已知问题
-    - 新增主题
-    - 优化了界面体验
-    - 各平台安装包默认内置独立内核
-
-    - Bug fixes
-    - New themes
-    - UI polish
-    - Platform packages ship with integrated kernels
+    - 修复已知问题
+    - 改进稳定性
+    - Bug fixes and stability improvements
 
     ### 下载 / Downloads
 
