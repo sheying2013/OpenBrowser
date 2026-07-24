@@ -13,8 +13,8 @@ await rcedit(exePath, {
     LegalCopyright: 'AGPL-3.0-or-later',
     OriginalFilename: 'OpenBrowser.exe'
   },
-  'file-version': '1.0.0.0',
-  'product-version': '1.0.0.0',
+  'file-version': '1.0.3.0',
+  'product-version': '1.0.3.0',
   icon: iconPath,
   'requested-execution-level': 'asInvoker'
 });
