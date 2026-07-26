@@ -2632,6 +2632,40 @@ async function refreshStatus() {
   engineProfiles = await window.ops.profileStatus(); renderProfiles();
 }
 
+// --- Render/IPC coalescing (perf) --------------------------------------------------
+// Engine events arrive in bursts (a single launch emits ~8 start-progress events; a batch
+// of N launches multiplies that and interleaves status events). Rendering each event
+// synchronously means N×(full table rebuild) + IPC stampede → dropped frames.
+// These helpers collapse a burst into at most one render per animation frame and one
+// status/session fetch per ~120ms. ONLY the engine event loop uses them; synchronous
+// callers (button handlers that render then read the DOM) keep the direct functions.
+let __rafPending = 0;
+function scheduleRenderProfiles() {
+  if (__rafPending) return;
+  __rafPending = requestAnimationFrame(() => { __rafPending = 0; renderProfiles(); });
+}
+// Leading-guard throttle: fetch at most once per window during a burst (keeps progress
+// visible) instead of once per event; the trailing fetch captures the settled state.
+let __statusRefreshTimer = 0;
+function scheduleStatusRefresh() {
+  if (__statusRefreshTimer) return;
+  __statusRefreshTimer = setTimeout(async () => {
+    __statusRefreshTimer = 0;
+    try { engineProfiles = await window.ops.profileStatus(); } catch (_) {}
+    scheduleRenderProfiles();
+  }, 120);
+}
+let __sessionRefreshTimer = 0;
+function scheduleSessionRefresh() {
+  if (__sessionRefreshTimer) return;
+  __sessionRefreshTimer = setTimeout(() => {
+    __sessionRefreshTimer = 0;
+    // refreshSessions() already in-flight-dedups its IPC and renders sessions itself.
+    refreshSessions();
+  }, 120);
+}
+// -----------------------------------------------------------------------------------
+
 async function startProfile(id) {
   const profile = ui.profiles.find((item) => item.id === id); if (!profile) return;
   if (profileEngine(id).running || startingProfiles.has(id)) return;
@@ -3973,15 +4007,18 @@ window.ops.onEvent(async (value) => {
     } else {
       setStartingProgress(value.id, value);
     }
-    renderProfiles();
+    // ~8 progress events fire per launch; coalesce to one render per frame.
+    scheduleRenderProfiles();
   }
   if (value.type === 'status') {
     // Only terminal status clears the start bar. Intermediate emits (e.g. extensions-reconcile-skipped)
     // also set running:true and must not wipe progress mid-launch.
     if (value.id && value.running === false) clearStartingProgress(value.id);
     if (value.id && value.running === true && !value.action) clearStartingProgress(value.id);
-    await refreshStatus();
-    await refreshSessions();
+    // Coalesce fetch+render: a batch start/stop fires many status events; without this each
+    // one did 2 IPC round-trips + 2 full table rebuilds. The log() below only reads `value`.
+    scheduleStatusRefresh();
+    scheduleSessionRefresh();
     if (value.action === 'extensions-reconcile-skipped' && value.message) {
       // Informative only — openbrowser-148 lacks Extensions CDP; --load-extension still works.
       log('Browser', value.message);
@@ -4013,6 +4050,13 @@ window.ops.onEvent(async (value) => {
     }
   }
   if (value.type === 'extensions') await refreshExtensions();
+  if (value.type === 'platform-preflight' && Array.isArray(value.warnings)) {
+    for (const w of value.warnings) {
+      log(w.level === 'error' ? 'Error' : 'Platform', `${w.message}${w.hint ? ' — ' + w.hint : ''}`);
+    }
+    const blocker = value.warnings.find((w) => w.level === 'error');
+    if (blocker) toast(blocker.message);
+  }
   if (value.type === 'storage-settings') updateProfileStorageDisplay(value.profileRoot);
   if (value.type === 'sync-settings' && value.settings) { syncSettings = normalizeSyncSettings(value.settings); fillSyncSettingsForm(); }
   if (value.type === 'text-shortcut') {

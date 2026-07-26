@@ -12,6 +12,7 @@ const { resolveProfileLanguage, localeFromCountryCode } = require('./automation/
 const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
 const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = require('./automation/env-icon');
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
+const { platformPreflight } = require('./automation/platform-preflight');
 const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
 const { acquireProfileLock, releaseProfileLock, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = require('./automation/isolation');
 const { BrowserKernelManager, ensureKernelReadyForLaunch } = require('./automation/browser-kernel');
@@ -599,6 +600,16 @@ class BrowserEngine {
 
   getProfileDataRoot() { return this.profileDataRootPath; }
 
+  /**
+   * Cross-platform preflight against the current data root + real profile ids.
+   * Pure/cheap: surfaces Windows MAX_PATH risk, missing env, Linux sandbox, etc.
+   */
+  platformPreflightReport() {
+    const ids = [...this.profiles.keys()];
+    const maxProfileIdLen = ids.reduce((m, id) => Math.max(m, String(id).length), 0) || undefined;
+    return platformPreflight({ profileDataRoot: this.profileDataRootPath, maxProfileIdLen });
+  }
+
   setProfileDataRoot(value) {
     const raw = String(value || '').trim();
     if (!raw) throw new Error('Environment data directory is required');
@@ -750,6 +761,24 @@ class BrowserEngine {
       prefs.session.restore_on_startup = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession ? 1 : 5;
     }
     await fsp.writeFile(file, JSON.stringify(prefs), 'utf8');
+  }
+
+  /**
+   * Pre-spawn profile file prep, parallelized. resetZoom + applyProfilePreferences both
+   * read-modify-write Default/Preferences, so they MUST stay serialized relative to each
+   * other (else the later write clobbers the earlier one — lost update). Everything else
+   * only rm's disjoint paths (Sessions / cache dirs / retained data files) and can overlap,
+   * shortening the launch critical path (scales with disk latency and profile size).
+   */
+  async prepareProfileFilesForStart(root, profile, restoreSession) {
+    const jobs = [
+      // Shared-file chain: resetZoom then applyProfilePreferences, ordered.
+      (async () => { await this.resetZoom(root); await this.applyProfilePreferences(root, profile); })(),
+      this.enforceDataRetention(root, profile),
+    ];
+    if (!restoreSession) jobs.push(this.resetTabs(root));
+    if (profile.advanced.clearCacheOnStart) jobs.push(this.clearProfileCache(root));
+    await Promise.all(jobs);
   }
 
   resolveStartupUrls(profile) {
@@ -1644,7 +1673,7 @@ class BrowserEngine {
     const file = path.join(root, 'DevToolsActivePort');
     const started = Date.now();
     // Do not delete DevToolsActivePort here — cleared before spawn; post-spawn delete races Chromium.
-    while (Date.now() - started < timeout) {
+    const assertChildAlive = () => {
       if (child?._startupDiagnostic?.spawnError) {
         throw new Error(`Browser process could not start: ${child._startupDiagnostic.spawnError}`);
       }
@@ -1655,6 +1684,8 @@ class BrowserEngine {
           child._startupDiagnostic,
         ));
       }
+    };
+    const tryReadPort = async () => {
       try {
         const content = await fsp.readFile(file, 'utf8');
         const port = Number(content.split(/\r?\n/)[0]);
@@ -1667,7 +1698,36 @@ class BrowserEngine {
           }
         }
       } catch (_) {}
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      return 0;
+    };
+    // Event-driven fast path: watch the profile dir so we react ~1 tick after Chromium
+    // writes DevToolsActivePort, instead of waiting out a fixed 200ms poll. Polling stays
+    // as the fallback — fs.watch is unreliable on some network/virtual filesystems and
+    // platforms, so a watcher failure just degrades to the (slightly tighter) poll.
+    let watcher = null;
+    let wake = null;
+    try { watcher = fs.watch(root, () => { const w = wake; if (w) w(); }); } catch (_) { watcher = null; }
+    try {
+      assertChildAlive();
+      let port = await tryReadPort();
+      if (port) return port;
+      while (Date.now() - started < timeout) {
+        assertChildAlive();
+        await new Promise((resolve) => {
+          let done = false;
+          const finish = () => { if (done) return; done = true; wake = null; clearTimeout(timer); resolve(); };
+          wake = finish;
+          // Backstop timeout: short when watching (event does the real work), tighter than
+          // the old 200ms when we have no watcher to lean on.
+          const timer = setTimeout(finish, watcher ? 250 : 120);
+          if (timer.unref) timer.unref();
+        });
+        port = await tryReadPort();
+        if (port) return port;
+      }
+    } finally {
+      wake = null;
+      try { watcher?.close(); } catch (_) {}
     }
     let hint = '';
     try {
@@ -1700,7 +1760,24 @@ class BrowserEngine {
       if (!profile.advanced.multiOpen) return this.publicRunning(profile.id);
       return this.publicRunning(profile.id);
     }
+    // Surface cross-platform risks (Windows MAX_PATH on a deep data root, missing env,
+    // Linux sandbox, …) once — turns silent per-platform breakage into an actionable event.
+    if (!this._platformPreflightDone) {
+      this._platformPreflightDone = true;
+      try {
+        const preflight = this.platformPreflightReport();
+        if (preflight.warnings.length) this.emit({ type: 'platform-preflight', ok: preflight.ok, warnings: preflight.warnings });
+      } catch (_) {}
+    }
     this.emitStartProgress(profile.id, 'prepare', 6, '正在准备环境…');
+    // Hoisted so the outer catch can release these if start throws after they are
+    // acquired. The profile lock is keyed on the live Electron pid, so a leaked lock
+    // does NOT self-heal while the app runs — it blocks this environment (with a
+    // misleading "Profile already running") until a full app restart.
+    let root = null;
+    let profileLock = null;
+    let proxyForwarder = null;
+    let kernelWindowName = null;
     try {
       profile = await this.prepareProfileProxyForStart(profile);
     this.profiles.set(profile.id, profile);
@@ -1715,13 +1792,13 @@ class BrowserEngine {
       await this.ensureKernelBootstrap();
     }
     const browser = this.chooseBrowser(profile);
-    const root = this.profileRoot(profile.id);
+    root = this.profileRoot(profile.id);
     const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, root, profile.id, { create: true });
     if (!rootCheck.ok) throw new Error('Isolation error: ' + rootCheck.message);
-    const profileLock = await acquireProfileLock(root, { profileId: profile.id, browser: browser.path });
+    profileLock = await acquireProfileLock(root, { profileId: profile.id, browser: browser.path });
     const restoreSession = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession;
-    if (!restoreSession) await this.resetTabs(root); await this.resetZoom(root);
-    if (profile.advanced.clearCacheOnStart) await this.clearProfileCache(root); await this.enforceDataRetention(root, profile); await this.applyProfilePreferences(root, profile);
+    // Parallelized (independent IO overlaps; Preferences writers stay serialized). See method.
+    await this.prepareProfileFilesForStart(root, profile, restoreSession);
     await fsp.rm(path.join(root, 'DevToolsActivePort'), { force: true }).catch(() => {});
     const pageNetwork = this.networkInfo.get(profile.id) || {};
     const customStartUrls = this.resolveStartupUrls(profile);
@@ -1734,7 +1811,7 @@ class BrowserEngine {
       )
       : null;
     const startUrl = customStartUrls[0] || infoStartUrl;
-    const proxyConfig = this.proxyConfig(profile.proxy); let proxyForwarder = null;
+    const proxyConfig = this.proxyConfig(profile.proxy);
     // Site-stability keeps static marks; refresh-on-start only when stability is off.
     const allowSeedRefresh = profile.privacy.refreshFingerprintOnStart && profile.privacy.stabilityMode === 'off';
     const fingerprint = buildFingerprint({
@@ -1782,7 +1859,7 @@ class BrowserEngine {
     }
     // openbrowser-148: write profile/init.json so Framework native FP matches buildFingerprint
     let runtimeFingerprint = fingerprint;
-    let kernelWindowName = null;
+    kernelWindowName = null;
     if (isOpenBrowser148(browser)) {
       try {
         const written = await writeOpenBrowserKernelInit(root, {
@@ -2164,6 +2241,15 @@ class BrowserEngine {
     this.emit({ type: 'status', id: profile.id, running: true, ...this.publicRunning(profile.id) });
     return this.publicRunning(profile.id);
     } catch (error) {
+      // Release anything acquired before the env became live. The inner spawn/extension
+      // catches already release on their own failure paths (making this a safe no-op via
+      // token/close idempotency); this covers the earlier steps — proxy bridge, tab reset,
+      // start-page/fingerprint build — whose throws would otherwise strand the lock.
+      if (!this.running.has(profile.id)) {
+        try { await proxyForwarder?.close(); } catch (_) {}
+        stopIpcStubForWindow(kernelWindowName);
+        if (profileLock && root) await releaseProfileLock(root, profileLock).catch(() => {});
+      }
       this.emit({
         type: 'profile-start-progress',
         id: profile.id,
@@ -2265,7 +2351,13 @@ class BrowserEngine {
     return { id: safe, running: false, graceful, cookieExported: Boolean(cookieExport) };
   }
 
-  async stopAll() { await Promise.all([...this.running.keys()].map((id) => this.stop(id))); }
+  async stopAll() {
+    // allSettled so one environment failing to stop never aborts stopping the rest
+    // (and never rejects the before-quit chain into an unhandled rejection).
+    const results = await Promise.allSettled([...this.running.keys()].map((id) => this.stop(id)));
+    const failed = results.filter((r) => r.status === 'rejected').map((r) => String(r.reason?.message || r.reason));
+    if (failed.length) this.emit({ type: 'sync-error', action: 'stop-all', message: `部分环境停止失败：${failed.join('; ')}` });
+  }
 
   async deleteProfiles(ids, deleteData = true) {
     if (!Array.isArray(ids) || ids.length > 200) throw new Error('Invalid profile selection');

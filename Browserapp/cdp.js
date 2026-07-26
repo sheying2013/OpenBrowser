@@ -26,17 +26,30 @@ function call(webSocketUrl, method, params = {}, timeout = 6000) {
     if (typeof WebSocket !== 'function') return reject(new Error('WebSocket API is unavailable in this host runtime'));
     const id = Math.floor(Math.random() * 1_000_000_000);
     const socket = new WebSocket(webSocketUrl);
-    const timer = setTimeout(() => { try { socket.close(); } catch (_) {} reject(new Error(`CDP timeout: ${method}`)); }, timeout);
-    socket.addEventListener('open', () => socket.send(JSON.stringify({ id, method, params })));
+    let settled = false;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.close(); } catch (_) {}
+      fn(arg);
+    };
+    const timer = setTimeout(() => finish(reject, new Error(`CDP timeout: ${method}`)), timeout);
+    socket.addEventListener('open', () => {
+      try { socket.send(JSON.stringify({ id, method, params })); }
+      catch (error) { finish(reject, error instanceof Error ? error : new Error(`CDP send failed: ${method}`)); }
+    });
     socket.addEventListener('message', (event) => {
       let value;
       try { value = JSON.parse(String(event.data)); } catch (_) { return; }
       if (value.id !== id) return;
-      clearTimeout(timer); socket.close();
-      if (value.error) reject(new Error(value.error.message || `CDP error: ${method}`));
-      else resolve(value.result || {});
+      if (value.error) finish(reject, new Error(value.error.message || `CDP error: ${method}`));
+      else finish(resolve, value.result || {});
     });
-    socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error(`CDP socket error: ${method}`)); });
+    socket.addEventListener('error', () => finish(reject, new Error(`CDP socket error: ${method}`)));
+    // Without this, a target that closes before replying leaves the caller hanging until
+    // the full timeout elapses instead of failing fast.
+    socket.addEventListener('close', () => finish(reject, new Error(`CDP socket closed before response: ${method}`)));
   });
 }
 
