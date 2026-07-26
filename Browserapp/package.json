@@ -28,7 +28,8 @@
     "selftest:theme": "node theme-nes-light-selftest.js",
     "selftest:retro": "node theme-retro-desktop-selftest.js",
     "selftest:themes": "node theme-nes-light-selftest.js && node theme-retro-desktop-selftest.js",
-    "selftest:fplog": "node fingerprint-log-growth-selftest.js"
+    "selftest:fplog": "node fingerprint-log-growth-selftest.js",
+    "selftest:syncslave": "node sync-slave-isolation-selftest.js"
   },
   "devDependencies": {
     "desktop-shell": "npm:electron@43.1.1",
