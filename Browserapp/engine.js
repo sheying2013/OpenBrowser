@@ -433,6 +433,10 @@ class BrowserEngine {
         geoFromIp: privacyValue.geoFromIp !== false,
         fontMode: allowed(privacyValue.fontMode, ['default', 'custom'], 'default'),
         fontSize: Math.min(36, Math.max(9, Number(privacyValue.fontSize) || 16)),
+        // 'persona' draws CPU/memory/GPU/display from one real-world machine instead of
+        // sampling each axis on its own. Defaults to 'default' so an existing profile's
+        // hardware identity never changes underneath it.
+        deviceProfile: allowed(privacyValue.deviceProfile, ['default', 'persona'], 'default'),
         canvas: allowed(privacyValue.canvas, ['real', 'noise', 'blocked'], privacyValue.canvas === 'blocked' ? 'blocked' : (privacyValue.canvas === 'real' ? 'real' : 'noise')),
         webgl: allowed(privacyValue.webgl, ['real', 'noise', 'blocked'], privacyValue.webgl === 'blocked' ? 'blocked' : (privacyValue.webgl === 'real' ? 'real' : 'noise')),
         webglMeta: allowed(privacyValue.webglMeta, ['noise', 'custom', 'real', 'blocked'], 'noise'),

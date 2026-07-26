@@ -4,6 +4,7 @@ output/
 .playwright-cli/
 functional-selftest-data/
 extension-pipe-selftest-data/
+live-sync-v5-selftest-data/
 *.log
 .DS_Store
 .codex-local/
