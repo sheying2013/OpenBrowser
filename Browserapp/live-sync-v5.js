@@ -216,6 +216,28 @@ class LiveSyncController extends LiveSyncV4 {
     const environment = environmentMarker(environmentNumber(this.engine, this.master.id), true); await value.connection.command('Page.addScriptToEvaluateOnNewDocument', { source: environment }); await value.connection.command('Runtime.evaluate', { expression: environment });
   }
 
+  /**
+   * Surface slaves whose debug port stopped answering, without spamming: a permanently
+   * closed environment fails on every tick, so only report a given slave once per 10s.
+   */
+  reportUnreachableSlaves(failures) {
+    const now = Date.now();
+    if (!this._slaveErrorAt) this._slaveErrorAt = new Map();
+    for (const failure of failures) {
+      const last = this._slaveErrorAt.get(failure.id) || 0;
+      if (now - last < 10000) continue;
+      this._slaveErrorAt.set(failure.id, now);
+      this.emit({
+        type: 'sync-slave-unreachable',
+        id: failure.id,
+        message: failure.message,
+      });
+    }
+    // Drop bookkeeping for slaves no longer in the session.
+    const active = new Set(this.slaves.map((slave) => slave.id));
+    for (const id of [...this._slaveErrorAt.keys()]) if (!active.has(id)) this._slaveErrorAt.delete(id);
+  }
+
   async refreshMasterTabs() {
     if (!this.master) return;
     const tick = (this.tickCount || 0);
@@ -236,12 +258,22 @@ class LiveSyncController extends LiveSyncV4 {
     for (const id of [...this.tabMap.keys()]) if (!live.has(id)) { await this.closeMappedTabs(id); this.tabMap.delete(id); }
     this.masterTabs = tabs;
     const slaveLists = new Map(); const slaveExtensionLists = new Map();
-    // Parallel slave target fetch (was sequential).
+    // Parallel slave target fetch (was sequential). Each slave is isolated: a closed or
+    // hung environment throws ECONNREFUSED here, and letting that reject the batch would
+    // abort the whole pass — which handleWatchError then reads as a dead debug port and
+    // stops the entire session. One slave going away must not desync the others, so skip
+    // it for this tick and keep going. Master death still propagates (fetched above).
+    const failedSlaves = [];
     await Promise.all(this.slaves.map(async (slave) => {
-      const targets = await cdp.targets(slave.port);
-      slaveLists.set(slave.id, normalTabs(targets.filter((target) => target.type === 'page')));
-      if (doHeavy) slaveExtensionLists.set(slave.id, extensionPages(targets));
+      try {
+        const targets = await cdp.targets(slave.port);
+        slaveLists.set(slave.id, normalTabs(targets.filter((target) => target.type === 'page')));
+        if (doHeavy) slaveExtensionLists.set(slave.id, extensionPages(targets));
+      } catch (error) {
+        failedSlaves.push({ id: slave.id, message: String(error?.message || error) });
+      }
     }));
+    if (failedSlaves.length) this.reportUnreachableSlaves(failedSlaves);
     for (let index = 0; index < tabs.length; index += 1) await this.ensureMapping(tabs[index], index, slaveLists);
     this.mappingReady = true;
 
