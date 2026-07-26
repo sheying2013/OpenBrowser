@@ -15,6 +15,7 @@
     "selftest:waitport": "node waitforport-selftest.js",
     "selftest:prepfiles": "node prepare-profile-files-selftest.js",
     "selftest:templates": "node rpa-template-audit-selftest.js",
+    "selftest:colormode": "node color-mode-selftest.js",
     "selftest:kernel": "node automation/kernel-policy-selftest.js",
     "selftest:startup": "node browser-startup-diagnostic-selftest.js",
     "selftest:cloud": "node automation/cloud-sync-security-selftest.js",
