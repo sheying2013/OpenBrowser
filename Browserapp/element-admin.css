@@ -85,7 +85,7 @@ html[data-ui-theme="element-admin"][data-platform="macos"] {
   --desk-accent-soft: rgba(0, 122, 255, 0.14);
   --desk-accent-text: #0066d6;
   --desk-bg: #f5f5f7;
-  --desk-sidebar: rgba(236, 236, 240, 0.92);
+  --desk-sidebar: rgba(236, 236, 240, 0.55); /* translucent so macOS window vibrancy shows through */
   --desk-sidebar-text: #1d1d1f;
   --desk-sidebar-muted: #6e6e73;
   --desk-sidebar-active-bg: rgba(0, 122, 255, 0.14);
@@ -139,7 +139,7 @@ html[data-ui-theme="element-admin"][data-color-mode="dark"][data-platform="macos
   --desk-accent-soft: rgba(10, 132, 255, 0.24);
   --desk-accent-text: #6cb6ff;
   --desk-bg: #1c1c1e;
-  --desk-sidebar: rgba(44, 44, 46, 0.96);
+  --desk-sidebar: rgba(44, 44, 46, 0.60); /* translucent so macOS window vibrancy shows through */
   --desk-header: rgba(44, 44, 46, 0.92);
 }
 
@@ -1459,4 +1459,18 @@ html[data-ui-theme="element-admin"] #view-profiles .table-card .actions .mini.is
   opacity: .7;
   background: var(--desk-surface-2, #f5f5f7) !important;
   color: var(--desk-text-secondary, #6e6e73) !important;
+}
+
+/* ── Windows 11 Mica reveal (System Native theme, Windows only) ──────────────
+   main.js sets this window's backdrop to Mica material for element-admin on
+   Windows; a translucent sidebar/header lets the system material show through,
+   while the opaque .content keeps text readable. Scoped to [data-platform="windows"]
+   so Linux/other stay opaque. Tune the alpha here if the effect is too strong/weak. */
+html[data-ui-theme="element-admin"][data-platform="windows"] {
+  --desk-sidebar: rgba(249, 249, 249, 0.6);
+  --desk-header: rgba(249, 249, 249, 0.6);
+}
+html[data-ui-theme="element-admin"][data-color-mode="dark"][data-platform="windows"] {
+  --desk-sidebar: rgba(44, 44, 44, 0.6);
+  --desk-header: rgba(44, 44, 44, 0.6);
 }

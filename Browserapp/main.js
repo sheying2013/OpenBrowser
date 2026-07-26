@@ -1314,7 +1314,21 @@ function chromeForTheme(themeId, colorMode) {
 function applyWindowChrome(win, themeId, colorMode) {
   if (!win || win.isDestroyed()) return;
   const chrome = chromeForTheme(themeId, colorMode);
-  try { win.setBackgroundColor(chrome.bg); } catch (_) {}
+  // macOS: the System Native (element-admin) theme sits on a frosted-glass sidebar
+  // material. A transparent window backdrop lets that material show through the
+  // translucent sidebar/header; the opaque .content covers it so text stays readable.
+  // Every other theme turns vibrancy off and keeps its opaque background.
+  const macVibrant = process.platform === 'darwin' && themeId === 'element-admin';
+  // Windows 11: same idea via Mica — a system-tinted window backdrop that shows through
+  // the translucent sidebar/header. No-op / solid fallback on Win10 or Electron < 30.
+  const winMica = process.platform === 'win32' && themeId === 'element-admin';
+  try { win.setBackgroundColor((macVibrant || winMica) ? '#00000000' : chrome.bg); } catch (_) {}
+  if (process.platform === 'darwin' && typeof win.setVibrancy === 'function') {
+    try { win.setVibrancy(macVibrant ? 'sidebar' : null); } catch (_) {}
+  }
+  if (process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') {
+    try { win.setBackgroundMaterial(winMica ? 'mica' : 'none'); } catch (_) {}
+  }
   // Keep Windows caption overlay in sync with theme (light/dark native skin too)
   if (process.platform === 'win32' && typeof win.setTitleBarOverlay === 'function') {
     try {
