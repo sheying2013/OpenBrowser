@@ -1337,21 +1337,28 @@ class BrowserEngine {
       phase: 'post-startpage',
       force: true,
     });
-    await sleep(350);
+    // Short settle before the first repaint request; the retry below covers a slower boot.
+    await sleep(120);
     // Ask welcome page to repaint fingerprint table from spoofed navigator.
-    // Retry a few times: start-page script may still be booting.
+    // Retry a few times: start-page script may still be booting. Stop as soon as the page
+    // confirms it ran the collector — it re-samples itself on a timer after that, so extra
+    // rounds only added fixed delay to the launch (this loop always ran its full 3 rounds
+    // and slept after the last one because the result was discarded).
     for (let repaint = 0; repaint < 3; repaint += 1) {
+      let collected = false;
       try {
         const tabsR = await cdp.tabs(port).catch(() => []);
         for (const tab of tabsR) {
           if (!tab.webSocketDebuggerUrl) continue;
           if (!this.isStartPageUrl(tab.url) && !/about:blank/i.test(String(tab.url || ''))) continue;
-          await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', {
+          const outcome = await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', {
             expression: `(() => { try { if (typeof window.__openbrowserCollectFingerprint === 'function') { window.__openbrowserCollectFingerprint('post-inject-${repaint}'); return 'ok'; } return 'missing'; } catch (e) { return String(e && e.message || e); } })()`,
             returnByValue: true,
-          }, 3000).catch(() => {});
+          }, 3000).catch(() => null);
+          if ((outcome?.result?.value ?? outcome?.value) === 'ok') collected = true;
         }
       } catch (_) {}
+      if (collected) break;
       await sleep(200);
     }
     const tabs = await cdp.tabs(port).catch(() => []);
@@ -1714,7 +1721,9 @@ class BrowserEngine {
             await cdp.json(`http://127.0.0.1:${port}/json/version`);
             return port;
           } catch (_) {
-            // file present but endpoint not live yet (or stale)
+            // File is written slightly before the DevTools endpoint answers. Measured on a
+            // real launch that gap is ~600ms of Chromium coming up, not idle polling — a
+            // tighter retry loop here was tried and bought nothing, so keep it simple.
           }
         }
       } catch (_) {}
