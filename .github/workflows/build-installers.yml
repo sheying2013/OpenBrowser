@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.3'
+        default: 'v1.0.4'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -39,9 +39,11 @@ env:
   RELEASE_NOTES: |
     ## OpenBrowser ${{ inputs.release_tag }}
 
-    - 修复已知问题
-    - 改进稳定性
-    - Bug fixes and stability improvements
+    - 抗指纹增强：按真实机型画像作答字体/硬件探测，语音与字体表随声称系统保持一致，伪装接口呈现原生特征
+    - 启动更快、界面更顺：图标产物缓存复用、事件渲染合流
+    - 更像原生应用：系统原生主题跟随明暗、macOS 毛玻璃 / Windows 11 Mica、Dock 图标直接显示环境编号
+    - 多平台预检：Windows 长路径、Apple Silicon Rosetta 等风险提前提示
+    - 若干启动 / IPC 边角问题修复与稳定性提升
 
     ### 下载 / Downloads
 
