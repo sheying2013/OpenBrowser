@@ -339,6 +339,9 @@ function normalizeProfileSettings(profile) {
       geoFromIp: privacy.geoFromIp !== false,
       fontMode: String(privacy.fontMode || 'default'),
       fontSize: Number(privacy.fontSize) || 16,
+      // Absent means off: an existing profile must never have its hardware identity
+      // re-rolled underneath it. New profiles opt in at creation time instead.
+      deviceProfile: String(privacy.deviceProfile || 'default'),
       canvas: String(privacy.canvas || 'noise'),
       webgl: String(privacy.webgl || 'noise'),
       webglMeta: String(privacy.webglMeta || 'noise'),
@@ -1485,6 +1488,7 @@ function editorDraft(strict = true) {
     geoFromIp: $('#editor-geo-from-ip')?.checked !== false,
     fontMode: $('#editor-font-mode')?.value || 'default',
     fontSize: Number($('#editor-font-size')?.value) || 16,
+    deviceProfile: $('#editor-device-profile')?.value || 'default',
     canvas: $('#editor-canvas')?.value || 'noise',
     webgl: $('#editor-webgl')?.value || 'noise',
     webglMeta: $('#editor-webgl-meta')?.value || 'noise',
@@ -1817,6 +1821,7 @@ function openProfileEditor(id) {
   editorSet('#editor-height', profile.height);
   editorSet('#editor-font-mode', privacy.fontMode);
   editorSet('#editor-font-size', privacy.fontSize);
+  editorSet('#editor-device-profile', privacy.deviceProfile || 'default');
   editorSet('#editor-canvas', privacy.canvas);
   editorSet('#editor-webgl', privacy.webgl);
   editorSet('#editor-webgl-meta', privacy.webglMeta || 'noise');
@@ -3588,7 +3593,8 @@ $('#profile-form').addEventListener('submit', async (event) => {
     os: 'Windows',
     location: 'Local',
     // Browser UI language defaults to exit-IP country; fixed locale is optional in editor.
-    privacy: { languageMode: 'ip', langFromIp: true, uiLanguage: 'profile' },
+    // New profiles get a coherent device persona; existing ones are left as they were.
+    privacy: { languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona' },
   };
   ui.profiles.push(profile); ui.nextProfileNumber = number + 1; save();
   try {

@@ -31,7 +31,8 @@
     "selftest:fplog": "node fingerprint-log-growth-selftest.js",
     "selftest:syncslave": "node sync-slave-isolation-selftest.js",
     "selftest:hooks": "node fingerprint-native-hooks-selftest.js",
-    "selftest:persona": "node device-persona-selftest.js"
+    "selftest:persona": "node device-persona-selftest.js",
+    "selftest:devprofile": "node device-profile-wiring-selftest.js"
   },
   "devDependencies": {
     "desktop-shell": "npm:electron@43.1.1",
