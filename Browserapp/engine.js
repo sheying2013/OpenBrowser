@@ -881,6 +881,23 @@ class BrowserEngine {
       })();`;
     }
 
+    const force = options.force === true;
+    // Steady state: the watch loop calls this every ~2.4s per running profile. When every
+    // live tab already carries the inject there is nothing to do, and logging begin/skip/end
+    // each time would burn disk and append tab URLs to the diagnostic log forever.
+    // Prune closed targets, keep the tracked state fresh, and return quietly.
+    if (!force && tabs.every((tab) => applied.has(tab.id))) {
+      const liveIds = new Set(tabs.map((tab) => tab.id));
+      for (const id of [...applied]) {
+        if (!liveIds.has(id)) applied.delete(id);
+      }
+      if (options.trackOn) {
+        options.trackOn.fpAppliedTargets = applied;
+        options.trackOn.fingerprint = fp;
+      }
+      return fp;
+    }
+
     await fpLog('inject.begin', {
       phase,
       profileId: profile.id,
@@ -891,7 +908,6 @@ class BrowserEngine {
       logFile: fingerprintLogPath(),
     });
 
-    const force = options.force === true;
     for (const tab of tabs) {
       if (!force && applied.has(tab.id)) {
         await fpLog('inject.skip-tab', { phase, profileId: profile.id, tabId: tab.id, url: tab.url, reason: 'already-applied' });
