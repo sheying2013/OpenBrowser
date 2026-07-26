@@ -18,6 +18,7 @@
  */
 
 const crypto = require('crypto');
+const { pickPersona } = require('./device-personas');
 const {
   buildUaProfile,
   randomUaForSeed,
@@ -576,16 +577,20 @@ function buildFingerprint(profile = {}) {
   const memoryOverride = rawMemoryOverride === '' || rawMemoryOverride === null || rawMemoryOverride === undefined ? NaN : Number(rawMemoryOverride);
   const useRealCores = coresOverride === 0;
   const useRealMemory = memoryOverride === 0;
-  const cores = Number.isFinite(coresOverride) && coresOverride > 0
+  // These are reassigned below when a coherent device persona is selected (opt-in), so the
+  // hardware axes come from one real machine instead of being drawn independently.
+  const hasCoresOverride = Number.isFinite(coresOverride) && coresOverride > 0;
+  const hasMemoryOverride = Number.isFinite(memoryOverride) && memoryOverride > 0;
+  let cores = hasCoresOverride
     ? Math.min(64, Math.max(1, Math.round(coresOverride)))
     : [4, 6, 8, 12, 16][u32(seed, 12) % 5];
-  const memory = Number.isFinite(memoryOverride) && memoryOverride > 0
+  let memory = hasMemoryOverride
     ? Math.min(128, Math.max(1, Math.round(memoryOverride)))
     : [4, 8, 8, 16, 32][u32(seed, 16) % 5];
   const width = Number(profile.width) || 1280;
   const height = Number(profile.height) || 820;
-  const colorDepth = [24, 24, 30][u32(seed, 20) % 3];
-  const devicePixelRatio = [1, 1, 1.25, 1.5, 2][u32(seed, 24) % 5];
+  let colorDepth = [24, 24, 30][u32(seed, 20) % 3];
+  let devicePixelRatio = [1, 1, 1.25, 1.5, 2][u32(seed, 24) % 5];
 
   // Numeric noise marks (canvas/webgl ±10000; audio/clientRects from seed formulas unless overridden)
   const canvasId = (u32(seed, 28) % 20000) - 10000 || 1;
@@ -663,7 +668,29 @@ function buildFingerprint(profile = {}) {
 
   const uaOs = desktopOs(uaProfile.os) || desktopOs(parseOsFromUa(uaProfile.userAgent)) || 'windows';
   const webglOptions = webglPresetsForOs(uaOs);
-  const webglPreset = webglOptions[u32(seed, 8) % webglOptions.length];
+  let webglPreset = webglOptions[u32(seed, 8) % webglOptions.length];
+
+  // --- coherent device persona (opt-in) ---------------------------------------------
+  // Drawing CPU, memory, colour depth, pixel ratio and GPU from separate pools can produce
+  // machines that do not exist (4 cores with 32 GB, a 1x non-Retina Mac), and detectors score
+  // the combination rather than each value. A persona bundles axes that co-occur on real
+  // hardware. Off by default: switching an existing profile's hardware identity mid-life is
+  // itself a risk, so this only applies where it was explicitly requested.
+  const personaRequested = String(fpIn.deviceProfile ?? privacy.deviceProfile ?? '').toLowerCase() === 'persona';
+  let devicePersona = null;
+  if (personaRequested) {
+    devicePersona = pickPersona(uaOs, u32(seed, 36));
+    if (!hasCoresOverride) cores = devicePersona.cores;
+    if (!hasMemoryOverride) memory = devicePersona.memory;
+    colorDepth = devicePersona.colorDepth;
+    devicePixelRatio = devicePersona.devicePixelRatio;
+    webglPreset = {
+      ...webglPreset,
+      vendor: devicePersona.webgl.vendor,
+      renderer: devicePersona.webgl.renderer,
+      gpu: devicePersona.webgl.gpu || webglPreset.gpu,
+    };
+  }
   const webglGpu = (fpIn.webgpu && typeof fpIn.webgpu === 'object')
     ? {
       vendor: String(fpIn.webgpu.vendor || fpIn.gpuVendor || webglPreset.gpu?.vendor || ''),
@@ -682,8 +709,10 @@ function buildFingerprint(profile = {}) {
   const languages = String(languagePrimary).split(',').map((s) => s.trim()).filter(Boolean);
   if (!languages.length) languages.push('en-US');
 
-  const screenWidth = Math.max(640, Math.round(Number(fpIn.screenWidth) || width));
-  const screenHeight = Math.max(480, Math.round(Number(fpIn.screenHeight) || height));
+  // A persona carries its own panel size; without it the reported screen follows the window,
+  // which is what makes "screen smaller than the viewport" style inconsistencies show up.
+  const screenWidth = Math.max(640, Math.round(Number(fpIn.screenWidth) || devicePersona?.screen?.width || width));
+  const screenHeight = Math.max(480, Math.round(Number(fpIn.screenHeight) || devicePersona?.screen?.height || height));
   const taskbarHeight = Math.max(0, Math.round(Number(fpIn.taskbarHeight) || (uaOs === 'macos' || uaOs === 'macos_arm' ? 25 : 40)));
   const availLeft = Math.round(Number(fpIn.availLeft) || 0);
   const availTop = Math.round(Number(fpIn.availTop) || 0);
