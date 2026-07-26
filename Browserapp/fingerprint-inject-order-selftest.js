@@ -45,8 +45,15 @@ function main() {
 
   // --- start-page re-samples fingerprint after inject settle ---
   const tpl = fs.readFileSync(path.join(__dirname, 'automation/start-page-template.js'), 'utf8');
-  assert.ok(/setTimeout\(function\(\)\{collectFingerprint\([^)]*\)\},350\)/.test(tpl), 'welcome page must re-collect at 350ms');
-  assert.ok(/setTimeout\(function\(\)\{collectFingerprint\([^)]*\)\},1200\)/.test(tpl), 'welcome page must re-collect at 1200ms');
+  // Assert the intent — the page re-samples several times while the inject settles — rather
+  // than exact delays. Pinning literal milliseconds made this fail the moment the early
+  // re-collect was retuned (350ms -> 450ms) even though the behaviour was still correct.
+  const recollectDelays = [...tpl.matchAll(/setTimeout\(function\(\)\{collectFingerprint\([^)]*\)\},(\d+)\)/g)]
+    .map((match) => Number(match[1]))
+    .sort((a, b) => a - b);
+  assert.ok(recollectDelays.length >= 3, `welcome page must re-collect several times (found ${recollectDelays.length})`);
+  assert.ok(recollectDelays.some((ms) => ms > 0 && ms <= 600), `welcome page needs an early re-collect (got ${recollectDelays.join(',')})`);
+  assert.ok(recollectDelays.some((ms) => ms >= 1200), `welcome page needs a settled re-collect (got ${recollectDelays.join(',')})`);
   assert.ok(tpl.includes('/api/fingerprint-report'), 'welcome page must POST samples to fingerprint-report');
 
   // --- registerSession merges expectedFingerprint from engine ---

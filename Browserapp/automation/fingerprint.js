@@ -1075,6 +1075,26 @@ function buildInjectionScript(fp) {
     try { nativeSource.set(wrapper, originalToString.call(original)); } catch (_) {}
     return wrapper;
   };
+  // Accessors need the same disguise as methods. In real Chrome an installed accessor
+  // stringifies as a native "get <key>" function and reports that as its name; a spoofed
+  // getter that stringifies to its arrow-function source is a well-known tell, since
+  // detectors read getOwnPropertyDescriptor(...).get.toString(). Mark every accessor we
+  // install so it matches the native shape.
+  const nativeGetter = (key, fn) => {
+    if (typeof fn !== 'function') return fn;
+    try { Object.defineProperty(fn, 'name', { configurable: true, value: 'get ' + key }); } catch (_) {}
+    try { Object.defineProperty(fn, 'length', { configurable: true, value: 0 }); } catch (_) {}
+    try { nativeSource.set(fn, 'function get ' + key + '() { [native code] }'); } catch (_) {}
+    return fn;
+  };
+  const nativeAccessor = (key, desc) => {
+    if (desc && typeof desc.get === 'function') nativeGetter(key, desc.get);
+    if (desc && typeof desc.set === 'function') {
+      try { Object.defineProperty(desc.set, 'name', { configurable: true, value: 'set ' + key }); } catch (_) {}
+      try { nativeSource.set(desc.set, 'function set ' + key + '() { [native code] }'); } catch (_) {}
+    }
+    return desc;
+  };
   try {
     if (!nativeSource.has(Function.prototype.toString)) {
       const patchedToString = nativeLike(function toString() {
@@ -1106,7 +1126,7 @@ function buildInjectionScript(fp) {
   // --- hide automation (navigator.webdriver / AutomationControlled) ---
   // Real Chrome without automation reports webdriver === false
   try {
-    const hideWd = { configurable: true, enumerable: true, get: () => false };
+    const hideWd = nativeAccessor('webdriver', { configurable: true, enumerable: true, get: () => false });
     try { Object.defineProperty(Navigator.prototype, 'webdriver', hideWd); } catch (_) {}
     try { Object.defineProperty(navigator, 'webdriver', hideWd); } catch (_) {}
     try {
@@ -1142,6 +1162,7 @@ function buildInjectionScript(fp) {
   const forceNavProp = (target, key, desc) => {
     try {
       if (!target) return false;
+      nativeAccessor(key, desc);
       const full = { configurable: true, enumerable: true, ...desc };
       try {
         const existing = Object.getOwnPropertyDescriptor(target, key);
@@ -1201,7 +1222,10 @@ function buildInjectionScript(fp) {
       },
       getOwnPropertyDescriptor(t, prop) {
         if (Object.prototype.hasOwnProperty.call(navPatch, prop)) {
-          return { configurable: true, enumerable: true, get: () => navPatch[prop].get() };
+          // Hand back the already-disguised getter. Building a fresh arrow here would
+          // stringify to its own source (and leak internal names) at exactly the call
+          // detectors use: getOwnPropertyDescriptor(navigator, prop).get.toString().
+          return { configurable: true, enumerable: true, get: navPatch[prop].get };
         }
         try { return Reflect.getOwnPropertyDescriptor(t, prop); } catch (_) { return undefined; }
       },
@@ -1214,7 +1238,7 @@ function buildInjectionScript(fp) {
     };
     const proxied = new Proxy(navTarget, handler);
     try {
-      Object.defineProperty(window, 'navigator', { configurable: true, enumerable: true, get: () => proxied });
+      Object.defineProperty(window, 'navigator', nativeAccessor('navigator', { configurable: true, enumerable: true, get: () => proxied }));
     } catch (_) {
       try { window.navigator = proxied; } catch (__) {}
     }
@@ -1229,11 +1253,11 @@ function buildInjectionScript(fp) {
       colorDepth: s.colorDepth, pixelDepth: s.pixelDepth,
     })) {
       if (value == null) continue;
-      try { Object.defineProperty(Screen.prototype, key, { configurable: true, get: () => value }); } catch (_) {}
+      try { Object.defineProperty(Screen.prototype, key, nativeAccessor(key, { configurable: true, get: () => value })); } catch (_) {}
     }
-    try { Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => s.devicePixelRatio || 1 }); } catch (_) {}
+    try { Object.defineProperty(window, 'devicePixelRatio', nativeAccessor('devicePixelRatio', { configurable: true, get: () => s.devicePixelRatio || 1 })); } catch (_) {}
     for (const [key, value] of Object.entries({ screenX: s.screenX, screenY: s.screenY, screenLeft: s.screenX, screenTop: s.screenY })) {
-      try { Object.defineProperty(window, key, { configurable: true, get: () => value || 0 }); } catch (_) {}
+      try { Object.defineProperty(window, key, nativeAccessor(key, { configurable: true, get: () => value || 0 })); } catch (_) {}
     }
   } catch (_) {}
 
@@ -1634,7 +1658,7 @@ function buildInjectionScript(fp) {
           const adapter = await originalRequestAdapter(...args);
           if (!adapter) return adapter;
           try {
-            Object.defineProperty(adapter, 'info', { configurable: true, get: () => gpuInfo });
+            Object.defineProperty(adapter, 'info', nativeAccessor('info', { configurable: true, get: () => gpuInfo }));
             if (typeof adapter.requestAdapterInfo === 'function') {
               adapter.requestAdapterInfo = async () => gpuInfo;
             }
@@ -1777,6 +1801,16 @@ function buildWorkerInjectionScript(fp) {
     try { sources.set(wrapper, originalToString.call(original)); } catch (_) {}
     return wrapper;
   };
+  // Workers are probed independently of the page, so the accessors installed here need the
+  // same native disguise: real WorkerNavigator getters stringify as [native code].
+  const nativeAccessor = (key, desc) => {
+    if (desc && typeof desc.get === 'function') {
+      try { Object.defineProperty(desc.get, 'name', { configurable: true, value: 'get ' + key }); } catch (_) {}
+      try { Object.defineProperty(desc.get, 'length', { configurable: true, value: 0 }); } catch (_) {}
+      try { sources.set(desc.get, 'function get ' + key + '() { [native code] }'); } catch (_) {}
+    }
+    return desc;
+  };
   try {
     const patched = nativeLike(function toString() {
       if (sources.has(this)) return sources.get(this);
@@ -1805,7 +1839,7 @@ function buildWorkerInjectionScript(fp) {
       if (CFG.hardwareConcurrency != null) navValues.hardwareConcurrency = CFG.hardwareConcurrency;
       if (CFG.deviceMemory != null) navValues.deviceMemory = CFG.deviceMemory;
       for (const [key, value] of Object.entries(navValues)) {
-        try { Object.defineProperty(navProto, key, { configurable: true, enumerable: true, get: () => value }); } catch (_) {}
+        try { Object.defineProperty(navProto, key, nativeAccessor(key, { configurable: true, enumerable: true, get: () => value })); } catch (_) {}
       }
       const metadata = CFG.userAgentMetadata || {};
       const brands = Object.freeze((metadata.brands || []).map((item) => Object.freeze({ brand: String(item.brand), version: String(item.version) })));
@@ -1834,7 +1868,7 @@ function buildWorkerInjectionScript(fp) {
         },
         toJSON() { return { brands, mobile: Boolean(metadata.mobile), platform: String(metadata.platform || '') }; },
       });
-      try { Object.defineProperty(navProto, 'userAgentData', { configurable: true, enumerable: true, get: () => uaData }); } catch (_) {}
+      try { Object.defineProperty(navProto, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => uaData })); } catch (_) {}
     }
   } catch (_) {}
   const canvasMark = Number(CFG.canvas?.mark) || 1;
