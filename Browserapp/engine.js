@@ -611,7 +611,16 @@ class BrowserEngine {
   platformPreflightReport() {
     const ids = [...this.profiles.keys()];
     const maxProfileIdLen = ids.reduce((m, id) => Math.max(m, String(id).length), 0) || undefined;
-    return platformPreflight({ profileDataRoot: this.profileDataRootPath, maxProfileIdLen });
+    // The integrated anti-detect kernel (openbrowser-148) is x64-only by design — see
+    // isOpenBrowser148SupportedHost / the macos-x64 bundle layout. Pass that fact through so
+    // the arm64 advisories (mac-arm-rosetta / win-arm-kernel) can fire on Apple Silicon and
+    // Windows-on-ARM; without it those branches were unreachable. The arch === 'arm64' guard
+    // inside platformPreflight keeps x64 hosts silent.
+    return platformPreflight({
+      profileDataRoot: this.profileDataRootPath,
+      maxProfileIdLen,
+      kernelRequiresX64: true,
+    });
   }
 
   setProfileDataRoot(value) {

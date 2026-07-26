@@ -108,6 +108,14 @@ function makeCtx(fp, opts = {}) {
     ok('check() confirms a font the platform ships', check(ctx, '12px "Segoe UI"') === true);
     ok('check() denies a font exclusive to another platform', check(ctx, '12px "Helvetica Neue"') === false);
 
+    // Unquoted families must be answered too. Every check() carries a required font-size, so a
+    // naive extractor keeps the size token and matches nothing — the persona then leaks to the
+    // host's real fonts. These cover unquoted, numeric-weight-prefixed and multi-family specs.
+    ok('check() confirms an unquoted platform font', check(ctx, '12px Segoe UI') === true);
+    ok('check() denies an unquoted foreign font', check(ctx, '16px Helvetica Neue') === false);
+    ok('check() ignores a numeric font-weight before the size', check(ctx, 'italic 700 16px Segoe UI') === true);
+    ok('check() reads the primary family of a list', check(ctx, 'bold 12px/1.4 "Helvetica Neue", Arial') === false);
+
     const macFp = buildFingerprint({ id: 'font-c', userAgent: MAC_UA, privacy: { deviceProfile: 'persona' }, advanced: {} });
     const macCtx = makeCtx(macFp);
     ok('macOS persona confirms Helvetica Neue', check(macCtx, '12px "Helvetica Neue"') === true);

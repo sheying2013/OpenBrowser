@@ -1356,10 +1356,18 @@ function buildInjectionScript(fp) {
         const originalCheck = fontSet.check.bind(fontSet);
         const rawCheck = fontSet.check;
         const familyOf = (spec) => {
-          // NOTE: this lives in a template literal, so backslashes must be doubled to survive
-          // into the emitted script — a bare \\s would reach the page as a literal "s".
-          const match = String(spec || '').match(/(?:^|\\s)(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9 _-]+))\\s*$/);
-          return String(match && (match[1] || match[2] || match[3]) || '').trim();
+          // The CSS 'font' shorthand always ends with the family list, preceded by the
+          // (required) font-size. Anchor on a UNIT-bearing size so a numeric font-weight
+          // (e.g. "700") is not mistaken for it, take everything after it as the family
+          // list, then return the primary family, unquoted. Handling only quoted families
+          // here leaked: every check() carries a size, so an unquoted family such as
+          // "12px Menlo" kept the size token and matched nothing, falling through to the
+          // host's real fonts — the exact contradiction this hook exists to prevent.
+          // NOTE: template literal — backslashes are doubled so \\s / \\d survive to the page.
+          const s = String(spec || '').trim();
+          const m = s.match(/(?:^|\\s)\\d*\\.?\\d+(?:px|pt|pc|em|rem|ex|ch|%|vh|vw|vmin|vmax|cm|mm|in|q)(?:\\s*\\/\\s*\\S+)?\\s+(.+)$/i);
+          const first = String(m ? m[1] : s).split(',')[0].trim();
+          return first.replace(/^["']|["']$/g, '').trim();
         };
         const isWebFont = (family) => {
           try {
