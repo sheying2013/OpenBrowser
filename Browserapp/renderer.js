@@ -1209,19 +1209,37 @@ function syncThemedSelects(root = document) {
   root.querySelectorAll?.('.themed-multiselect > select').forEach((select) => syncThemedMultiSelect(select));
 }
 
-function readSavedColorMode() {
-  try {
-    const saved = localStorage.getItem(UI_COLOR_MODE_KEY);
-    if (saved === 'dark' || saved === 'light') return saved;
-  } catch (_) {}
-  // Prefer system preference when first using native theme
-  try {
-    if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) return 'dark';
-  } catch (_) {}
-  return 'light';
+function systemPrefersDark() {
+  try { return Boolean(window.matchMedia?.('(prefers-color-scheme: dark)')?.matches); } catch (_) { return false; }
 }
 
-let uiColorMode = readSavedColorMode();
+// Preference is 'light' | 'dark' | 'auto'; 'auto' follows the OS appearance.
+// Returns the effective mode 'light' | 'dark'. prefersDark is injectable for testing.
+function resolveColorMode(pref, prefersDark) {
+  if (pref === 'auto') return (prefersDark === undefined ? systemPrefersDark() : prefersDark) ? 'dark' : 'light';
+  return pref === 'dark' ? 'dark' : 'light';
+}
+
+function readSavedColorPreference() {
+  try {
+    const saved = localStorage.getItem(UI_COLOR_MODE_KEY);
+    if (saved === 'dark' || saved === 'light' || saved === 'auto') return saved;
+  } catch (_) {}
+  return 'auto'; // default: follow the operating system
+}
+
+let uiColorPreference = readSavedColorPreference();
+let uiColorMode = resolveColorMode(uiColorPreference);
+
+// While the preference is 'auto', track the OS appearance and re-apply on change.
+try {
+  const uiAppearanceQuery = window.matchMedia?.('(prefers-color-scheme: dark)');
+  if (uiAppearanceQuery) {
+    const onSystemAppearanceChange = () => { if (uiColorPreference === 'auto') applyColorMode('auto', false); };
+    if (typeof uiAppearanceQuery.addEventListener === 'function') uiAppearanceQuery.addEventListener('change', onSystemAppearanceChange);
+    else if (typeof uiAppearanceQuery.addListener === 'function') uiAppearanceQuery.addListener(onSystemAppearanceChange);
+  }
+} catch (_) {}
 
 function syncAppearanceControls(theme) {
   const panel = $('#theme-appearance');
@@ -1230,17 +1248,19 @@ function syncAppearanceControls(theme) {
   panel.hidden = !show;
   panel.classList.toggle('is-visible', show);
   panel.querySelectorAll('[data-color-mode]').forEach((button) => {
-    const active = button.dataset.colorMode === uiColorMode;
+    // Highlight by the user's preference (light/dark/auto), not the resolved mode.
+    const active = button.dataset.colorMode === uiColorPreference;
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', String(active));
   });
 }
 
-function applyColorMode(mode, persist = true) {
-  uiColorMode = mode === 'dark' ? 'dark' : 'light';
+function applyColorMode(pref, persist = true) {
+  uiColorPreference = (pref === 'dark' || pref === 'light' || pref === 'auto') ? pref : 'auto';
+  uiColorMode = resolveColorMode(uiColorPreference);
   document.documentElement.dataset.colorMode = uiColorMode;
   if (persist) {
-    try { localStorage.setItem(UI_COLOR_MODE_KEY, uiColorMode); } catch (_) {}
+    try { localStorage.setItem(UI_COLOR_MODE_KEY, uiColorPreference); } catch (_) {}
   }
   const theme = document.documentElement.dataset.uiTheme || 'pixel-workstation';
   const definition = UI_THEMES[theme];
@@ -1273,7 +1293,7 @@ function applyUiTheme(value, persist = true) {
   const current = $('#theme-current');
   if (current) {
     current.textContent = theme === 'element-admin'
-      ? `${themeDisplayName(theme)} · ${uiColorMode === 'dark' ? t('theme.dark') : t('theme.light')}`
+      ? `${themeDisplayName(theme)} · ${uiColorPreference === 'auto' ? t('theme.auto') : (uiColorMode === 'dark' ? t('theme.dark') : t('theme.light'))}`
       : themeDisplayName(theme);
   }
   $$('[data-ui-theme-option]').forEach((button) => {
