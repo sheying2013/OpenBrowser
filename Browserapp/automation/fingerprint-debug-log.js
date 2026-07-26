@@ -25,8 +25,24 @@ function defaultLogPath() {
 }
 
 const FALLBACK_LOG = path.join(os.tmpdir(), 'openbrowser-fingerprint-inject.log');
+// This log is append-only and always on, so it needs a ceiling: without one it grows for
+// the whole life of the install. At the cap the file is rotated to a single .1 backup,
+// keeping recent history for diagnosis while bounding disk use to ~2x LOG_SIZE_LIMIT.
+const LOG_SIZE_LIMIT = 4 * 1024 * 1024;
 let cachedPath = null;
 let writeFailCount = 0;
+
+/** Rotate `file` to `file.1` once it exceeds the cap. Best-effort: never throws. */
+async function rotateIfOversized(file, limit = LOG_SIZE_LIMIT) {
+  try {
+    const stat = await fsp.stat(file);
+    if (stat.size < limit) return false;
+    await fsp.rename(file, file + '.1');
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 
 function logPath() {
   if (!cachedPath) cachedPath = defaultLogPath();
@@ -58,6 +74,7 @@ async function fpLog(event, payload = {}) {
   const primary = logPath();
   try {
     await fsp.mkdir(path.dirname(primary), { recursive: true });
+    await rotateIfOversized(primary);
     // If an old root-owned empty file blocks us, replace it once.
     try {
       await fsp.appendFile(primary, line, { encoding: 'utf8', flag: 'a' });
@@ -129,4 +146,6 @@ module.exports = {
   LIVE_PROBE_EXPRESSION,
   defaultLogPath,
   FALLBACK_LOG,
+  rotateIfOversized,
+  LOG_SIZE_LIMIT,
 };
