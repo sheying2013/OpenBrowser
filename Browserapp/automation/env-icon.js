@@ -427,6 +427,33 @@ function rebuildAppShortcutIcons() {
 }
 
 /**
+ * Both artifacts below are rebuilt from scratch on every launch, and rebuilding means
+ * shelling out to python3/Pillow (and on macOS also sips, iconutil and lsregister). Measured
+ * on a warm start that was ~2.9s — about 40% of the whole launch — spent before the browser
+ * process is even spawned. The output only depends on the environment number and the kernel
+ * being wrapped, so a stamp lets an unchanged environment reuse what is already on disk.
+ *
+ * Bump ARTIFACT_STAMP_VERSION whenever the generated layout changes, so upgrades rebuild.
+ */
+const ARTIFACT_STAMP_VERSION = 1;
+
+/** True when the stamp matches and every expected output is still present. */
+function artifactIsFresh(stampPath, key, outputs) {
+  try {
+    if (fs.readFileSync(stampPath, 'utf8') !== key) return false;
+  } catch (_) {
+    return false;
+  }
+  return outputs.every((file) => {
+    try { return fs.existsSync(file); } catch (_) { return false; }
+  });
+}
+
+function writeArtifactStamp(stampPath, key) {
+  try { fs.writeFileSync(stampPath, key, 'utf8'); } catch (_) {}
+}
+
+/**
  * Per-profile marker extension: toolbar icon = logo-native + number.
  * In-page floating badge also shows the number (extension content script).
  */
@@ -434,6 +461,13 @@ async function prepareMarkerExtension({ profileId, envNumber, userDataPath, temp
   const label = normalizeEnvNumber(envNumber);
   const dest = path.join(userDataPath, 'env-markers', String(profileId || 'env'), 'extension');
   await fsp.mkdir(dest, { recursive: true });
+
+  // Icons are a pure function of the label; regenerating them costs four python3 spawns.
+  const stampPath = path.join(dest, '.artifact-stamp');
+  const stampKey = JSON.stringify({ v: ARTIFACT_STAMP_VERSION, label });
+  const expected = [16, 32, 48, 128].map((size) => path.join(dest, `icon-${size}.png`))
+    .concat([path.join(dest, 'manifest.json'), path.join(dest, 'marker.js')]);
+  if (artifactIsFresh(stampPath, stampKey, expected)) return dest;
 
   const sizes = [16, 32, 48, 128];
   for (const size of sizes) {
@@ -513,6 +547,7 @@ async function prepareMarkerExtension({ profileId, envNumber, userDataPath, temp
   if (templateDir) {
     await fsp.writeFile(path.join(dest, '.source-template'), String(templateDir), 'utf8').catch(() => {});
   }
+  writeArtifactStamp(stampPath, stampKey);
   return dest;
 }
 
@@ -578,6 +613,25 @@ async function prepareMacDockWrapper({
   const contents = path.join(appRoot, 'Contents');
   const macOS = path.join(contents, 'MacOS');
   const resources = path.join(contents, 'Resources');
+  const launcherPath = path.join(macOS, 'OpenBrowser');
+
+  // Reuse the wrapper when nothing that shapes it has changed. Keyed on the kernel binary
+  // too, so pointing the profile at a different kernel still forces a clean rebuild — the
+  // wrapper symlinks into that kernel's Frameworks and would otherwise go stale.
+  const stampPath = path.join(appRoot, '.artifact-stamp');
+  const stampKey = JSON.stringify({
+    v: ARTIFACT_STAMP_VERSION,
+    label,
+    realBin: layout.realBin,
+    frameworks: layout.frameworks,
+  });
+  if (artifactIsFresh(stampPath, stampKey, [
+    launcherPath,
+    path.join(contents, 'Info.plist'),
+    path.join(resources, 'app.icns'),
+  ])) {
+    return launcherPath;
+  }
 
   // Rebuild shell cleanly so we never keep a thin exec-wrapper
   await fsp.rm(appRoot, { recursive: true, force: true }).catch(() => {});
@@ -888,6 +942,7 @@ fi
     ], { stdio: 'ignore' });
   } catch (_) {}
 
+  writeArtifactStamp(stampPath, stampKey);
   return launcher;
 }
 
