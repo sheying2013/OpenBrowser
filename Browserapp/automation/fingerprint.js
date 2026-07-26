@@ -420,9 +420,34 @@ function createMediaDevicesFromSeed(seedInput, options = {}) {
 }
 
 /** Pick a stable default speech voice matching the primary language. */
-function createSpeechVoicesFromSeed(seedInput, languages = ['en-US'], mode = 'noise') {
+/**
+ * Voices a given platform can actually ship. Apple voices are the bare given names
+ * (Alex, Samantha, Otoya); Windows uses the "Microsoft X - Language" form; the Google
+ * voices are bundled by Chrome itself and appear everywhere. Without an OS the full table
+ * is returned, which keeps previously generated profiles byte-identical.
+ */
+function speechVoicePoolForOs(os) {
+  const family = String(os || '').toLowerCase();
+  if (!family) return SPEECH_VOICE_POOL;
+  const isMac = family.startsWith('macos') || family === 'darwin';
+  const isLinux = family === 'linux';
+  return SPEECH_VOICE_POOL.filter((voice) => {
+    const name = String(voice.name || '');
+    if (/^Google\s/i.test(name)) return true;
+    if (/^Microsoft\s/i.test(name)) return !isMac && !isLinux;
+    return isMac;
+  });
+}
+
+function createSpeechVoicesFromSeed(seedInput, languages = ['en-US'], mode = 'noise', options = {}) {
   if (mode === 'blocked') return [];
   if (mode === 'real') return null;
+  // speechSynthesis.getVoices() is a strong OS signal: Samantha and Alex only exist on
+  // macOS, the "Microsoft X - Language" voices only on Windows, and a stock Linux Chrome
+  // reports just the bundled Google ones. Selecting purely by language mixes those
+  // families, so a profile claiming Windows can answer with Apple voices. When an OS is
+  // supplied the table is narrowed to what that platform can actually ship.
+  const pool = speechVoicePoolForOs(options.os);
   const langs = (Array.isArray(languages) ? languages : [languages])
     .map((item) => String(item || '').trim())
     .filter(Boolean);
@@ -431,8 +456,9 @@ function createSpeechVoicesFromSeed(seedInput, languages = ['en-US'], mode = 'no
   const langSet = new Set(langs.map((item) => item.toLowerCase()));
   const langPrefixSet = new Set(langs.map((item) => item.split('-')[0].toLowerCase()));
   const seed = hashSeed(String(seedInput || primary));
-  const count = 18 + (u32(seed, 4) % 15); // 18-32 voices, closer to full system tables
-  const scored = SPEECH_VOICE_POOL.map((base, index) => {
+  // 18-32 voices, closer to full system tables — but never more than the platform has.
+  const count = Math.min(pool.length, 18 + (u32(seed, 4) % 15));
+  const scored = pool.map((base, index) => {
     let score = 0;
     const lang = String(base.lang || '').toLowerCase();
     const prefix = lang.split('-')[0];
@@ -458,7 +484,10 @@ function createSpeechVoicesFromSeed(seedInput, languages = ['en-US'], mode = 'no
       lang: base.lang,
       default: false,
       localService: !/^Google\s/i.test(base.name),
-      voiceURI: `ob-voice://${encodeURIComponent(base.name)}/${base.lang}`,
+      // Chrome reports the voice name as the URI; the old scheme here was a string no real
+      // browser emits, which made it a product-identifying marker on its own. Only applied
+      // in OS-aware mode so previously generated profiles keep the value they already had.
+      voiceURI: options.os ? base.name : `ob-voice://${encodeURIComponent(base.name)}/${base.lang}`,
     });
   }
   let def = picked.find((v) => v.lang === primary)
@@ -739,7 +768,10 @@ function buildFingerprint(profile = {}) {
   const speechVoices = createSpeechVoicesFromSeed(
     stableIdentity + ':speech:' + seed.toString('hex').slice(0, 8),
     Array.isArray(fpIn.languages) ? fpIn.languages : languages,
-    speechMode
+    speechMode,
+    // Only narrow the voice table to the claimed OS for persona profiles: it changes the
+    // reported voices, and an existing profile's fingerprint must not move on upgrade.
+    { os: devicePersona ? uaOs : '' }
   );
   const deviceNameMode = mode('deviceNameMode', ['noise', 'custom', 'real'], privacy.deviceNameMode || 'noise');
   const deviceName = createDeviceNameFromSeed(

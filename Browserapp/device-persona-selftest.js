@@ -244,6 +244,42 @@ const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.
   ok('explicit memory override beats the persona', fp.deviceMemory === 64);
 }
 
+// --- 6b. speech voices match the OS the profile claims ---
+// getVoices() is a strong platform signal: the Apple voices exist only on macOS, the
+// "Microsoft X - Language" ones only on Windows, and a stock Linux Chrome reports just the
+// bundled Google set. Selecting by language alone mixed them, so a Windows profile could
+// answer with Samantha.
+{
+  const voicesOf = (ua, persona) => {
+    const privacy = { speech: 'noise' };
+    if (persona) privacy.deviceProfile = 'persona';
+    const fp = buildFingerprint(base('voices', { userAgent: ua, privacy }));
+    return (fp.speech && fp.speech.voices) || [];
+  };
+  const isMicrosoft = (v) => /^Microsoft\s/i.test(v.name);
+  const isGoogle = (v) => /^Google\s/i.test(v.name);
+  const isApple = (v) => !isMicrosoft(v) && !isGoogle(v);
+
+  const win = voicesOf(WIN_UA, true);
+  ok('persona Windows profile exposes voices', win.length > 0);
+  ok('persona Windows profile has no Apple-only voices', !win.some(isApple));
+  ok('persona Windows profile includes Microsoft voices', win.some(isMicrosoft));
+
+  const mac = voicesOf(MAC_UA, true);
+  ok('persona macOS profile has no Windows-only voices', !mac.some(isMicrosoft));
+  ok('persona macOS profile includes Apple voices', mac.some(isApple));
+
+  const linux = voicesOf('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', true);
+  ok('persona Linux profile reports only the bundled Google voices', linux.length > 0 && linux.every(isGoogle));
+
+  // A voiceURI scheme no real browser emits would identify the product by itself.
+  ok('persona voiceURIs carry no synthetic scheme', win.concat(mac, linux).every((v) => !/^[a-z-]+:\/\//i.test(v.voiceURI)));
+
+  // Existing (non-persona) profiles must keep the exact values they already had.
+  const legacy = voicesOf(WIN_UA, false);
+  ok('non-persona profiles keep their previous voice URIs', legacy.length > 0 && legacy.every((v) => v.voiceURI.startsWith('ob-voice://')));
+}
+
 // --- 7. pickPersona is deterministic and bounded ---
 {
   ok('pickPersona is stable for the same index', pickPersona('windows', 7) === pickPersona('windows', 7));
