@@ -146,6 +146,78 @@ const LINUX_PERSONAS = [
   },
 ];
 
+/**
+ * Fonts shipped with a stock install of each platform. Font probing is one of the strongest
+ * OS signals there is — Segoe UI and Calibri only exist on Windows, Helvetica Neue and the
+ * SF faces only on macOS — so a profile presenting as one platform while the host is another
+ * is contradicted the moment a page enumerates fonts.
+ *
+ * These lists are deliberately the common baseline rather than an exhaustive dump: claiming
+ * an unusually large or exotic font set is itself distinguishing.
+ */
+const OS_FONTS = Object.freeze({
+  windows: Object.freeze([
+    'Arial', 'Arial Black', 'Bahnschrift', 'Calibri', 'Cambria', 'Cambria Math', 'Candara',
+    'Comic Sans MS', 'Consolas', 'Constantia', 'Corbel', 'Courier New', 'Ebrima',
+    'Franklin Gothic Medium', 'Gabriola', 'Gadugi', 'Georgia', 'Impact', 'Ink Free',
+    'Javanese Text', 'Leelawadee UI', 'Lucida Console', 'Lucida Sans Unicode',
+    'Malgun Gothic', 'Marlett', 'Microsoft Himalaya', 'Microsoft JhengHei',
+    'Microsoft New Tai Lue', 'Microsoft PhagsPa', 'Microsoft Sans Serif', 'Microsoft Tai Le',
+    'Microsoft YaHei', 'MingLiU-ExtB', 'Mongolian Baiti', 'MS Gothic', 'MV Boli',
+    'Myanmar Text', 'Nirmala UI', 'Palatino Linotype', 'Segoe MDL2 Assets', 'Segoe Print',
+    'Segoe Script', 'Segoe UI', 'Segoe UI Emoji', 'Segoe UI Historic', 'Segoe UI Symbol',
+    'SimSun', 'Sitka', 'Sylfaen', 'Symbol', 'Tahoma', 'Times New Roman', 'Trebuchet MS',
+    'Verdana', 'Webdings', 'Wingdings', 'Yu Gothic',
+  ]),
+  macos: Object.freeze([
+    'American Typewriter', 'Andale Mono', 'Arial', 'Arial Black', 'Arial Narrow',
+    'Arial Rounded MT Bold', 'Arial Unicode MS', 'Avenir', 'Avenir Next', 'Avenir Next Condensed',
+    'Baskerville', 'Big Caslon', 'Bodoni 72', 'Bradley Hand', 'Brush Script MT', 'Chalkboard',
+    'Chalkboard SE', 'Chalkduster', 'Charter', 'Cochin', 'Comic Sans MS', 'Copperplate',
+    'Courier', 'Courier New', 'Didot', 'DIN Alternate', 'DIN Condensed', 'Futura', 'Geneva',
+    'Georgia', 'Gill Sans', 'Helvetica', 'Helvetica Neue', 'Herculanum', 'Hoefler Text',
+    'Impact', 'Lucida Grande', 'Luminari', 'Marker Felt', 'Menlo', 'Microsoft Sans Serif',
+    'Monaco', 'Noteworthy', 'Optima', 'Palatino', 'Papyrus', 'Phosphate', 'Rockwell',
+    'Savoye LET', 'SignPainter', 'Skia', 'Snell Roundhand', 'Tahoma', 'Times', 'Times New Roman',
+    'Trattatello', 'Trebuchet MS', 'Verdana', 'Zapfino', 'PingFang SC', 'Hiragino Sans',
+  ]),
+  linux: Object.freeze([
+    'Abyssinica SIL', 'Bitstream Charter', 'Cantarell', 'Century Schoolbook L', 'Courier 10 Pitch',
+    'DejaVu Sans', 'DejaVu Sans Mono', 'DejaVu Serif', 'Dingbats', 'FreeMono', 'FreeSans',
+    'FreeSerif', 'Liberation Mono', 'Liberation Sans', 'Liberation Sans Narrow',
+    'Liberation Serif', 'Nimbus Mono PS', 'Nimbus Roman', 'Nimbus Sans', 'Noto Color Emoji',
+    'Noto Mono', 'Noto Sans', 'Noto Sans CJK JP', 'Noto Sans CJK SC', 'Noto Serif',
+    'P052', 'Standard Symbols PS', 'Ubuntu', 'Ubuntu Condensed', 'Ubuntu Mono', 'URW Bookman',
+    'URW Gothic', 'Z003',
+  ]),
+});
+
+function fontsForOs(os) {
+  const family = String(os || '').toLowerCase();
+  if (family.startsWith('macos') || family === 'darwin') return OS_FONTS.macos;
+  if (family === 'linux') return OS_FONTS.linux;
+  return OS_FONTS.windows;
+}
+
+/**
+ * Families that exist on exactly one platform. Used to answer font probes for a persona:
+ * claiming Windows while the host answers "yes" to Helvetica Neue is a direct contradiction.
+ */
+function exclusiveFontsForOtherOs(os) {
+  const family = String(os || '').toLowerCase();
+  const isMac = family.startsWith('macos') || family === 'darwin';
+  const isLinux = family === 'linux';
+  const mine = new Set(fontsForOs(os).map((name) => name.toLowerCase()));
+  const others = [];
+  for (const [key, list] of Object.entries(OS_FONTS)) {
+    const keyIsMac = key === 'macos';
+    const keyIsLinux = key === 'linux';
+    if ((isMac && keyIsMac) || (isLinux && keyIsLinux) || (!isMac && !isLinux && key === 'windows')) continue;
+    for (const name of list) if (!mine.has(name.toLowerCase())) others.push(name);
+  }
+  return others;
+}
+
 const PERSONAS_BY_OS = Object.freeze({
   windows: Object.freeze(WINDOWS_PERSONAS),
   macos: Object.freeze(MACOS_PERSONAS),
@@ -191,7 +263,10 @@ function isCoherent(persona) {
 
 module.exports = {
   PERSONAS_BY_OS,
+  OS_FONTS,
   personasForOs,
   pickPersona,
   isCoherent,
+  fontsForOs,
+  exclusiveFontsForOtherOs,
 };

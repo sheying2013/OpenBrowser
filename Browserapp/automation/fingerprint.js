@@ -18,7 +18,7 @@
  */
 
 const crypto = require('crypto');
-const { pickPersona } = require('./device-personas');
+const { pickPersona, fontsForOs, exclusiveFontsForOtherOs } = require('./device-personas');
 const {
   buildUaProfile,
   randomUaForSeed,
@@ -895,6 +895,17 @@ function buildFingerprint(profile = {}) {
       mode: speechMode,
       voices: speechVoices,
     },
+    // Font probing is a top-tier OS signal, and on a stock Chromium kernel the host's real
+    // font list answers it. A persona carries the set its claimed platform ships, plus the
+    // families exclusive to the other platforms so probes for those can be answered honestly
+    // as absent. Null when no persona is selected: no persona means no claim to enforce.
+    fonts: devicePersona
+      ? {
+        os: uaOs,
+        list: fontsForOs(uaOs),
+        foreign: exclusiveFontsForOtherOs(uaOs),
+      }
+      : null,
     maxTouchPoints: Number(fpIn.maxTouchPoints) >= 0 ? Number(fpIn.maxTouchPoints) : 0,
     vendor: fpIn.vendor || 'Google Inc.',
     doNotTrack: privacy.dnt ? '1' : null,
@@ -1017,6 +1028,7 @@ function buildInjectionScript(fp) {
     webgpu: fp.webgpu || null,
     mediaDevices: fp.mediaDevices || null,
     speech: fp.speech || null,
+    fonts: fp.fonts || null,
     maxTouchPoints: fp.maxTouchPoints,
     vendor: fp.vendor || fp.uaProfile?.vendor || 'Google Inc.',
     doNotTrack: fp.doNotTrack,
@@ -1304,6 +1316,71 @@ function buildInjectionScript(fp) {
       try { window.navigator = proxied; } catch (__) {}
     }
   } catch (_) {}
+
+  // --- fonts ---
+  // Only the APIs that report font presence directly are answered here. Measurement-based
+  // probing (rendering text and comparing widths) is NOT intercepted: doing so means hooking
+  // the same geometry the page uses for layout, which risks visibly breaking sites. Closing
+  // that path properly belongs in the kernel's font stack, so on a stock Chromium kernel the
+  // host's real fonts can still be measured — see the notes in the development guide.
+  if (CFG.fonts && Array.isArray(CFG.fonts.list) && CFG.fonts.list.length) {
+    const personaFonts = CFG.fonts.list.slice();
+    const personaSet = new Set(personaFonts.map((name) => String(name).toLowerCase()));
+    const foreignSet = new Set((CFG.fonts.foreign || []).map((name) => String(name).toLowerCase()));
+    // Local Font Access: enumerate the persona's set rather than the host's.
+    try {
+      if (typeof globalThis.queryLocalFonts === 'function') {
+        const original = globalThis.queryLocalFonts;
+        const patched = nativeLike(async function queryLocalFonts(options) {
+          const wanted = options && Array.isArray(options.postscriptNames)
+            ? new Set(options.postscriptNames.map((name) => String(name)))
+            : null;
+          return personaFonts
+            .filter((family) => !wanted || wanted.has(family.replace(/\\s+/g, '')))
+            .map((family) => Object.freeze({
+              family,
+              fullName: family,
+              postscriptName: family.replace(/\\s+/g, ''),
+              style: 'Regular',
+            }));
+        }, original);
+        Object.defineProperty(globalThis, 'queryLocalFonts', { configurable: true, writable: true, value: patched });
+      }
+    } catch (_) {}
+    // document.fonts.check(): answer for the platform font families we model, and only when
+    // the page has not loaded a web font under that name — otherwise defer to the browser so
+    // real font-loading logic keeps working.
+    try {
+      const fontSet = document.fonts;
+      if (fontSet && typeof fontSet.check === 'function') {
+        const originalCheck = fontSet.check.bind(fontSet);
+        const rawCheck = fontSet.check;
+        const familyOf = (spec) => {
+          // NOTE: this lives in a template literal, so backslashes must be doubled to survive
+          // into the emitted script — a bare \\s would reach the page as a literal "s".
+          const match = String(spec || '').match(/(?:^|\\s)(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9 _-]+))\\s*$/);
+          return String(match && (match[1] || match[2] || match[3]) || '').trim();
+        };
+        const isWebFont = (family) => {
+          try {
+            for (const face of fontSet) if (String(face.family).replace(/^["']|["']$/g, '').toLowerCase() === family) return true;
+          } catch (_) {}
+          return false;
+        };
+        const patched = nativeLike(function check(spec, text) {
+          try {
+            const family = familyOf(spec).toLowerCase();
+            if (family && !isWebFont(family)) {
+              if (foreignSet.has(family)) return false;
+              if (personaSet.has(family)) return true;
+            }
+          } catch (_) {}
+          return originalCheck(spec, text);
+        }, rawCheck);
+        Object.defineProperty(fontSet, 'check', { configurable: true, writable: true, value: patched });
+      }
+    } catch (_) {}
+  }
 
   // --- screen ---
   try {
