@@ -435,7 +435,9 @@ function rebuildAppShortcutIcons() {
  *
  * Bump ARTIFACT_STAMP_VERSION whenever the generated layout changes, so upgrades rebuild.
  */
-const ARTIFACT_STAMP_VERSION = 1;
+// v2: the Dock wrapper now strips CFBundleIconName, so wrappers built by v1 must be rebuilt
+// or they keep resolving their icon out of the kernel's asset catalog.
+const ARTIFACT_STAMP_VERSION = 2;
 
 /** True when the stamp matches and every expected output is still present. */
 function artifactIsFresh(stampPath, key, outputs) {
@@ -730,9 +732,19 @@ async function prepareMacDockWrapper({
       const re = new RegExp(`(<key>${key}<\\/key>\\s*<string>)[^<]*(<\\/string>)`);
       if (re.test(plistBody)) plistBody = plistBody.replace(re, `$1${xmlEscape(value)}$2`);
     };
+    const removeKey = (key) => {
+      const re = new RegExp(`[\\t ]*<key>${key}<\\/key>\\s*<string>[^<]*<\\/string>\\s*\\n?`, 'g');
+      plistBody = plistBody.replace(re, '');
+    };
     patch('CFBundleDisplayName', appName);
     patch('CFBundleName', appName);
     patch('CFBundleIconFile', 'app.icns');
+    // The kernel plist also carries CFBundleIconName, which names an icon inside Assets.car —
+    // and that asset-catalog key outranks CFBundleIconFile on modern macOS. Since Assets.car
+    // is symlinked straight from the kernel, leaving the key in means the Dock keeps drawing
+    // the kernel's plain icon and the per-environment number never shows. Drop it so the
+    // generated app.icns (logo + number badge) is what macOS resolves.
+    removeKey('CFBundleIconName');
     // Keep CFBundleIdentifier compatible with kernel Helpers / Mach rendezvous
     // Keep NSPrincipalClass = BrowserCrApplication
     await fsp.writeFile(path.join(contents, 'Info.plist'), plistBody, 'utf8');

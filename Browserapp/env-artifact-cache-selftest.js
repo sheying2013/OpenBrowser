@@ -73,6 +73,30 @@ const ok = (n, c) => { assert.ok(c, n); console.log('  PASS  ' + n); passed += 1
   await prepareMarkerExtension({ ...args, envNumber: 9 });
   ok('an unrecognised stamp forces a rebuild', fs.statSync(manifest).mtimeMs !== mtimeBefore);
 
+  // --- macOS Dock wrapper: the environment number must be what the Dock actually draws ---
+  // The wrapper copies the kernel's Info.plist to keep its bundle identity, and that plist
+  // carries CFBundleIconName pointing into Assets.car. That asset-catalog key outranks
+  // CFBundleIconFile, so leaving it in means the Dock keeps showing the kernel's plain icon
+  // while the tooltip says 环境 N — the number never appears on the icon itself.
+  if (process.platform === 'darwin') {
+    const { prepareMacDockWrapper } = require('./automation/env-icon');
+    const kernel = path.join(__dirname, 'kernels/macos-x64/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser');
+    if (fs.existsSync(kernel)) {
+      const launcher = await prepareMacDockWrapper({ profileId: 'dock1', envNumber: 24, userDataPath, realBinary: kernel });
+      ok('Dock wrapper is built', Boolean(launcher) && fs.existsSync(launcher));
+      const appRoot = path.join(userDataPath, 'env-apps', 'dock1', '环境 24.app');
+      const plist = fs.readFileSync(path.join(appRoot, 'Contents', 'Info.plist'), 'utf8');
+      ok('wrapper points at the generated icon', /<key>CFBundleIconFile<\/key>\s*<string>app\.icns<\/string>/.test(plist));
+      ok('wrapper drops CFBundleIconName so the asset catalog cannot win', !/<key>CFBundleIconName<\/key>/.test(plist));
+      ok('wrapper keeps the kernel bundle identity', /<key>CFBundleIdentifier<\/key>/.test(plist));
+      ok('wrapper shows the environment name', /<key>CFBundleName<\/key>\s*<string>环境 24<\/string>/.test(plist));
+      const icns = path.join(appRoot, 'Contents', 'Resources', 'app.icns');
+      ok('generated icon is a real file, not the kernel symlink', fs.existsSync(icns) && !fs.lstatSync(icns).isSymbolicLink() && fs.statSync(icns).size > 1000);
+    } else {
+      console.log('  SKIP  macOS kernel not present — Dock wrapper checks not exercised');
+    }
+  }
+
   await fsp.rm(userDataPath, { recursive: true, force: true }).catch(() => {});
   console.log(`\nenv-artifact-cache-selftest: ${passed} checks passed.`);
 })().catch((e) => { console.error('env-artifact-cache-selftest FAILED:', e); process.exit(1); });
