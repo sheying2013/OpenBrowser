@@ -33,7 +33,8 @@
     "selftest:hooks": "node fingerprint-native-hooks-selftest.js",
     "selftest:persona": "node device-persona-selftest.js",
     "selftest:devprofile": "node device-profile-wiring-selftest.js",
-    "selftest:fonts": "node font-persona-selftest.js"
+    "selftest:fonts": "node font-persona-selftest.js",
+    "selftest:artifacts": "node env-artifact-cache-selftest.js"
   },
   "devDependencies": {
     "desktop-shell": "npm:electron@43.1.1",
