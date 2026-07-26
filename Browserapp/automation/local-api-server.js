@@ -84,8 +84,14 @@ class LocalApiServer {
     const auth = String(req.headers.authorization || '');
     const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
     const supplied = String(headerKey || bearer || '');
-    if (!supplied || supplied.length !== this.apiKey.length) return false;
-    return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(this.apiKey));
+    if (!supplied) return false;
+    // Compare byte lengths (not JS string length): a multibyte input of equal character
+    // length would otherwise make timingSafeEqual throw on unequal Buffer sizes, surfacing
+    // as a 500 instead of a clean 401.
+    const suppliedBuf = Buffer.from(supplied);
+    const keyBuf = Buffer.from(this.apiKey);
+    if (suppliedBuf.length !== keyBuf.length) return false;
+    return crypto.timingSafeEqual(suppliedBuf, keyBuf);
   }
 
   allowedOrigin(req) {
@@ -159,6 +165,7 @@ class LocalApiServer {
         runningProfiles: this.engine?.running?.size || 0,
         sync: this.syncBridge?.status?.() || null,
         rpa: this.rpaEngine?.getStatus?.() || null,
+        platform: this.engine?.platformPreflightReport?.() || null,
       });
     }
     if (pathname === '/api/getVersion' || pathname === '/api/v1/version') {

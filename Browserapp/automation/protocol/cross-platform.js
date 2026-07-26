@@ -191,8 +191,14 @@ function processIdentity(pid, options = {}) {
   }
   if (options.expectedUserDataDir) {
     const expectedRoot = path.resolve(String(options.expectedUserDataDir));
-    const userDataArg = command.match(/(?:^|\s)--user-data-dir=("[^"]*"|'[^']*'|[^\s]+)/)?.[1]?.replace(/^['"]|['"]$/g, '');
-    if (path.resolve(userDataArg || '') !== expectedRoot) {
+    const quoted = command.match(/(?:^|\s)--user-data-dir=("[^"]*"|'[^']*')/)?.[1]?.replace(/^['"]|['"]$/g, '');
+    // Node spawns argv unquoted, so `ps -o command=` space-joins a root that contains
+    // spaces; a greedy [^\s]+ capture would truncate it. Capture up to the next
+    // " --flag" boundary (or end) and compare resolved paths for equality — this keeps
+    // spaced paths working without letting one profile id prefix-match another.
+    const bare = command.match(/(?:^|\s)--user-data-dir=((?:(?! --).)*)/)?.[1];
+    const userDataArg = quoted || bare || '';
+    if (!userDataArg || path.resolve(userDataArg) !== expectedRoot) {
       return { ok: false, reason: 'managed user-data-dir does not match', command };
     }
   }
