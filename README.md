@@ -2,8 +2,8 @@
 
 <img src="./assets/openbrowser-title.svg" alt="OpenBrowser" width="820">
 
-[![Version](https://img.shields.io/badge/version-1.0.1-blue)](https://github.com/sheying2013/OpenBrowser)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](https://github.com/sheying2013/OpenBrowser)
+[![Version](https://img.shields.io/badge/version-1.0.1-blue)](https://github.com/clcc2019/OpenBrowser)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Ubuntu-lightgrey)](https://github.com/clcc2019/OpenBrowser)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![Node](https://img.shields.io/badge/Node.js-LTS-339933.svg)](https://nodejs.org/)
 
@@ -70,6 +70,7 @@ The app supports multiple UI languages, currently including English and Chinese.
 | Windows | x86_64 | ✅ Supported |
 | macOS | x86_64 | ✅ Supported |
 | macOS | arm64 | ✅ Supported |
+| Ubuntu | x86_64 | ✅ Supported |
 
 ## Quick start
 
@@ -88,12 +89,15 @@ Or use the launcher scripts from the repository root:
 | --- | --- |
 | macOS | [`start-test.command`](./start-test.command) |
 | Windows | [`start-test.cmd`](./start-test.cmd) |
+| Ubuntu | [`start-test.sh`](./start-test.sh) |
 
 ## Packaging
 
 ```bash
 cd Browserapp
 # Optional: OPENBROWSER_PACKAGE_ARCH=x86_64 or arm64
+# Ubuntu x86_64 only: explicitly fetch the Chrome for Testing package seed.
+npm run prepare:linux-kernel
 npm run package:portable
 ```
 
@@ -103,6 +107,16 @@ Build output is written to `Browserapp/dist/`.
 | --- | --- |
 | Windows | Includes `START.cmd`. |
 | macOS | Includes `OpenBrowser.app` and `启动.command`. |
+| Ubuntu x86_64 | Includes an `OpenBrowser-…tar.gz` portable archive and launcher. |
+
+Ubuntu packages include Chrome for Testing under
+`kernels/chrome-for-testing/chrome-linux64`; the application never downloads a
+kernel at runtime. Run the package as a normal desktop user, not with `sudo`.
+If required, install the standard Electron/Chromium desktop libraries:
+
+```bash
+sudo apt-get install libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcups2 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2
+```
 
 ## Self-tests
 
@@ -124,13 +138,14 @@ OpenBrowser/
 ├── docs/screenshots/      # Screenshots
 ├── start-test.command     # macOS launcher
 ├── start-test.cmd         # Windows launcher
+├── start-test.sh          # Ubuntu launcher
 ├── DISCLAIMER.md
 ├── LICENSE
 ├── README.md              # English documentation
 └── README_CN.md           # Chinese documentation
 ```
 
-This repository contains source code and documentation only. It does not include profiles, cookies, proxy credentials, bundled kernel binaries, or installers. Official Windows x64 and macOS arm64 builds download the matching Wayfern kernel during CI packaging; macOS x86_64 builds include the OpenBrowser 148 kernel.
+This repository contains source code and documentation only. It does not include profiles, cookies, proxy credentials, bundled kernel binaries, or installers. Official Windows x64 and macOS arm64 builds use the matching Wayfern kernel during CI packaging; macOS x86_64 builds use the OpenBrowser 148 kernel; Ubuntu x86_64 builds explicitly fetch Chrome for Testing during CI packaging.
 
 ## Data and security
 

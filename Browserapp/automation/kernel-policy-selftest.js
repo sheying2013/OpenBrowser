@@ -15,6 +15,7 @@ const {
   safeInstalledBinary,
   findOpenBrowserKernelBinary,
   findBundledWayfernKernel,
+  findBundledChromeForTesting,
   isOpenBrowser148SupportedHost,
   isMacX64Host,
   isWayfernKernel,
@@ -22,6 +23,7 @@ const {
   termsAcceptanceArgsForKernel,
   SOURCE_OPENBROWSER,
   SOURCE_WAYFERN,
+  SOURCE_CFT,
 } = require('./browser-kernel');
 const { BrowserEngine, systemBrowserCandidatesForPlatform } = require('../engine');
 
@@ -67,6 +69,19 @@ async function main() {
     assert.deepStrictEqual(termsAcceptanceArgsForKernel({ path: bundledBinary }), ['--accept-terms-and-conditions']);
     assert.deepStrictEqual(termsAcceptanceArgsForKernel({ path: binary, source: 'chrome-for-testing' }), []);
     console.log('  PASS  bundled Wayfern kernel discovered from packaged resource root');
+
+    const cftResourceRoot = path.join(root, 'cft-resource');
+    const packagedCft = cftBinary(cftResourceRoot);
+    await fsp.mkdir(path.dirname(packagedCft), { recursive: true });
+    await fsp.writeFile(packagedCft, '', 'utf8');
+    await fsp.writeFile(path.join(cftResourceRoot, 'kernels', 'chrome-for-testing', 'kernel.json'), JSON.stringify({ version: '123.0.0.0' }), 'utf8');
+    const bundledCft = findBundledChromeForTesting([cftResourceRoot]);
+    assert.strictEqual(path.resolve(bundledCft.binary), path.resolve(packagedCft));
+    const packagedManager = new BrowserKernelManager(path.join(root, 'packaged-user-data'), { resourceRoot: cftResourceRoot });
+    await packagedManager.loadMeta();
+    assert.strictEqual(packagedManager.status().kernel.source, SOURCE_CFT);
+    assert.strictEqual(path.resolve(packagedManager.status().kernel.path), path.resolve(packagedCft));
+    console.log('  PASS  bundled Chrome for Testing discovered from packaged resource root');
 
     assert.throws(() => validateArchiveMemberName('../outside/chrome'));
     assert.throws(() => validateArchiveMemberName('/tmp/chrome'));
@@ -189,10 +204,15 @@ async function main() {
       assert.notStrictEqual(chosen.source, SOURCE_OPENBROWSER);
       const appRoot = path.join(__dirname, '..');
       const integrated = findBundledWayfernKernel([appRoot, path.join(appRoot, 'kernels')]);
+      const integratedCft = findBundledChromeForTesting([appRoot, path.join(appRoot, 'kernels')]);
       if (integrated && integrated.binary && isIntegratedKernelCdpReady({ path: integrated.binary, source: SOURCE_WAYFERN })) {
         assert.strictEqual(path.resolve(chosen.path), path.resolve(integrated.binary));
         assert.strictEqual(chosen.source, SOURCE_WAYFERN);
         console.log('  PASS  engine prefers integrated independent kernel over temporary CfT');
+      } else if (integratedCft && integratedCft.binary) {
+        assert.strictEqual(path.resolve(chosen.path), path.resolve(integratedCft.binary));
+        assert.strictEqual(chosen.source, SOURCE_CFT);
+        console.log('  PASS  engine prefers integrated Chrome for Testing over temporary CfT');
       } else {
         assert.strictEqual(chosen.path, binary);
         console.log('  PASS  legacy fallback policy migrates to independent-only');

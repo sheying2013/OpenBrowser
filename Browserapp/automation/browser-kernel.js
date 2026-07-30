@@ -874,6 +874,28 @@ function findBundledWayfernKernel(resourceRoots = []) {
   return null;
 }
 
+/** Locate a Chrome for Testing seed bundled beside the application resources. */
+function findBundledChromeForTesting(resourceRoots = []) {
+  const roots = [];
+  const addRoot = (root) => {
+    if (!root) return;
+    const value = path.resolve(String(root));
+    if (!roots.includes(value)) roots.push(value);
+  };
+  for (const root of resourceRoots || []) {
+    addRoot(path.join(root, 'kernels', 'chrome-for-testing'));
+    addRoot(path.join(root, 'app', 'kernels', 'chrome-for-testing'));
+    addRoot(path.join(root, 'chrome-for-testing'));
+  }
+  const relative = chromeForTestingBinaryRelative(cftPlatformKey());
+  for (const root of roots) {
+    const binary = path.join(root, relative);
+    const trusted = safeInstalledBinary(binary, root);
+    if (trusted) return { binary: trusted, root };
+  }
+  return null;
+}
+
 function bundledKernelVersion(root) {
   const tryFiles = [];
   if (root) {
@@ -981,6 +1003,20 @@ class BrowserKernelManager {
       }
     }
 
+    // Chrome for Testing is the integrated Ubuntu x86_64 kernel. Search
+    // resource roots so a portable package works without copying a kernel to
+    // userData first.
+    const bundledCft = findBundledChromeForTesting(this.resourceRoots);
+    if (bundledCft) {
+      return {
+        name: kernelDisplayName(SOURCE_CFT),
+        path: bundledCft.binary,
+        version: bundledKernelVersion(bundledCft.root),
+        independent: true,
+        source: SOURCE_CFT,
+      };
+    }
+
     if (this.meta.binary && fs.existsSync(this.meta.binary)) {
       const src = this.meta.source || SOURCE_WAYFERN;
       // Refuse stale openbrowser-148 meta on non-mac-x64 hosts.
@@ -1049,15 +1085,13 @@ class BrowserKernelManager {
       }
     } catch (_) {}
 
-    // Legacy Chrome for Testing path
-    const plat = cftPlatformKey();
-    const cft = path.join(this.kernelsRoot, 'chrome-for-testing', chromeForTestingBinaryRelative(plat));
-    const trustedCft = safeInstalledBinary(cft, this.kernelsRoot);
-    if (trustedCft) {
+    // User-data Chrome for Testing path (legacy and explicit local installs).
+    const localCft = findBundledChromeForTesting([this.userData, this.kernelsRoot]);
+    if (localCft) {
       return {
         name: kernelDisplayName(SOURCE_CFT),
-        path: trustedCft,
-        version: this.meta.version || 'unknown',
+        path: localCft.binary,
+        version: this.meta.version || bundledKernelVersion(localCft.root),
         independent: true,
         source: SOURCE_CFT,
       };
@@ -1096,6 +1130,8 @@ class BrowserKernelManager {
       && (!installed || installed.source === SOURCE_OPENBROWSER);
     const wayfernIntegrated = !openBrowserDefault
       && Boolean(installed && installed.source === SOURCE_WAYFERN);
+    const cftIntegrated = !openBrowserDefault
+      && Boolean(installed && installed.source === SOURCE_CFT);
     return {
       platform: donutPlatformKey(),
       cftPlatform: cftPlatformKey(),
@@ -1121,7 +1157,9 @@ class BrowserKernelManager {
         ? 'macOS x86 使用安装包/源码内置的 OpenBrowser 148（kernels/macos-x64/）。运行时不再自动下载内核。'
         : wayfernIntegrated
           ? 'Windows x64 / macOS arm64 使用安装包内置 Wayfern（kernels/windows-x64 或 kernels/macos-arm64）。运行时不再自动下载内核。'
-          : '未发现内置独立内核。请确认安装包包含 kernels/{macos-x64|windows-x64|macos-arm64}/，或在本地设置中选择自定义 Chromium。运行时不会自动下载内核。',
+          : cftIntegrated
+            ? 'Ubuntu x86_64 使用安装包内置 Chrome for Testing（kernels/chrome-for-testing/chrome-linux64）。运行时不再自动下载内核。'
+            : '未发现内置独立内核。请确认安装包包含对应平台内核（Linux 为 kernels/chrome-for-testing/chrome-linux64），或在本地设置中选择自定义 Chromium。运行时不会自动下载内核。',
     };
   }
 
@@ -1229,7 +1267,7 @@ class BrowserKernelManager {
       );
     }
 
-    // Windows / macOS arm64: only integrated seeds under kernels/{platform}.
+    // Windows/macOS integrated Wayfern seed.
     const bundled = findBundledWayfernKernel(this.resourceRoots);
     if (bundled) {
       const trusted = safeInstalledBinary(bundled.binary, bundled.root);
@@ -1260,7 +1298,7 @@ class BrowserKernelManager {
     }
 
     throw new Error(
-      '未找到内置独立内核（kernels/windows-x64 或 kernels/macos-arm64）。本版本不再自动下载内核；'
+      '未找到内置独立内核（Windows: kernels/windows-x64；macOS: kernels/macos-arm64；Linux: kernels/chrome-for-testing/chrome-linux64）。本版本不再自动下载内核；'
       + '请使用包含对应平台内核种子的安装包，或在本地设置中选择自定义 Chromium。'
       + (force ? '（force 不会触发下载）' : '')
     );
@@ -1514,6 +1552,7 @@ module.exports = {
   safeInstalledBinary,
   findWayfernKernelBinary,
   findBundledWayfernKernel,
+  findBundledChromeForTesting,
   wayfernSeedDirNames,
   bundledKernelVersion,
   downloadFile,

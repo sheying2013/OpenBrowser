@@ -42,7 +42,7 @@ app.setPath('userData', userDataRoot);
 const defaultProfileDataRoot = path.join(app.getPath('userData'), 'browser-profiles-v2');
 const localSettingsFile = path.join(app.getPath('userData'), 'openbrowser-local-settings.json');
 
-const UPDATE_REPOSITORY = 'sheying2013/OpenBrowser';
+const UPDATE_REPOSITORY = 'clcc2019/OpenBrowser';
 const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPOSITORY}/releases/latest`;
 const UPDATE_LATEST_HTML = `https://github.com/${UPDATE_REPOSITORY}/releases/latest`;
 const UPDATE_RELEASES_ATOM = `https://github.com/${UPDATE_REPOSITORY}/releases.atom`;
@@ -50,6 +50,7 @@ const UPDATE_ASSETS = Object.freeze({
   'darwin:x64': 'OpenBrowser-macOS-x86_64.dmg',
   'darwin:arm64': 'OpenBrowser-macOS-arm64-with-kernel.dmg',
   'win32:x64': 'OpenBrowser-Windows-x86_64-with-kernel.exe',
+  'linux:x64': 'OpenBrowser-Linux-x86_64-with-kernel.tar.gz',
 });
 const UPDATE_MAX_BYTES = 1024 * 1024 * 1024;
 const UPDATE_TIMEOUT_MS = 20000;

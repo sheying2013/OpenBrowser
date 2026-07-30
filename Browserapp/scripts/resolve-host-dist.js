@@ -28,6 +28,30 @@ function findHostWindowsExe(distRoot) {
   return path.join(distRoot, name);
 }
 
+function findHostLinuxBinary(distRoot) {
+  const entries = fs.readdirSync(distRoot);
+  const preferred = entries.find((entry) => entry === 'OpenBrowser')
+    || entries.find((entry) => entry === 'electron');
+  if (preferred) {
+    const candidate = path.join(distRoot, preferred);
+    try {
+      if (fs.statSync(candidate).isFile() && (fs.statSync(candidate).mode & 0o111)) return candidate;
+    } catch (_) {}
+  }
+  const binary = entries.find((entry) => {
+    if (/^(chrome-sandbox|chrome_crashpad_handler)$/i.test(entry)) return false;
+    const candidate = path.join(distRoot, entry);
+    try {
+      const stat = fs.statSync(candidate);
+      return stat.isFile() && Boolean(stat.mode & 0o111);
+    } catch (_) {
+      return false;
+    }
+  });
+  if (!binary) throw new Error('缺少 Linux 主机可执行文件。请执行 npm install --force --include=dev。');
+  return path.join(distRoot, binary);
+}
+
 function findMacBinary(macosDir) {
   const entries = fs.readdirSync(macosDir);
   const preferred = entries.find((name) => name === 'OpenBrowser');
@@ -49,5 +73,6 @@ module.exports = {
   resolveHostDist,
   findHostAppBundle,
   findHostWindowsExe,
+  findHostLinuxBinary,
   findMacBinary,
 };
