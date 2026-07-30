@@ -1,6 +1,14 @@
 const net = require('net');
 const tls = require('tls');
 
+const IP_LOOKUP_CHANNELS = Object.freeze(['ip-api', 'ip2location', 'ifconfig-me']);
+
+function normalizeIpLookupChannel(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'ifconfig' || raw === 'ifconfig.me' || raw === 'ifconfig-me') return 'ifconfig-me';
+  return IP_LOOKUP_CHANNELS.includes(raw) ? raw : 'ip-api';
+}
+
 function decode(value) {
   try { return decodeURIComponent(value); } catch (_) { return value; }
 }
@@ -1054,20 +1062,28 @@ async function invokeProxyRefresh(url) {
   };
 }
 
-async function lookupProxyCountry(config) {
+async function lookupProxyCountry(config, options = {}) {
   const started = Date.now();
+  const ipChannel = normalizeIpLookupChannel(options.ipChannel || options.channel);
   try {
-    const parts = await raceSettledValues([
+    const fallbackLookups = [
       () => lookupProxyIpApi(config),
       () => lookupProxyIpWho(config),
       () => lookupProxyIpInfo(config),
       () => lookupProxyCloudflareTrace(config),
-    ], { maxWaitMs: 12000 });
+    ];
+    // ifconfig.me is IP-only; keep the existing geo providers in the same
+    // request cycle so selecting it does not leave locale/timezone blank.
+    const lookups = ipChannel === 'ifconfig-me'
+      ? [() => lookupProxyIfconfigMe(config), ...fallbackLookups]
+      : [...fallbackLookups, () => lookupProxyIfconfigMe(config)];
+    const parts = await raceSettledValues(lookups, { maxWaitMs: 12000 });
     if (!parts.length) throw new Error('Proxy exit lookup failed on all sources');
     const result = mergeNetworkLookups(parts);
     const latencyMs = Date.now() - started;
     return enrichWithIpPure({
       ...result,
+      ipChannel,
       latencyMs,
       networkType: networkTypeFromLookup(result),
     }, () => lookupIpPureProxy(config));
@@ -1186,6 +1202,29 @@ async function lookupProxyCloudflareTrace(config) {
   return parseCloudflareTrace(response.body.toString('utf8'));
 }
 
+/**
+ * HTTPS egress-IP probe requested by the product: https://ifconfig.me/ip.
+ * The endpoint is deliberately IP-only, so geo data continues to come from
+ * the existing providers while this confirms that the configured proxy can
+ * reach ifconfig.me over TLS and exposes a valid public exit address.
+ */
+function normalizeIfconfigMeResult(value) {
+  const ip = String(value || '').trim();
+  if (!net.isIP(ip)) throw new Error('ifconfig.me response did not contain a valid IP address');
+  return {
+    ip,
+    source: 'ifconfig.me',
+    geoRole: 'egress',
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+async function lookupProxyIfconfigMe(config) {
+  const response = await requestProxyHttps(config, 'ifconfig.me', '/ip');
+  if (response.status !== 200) throw new Error('ifconfig.me proxy check returned HTTP ' + response.status);
+  return normalizeIfconfigMeResult(response.body.toString('utf8'));
+}
+
 async function probeProxyTunnel(config, hostname = 'www.google.com', port = 443) {
   const bridge = await startAuthenticatedProxy(config); let socket;
   try {
@@ -1217,12 +1256,14 @@ async function probeProxyHttps(config, hostname = 'www.google.com', pathname = '
 module.exports = {
   parseProxy,
   displayProxy,
+  normalizeIpLookupChannel,
   startAuthenticatedProxy,
   lookupProxyCountry,
   lookupDirectCountry,
   mergeNetworkLookups,
   parseCloudflareTrace,
   normalizeIpInfoResult,
+  normalizeIfconfigMeResult,
   probeProxyTunnel,
   probeProxyHttps,
   classifyProxyError,
