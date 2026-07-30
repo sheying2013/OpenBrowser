@@ -80,6 +80,7 @@ async function main() {
     networkMode: 'proxy',
     proxy: 'socks5://127.0.0.1:1080',
     proxyMeta: {
+      ipChannel: 'ifconfig.me',
       checkOnStart: true,
       refreshOnStart: true,
       apiExtractUrl: `${base}/extract-text`,
@@ -89,6 +90,7 @@ async function main() {
     },
     privacy: { languageMode: 'ip', timezoneMode: 'ip', geoMode: 'ip' },
   });
+  assert.strictEqual(sanitized.proxyMeta.ipChannel, 'ifconfig-me');
   assert.strictEqual(sanitized.proxyMeta.refreshOnStart, true);
   assert.strictEqual(sanitized.proxyMeta.fillFingerprint, false);
   assert.deepStrictEqual(sanitized.proxyMeta.backupProxies, ['socks5://127.0.0.1:1081', 'http://127.0.0.1:8080']);
@@ -226,7 +228,8 @@ async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pxf-'));
   const store = new ProxyStore(path.join(dir, 'p.json'));
   await store.load();
-  const item = await store.create({ raw: 'socks5://127.0.0.1:9', name: 'x' });
+  const item = await store.create({ raw: 'socks5://127.0.0.1:9', name: 'x', ipChannel: 'ifconfig.me' });
+  assert.strictEqual(store.get(item.id).ipChannel, 'ifconfig-me');
   await store.markCheck(item.id, { ip: '8.8.8.8', countryCode: 'US', latencyMs: 12, networkType: 'broadband' });
   assert.strictEqual(store.get(item.id).lastLatencyMs, 12);
   assert.strictEqual(store.get(item.id).lastCheckOk, true);
@@ -256,6 +259,7 @@ async function main() {
   ]) {
     assert.ok(html.includes(`id="${id}"`), 'missing html id ' + id);
   }
+  assert.ok(html.includes('value="ifconfig-me"'), 'ifconfig.me must be selectable as an IP query channel');
   assert.ok(renderer.includes("requireReady: $('#editor-proxy-require-ready')"), 'editor draft must collect requireReady');
   assert.ok(renderer.includes("notReadyPolicy: $('#editor-proxy-not-ready-policy')"), 'editor draft must collect notReadyPolicy');
   assert.ok(renderer.includes("tlsProfile: $('#editor-proxy-tls-profile')"), 'editor draft must collect tlsProfile');
