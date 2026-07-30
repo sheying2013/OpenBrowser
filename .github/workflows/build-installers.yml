@@ -1,8 +1,8 @@
 name: Build OpenBrowser installers
 
 # Product policy:
-# - macOS x86_64 / macOS arm64 / Windows x86_64 all ship WITH integrated kernels by default
-# - three platform jobs are independent (no shared cancel group, no fail-fast chain)
+# - macOS x86_64 / macOS arm64 / Windows x86_64 / Ubuntu x86_64 ship WITH integrated kernels by default
+# - four platform jobs are independent (no shared cancel group, no fail-fast chain)
 # - each finished platform uploads its own assets to the same GitHub Release immediately
 
 on:
@@ -26,6 +26,7 @@ on:
           - windows-x86_64
           - macos-x86_64
           - macos-arm64
+          - linux-x86_64
           - all
 
 permissions:
@@ -46,6 +47,7 @@ env:
     - More native feel: system-native theme follows light/dark, macOS vibrancy / Windows 11 Mica, and the environment number is drawn directly on the Dock icon.
     - Cross-platform preflight: early warnings for Windows long paths, Apple Silicon Rosetta, and more.
     - Various startup / IPC edge-case fixes and stability improvements.
+    - Ubuntu x86_64 portable packages bundle Chrome for Testing and never download a browser kernel at runtime.
 
     ### 中文
 
@@ -54,6 +56,7 @@ env:
     - 更像原生应用：系统原生主题跟随明暗、macOS 毛玻璃 / Windows 11 Mica、Dock 图标直接显示环境编号
     - 多平台预检：Windows 长路径、Apple Silicon Rosetta 等风险提前提示
     - 若干启动 / IPC 边角问题修复与稳定性提升
+    - Ubuntu x86_64 便携包内置 Chrome for Testing，运行时不会下载浏览器内核
 
     ### 下载 / Downloads
 
@@ -63,6 +66,7 @@ env:
     | **Windows x86_64 · 便携包** | `OpenBrowser-Windows-x86_64-with-kernel.zip` |
     | **macOS x86_64 · 内置内核** | `OpenBrowser-macOS-x86_64.dmg` |
     | **macOS arm64 · 内置内核** | `OpenBrowser-macOS-arm64-with-kernel.dmg` |
+    | **Ubuntu x86_64 · 内置内核** | `OpenBrowser-Linux-x86_64-with-kernel.tar.gz` |
 
     > 标签说明：`with-kernel` = 安装包内置独立浏览器内核，运行时无需再下载内核。
 
@@ -179,6 +183,90 @@ jobs:
             assets=(dist/OpenBrowser-Windows-x86_64-with-kernel.exe dist/OpenBrowser-Windows-x86_64-with-kernel.zip)
           fi
           bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" "${assets[@]}"
+
+  linux-x86_64:
+    name: Ubuntu x86_64 (with Chrome for Testing)
+    needs: ensure-release
+    if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'linux-x86_64' }}
+    runs-on: ubuntu-22.04
+    concurrency:
+      group: openbrowser-installers-${{ inputs.release_tag }}-linux-x86_64
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: Browserapp
+        shell: bash
+    env:
+      OPENBROWSER_PACKAGE_ARCH: x86_64
+      OPENBROWSER_PACKAGE_VARIANT: with-kernel
+      OPENBROWSER_BUNDLE_KERNEL: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          sparse-checkout: |
+            /*
+            !/Browserapp/kernels/macos-x64/
+            !/Browserapp/kernels/macos-arm64/
+            !/Browserapp/kernels/windows-x64/
+            !/Browserapp/kernels/openbrowser/
+            !/Browserapp/kernels/wayfern/
+          sparse-checkout-cone-mode: false
+      - name: Install desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes unzip xvfb libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcups2 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Browserapp/package-lock.json
+      - run: npm ci --include=dev
+      - name: Prepare and verify Chrome for Testing seed
+        run: |
+          set -euo pipefail
+          npm run prepare:linux-kernel
+          OPENBROWSER_VERIFY_PLATFORM=linux-x64 npm run prepare:bundled-kernel
+      - name: Self-tests
+        run: |
+          npm run selftest
+          npm run selftest:automation
+          npm run selftest:protocol
+          npm run selftest:isolation
+          npm run selftest:kernel
+      - run: npm run package:portable
+      - name: Verify Ubuntu package and bundled kernel
+        run: |
+          set -euo pipefail
+          STEM="OpenBrowser-Linux-x86_64-with-kernel"
+          PACKAGE="dist/${STEM}"
+          APP="$PACKAGE/runtime/resources/app"
+          KERNEL="$APP/kernels/chrome-for-testing/chrome-linux64/chrome"
+          test -x "$PACKAGE/OpenBrowser"
+          test -x "$KERNEL"
+          test -f "dist/${STEM}.tar.gz"
+          test ! -e "$APP/kernels/windows-x64"
+          test ! -e "$APP/kernels/macos-x64"
+          test ! -e "$APP/kernels/macos-arm64"
+          TEST_DATA="$RUNNER_TEMP/openbrowser-cft-smoke"
+          "$KERNEL" --headless=new --no-sandbox --disable-gpu --remote-debugging-port=0 --user-data-dir="$TEST_DATA" about:blank >"$RUNNER_TEMP/openbrowser-cft.log" 2>&1 &
+          cft_pid=$!
+          trap 'kill "$cft_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 40); do
+            test -f "$TEST_DATA/DevToolsActivePort" && break
+            sleep 0.25
+          done
+          test -f "$TEST_DATA/DevToolsActivePort"
+          kill "$cft_pid"
+          wait "$cft_pid" || true
+          trap - EXIT
+      - name: Upload to release
+        run: |
+          set -euo pipefail
+          notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
+          printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
+          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
+            dist/OpenBrowser-Linux-x86_64-with-kernel.tar.gz
 
   macos-x86_64:
     name: macOS x86_64 (with kernel)
