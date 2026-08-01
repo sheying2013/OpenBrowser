@@ -8,9 +8,11 @@
  *   kernels/macos-x64
  *   kernels/windows-x64
  *   kernels/macos-arm64
+ *   kernels/chrome-for-testing/chrome-linux64
  *
  * Runtime auto-download is disabled. This script does not download kernels.
  * For Windows/mac-arm seeds it also verifies companion-library CDP readiness markers.
+ * Ubuntu x86_64 packages ship Chrome for Testing under its canonical layout.
  *
  * Env:
  *   OPENBROWSER_PACKAGE_ARCH = x64 | arm64 | x86_64 | aarch64
@@ -40,6 +42,7 @@ function platformKey() {
   const arch = packageArch();
   if (process.platform === 'darwin') return `macos-${arch}`;
   if (process.platform === 'win32') return `windows-${arch}`;
+  if (process.platform === 'linux') return `linux-${arch}`;
   throw new Error(`Unsupported package host: ${process.platform}/${arch}`);
 }
 
@@ -111,6 +114,18 @@ function main() {
     assertExists(binary, 'macOS arm64 kernel binary');
     assertCdpReady(binary, 'macos-arm64');
     console.log(`[kernel] ok macos-arm64 CDP-ready at ${seed}`);
+    return;
+  }
+
+  if (platform === 'linux-x64') {
+    const binary = path.join(kernelsRoot, 'chrome-for-testing', 'chrome-linux64', 'chrome');
+    assertExists(binary, 'Linux x64 Chrome for Testing kernel binary');
+    try {
+      fs.accessSync(binary, fs.constants.X_OK);
+    } catch (_) {
+      throw new Error(`Linux x64 Chrome for Testing kernel is not executable: ${binary}`);
+    }
+    console.log(`[kernel] ok linux-x64 Chrome for Testing at ${binary}`);
     return;
   }
 
