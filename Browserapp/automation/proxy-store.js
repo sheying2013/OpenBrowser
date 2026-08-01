@@ -3,7 +3,7 @@
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { parseProxy, displayProxy } = require('../proxy-forwarder');
+const { parseProxy, displayProxy, normalizeIpLookupChannel } = require('../proxy-forwarder');
 
 /**
  * Local proxy library (proxy-list CRUD, self-contained).
@@ -22,9 +22,7 @@ function normalizeProxyRecord(input = {}, existing = null) {
   const username = String(input.username ?? input.user ?? existing?.username ?? '');
   const password = String(input.password ?? existing?.password ?? '');
   const refreshUrl = String(input.refreshUrl || input.refresh_url || existing?.refreshUrl || '').slice(0, 1000);
-  const ipChannel = ['ip-api', 'ip2location'].includes(String(input.ipChannel || existing?.ipChannel || ''))
-    ? String(input.ipChannel || existing?.ipChannel)
-    : 'ip-api';
+  const ipChannel = normalizeIpLookupChannel(input.ipChannel || existing?.ipChannel);
 
   let raw = String(input.raw || input.proxy || '').trim();
   if (!raw) {

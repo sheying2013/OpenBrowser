@@ -7,7 +7,7 @@ const { spawn, execFileSync } = require('child_process');
 const cdp = require('./cdp');
 const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
-const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
+const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError, normalizeIpLookupChannel } = require('./proxy-forwarder');
 const { resolveProfileLanguage, localeFromCountryCode } = require('./automation/locale-from-country');
 const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
 const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = require('./automation/env-icon');
@@ -396,7 +396,7 @@ class BrowserEngine {
         totpSecret: String(platformValue.totpSecret || platformValue.otp || '').slice(0, 200),
       },
       proxyMeta: {
-        ipChannel: allowed(proxyMetaValue.ipChannel, ['ip-api', 'ip2location'], 'ip-api'),
+        ipChannel: normalizeIpLookupChannel(proxyMetaValue.ipChannel),
         refreshUrl: String(proxyMetaValue.refreshUrl || '').slice(0, 1000),
         checkOnStart: Boolean(proxyMetaValue.checkOnStart),
         refreshOnStart: Boolean(proxyMetaValue.refreshOnStart),
@@ -2535,7 +2535,9 @@ class BrowserEngine {
       resolved = await this.resolveProfileProxyConfig(profile, { allowExtract: options.allowExtract !== false });
     }
     try {
-      const result = await retryProxyOperation(() => lookupProxyCountry(resolved.config));
+      const result = await retryProxyOperation(() => lookupProxyCountry(resolved.config, {
+        ipChannel: profile.proxyMeta?.ipChannel,
+      }));
       return {
         ...result,
         protocol: resolved.config.protocol,
