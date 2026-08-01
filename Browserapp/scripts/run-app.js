@@ -10,6 +10,7 @@ const {
   resolveHostDist,
   findHostAppBundle,
   findHostWindowsExe,
+  findHostLinuxBinary,
   findMacBinary,
 } = require('./resolve-host-dist.js');
 const { ensureHostRuntime } = require('./ensure-host-runtime.js');
@@ -57,6 +58,16 @@ function resolveHostBinary() {
     } catch (_) { /* fall through */ }
     const distRoot = resolveHostDist(appRoot);
     const binary = findHostWindowsExe(distRoot);
+    if (fs.existsSync(binary)) return binary;
+  }
+
+  if (process.platform === 'linux') {
+    try {
+      const binary = require('desktop-shell');
+      if (typeof binary === 'string' && fs.existsSync(binary)) return binary;
+    } catch (_) { /* fall through */ }
+    const distRoot = resolveHostDist(appRoot);
+    const binary = findHostLinuxBinary(distRoot);
     if (fs.existsSync(binary)) return binary;
   }
 

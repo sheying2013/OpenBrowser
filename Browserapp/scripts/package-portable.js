@@ -7,11 +7,13 @@ const {
   resolveHostDist,
   findHostAppBundle,
   findHostWindowsExe,
+  findHostLinuxBinary,
   findMacBinary,
 } = require('./resolve-host-dist');
 const { ensureHostRuntime } = require('./ensure-host-runtime');
 const {
   findBundledWayfernKernel,
+  findBundledChromeForTesting,
   isIntegratedKernelCdpReady,
   companionLibraryForKernelBinary,
 } = require('../automation/browser-kernel');
@@ -53,7 +55,7 @@ function bundleKernelVariantEnabled() {
 function packageVariantSuffix(platform = process.platform, arch = packageArch) {
   const p = String(platform || '').toLowerCase();
   const a = String(arch || '').toLowerCase();
-  const isVariantPlatform = p === 'win32' || (p === 'darwin' && a === 'arm64');
+  const isVariantPlatform = p === 'win32' || p === 'linux' || (p === 'darwin' && a === 'arm64');
   if (!isVariantPlatform) return '';
   // Default product SKU is with-kernel; keep stable artifact suffix for CI/release assets.
   return packageVariant() === 'without-kernel' ? '-without-kernel' : '-with-kernel';
@@ -61,7 +63,7 @@ function packageVariantSuffix(platform = process.platform, arch = packageArch) {
 
 function packageArtifactStem(platform = process.platform, arch = packageArch) {
   const p = String(platform || '').toLowerCase();
-  const productPlatform = p === 'win32' ? 'Windows' : 'macOS';
+  const productPlatform = p === 'win32' ? 'Windows' : p === 'linux' ? 'Linux' : 'macOS';
   return `OpenBrowser-${productPlatform}-${arch}${packageVariantSuffix(platform, arch)}`;
 }
 
@@ -127,6 +129,13 @@ function shouldShipIntegratedWayfern(platform = process.platform, arch = package
   return supportedPlatform && bundleKernelVariantEnabled();
 }
 
+/** Ubuntu x86_64 packages use the official Chrome for Testing archive. */
+function shouldShipChromeForTesting(platform = process.platform, arch = packageArch) {
+  const p = String(platform || '').toLowerCase();
+  const a = String(arch || '').toLowerCase();
+  return p === 'linux' && ['x86_64', 'x64', 'amd64'].includes(a) && bundleKernelVariantEnabled();
+}
+
 /** @deprecated alias for shouldShipIntegratedWayfern. */
 function shouldShipBundledWayfern(platform = process.platform, arch = packageArch) {
   return shouldShipIntegratedWayfern(platform, arch);
@@ -139,6 +148,7 @@ function shouldShipBundledWayfern(platform = process.platform, arch = packageArc
  *   - macos-x64/    OpenBrowser 148 (macOS Intel)
  *   - windows-x64/  Windows independent kernel
  *   - macos-arm64/  macOS arm64 independent kernel
+ *   - chrome-for-testing/chrome-linux64/ Ubuntu x86_64 Chrome for Testing
  *
  * Always copy kernels/, then prune foreign platform seeds after copy.
  * Legacy bundled-kernels/ is never shipped.
@@ -152,9 +162,11 @@ function pruneForeignKernelSeeds(resourceApp, platform = process.platform, arch 
   if (!fs.existsSync(kernelsDir)) return;
   const shipOpenBrowser = shouldShipOpenBrowser148Kernel(platform, arch);
   const shipWayfern = shouldShipIntegratedWayfern(platform, arch);
+  const shipCft = shouldShipChromeForTesting(platform, arch);
   const a = String(arch || '').toLowerCase();
   const isWin = String(platform || '').toLowerCase() === 'win32';
   const isDarwin = String(platform || '').toLowerCase() === 'darwin';
+  const isLinux = String(platform || '').toLowerCase() === 'linux';
   const isArm64 = a === 'arm64' || a === 'aarch64';
 
   // Keep only the platform seed for this SKU (+ shared meta/README if present).
@@ -168,6 +180,7 @@ function pruneForeignKernelSeeds(resourceApp, platform = process.platform, arch 
     if (isDarwin && isArm64) keep.add('macos-arm64');
     keep.add('wayfern'); // legacy compat path; pruned below if empty
   }
+  if (shipCft) keep.add('chrome-for-testing');
 
   for (const entry of fs.readdirSync(kernelsDir)) {
     if (keep.has(entry)) continue;
@@ -201,6 +214,15 @@ function pruneForeignKernelSeeds(resourceApp, platform = process.platform, arch 
     for (const name of ['windows-x64', 'macos-arm64', 'wayfern']) {
       const p = path.join(kernelsDir, name);
       if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true });
+    }
+  }
+  const cftDir = path.join(kernelsDir, 'chrome-for-testing');
+  if (!shipCft) {
+    if (fs.existsSync(cftDir)) fs.rmSync(cftDir, { recursive: true, force: true });
+  } else if (isLinux && fs.existsSync(cftDir)) {
+    const cftKeep = new Set(['chrome-linux64', 'kernel.json']);
+    for (const entry of fs.readdirSync(cftDir)) {
+      if (!cftKeep.has(entry)) fs.rmSync(path.join(cftDir, entry), { recursive: true, force: true });
     }
   }
 
@@ -238,11 +260,13 @@ const OPENBROWSER_148_LEGACY_REL = path.join(
 function assertKernelPackagePolicy(resourceApp) {
   const shipOpenBrowser = shouldShipOpenBrowser148Kernel();
   const shipWayfern = shouldShipIntegratedWayfern();
+  const shipCft = shouldShipChromeForTesting();
   const kernelsDir = path.join(resourceApp, 'kernels');
   const openBrowserBin = fs.existsSync(path.join(resourceApp, OPENBROWSER_148_REL))
     ? path.join(resourceApp, OPENBROWSER_148_REL)
     : path.join(resourceApp, OPENBROWSER_148_LEGACY_REL);
   const integrated = findBundledWayfernKernel([resourceApp, path.join(resourceApp, 'kernels')]);
+  const cft = findBundledChromeForTesting([resourceApp, path.join(resourceApp, 'kernels')]);
   if (fs.existsSync(path.join(resourceApp, 'bundled-kernels'))) {
     throw new Error('[package] FATAL: legacy bundled-kernels/ must not ship (use kernels/{platform} seeds)');
   }
@@ -291,6 +315,18 @@ function assertKernelPackagePolicy(resourceApp) {
       }
     }
   }
+  if (shipCft) {
+    if (!cft) {
+      throw new Error('[package] FATAL: Linux package missing Chrome for Testing under kernels/chrome-for-testing/chrome-linux64');
+    }
+    try {
+      fs.accessSync(cft.binary, fs.constants.X_OK);
+    } catch (_) {
+      throw new Error(`[package] FATAL: Linux Chrome for Testing is not executable: ${cft.binary}`);
+    }
+  } else if (fs.existsSync(path.join(kernelsDir, 'chrome-for-testing'))) {
+    throw new Error('[package] FATAL: Chrome for Testing present on a package without the Linux kernel variant');
+  }
 }
 
 function copyAppResources(resourceApp) {
@@ -322,6 +358,7 @@ function copyAppResources(resourceApp) {
 
   console.log('[package] kernel policy: openbrowser-148=' + shouldShipOpenBrowser148Kernel()
     + ' integrated-kernel=' + shouldShipIntegratedWayfern()
+    + ' chrome-for-testing=' + shouldShipChromeForTesting()
     + ' auto-download=false'
     + ' arch=' + packageArch + ' platform=' + process.platform);
   assertKernelPackagePolicy(resourceApp);
@@ -480,7 +517,6 @@ function packageWindows() {
   console.log('便携版目录：' + packageRoot);
 }
 
-
 function readProductVersion() {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8'));
@@ -514,6 +550,70 @@ function signMacAppBundle(appBundle) {
     throw new Error('codesign verify failed: ' + String(verify.stderr || verify.stdout || verify.status));
   }
   console.log('[package] codesign verify ok');
+}
+
+function packageLinux() {
+  if (!['x86_64', 'x64', 'amd64'].includes(String(packageArch).toLowerCase())) {
+    throw new Error(`Linux packaging currently supports x86_64 only (requested ${packageArch})`);
+  }
+  if (bundleKernelVariantEnabled()) {
+    const kernel = path.join(appRoot, 'kernels', 'chrome-for-testing', 'chrome-linux64', 'chrome');
+    if (!fs.existsSync(kernel)) {
+      throw new Error('Linux kernel seed missing. Run npm run prepare:linux-kernel before npm run package:portable.');
+    }
+    run(process.execPath, [path.join(__dirname, 'prepare-bundled-kernel.js')]);
+  }
+
+  const resolvedHostDist = ensureResolvedHostDist();
+  const hostBinary = findHostLinuxBinary(resolvedHostDist);
+  const packageRoot = path.join(distRoot, packageArtifactStem());
+  const runtimeRoot = path.join(packageRoot, 'runtime');
+  const resourceApp = path.join(runtimeRoot, 'resources', 'app');
+  removeIfExists(packageRoot);
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  copyRecursive(resolvedHostDist, runtimeRoot);
+
+  const mainBinary = path.join(runtimeRoot, 'OpenBrowser');
+  const copiedHostBinary = path.join(runtimeRoot, path.basename(hostBinary));
+  if (path.resolve(copiedHostBinary) !== path.resolve(mainBinary)) fs.renameSync(copiedHostBinary, mainBinary);
+  fs.chmodSync(mainBinary, 0o755);
+  copyAppResources(resourceApp);
+
+  const repoRoot = path.resolve(appRoot, '..');
+  for (const document of ['README.md', 'DISCLAIMER.md', 'LICENSE']) {
+    const source = path.join(repoRoot, document);
+    if (fs.existsSync(source)) fs.copyFileSync(source, path.join(packageRoot, document));
+  }
+  const notice = path.join(appRoot, 'THIRD-PARTY-NOTICES.md');
+  if (fs.existsSync(notice)) fs.copyFileSync(notice, path.join(packageRoot, 'THIRD-PARTY-NOTICES.md'));
+
+  const launcher = path.join(packageRoot, 'OpenBrowser');
+  writeText(launcher, [
+    '#!/bin/sh',
+    'set -eu',
+    'ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"',
+    'exec "$ROOT/runtime/OpenBrowser" "$@"',
+    '',
+  ].join('\n'));
+  fs.chmodSync(launcher, 0o755);
+  writeText(path.join(packageRoot, 'README-Ubuntu.txt'), [
+    'OpenBrowser Ubuntu x86_64 portable package',
+    '',
+    '1. Extract the complete tar.gz archive and run ./OpenBrowser as a normal desktop user.',
+    '2. Do not run as root or via sudo: profile data belongs to the desktop user.',
+    '3. This package includes Chrome for Testing under kernels/chrome-for-testing/chrome-linux64; it never downloads a browser kernel at runtime.',
+    '4. Ubuntu desktop dependencies (install when missing):',
+    '   sudo apt-get install libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcups2 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2',
+    '5. If audio support is missing, install libasound2 (Ubuntu 22.04) or libasound2t64 (Ubuntu 24.04+).',
+    '6. Native Chrome UI input mirroring is Windows-only; Ubuntu uses CDP page synchronization.',
+    '',
+  ].join('\n'));
+
+  const archive = path.join(distRoot, `${packageArtifactStem()}.tar.gz`);
+  removeIfExists(archive);
+  run('tar', ['-czf', archive, '-C', distRoot, path.basename(packageRoot)]);
+  console.log('Ubuntu portable archive: ' + archive);
+  console.log('Ubuntu package directory: ' + packageRoot);
 }
 
 function packageMac() {
@@ -635,6 +735,7 @@ function packageMac() {
 
 if (process.platform === 'win32') packageWindows();
 else if (process.platform === 'darwin') packageMac();
+else if (process.platform === 'linux') packageLinux();
 else {
   console.error('当前平台暂不支持 package:portable：' + process.platform);
   process.exit(1);
