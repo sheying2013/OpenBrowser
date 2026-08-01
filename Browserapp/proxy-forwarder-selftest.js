@@ -1,6 +1,12 @@
 const assert = require('assert');
 const net = require('net');
-const { parseProxy, displayProxy, startAuthenticatedProxy } = require('./proxy-forwarder');
+const {
+  parseProxy,
+  displayProxy,
+  startAuthenticatedProxy,
+  normalizeIpLookupChannel,
+  normalizeIfconfigMeResult,
+} = require('./proxy-forwarder');
 
 function listen(server) {
   return new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve(server.address().port)); });
@@ -32,6 +38,11 @@ async function run() {
   assert.strictEqual(socks.authenticated, true);
   assert.strictEqual(parseProxy('socks5://127.0.0.1:1080').chromeUrl, 'socks5://127.0.0.1:1080');
   assert.throws(() => parseProxy('bad-format'));
+  assert.strictEqual(normalizeIpLookupChannel('ifconfig.me'), 'ifconfig-me');
+  assert.strictEqual(normalizeIpLookupChannel('unknown-provider'), 'ip-api');
+  assert.strictEqual(normalizeIfconfigMeResult('203.0.113.8\n').ip, '203.0.113.8');
+  assert.strictEqual(normalizeIfconfigMeResult('2001:db8::8').source, 'ifconfig.me');
+  assert.throws(() => normalizeIfconfigMeResult('<html>not an IP</html>'));
 
   let receivedHeader = '';
   const upstream = net.createServer((socket) => {
@@ -57,7 +68,7 @@ async function run() {
   const echoed = await until(client, Buffer.from('PING'));
   assert(echoed.includes(Buffer.from('PING')));
   client.destroy(); await forwarder.close(); await new Promise((resolve) => upstream.close(resolve));
-  console.log('PROXY_FORWARDER_SELFTEST_OK formats=4 auth_header=1 connect_tunnel=1 echo=1 credentials_masked=1');
+  console.log('PROXY_FORWARDER_SELFTEST_OK formats=4 ifconfig_ip=1 auth_header=1 connect_tunnel=1 echo=1 credentials_masked=1');
 }
 
 run().catch((error) => { console.error(error); process.exitCode = 1; });
