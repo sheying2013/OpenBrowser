@@ -186,7 +186,52 @@ class LocalApiServer {
       return ok({ list, page: 1, page_size: list.length });
     }
 
-    if (pathname === '/api/v1/browser/start' || pathname === '/api/v2/browser-profile/start' || pathname === '/api/browser/start') {
+    if (pathname === '/api/v1/user/create' || pathname === '/api/v2/browser-profile/create' || pathname === '/api/profiles/create') {
+      if (!this.engine) return fail('profile engine unavailable');
+      const body = input && typeof input.profile === 'object' ? { ...input, ...input.profile } : input;
+      const existingIds = new Set(this.engine.profiles ? [...this.engine.profiles.keys()] : []);
+      let id = String(body.user_id || body.profile_id || body.id || '').trim();
+      if (!id) {
+        do { id = 'ob-' + Date.now().toString(36) + '-' + crypto.randomBytes(5).toString('hex'); } while (existingIds.has(id));
+      }
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return fail('invalid profile id');
+      if (existingIds.has(id)) return fail('profile already exists');
+      const numbers = this.engine.profiles ? [...this.engine.profiles.values()].map((item) => Number(item.number)).filter((n) => Number.isInteger(n) && n > 0) : [];
+      const number = Number.isInteger(Number(body.number)) && Number(body.number) > 0 ? Number(body.number) : ((Math.max(0, ...numbers) || 0) + 1);
+      const rawProxy = String(body.proxy || '').trim();
+      const userProxy = body.user_proxy_config && typeof body.user_proxy_config === 'object' ? body.user_proxy_config : {};
+      const proxyType = String(userProxy.proxy_type || 'http').toLowerCase();
+      const proxyHost = String(userProxy.proxy_host || '').trim();
+      const proxyPort = String(userProxy.proxy_port || '').trim();
+      const proxyUser = String(userProxy.proxy_user || '');
+      const proxyPassword = String(userProxy.proxy_password || '');
+      const proxy = rawProxy || (proxyHost && proxyPort ? (proxyType === 'socks' ? 'socks5' : proxyType) + '://' + (proxyUser ? encodeURIComponent(proxyUser) + ':' + encodeURIComponent(proxyPassword) + '@' : '') + proxyHost + ':' + proxyPort : 'Direct');
+      const profile = {
+        ...body,
+        id, number,
+        name: String(body.name || body.title || ('Environment ' + number)),
+        title: String(body.title || body.name || ('Environment ' + number)),
+        language: String(body.language || 'en-US'),
+        networkMode: body.networkMode || (/^(direct|offline|none)$/i.test(proxy) ? 'direct' : 'proxy'),
+        proxy,
+        privacy: {
+          ...(body.privacy && typeof body.privacy === 'object' ? body.privacy : {}),
+        },
+      };
+      this.engine.syncProfiles([profile]);
+      if (typeof this.engine.persist === 'function') await this.engine.persist();
+      const created = this.engine.profiles.get(id) || profile;
+      return ok({ user_id: id, profile_id: id, id, profile: created });
+    }
+
+    if (pathname === '/api/v1/user/delete' || pathname === '/api/v2/browser-profile/delete' || pathname === '/api/profiles/delete') {
+      if (!this.engine) return fail('profile engine unavailable');
+      const rawIds = Array.isArray(input.user_ids) ? input.user_ids : (Array.isArray(input.profile_ids) ? input.profile_ids : (Array.isArray(input.ids) ? input.ids : [input.user_id || input.profile_id || input.id]));
+      const ids = rawIds.map((value) => String(value || '').trim()).filter(Boolean);
+      if (!ids.length) return fail('profile id required');
+      const result = await this.engine.deleteProfiles(ids, input.delete_data !== false && input.deleteData !== false);
+      return ok(result);
+    }    if (pathname === '/api/v1/browser/start' || pathname === '/api/v2/browser-profile/start' || pathname === '/api/browser/start') {
       const id = String(input.user_id || input.profile_id || input.id || '');
       const profile = this.engine.profiles.get(id);
       if (!profile) return fail('profile not found');
