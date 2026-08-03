@@ -218,9 +218,18 @@ class LocalApiServer {
           ...(body.privacy && typeof body.privacy === 'object' ? body.privacy : {}),
         },
       };
-      this.engine.syncProfiles([profile]);
+      // The engine's sanitizer may still reject structurally odd profiles (e.g. a
+      // non-string name slipped past String() coercion). Surface that as a 400
+      // request error rather than an internal 500 from syncProfiles' throw.
+      let created;
+      try {
+        created = this.engine.sanitizeProfile(profile);
+        this.engine.syncProfiles([created]);
+      } catch (error) {
+        return fail(`invalid profile: ${error.message}`, 400);
+      }
       if (typeof this.engine.persist === 'function') await this.engine.persist();
-      const created = this.engine.profiles.get(id) || profile;
+      created = this.engine.profiles.get(id) || created;
       return ok({ user_id: id, profile_id: id, id, profile: created });
     }
 
@@ -229,9 +238,18 @@ class LocalApiServer {
       const rawIds = Array.isArray(input.user_ids) ? input.user_ids : (Array.isArray(input.profile_ids) ? input.profile_ids : (Array.isArray(input.ids) ? input.ids : [input.user_id || input.profile_id || input.id]));
       const ids = rawIds.map((value) => String(value || '').trim()).filter(Boolean);
       if (!ids.length) return fail('profile id required');
-      const result = await this.engine.deleteProfiles(ids, input.delete_data !== false && input.deleteData !== false);
+      let result;
+      try {
+        result = await this.engine.deleteProfiles(ids, input.delete_data !== false && input.deleteData !== false);
+      } catch (error) {
+        // e.g. isolation root validation rejection while removing profile data —
+        // surface as a request error, not an internal 500.
+        return fail(`delete failed: ${error.message}`, 400);
+      }
       return ok(result);
-    }    if (pathname === '/api/v1/browser/start' || pathname === '/api/v2/browser-profile/start' || pathname === '/api/browser/start') {
+    }
+
+    if (pathname === '/api/v1/browser/start' || pathname === '/api/v2/browser-profile/start' || pathname === '/api/browser/start') {
       const id = String(input.user_id || input.profile_id || input.id || '');
       const profile = this.engine.profiles.get(id);
       if (!profile) return fail('profile not found');
