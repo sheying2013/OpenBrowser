@@ -93,7 +93,7 @@
           </div>
           <div class="profile-selection-bar" id="profile-selection-bar" hidden>
             <strong id="profile-selection-count">已选择 0 个环境</strong>
-            <div class="selection-actions"><button class="outline" id="start-selected"><i data-lucide="play"></i><span data-i18n="profiles.startSelected">启动选中</span></button><button class="outline" id="stop-selected"><i data-lucide="square"></i><span data-i18n="profiles.stopSelected">停止选中</span></button><button class="outline" id="batch-update"><i data-lucide="refresh-cw"></i><span data-i18n="profiles.batchNetwork">切换网络/IP</span></button><button class="outline" id="batch-set-direct" type="button" title="将选中环境改为本地直连"><i data-lucide="wifi"></i><span data-i18n="profiles.direct">本地直连</span></button>
+            <div class="selection-actions"><button class="outline" id="start-selected"><i data-lucide="play"></i><span data-i18n="profiles.startSelected">启动选中</span></button><button class="outline" id="stop-selected"><i data-lucide="square"></i><span data-i18n="profiles.stopSelected">停止选中</span></button><button class="outline" id="copy-selected" type="button" title="复制选中环境的配置，不复制 Cookie 和账号密码"><i data-lucide="copy"></i><span>复制环境</span></button><button class="outline" id="batch-update"><i data-lucide="refresh-cw"></i><span data-i18n="profiles.batchNetwork">切换网络/IP</span></button><button class="outline" id="batch-set-direct" type="button" title="将选中环境改为本地直连"><i data-lucide="wifi"></i><span data-i18n="profiles.direct">本地直连</span></button>
               <label class="batch-group-assign"><span data-i18n="profiles.moveGroup">移到分组</span>
                 <select id="batch-assign-group"></select>
               </label>
@@ -1110,6 +1110,7 @@
       </select></label>
     </div>
     <label>所属分组<select id="profile-create-group" name="groupId"></select></label>
+    <label>打开指定网页（可选）<input name="startUrl" type="text" inputmode="url" placeholder="example.com 或 https://example.com" autocomplete="off" spellcheck="false"></label>
     <div class="network-mode-block">
       <span class="network-mode-label">网络模式</span>
       <div class="segmented" id="create-network-mode" role="radiogroup" aria-label="网络模式">
@@ -1151,6 +1152,12 @@
       <option value="id-ID">Bahasa Indonesia</option>
     </select></label><label>标签<input id="batch-add-tag" value="批量创建" maxlength="40"></label></div>
     <label>所属分组<select id="batch-add-group"></select></label>
+    <label>偏好设置
+      <select id="batch-add-template">
+        <option value="">使用新环境默认偏好</option>
+      </select>
+      <small class="field-hint">可沿用现有环境的指纹、启动页和高级偏好；网络、语言、标签与分组仍按本窗口设置。</small>
+    </label>
     <div class="network-mode-block">
       <span class="network-mode-label">网络模式</span>
       <div class="segmented" id="batch-add-network-mode" role="radiogroup" aria-label="网络模式">

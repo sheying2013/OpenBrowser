@@ -257,11 +257,20 @@ internal static class NativeInputMirror
         string observed = null;
         string pending = null;
         int changedAt = 0;
+        bool popupActive = false;
         while (running)
         {
             try
             {
                 IntPtr master = FindChromeWindow(masterPid);
+                IntPtr foreground = GetForegroundWindow();
+                bool nextPopupActive = foreground != IntPtr.Zero && foreground != master && IsChromeWidgetForPid(foreground, masterPid);
+                if (nextPopupActive != popupActive)
+                {
+                    popupActive = nextPopupActive;
+                    Console.WriteLine("NATIVE_POPUP_ACTIVE=" + (popupActive ? "1" : "0"));
+                    Console.Out.Flush();
+                }
                 AutomationElement editor = CachedTopEditor(master);
                 if (editor != null && editor.Current.HasKeyboardFocus)
                 {
@@ -277,7 +286,7 @@ internal static class NativeInputMirror
                             if (slaveEditor != null && ReadEditorValue(slaveEditor) != pending) { WriteEditorValue(slaveEditor, pending); RestoreMasterNoDelay(); }
                         }
                         pending = null;
-                        if (GetForegroundWindow() != master) FocusWindow(master);
+                        if (GetForegroundWindow() != master && !MasterPopupIsForeground(master)) FocusWindow(master);
                     }
                 }
                 else { observed = null; pending = null; }
@@ -353,7 +362,7 @@ internal static class NativeInputMirror
     private static void RestoreMasterNoDelay()
     {
         IntPtr master = FindChromeWindow(masterPid);
-        if (master == IntPtr.Zero || IsProcessForeground(masterPid)) return;
+        if (master == IntPtr.Zero || IsProcessForeground(masterPid) || MasterPopupIsForeground(master)) return;
         IntPtr foreground = GetForegroundWindow();
         uint ignoredForegroundPid;
         uint foregroundThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, out ignoredForegroundPid);
@@ -425,6 +434,9 @@ internal static class NativeInputMirror
                 else if (!item.Keyboard && delayClick && (item.Message == WM_LBUTTONDOWN || item.Message == WM_RBUTTONDOWN || item.Message == WM_MBUTTONDOWN)) Thread.Sleep(delayRandom.Next(clickMinMs, clickMaxMs + 1));
                 IntPtr master = FindChromeWindow(masterPid);
                 if (master == IntPtr.Zero) continue;
+                // A delayed key/mouse item may reach the worker after a native menu or
+                // picker has opened. Never activate another top-level window in that state.
+                if (!item.PostMessageOnly && MasterPopupIsForeground(master)) continue;
                 List<IntPtr> targets = new List<IntPtr>();
                 foreach (int pid in slavePids)
                 {
@@ -623,6 +635,12 @@ internal static class NativeInputMirror
 
         return owner == (uint)pid;
 
+    }
+
+    private static bool MasterPopupIsForeground(IntPtr master)
+    {
+        IntPtr foreground = GetForegroundWindow();
+        return foreground != IntPtr.Zero && foreground != master && IsChromeWidgetForPid(foreground, masterPid);
     }
 
     private static bool IsChromeWidgetForPid(IntPtr window, int pid)

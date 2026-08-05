@@ -1405,6 +1405,31 @@ function buildInjectionScript(fp) {
     for (const [key, value] of Object.entries({ screenX: s.screenX, screenY: s.screenY, screenLeft: s.screenX, screenTop: s.screenY })) {
       try { Object.defineProperty(window, key, nativeAccessor(key, { configurable: true, get: () => value || 0 })); } catch (_) {}
     }
+    // Some native anti-detect kernels pin Window/VisualViewport dimensions to the
+    // fingerprint screen size. CSS layout still resizes, but JS sees the stale value,
+    // breaking responsive sites and leaving fixed-width content after window resize.
+    // Keep screen.* spoofed while exposing the live desktop layout viewport.
+    const liveViewportSize = (axis, fallback) => {
+      try {
+        const root = document && document.documentElement;
+        const value = axis === 'width' ? root?.clientWidth : root?.clientHeight;
+        if (Number(value) > 0) return Number(value);
+      } catch (_) {}
+      return fallback;
+    };
+    const initialInnerWidth = Number(window.innerWidth) || Number(s.availWidth) || Number(s.width) || 1;
+    const initialInnerHeight = Number(window.innerHeight) || Number(s.availHeight) || Number(s.height) || 1;
+    try { Object.defineProperty(window, 'innerWidth', nativeAccessor('innerWidth', { configurable: true, get: () => liveViewportSize('width', initialInnerWidth) })); } catch (_) {}
+    try { Object.defineProperty(window, 'innerHeight', nativeAccessor('innerHeight', { configurable: true, get: () => liveViewportSize('height', initialInnerHeight) })); } catch (_) {}
+    try {
+      const viewport = window.visualViewport;
+      if (viewport) {
+        const initialVisualWidth = Number(viewport.width) || initialInnerWidth;
+        const initialVisualHeight = Number(viewport.height) || initialInnerHeight;
+        Object.defineProperty(viewport, 'width', nativeAccessor('width', { configurable: true, get: () => liveViewportSize('width', initialVisualWidth) }));
+        Object.defineProperty(viewport, 'height', nativeAccessor('height', { configurable: true, get: () => liveViewportSize('height', initialVisualHeight) }));
+      }
+    } catch (_) {}
   } catch (_) {}
 
   // --- canvas ---
@@ -2206,14 +2231,10 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
       userAgentMetadata: override.userAgentMetadata,
     });
   }
-  if (fp.screen) {
-    await softOverride('Emulation.setDeviceMetricsOverride', {
-      width: fp.screen.width,
-      height: fp.screen.height,
-      deviceScaleFactor: fp.screen.devicePixelRatio || 1,
-      mobile: false,
-    });
-  }
+  // Desktop windows must retain Chromium's live viewport. A fixed device-metrics
+  // override leaves the renderer at the fingerprint's initial size after resize,
+  // producing a large blank region. screen.* remains spoofed by the document script.
+  if (fp.screen) await softOverride('Emulation.clearDeviceMetricsOverride', {});
   if (timezone) {
     await softOverride('Emulation.setTimezoneOverride', { timezoneId: timezone });
   }

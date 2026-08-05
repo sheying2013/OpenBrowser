@@ -386,6 +386,7 @@ class BrowserEngine {
       userAgent: String(value.userAgent || '').replace(/[\r\n]/g, ' ').slice(0, 1000), cookies: String(value.cookies || '').slice(0, 500000), note: String(value.note || '').slice(0, 2000),
       exitIp: String(value.exitIp || '').slice(0, 80), exitCountryCode: String(value.exitCountryCode || '').slice(0, 4), exitTimezone: String(value.exitTimezone || '').slice(0, 100),
       exitLatitude: finite(value.exitLatitude), exitLongitude: finite(value.exitLongitude),
+      exitCheckedAt: String(value.exitCheckedAt || '').slice(0, 40),
       exitLatencyMs: finite(value.exitLatencyMs),
       exitNetworkType: String(value.exitNetworkType || '').slice(0, 40),
       platform: {
@@ -580,6 +581,21 @@ class BrowserEngine {
               password: previous.platform?.password || '',
               totpSecret: previous.platform?.totpSecret || '',
             },
+          });
+        }
+        // Renderer storage intentionally omits runtime exit details. Keep the engine's
+        // last successful result unless the proxy itself changed (which invalidates it).
+        if (previous.proxy === merged.proxy && previous.exitIp && !profile.exitIp) {
+          merged = this.sanitizeProfile({
+            ...merged,
+            exitIp: previous.exitIp,
+            exitCountryCode: previous.exitCountryCode,
+            exitTimezone: previous.exitTimezone,
+            exitLatitude: previous.exitLatitude,
+            exitLongitude: previous.exitLongitude,
+            exitCheckedAt: previous.exitCheckedAt,
+            exitLatencyMs: previous.exitLatencyMs,
+            exitNetworkType: previous.exitNetworkType,
           });
         }
       }
@@ -1232,6 +1248,10 @@ class BrowserEngine {
         profile.exitLatitude = network.latitude ?? profile.exitLatitude;
         profile.exitLongitude = network.longitude ?? profile.exitLongitude;
         profile.exitCheckedAt = network.checkedAt || profile.exitCheckedAt;
+        profile.exitLatencyMs = network.latencyMs ?? profile.exitLatencyMs;
+        profile.exitNetworkType = network.networkType || profile.exitNetworkType;
+        this.profiles.set(profile.id, this.sanitizeProfile(profile));
+        await this.persist();
       }
       return network;
     } catch (error) {
@@ -2557,7 +2577,10 @@ class BrowserEngine {
   async checkProxy(raw, options = {}) {
     const profile = this.sanitizeProfile(raw);
     const network = await this.testProxy(profile, options);
-    const applied = this.applyNetworkToProfile(profile, network, { persist: Boolean(options.persist) });
+    const applied = this.applyNetworkToProfile(profile, network, { persist: false });
+    // A successful manual check may be followed immediately by app shutdown. Do not
+    // acknowledge it until the durable engine state contains the new exit details.
+    if (options.persist) await this.persist();
     return {
       ...network,
       appliedFingerprint: applied.patch,
