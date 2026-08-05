@@ -58,7 +58,7 @@ class LiveSyncController extends LiveSyncV4 {
     this.desiredUrlMap = new Map();
     this.extensionMap = new Map(); this.extensionConnections = new Map();
     this.mappingReady = false;
-    this.activeMasterTab = null; this.lastWindowSync = 0; this.lastHealthCheck = 0; this.nativeInputMirror = null;
+    this.activeMasterTab = null; this.lastWindowSync = 0; this.lastHealthCheck = 0; this.nativeInputMirror = null; this.nativePopupActive = false;
     this.nativeRestartTimer = null; this.nativeRestartCount = 0; this.nativeDevToolsMode = false;
     this.syncSettings = { keyboard: true, click: true, scroll: true, track: true, delayClick: false, delayInput: false, inputMinMs: 300, inputMaxMs: 300, clickMinMs: 100, clickMaxMs: 300 };
   }
@@ -132,6 +132,8 @@ class LiveSyncController extends LiveSyncV4 {
       for (const line of String(chunk).split(/\r?\n/)) {
         const match = line.match(/^DEVTOOLS_MODE=([01])$/);
         if (match) { this.nativeDevToolsMode = match[1] === '1'; this.emit({ type: 'native-devtools', active: this.nativeDevToolsMode }); }
+        const popup = line.match(/^NATIVE_POPUP_ACTIVE=([01])$/);
+        if (popup) { this.nativePopupActive = popup[1] === '1'; this.emit({ type: 'native-popup', active: this.nativePopupActive }); }
       }
     });
     child.once('error', (error) => {
@@ -157,7 +159,7 @@ class LiveSyncController extends LiveSyncV4 {
   stopNativeInputMirror(resetAttempts = true) {
     if (this.nativeRestartTimer) clearTimeout(this.nativeRestartTimer); this.nativeRestartTimer = null;
     if (resetAttempts) this.nativeRestartCount = 0;
-    const child = this.nativeInputMirror; this.nativeInputMirror = null; this.nativeDevToolsMode = false;
+    const child = this.nativeInputMirror; this.nativeInputMirror = null; this.nativeDevToolsMode = false; this.nativePopupActive = false;
     if (child && !child.killed) { try { child.kill(); } catch (_) {} }
   }
 
@@ -444,6 +446,12 @@ class LiveSyncController extends LiveSyncV4 {
   }
 
   async activateMapped(masterTabId) {
+    // Target.activateTarget dismisses native menus/pickers. The bridge reports the
+    // short interval in which a separate Chrome popup owns the foreground.
+    if (process.platform === 'win32' && this.nativePopupActive) {
+      this.emit({ type: 'live-sync-tab', masterTabId, targets: this.slaves.length, native: true });
+      return;
+    }
     await Promise.all(this.slaves.map(async (slave) => { const tab = await this.slaveTab(slave, masterTabId); if (tab) await cdp.activateTab(slave.port, tab.id); }));
     this.emit({ type: 'live-sync-tab', masterTabId, targets: this.slaves.length });
   }
@@ -490,6 +498,9 @@ class LiveSyncController extends LiveSyncV4 {
   async syncWindowGeometry() {
     // Mirror only size (for coordinate mapping), never left/top — so tile/cascade layouts stay put.
     if (!this.master || Date.now() - this.lastWindowSync < 2800) return; this.lastWindowSync = Date.now();
+    // Resizing a Chrome top-level window closes native menus, date pickers and extension
+    // popups. Wait until the interaction has settled and no popup target is present.
+    if (this.nativePopupActive || this.extensionConnections.size) return;
     const source = await cdp.windowForPort(this.master.item.port); const bounds = source.bounds || {}; if (bounds.windowState && bounds.windowState !== 'normal') return;
     if (!Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) return;
     await Promise.all(this.slaves.map(async (slave) => {

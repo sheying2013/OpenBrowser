@@ -1645,7 +1645,7 @@ app.whenReady().then(async () => {
   registerTrustedIpc('profiles:clear-cache-cookies', (_event, id) => engine.clearProfileCacheAndCookies(id));
   registerTrustedIpc('profiles:status', () => engine.status());
   registerTrustedIpc('profiles:test-proxy', (_event, profile) => engine.testProxy(profile));
-  registerTrustedIpc('profiles:check-proxy', (_event, profile) => engine.checkProxy(profile));
+  registerTrustedIpc('profiles:check-proxy', (_event, profile) => engine.checkProxy(profile, { persist: true }));
 
   registerTrustedIpc('extensions:list', () => engine.listExtensions());
   registerTrustedIpc('extensions:add-folder', async () => {

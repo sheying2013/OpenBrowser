@@ -444,6 +444,62 @@ function normalizeProfileSettings(profile) {
   };
 }
 
+function normalizeOptionalWebUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^about:(blank|newtab)$/i.test(raw)) return raw.toLowerCase();
+  const normalized = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+  let parsed;
+  try { parsed = new URL(normalized); } catch (_) { throw new Error(tx('打开网页地址无效')); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error(tx('打开网页仅支持 HTTP 或 HTTPS 地址'));
+  return parsed.href;
+}
+
+function cloneProfilePreferences(profile) {
+  const value = normalizeProfileSettings(profile);
+  const privacy = structuredClone(value.privacy || {});
+  // Preferences may be shared, but an anti-detect identity must not be duplicated.
+  // The new profile id deterministically creates its own marks/snapshots on first start.
+  delete privacy.fingerprint;
+  delete privacy.batterySnapshot;
+  delete privacy.mediaLabels;
+  return {
+    os: value.os,
+    userAgent: value.userAgent,
+    width: value.width,
+    height: value.height,
+    note: value.note,
+    platform: {
+      type: value.platform?.type || 'other',
+      startUrl: value.platform?.startUrl || '',
+      username: '',
+      password: '',
+      totpSecret: '',
+    },
+    privacy,
+    advanced: structuredClone(value.advanced || {}),
+  };
+}
+
+function mergeEngineExitState(values) {
+  if (!Array.isArray(values) || !values.length) return false;
+  const byId = new Map(values.map((item) => [item.id, item]));
+  const exitFields = ['exitIp', 'exitCountryCode', 'exitTimezone', 'exitLatitude', 'exitLongitude', 'exitCheckedAt', 'exitLatencyMs', 'exitNetworkType'];
+  let changed = false;
+  ui.profiles = ui.profiles.map((local) => {
+    const remote = byId.get(local.id);
+    if (!remote?.exitIp) return local;
+    const next = { ...local };
+    for (const field of exitFields) {
+      if (remote[field] === undefined || remote[field] === null || remote[field] === '') continue;
+      if (next[field] !== remote[field]) { next[field] = remote[field]; changed = true; }
+    }
+    return next;
+  });
+  if (changed) save();
+  return changed;
+}
+
 function loadUi() {
   try {
     const value = JSON.parse(localStorage.getItem(UI_KEY));
@@ -2654,7 +2710,7 @@ function visibleProfilePageIds() {
 }
 
 async function refreshStatus() {
-  engineProfiles = await window.ops.profileStatus(); renderProfiles();
+  engineProfiles = await window.ops.profileStatus(); mergeEngineExitState(engineProfiles); renderProfiles();
 }
 
 // --- Render/IPC coalescing (perf) --------------------------------------------------
@@ -2676,7 +2732,7 @@ function scheduleStatusRefresh() {
   if (__statusRefreshTimer) return;
   __statusRefreshTimer = setTimeout(async () => {
     __statusRefreshTimer = 0;
-    try { engineProfiles = await window.ops.profileStatus(); } catch (_) {}
+    try { engineProfiles = await window.ops.profileStatus(); mergeEngineExitState(engineProfiles); } catch (_) {}
     scheduleRenderProfiles();
   }, 120);
 }
@@ -3508,6 +3564,7 @@ function openCreateProfileDialog() {
     form.elements.name.value = String(number);
     form.elements.name.readOnly = true;
   }
+  if (form?.elements?.startUrl) form.elements.startUrl.value = '';
   $('#profile-dialog')?.showModal();
 }
 $('#create-profile').addEventListener('click', openCreateProfileDialog); $('#quick-create').addEventListener('click', openCreateProfileDialog);
@@ -3570,6 +3627,9 @@ $('#profile-form').addEventListener('submit', async (event) => {
   event.preventDefault(); if (event.submitter?.value === 'cancel') return $('#profile-dialog').close();
   const form = event.currentTarget; const data = new FormData(form); const number = nextProfileNumber(); const previousNext = ui.nextProfileNumber;
   const groupId = String(data.get('groupId') || $('#profile-create-group')?.value || UNGROUPED_ID);
+  let startUrl = '';
+  try { startUrl = normalizeOptionalWebUrl(data.get('startUrl')); }
+  catch (error) { return toast(error.message); }
   const networkMode = document.querySelector('input[name="create-network"]:checked')?.value || 'direct';
   let proxy = 'Direct';
   if (networkMode === 'proxy') {
@@ -3592,6 +3652,7 @@ $('#profile-form').addEventListener('submit', async (event) => {
     groupId,
     os: 'Windows',
     location: 'Local',
+    platform: { type: 'other', startUrl },
     // Browser UI language defaults to exit-IP country; fixed locale is optional in editor.
     // New profiles get a coherent device persona; existing ones are left as they were.
     privacy: { languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona' },
@@ -3718,6 +3779,11 @@ $('#batch-add').addEventListener('click', () => {
   const directRadio = document.querySelector('input[name="batch-add-network"][value="direct"]');
   if (directRadio) directRadio.checked = true;
   const fields = $('#batch-add-proxy-fields'); if (fields) fields.hidden = true;
+  const template = $('#batch-add-template');
+  if (template) {
+    template.replaceChildren(new Option(tx('使用新环境默认偏好'), ''));
+    for (const profile of ui.profiles) template.append(new Option(`环境 ${displayProfileNumber(profile)}${profile.title ? ' · ' + profile.title : ''}`, profile.id));
+  }
   $('#batch-add-dialog').showModal();
 });
 $('#batch-add-form').addEventListener('submit', async (event) => {
@@ -3725,6 +3791,9 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
   const count = Number.parseInt($('#batch-add-count').value, 10); const start = nextProfileNumber(); const previousNext = ui.nextProfileNumber;
   const language = $('#batch-add-language').value; const tag = $('#batch-add-tag').value.trim() || '批量创建';
   const groupId = $('#batch-add-group')?.value || UNGROUPED_ID;
+  const templateId = $('#batch-add-template')?.value || '';
+  const templateProfile = templateId ? (profileEngine(templateId)?.id ? profileEngine(templateId) : ui.profiles.find((item) => item.id === templateId)) : null;
+  const templatePreferences = templateProfile ? cloneProfilePreferences(templateProfile) : null;
   const networkMode = document.querySelector('input[name="batch-add-network"]:checked')?.value || 'direct';
   let proxies = [];
   if (networkMode === 'proxy') {
@@ -3737,7 +3806,7 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
   const used = new Set(ui.profiles.map((item) => item.id)); const created = [];
   while (created.length < count) {
     const number = start + created.length; const id = createInternalProfileId(number, used); used.add(id);
-    created.push({ id, number, name: String(number), browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', tag, groupId, os: 'Windows', location: 'Local' });
+    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : {}), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', tag, groupId, os: templatePreferences?.os || 'Windows', location: 'Local', cookies: '' });
   }
   try {
     const verified = proxies.length ? await verifyProxyAssignments(created, proxies) : [];
@@ -3775,6 +3844,48 @@ $('#batch-delete-form').addEventListener('submit', async (event) => {
 });
 $('#start-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast(tx('请先选择环境')); for (const id of selectedProfiles) await startProfile(id); });
 $('#stop-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast(tx('请先选择环境')); for (const id of selectedProfiles) await stopProfile(id); });
+$('#copy-selected')?.addEventListener('click', async () => {
+  const sources = ui.profiles.filter((profile) => selectedProfiles.has(profile.id));
+  if (!sources.length) return toast(tx('请先选择环境'));
+  const previousNext = ui.nextProfileNumber;
+  const used = new Set(ui.profiles.map((item) => item.id));
+  const created = sources.map((local, index) => {
+    const engineProfile = engineProfiles.find((item) => item.id === local.id);
+    const source = normalizeProfileSettings(engineProfile ? { ...local, ...engineProfile } : local);
+    const number = previousNext + index;
+    const id = createInternalProfileId(number, used); used.add(id);
+    const clone = normalizeProfileSettings({
+      ...source,
+      ...cloneProfilePreferences(source),
+      id,
+      number,
+      name: String(number),
+      title: source.title ? `${source.title} 副本` : '',
+      cookies: '',
+      platform: { ...(source.platform || {}), username: '', password: '', totpSecret: '' },
+      exitIp: '', exitCountryCode: '', exitTimezone: '', exitLatitude: '', exitLongitude: '', exitCheckedAt: '', exitLatencyMs: '', exitNetworkType: '',
+    });
+    return clone;
+  });
+  try {
+    ui.profiles.push(...created); ui.nextProfileNumber = previousNext + created.length; save();
+    engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    for (let index = 0; index < sources.length; index += 1) {
+      const extensionIds = profileEngine(sources[index].id).assignedExtensions || [];
+      for (const extensionId of extensionIds) await window.ops.assignExtension(extensionId, [created[index].id], true);
+    }
+    await refreshExtensions();
+    await refreshStatus();
+    selectedProfiles = new Set(created.map((item) => item.id));
+    renderProfiles();
+    log('Batch', `复制 ${created.length} 个环境配置`);
+    toast(`已复制 ${created.length} 个环境配置（未复制 Cookie 和账号密码）`);
+  } catch (error) {
+    await window.ops.deleteProfiles(created.map((item) => item.id), false).catch(() => {});
+    ui.profiles = ui.profiles.filter((item) => !created.some((createdItem) => createdItem.id === item.id));
+    ui.nextProfileNumber = previousNext; save(); toast('复制环境失败：' + error.message);
+  }
+});
 $('#add-extension').addEventListener('click', () => $('#add-app-dialog').showModal());
 $('#close-add-app').addEventListener('click', () => $('#add-app-dialog').close());
 $('#cancel-add-app').addEventListener('click', () => $('#add-app-dialog').close());
@@ -4198,6 +4309,16 @@ async function initialize() {
         if (!remote) return local;
         return normalizeProfileSettings({
           ...local,
+          ...(remote.exitIp ? {
+            exitIp: remote.exitIp,
+            exitCountryCode: remote.exitCountryCode,
+            exitTimezone: remote.exitTimezone,
+            exitLatitude: remote.exitLatitude,
+            exitLongitude: remote.exitLongitude,
+            exitCheckedAt: remote.exitCheckedAt,
+            exitLatencyMs: remote.exitLatencyMs,
+            exitNetworkType: remote.exitNetworkType,
+          } : {}),
           cookies: local.cookies || remote.cookies || '',
           proxy: local.proxy && !/^(direct)$/i.test(local.proxy) ? local.proxy : (remote.proxy || local.proxy),
           platform: {
