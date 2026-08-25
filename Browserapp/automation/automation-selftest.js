@@ -7,6 +7,9 @@
  *   node automation/automation-selftest.js
  */
 
+// Small task-history window so pruning is exercised without creating 100+ tasks.
+process.env.OPENBROWSER_RPA_TASK_HISTORY = '5';
+
 const path = require('path');
 const os = require('os');
 const http = require('http');
@@ -15,7 +18,7 @@ const fs = require('fs');
 const { LocalApiServer } = require('./local-api-server');
 const { RpaStore } = require('./rpa-store');
 const { RpaEngine } = require('./rpa-engine');
-const { findUnsupportedSteps } = require('./rpa-engine');
+const { findUnsupportedSteps, snapshotVariables } = require('./rpa-engine');
 const { cloneBuiltinTemplates } = require('./rpa-templates-builtin');
 const { WindowSyncBridge } = require('./window-sync-bridge');
 const { AppCenter, RECOMMENDED_APPS } = require('./app-center');
@@ -201,7 +204,83 @@ async function main() {
   });
   const run = await rpa.runTask(task.id);
   assert.strictEqual(run.success, true, 'rpa wait/noop success: ' + JSON.stringify(run));
+  assert.ok(run.result && typeof run.result.variables === 'object' && !Array.isArray(run.result.variables), 'rpa result returns a variables snapshot');
+  assert.ok(Array.isArray(run.result.remarks), 'rpa result returns remarks');
+  const persistedTask = store.getTask(task.id);
+  assert.ok(persistedTask.process_result && typeof persistedTask.process_result.variables === 'object', 'finished task persists process_result.variables');
   ok('rpa-engine wait/noop task');
+
+  // Failed tasks return the values collected before the failing step as well.
+  const failedTask = await store.createTask({
+    profile_id: 'p1',
+    process_name: 'failure-result',
+    steps: [{ type: 'unsupported-step-for-selftest' }],
+    variables: { before: 'kept' },
+  });
+  const failedRun = await rpa.runTask(failedTask.id);
+  assert.strictEqual(failedRun.success, false, 'failure-result task fails');
+  assert.ok(failedRun.result && failedRun.result.variables?.before === 'kept', 'failed RPA run returns collected variables');
+  assert.ok(store.getTask(failedTask.id).process_result.variables?.before === 'kept', 'failed task persists collected variables');
+  ok('rpa-engine failure result channel');
+
+  // Result snapshots: strings capped at the result char limit, structure kept whole.
+  const circular = { name: 'loop' };
+  circular.self = circular;
+  const whole = snapshotVariables({
+    small: 'ok',
+    medium: 'x'.repeat(10000),
+    big: 'y'.repeat(30000),
+    list: Array.from({ length: 200 }, (_, index) => index),
+    circular,
+    fn: () => 1,
+  });
+  assert.strictEqual(whole.small, 'ok');
+  assert.strictEqual(whole.medium.length, 10000, 'strings under the limit are kept whole');
+  assert.ok(whole.big.startsWith('y'.repeat(20000)), 'oversized strings keep the first 20000 chars');
+  assert.ok(whole.big.includes('[truncated 10000 chars]'), 'oversized strings carry a truncation marker');
+  assert.strictEqual(whole.list.length, 200, 'arrays are never trimmed in results');
+  assert.strictEqual(whole.circular.self, '[circular]', 'circular references are neutralized');
+  assert.strictEqual(whole.fn, '[function]', 'functions are neutralized');
+  ok('rpa result snapshot caps');
+
+  // Task history pruning: pending tasks always survive, terminal tasks do not.
+  const pruneStorePath = path.join(os.tmpdir(), `openbrowser-rpa-prune-${process.pid}-${Date.now()}.json`);
+  const pruneStore = new RpaStore(pruneStorePath);
+  await pruneStore.load();
+  await pruneStore.createTasks(Array.from({ length: 8 }, (_, index) => ({
+    profile_id: 'p1', process_name: 'prune-' + index, steps: [{ type: 'noop' }],
+  })));
+  assert.strictEqual(pruneStore.listTasks().length, 8, 'pending tasks are never pruned');
+  for (const item of pruneStore.listTasks()) {
+    await pruneStore.updateTask(item.id, { status: 'success' });
+  }
+  await pruneStore.createTask({ profile_id: 'p1', process_name: 'after-prune', steps: [] });
+  assert.strictEqual(pruneStore.listTasks().length, 5, 'terminal tasks are pruned to the history limit');
+  const deleteResult = await pruneStore.deleteTask(pruneStore.listTasks()[0].id);
+  assert.strictEqual(deleteResult.success, true, 'deleteTask removes a task');
+  ok('rpa-store task history pruning');
+
+  // Store size budget: over-limit stores shed old tasks, then logs, then result payloads.
+  const budgetStorePath = path.join(os.tmpdir(), `openbrowser-rpa-budget-${process.pid}-${Date.now()}.json`);
+  const budgetStore = new RpaStore(budgetStorePath);
+  await budgetStore.load();
+  budgetStore.sizeLimitBytes = 4096;
+  const bigPayload = 'z'.repeat(6000);
+  const budgetTasks = await budgetStore.createTasks(Array.from({ length: 4 }, (_, index) => ({
+    profile_id: 'p1', process_name: 'budget-' + index, steps: [],
+  })));
+  for (const item of budgetTasks) {
+    await budgetStore.updateTask(item.id, { status: 'success', process_result: { ok: true, variables: { a: bigPayload } } });
+  }
+  await budgetStore.save();
+  const remainingBudgetTasks = budgetStore.listTasks();
+  assert.ok(remainingBudgetTasks.length < budgetTasks.length, 'size budget sheds terminal tasks');
+  assert.ok(remainingBudgetTasks.length >= 1, 'size budget keeps the newest task');
+  assert.ok(
+    remainingBudgetTasks.every((task) => !task.process_result?.variables || task.process_result?.__shed),
+    'surviving oversized results are shed with a marker'
+  );
+  ok('rpa-store size budget');
 
   let rpaAutoStartCount = 0;
   rpa.engine.profiles.set('p3', { id: 'p3', name: 'Env 3', number: 3 });
@@ -237,6 +316,20 @@ async function main() {
   assert.ok(/当前浏览器内核拒绝 CDP\/RPA 自动化/.test(paidGateRun.error), 'paid gate error is actionable');
   assert.ok(fs.readFileSync(rpaLogPath, 'utf8').includes('rpa-task-failed'), 'paid gate failure is logged');
   ok('rpa-engine paid automation gate diagnostics');
+
+  // A task that fails mid-run still returns the values collected before the error.
+  const failingTask = await store.createTask({
+    profile_id: 'p1',
+    process_name: 'fail-with-context',
+    steps: [{ type: 'wait', ms: 1 }, { type: 'notarealstep' }],
+  });
+  const failingRun = await rpa.runTask(failingTask.id);
+  assert.strictEqual(failingRun.success, false, 'unknown step type fails the task');
+  const failingRecord = store.getTask(failingTask.id);
+  assert.strictEqual(failingRecord.process_result.ok, false, 'failed task result marks ok=false');
+  assert.ok(failingRecord.process_result.variables && typeof failingRecord.process_result.variables === 'object',
+    'failed task still returns the variables collected before the error');
+  ok('rpa-engine failure keeps collected variables');
 
   const parallelPlan = await store.upsertPlan({
     plan_name: 'parallel-selftest',
@@ -486,10 +579,28 @@ async function main() {
   assert.strictEqual(rpaStatus.body.code, 0);
   ok('local-api rpa/status');
 
+  const rpaTasksLimited = await httpJson(port, 'GET', '/api/rpa/tasks?limit=2', undefined, authHeaders);
+  assert.strictEqual(rpaTasksLimited.body.code, 0);
+  assert.ok(rpaTasksLimited.body.data.list.length <= 2, 'rpa task list honors limit');
+  assert.ok(Number(rpaTasksLimited.body.data.total) >= rpaTasksLimited.body.data.list.length, 'rpa task list reports total');
+  const rpaTasks = await httpJson(port, 'GET', '/api/rpa/tasks', undefined, authHeaders);
+  const listedTask = rpaTasks.body.data.list[0];
+  assert.ok(listedTask, 'rpa task list has entries');
+  const rpaTaskById = await httpJson(port, 'GET', '/api/rpa/tasks/' + encodeURIComponent(listedTask.id), undefined, authHeaders);
+  assert.strictEqual(rpaTaskById.body.code, 0);
+  assert.strictEqual(rpaTaskById.body.data.task.id, listedTask.id);
+  assert.ok(rpaTaskById.body.data.task.process_result && typeof rpaTaskById.body.data.task.process_result.variables === 'object', 'task endpoint exposes process_result.variables');
+  const rpaTaskDeleted = await httpJson(port, 'DELETE', '/api/rpa/tasks/' + encodeURIComponent(listedTask.id), undefined, authHeaders);
+  assert.strictEqual(rpaTaskDeleted.body.code, 0);
+  assert.strictEqual(rpaTaskDeleted.body.data.success, true, 'task endpoint deletes by id');
+  ok('local-api rpa task result/limit/delete');
+
   // 7) MCP tool surface
   assert.ok(TOOLS.some((tool) => tool.name === 'list_applications'));
   assert.ok(TOOLS.some((tool) => tool.name === 'window_sync_start'));
   assert.ok(TOOLS.some((tool) => tool.name === 'rpa_run_steps'));
+  assert.ok(TOOLS.some((tool) => tool.name === 'rpa_task_result'), 'mcp exposes task result retrieval');
+  assert.ok(TOOLS.some((tool) => tool.name === 'rpa_tasks'), 'mcp exposes task listing');
   ok('mcp tools registered (' + TOOLS.length + ')');
 
   // Point MCP request helper at our server by temporarily monkey-patching env... callTool uses fixed env.

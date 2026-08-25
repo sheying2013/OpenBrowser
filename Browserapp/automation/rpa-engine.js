@@ -16,6 +16,47 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const OUTPUT_DIRECTORY = path.join(process.cwd(), 'rpa-output');
 const RPA_DIAGNOSTIC_LIMIT = 512 * 1024;
 const CDP_AUTOMATION_BLOCKED = 'Browser automation requires a paid Donut Browser plan.';
+// Result payloads carry the extracted values: strings are capped at
+// RPA_RESULT_CHAR_LIMIT per value; structure is kept whole. Task logs keep the
+// original full-content behavior — store growth is bounded by task-history
+// pruning and the store size budget, not by log trimming.
+const PARSED_RESULT_CHAR_LIMIT = Number(process.env.OPENBROWSER_RPA_RESULT_CHAR_LIMIT);
+const RPA_RESULT_CHAR_LIMIT = Number.isFinite(PARSED_RESULT_CHAR_LIMIT) && PARSED_RESULT_CHAR_LIMIT > 0
+  ? Math.floor(PARSED_RESULT_CHAR_LIMIT)
+  : 20000;
+
+/** Per-string cap for result payloads; structure (arrays/objects) is kept, only string length is capped. */
+function capResultString(text) {
+  return text.length > RPA_RESULT_CHAR_LIMIT
+    ? text.slice(0, RPA_RESULT_CHAR_LIMIT) + `…[truncated ${text.length - RPA_RESULT_CHAR_LIMIT} chars]`
+    : text;
+}
+
+/**
+ * Cycle-safe copy of final task variables for process_result and the API
+ * response. Strings are capped per RPA_RESULT_CHAR_LIMIT; everything else is
+ * kept whole.
+ */
+function snapshotVariables(variables) {
+  const clone = (value, seen) => {
+    if (typeof value === 'function') return '[function]';
+    if (typeof value === 'string') return capResultString(value);
+    if (value == null || typeof value !== 'object') return value;
+    if (seen.has(value)) return '[circular]';
+    seen.add(value);
+    try {
+      if (Array.isArray(value)) return value.map((item) => clone(item, seen));
+      const out = {};
+      for (const [key, item] of Object.entries(value)) out[key] = clone(item, seen);
+      return out;
+    } finally {
+      seen.delete(value);
+    }
+  };
+  const copied = {};
+  for (const [key, value] of Object.entries(variables || {})) copied[key] = clone(value, new Set());
+  return copied;
+}
 
 /** True when a missing element should not fail the whole flow. */
 function isOptionalElementStep(params = {}) {
@@ -271,6 +312,7 @@ class RpaEngine {
       this.emit({ type: 'rpa-log', taskId, ...entry });
     };
 
+    let context = null;
     try {
       const entry = await this.ensureProfileRunning(task.profile_id, { log });
       const port = entry.port;
@@ -283,7 +325,7 @@ class RpaEngine {
       }
       await log(`start task on profile ${task.profile_id}, steps=${steps.length}`);
 
-      const context = {
+      context = {
         log,
         options,
         variables: this.initialVariables(task),
@@ -300,7 +342,17 @@ class RpaEngine {
         await this.executeStep(port, step, context);
       }
 
-      const result = { ok: true, steps: steps.length };
+      const snapshot = snapshotVariables(context.variables);
+      const result = {
+        ok: true,
+        steps: steps.length,
+        remarks: context.remarks.map((remark) => capResultString(String(remark))),
+        variables: snapshot,
+      };
+      // Opt-in export channel: variableOperation(type=export) collects __exported.
+      if (Object.prototype.hasOwnProperty.call(snapshot, '__exported')) {
+        result.exports = snapshot.__exported;
+      }
       await this.store.updateTask(taskId, {
         status: 'success',
         complete_time: new Date().toISOString(),
@@ -329,14 +381,21 @@ class RpaEngine {
         error: message,
         rawError: compactError(error),
       });
+      // Values collected before the failure are still returned, mirroring the
+      // success path; context stays null when the profile never started.
+      const failureResult = { ok: false, error: message };
+      if (context) {
+        failureResult.remarks = context.remarks.map((remark) => capResultString(String(remark)));
+        failureResult.variables = snapshotVariables(context.variables);
+      }
       await this.store.updateTask(taskId, {
         status,
         complete_time: new Date().toISOString(),
-        process_result: { ok: false, error: message },
+        process_result: failureResult,
         process_logs: logs,
       });
       this.emit({ type: 'rpa-task', taskId, status, profileId: task.profile_id, message });
-      return { success: false, taskId, error: message, status };
+      return { success: false, taskId, error: message, status, result: failureResult };
     } finally {
       this.running.delete(taskId);
       this.cancelled.delete(taskId);
@@ -987,10 +1046,17 @@ class RpaEngine {
     }
 
     if (type === 'screenshotpage' || type === 'screenshot') {
-      await this.withPage(port, async (ws) => {
-        const shot = await cdp.call(ws, 'Page.captureScreenshot', { format: 'png' }, 15000);
-        if (ctx?.log) await ctx.log('screenshot bytes(base64 length)=' + String(shot.data || '').length);
-      });
+      const shot = await this.withPage(port, (ws) =>
+        cdp.call(ws, 'Page.captureScreenshot', { format: String(params.format || 'png') }, 15000));
+      if (!shot?.data) throw new Error('screenshot failed: no image data returned');
+      const format = String(params.format || 'png').toLowerCase();
+      const extension = format === 'jpeg' || format === 'jpg' ? '.jpg' : format === 'webp' ? '.webp' : '.png';
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = this.outputPath(text(params.name || params.path) || `screenshot-${stamp}`, extension);
+      await fs.mkdir(path.dirname(filename), { recursive: true });
+      await fs.writeFile(filename, Buffer.from(String(shot.data), 'base64'));
+      if (params.variable) variables[params.variable] = filename;
+      if (ctx?.log) await ctx.log('screenshot saved: ' + filename);
       return;
     }
 
@@ -1289,4 +1355,4 @@ function valueOf(input, variables) {
   return getVariableValue(input, variables);
 }
 
-module.exports = { RpaEngine, RPA_PLUS_ACTIONS, parseProcessContent, findUnsupportedSteps };
+module.exports = { RpaEngine, RPA_PLUS_ACTIONS, parseProcessContent, findUnsupportedSteps, snapshotVariables };

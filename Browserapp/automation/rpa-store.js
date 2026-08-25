@@ -17,11 +17,19 @@ const { findUnsupportedSteps } = require('./rpa-engine');
  * Plan / task / template store for RPA (JSON file).
  * Templates: built-in and user-created/imported.
  */
+const TASK_HISTORY_LIMIT = Math.max(1, Number(process.env.OPENBROWSER_RPA_TASK_HISTORY) || 100);
+
+function parseStoreSizeLimit() {
+  const mb = Number(process.env.OPENBROWSER_RPA_STORE_LIMIT_MB);
+  const value = Number.isFinite(mb) && mb > 0 ? mb : 50;
+  return Math.floor(value * 1024 * 1024);
+}
 class RpaStore {
   constructor(filePath) {
     this.filePath = filePath;
     this.data = { version: 4, plans: [], tasks: [], templates: [], config: {} };
     this.saveQueue = Promise.resolve();
+    this.sizeLimitBytes = parseStoreSizeLimit();
   }
 
   async load() {
@@ -39,6 +47,7 @@ class RpaStore {
       this.data = { version: 4, plans: [], tasks: [], templates: [], config: {} };
     }
     this.migrateLegacyTemplates();
+    this.pruneTasks();
     await this.ensureBuiltinTemplates();
     await this.ensureLocalCatalogTemplates();
     this.scrubLegacyFieldsFromTemplates();
@@ -378,6 +387,7 @@ class RpaStore {
   save() {
     const write = async () => {
       await fsp.mkdir(path.dirname(this.filePath), { recursive: true });
+      this.enforceStoreBudget();
       const temporary = this.filePath + '.tmp';
       await fsp.writeFile(temporary, JSON.stringify(this.data, null, 2), 'utf8');
       await fsp.rename(temporary, this.filePath);
@@ -386,6 +396,35 @@ class RpaStore {
     // Keep subsequent writes usable after an individual filesystem failure.
     this.saveQueue = pending.catch(() => {});
     return pending;
+  }
+
+  /**
+   * Keep rpa-store.json under sizeLimitBytes. Shedding order: oldest terminal
+   * tasks first, then log tails, then result payloads of what remains. Plans
+   * and templates are never touched; pending/running tasks are never dropped.
+   */
+  enforceStoreBudget() {
+    const over = () => Buffer.byteLength(JSON.stringify(this.data), 'utf8') > this.sizeLimitBytes;
+    if (!over()) return;
+    const ACTIVE = new Set(['pending', 'running']);
+    for (let i = this.data.tasks.length - 1; i >= 1 && over(); i -= 1) {
+      if (!ACTIVE.has(String(this.data.tasks[i]?.status || ''))) {
+        this.data.tasks.splice(i, 1);
+      }
+    }
+    if (!over()) return;
+    for (const task of [...this.data.tasks].reverse()) {
+      if (!over()) return;
+      if (Array.isArray(task.process_logs) && task.process_logs.length) task.process_logs = [];
+    }
+    for (const task of [...this.data.tasks].reverse()) {
+      if (!over()) return;
+      if (task.process_result && typeof task.process_result === 'object') {
+        delete task.process_result.variables;
+        delete task.process_result.exports;
+        task.process_result.__shed = 'result payload dropped to keep rpa-store.json under the size limit';
+      }
+    }
   }
 
   // ---------- plans ----------
@@ -448,6 +487,30 @@ class RpaStore {
     return this.data.tasks.find((item) => item.id === id) || null;
   }
 
+  /** Keep only the newest tasks so rpa-store.json stays bounded. */
+  pruneTasks() {
+    const data = this.data.tasks;
+    if (data.length <= TASK_HISTORY_LIMIT) return [];
+    const ACTIVE = new Set(['pending', 'running']);
+    const removed = [];
+    // Drop oldest terminal tasks first; never drop tasks that may still execute.
+    for (let i = data.length - 1; i >= 0 && data.length > TASK_HISTORY_LIMIT; i -= 1) {
+      if (!ACTIVE.has(String(data[i]?.status || ''))) {
+        removed.push(data[i].id);
+        data.splice(i, 1);
+      }
+    }
+    return removed;
+  }
+
+  async deleteTask(id) {
+    const before = this.data.tasks.length;
+    this.data.tasks = this.data.tasks.filter((item) => item.id !== id);
+    if (this.data.tasks.length === before) return { success: false, id };
+    await this.save();
+    return { success: true, id };
+  }
+
   async createTask(input = {}) {
     const now = new Date().toISOString();
     const variables = input.variables && typeof input.variables === 'object' && !Array.isArray(input.variables)
@@ -470,6 +533,7 @@ class RpaStore {
       update_time: now,
     };
     this.data.tasks.unshift(task);
+    this.pruneTasks();
     await this.save();
     return task;
   }
@@ -496,6 +560,7 @@ class RpaStore {
       update_time: now,
     }));
     this.data.tasks.unshift(...tasks);
+    this.pruneTasks();
     await this.save();
     return tasks;
   }
@@ -504,7 +569,10 @@ class RpaStore {
     const task = this.getTask(id);
     if (!task) throw new Error('RPA task not found: ' + id);
     Object.assign(task, patch, { update_time: new Date().toISOString() });
-    if (save) await this.save();
+    if (save) {
+      this.pruneTasks();
+      await this.save();
+    }
     return task;
   }
 

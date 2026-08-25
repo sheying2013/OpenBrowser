@@ -606,7 +606,19 @@ class LocalApiServer {
       return ok(await this.rpaStore.deletePlan(id));
     }
     if (pathname === '/api/rpa/tasks' && method === 'GET') {
-      return ok({ list: this.rpaStore.listTasks(input) });
+      const list = this.rpaStore.listTasks(input);
+      const limit = Math.max(1, Math.min(500, Number(input.limit) || 50));
+      return ok({ list: list.slice(0, limit), total: list.length });
+    }
+    if (pathname.startsWith('/api/rpa/tasks/') && method === 'GET') {
+      const id = decodeURIComponent(pathname.slice('/api/rpa/tasks/'.length));
+      const task = this.rpaStore.getTask(id);
+      if (!task) return fail('task not found: ' + id);
+      return ok({ task });
+    }
+    if (pathname.startsWith('/api/rpa/tasks/') && method === 'DELETE') {
+      const id = decodeURIComponent(pathname.slice('/api/rpa/tasks/'.length));
+      return ok(await this.rpaStore.deleteTask(id));
     }
     if (pathname === '/api/rpa/run' || pathname === '/api/rpa' || pathname === '/api/rpav2') {
       if (input.plan_id) return ok(await this.rpaEngine.runPlan(String(input.plan_id), input));

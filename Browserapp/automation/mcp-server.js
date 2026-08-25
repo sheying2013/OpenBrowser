@@ -100,7 +100,9 @@ function toolsMeta() {
     ['isolation_audit', 'Audit isolation collisions (user-data dirs and CDP ports)', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/isolation/audit', null],
     ['window_sync_settings_get', 'Get current multi-window sync settings', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/sync/settings', null],
     ['rpa_plans_list', 'List saved RPA plans', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/rpa/plans', null],
-    ['rpa_tasks_list', 'List RPA tasks', { type: 'object', properties: { status: { type: 'string' } }, additionalProperties: false }, 'read', 'GET', '/api/rpa/tasks', null],
+    ['rpa_tasks_list', 'List RPA tasks', { type: 'object', properties: { status: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 500 } }, additionalProperties: false }, 'read', 'GET', '/api/rpa/tasks', null],
+    ['rpa_task_result', 'Get one RPA task by id, including process_result (variables / exports / remarks) and persisted logs', { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'], additionalProperties: false }, 'read', 'GET', '/api/rpa/tasks/', null],
+    ['rpa_tasks', 'List RPA tasks newest first (optionally filtered by status)', { type: 'object', properties: { status: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 500 } }, additionalProperties: false }, 'read', 'GET', '/api/rpa/tasks', null],
     ['rpa_templates_list', 'List RPA templates and categories', { type: 'object', properties: { category: { type: 'string' } }, additionalProperties: false }, 'read', 'GET', '/api/rpa/templates', null],
     ['proxy_list', 'List proxy library entries', { type: 'object', properties: { q: { type: 'string' }, status: { type: 'string' } }, additionalProperties: false }, 'read', 'GET', '/api/proxy/list', null],
     ['list_profiles', 'List browser profiles, running status and CDP debug ports', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/v1/user/list', null],
@@ -187,7 +189,7 @@ function toTool(meta) {
   return {
     name: meta[0],
     description: `${meta[1]} [permission: ${meta[3]}]`,
-    inputSchema: meta[4],
+    inputSchema: meta[2],
   };
 }
 
@@ -351,6 +353,10 @@ async function callTool(name, args = {}) {
     case 'rpa_plan_delete':
       return request('DELETE', `/api/rpa/plans/${encodeURIComponent(args.plan_id)}`);
     case 'rpa_tasks_list':
+      return request('GET', '/api/rpa/tasks' + queryString(args));
+    case 'rpa_task_result':
+      return request('GET', '/api/rpa/tasks/' + encodeURIComponent(String(args.task_id || '')));
+    case 'rpa_tasks':
       return request('GET', '/api/rpa/tasks' + queryString(args));
     case 'rpa_templates_list':
       return request('GET', '/api/rpa/templates' + queryString(args));
