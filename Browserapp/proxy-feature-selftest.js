@@ -34,6 +34,7 @@ function makeEngineStub() {
   engine.prepareProfileProxyForStart = BrowserEngine.prototype.prepareProfileProxyForStart.bind(engine);
   engine.refreshProfileProxy = BrowserEngine.prototype.refreshProfileProxy.bind(engine);
   engine.applyResolvedLocale = BrowserEngine.prototype.applyResolvedLocale.bind(engine);
+  engine.restoreStoredProxyCredentials = BrowserEngine.prototype.restoreStoredProxyCredentials.bind(engine);
   return engine;
 }
 
@@ -237,6 +238,33 @@ async function main() {
   assert.strictEqual(store.get(item.id).lastCheckOk, false);
   assert.strictEqual(store.get(item.id).lastErrorClass, 'auth');
   fs.rmSync(dir, { recursive: true, force: true });
+
+  // UI localStorage redacts proxy auth. Start must restore credentials from engine state
+  // when host:port still match, otherwise Chrome launches without the local auth bridge.
+  const credEngine = makeEngineStub();
+  const stored = credEngine.sanitizeProfile({
+    id: 'prof_proxy_auth_restore',
+    name: 'auth-restore',
+    networkMode: 'proxy',
+    proxy: 'http://user:secret@14.224.225.102:19125',
+  });
+  credEngine.profiles.set(stored.id, stored);
+  const redacted = credEngine.sanitizeProfile({
+    id: stored.id,
+    name: stored.name,
+    networkMode: 'proxy',
+    proxy: 'http://14.224.225.102:19125/',
+  });
+  const restored = credEngine.restoreStoredProxyCredentials(redacted);
+  assert.ok(restored.proxy.includes('user:secret@'), 'redacted UI proxy must restore stored credentials, got ' + restored.proxy);
+  assert.strictEqual(restored.networkMode, 'proxy');
+  const otherHost = credEngine.restoreStoredProxyCredentials(credEngine.sanitizeProfile({
+    id: stored.id,
+    name: stored.name,
+    networkMode: 'proxy',
+    proxy: 'http://10.0.0.1:8080',
+  }));
+  assert.ok(!otherHost.proxy.includes('user:secret@'), 'must not copy credentials onto a different host:port');
 
   // --- renderer wiring integrity ---
   const renderer = fs.readFileSync(path.join(__dirname, 'renderer.js'), 'utf8');
