@@ -437,7 +437,8 @@ function rebuildAppShortcutIcons() {
  */
 // v2: the Dock wrapper now strips CFBundleIconName, so wrappers built by v1 must be rebuilt
 // or they keep resolving their icon out of the kernel's asset catalog.
-const ARTIFACT_STAMP_VERSION = 2;
+// v3: do not inject --no-proxy-server (it overrides Chromium --proxy-server and leaks the real IP).
+const ARTIFACT_STAMP_VERSION = 3;
 
 /** True when the stamp matches and every expected output is still present. */
 function artifactIsFresh(stampPath, key, outputs) {
@@ -807,7 +808,7 @@ for a in "\$@"; do
   esac
 done
 
-USER_DATA=""; HAS_STORE=0; HAS_BROWSER_ID=0; HAS_NO_SANDBOX=0; HAS_MOCK=0; HAS_REMOTE=0; HAS_NOPROXY=0; HAS_DDE=0
+USER_DATA=""; HAS_STORE=0; HAS_BROWSER_ID=0; HAS_NO_SANDBOX=0; HAS_MOCK=0; HAS_REMOTE=0; HAS_DDE=0
 for a in "\$@"; do
   case "\$a" in
     --user-data-dir=*) USER_DATA="\${a#--user-data-dir=}" ;;
@@ -816,7 +817,6 @@ for a in "\$@"; do
     --no-sandbox) HAS_NO_SANDBOX=1 ;;
     --use-mock-keychain) HAS_MOCK=1 ;;
     --remote-allow-origins=*) HAS_REMOTE=1 ;;
-    --no-proxy-server) HAS_NOPROXY=1 ;;
     --do-not-de-elevate) HAS_DDE=1 ;;
   esac
 done
@@ -917,7 +917,6 @@ fi
 [[ "\$HAS_NO_SANDBOX" -eq 0 ]] && EXTRA+=(--no-sandbox)
 [[ "\$HAS_MOCK" -eq 0 ]] && EXTRA+=(--use-mock-keychain)
 [[ "\$HAS_REMOTE" -eq 0 ]] && EXTRA+=(--remote-allow-origins=*)
-[[ "\$HAS_NOPROXY" -eq 0 ]] && EXTRA+=(--no-proxy-server)
 [[ "\$HAS_DDE" -eq 0 ]] && EXTRA+=(--do-not-de-elevate)
 
 # IPC stub detached (survives exec); next launch re-binds the same sockets

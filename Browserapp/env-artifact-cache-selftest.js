@@ -92,6 +92,11 @@ const ok = (n, c) => { assert.ok(c, n); console.log('  PASS  ' + n); passed += 1
       ok('wrapper shows the environment name', /<key>CFBundleName<\/key>\s*<string>环境 24<\/string>/.test(plist));
       const icns = path.join(appRoot, 'Contents', 'Resources', 'app.icns');
       ok('generated icon is a real file, not the kernel symlink', fs.existsSync(icns) && !fs.lstatSync(icns).isSymbolicLink() && fs.statSync(icns).size > 1000);
+      const launcherSrc = fs.readFileSync(launcher, 'utf8');
+      ok(
+        'Dock wrapper does not inject --no-proxy-server (would override --proxy-server)',
+        !launcherSrc.includes('EXTRA+=(--no-proxy-server)'),
+      );
     } else {
       console.log('  SKIP  macOS kernel not present — Dock wrapper checks not exercised');
     }
