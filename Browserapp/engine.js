@@ -1811,9 +1811,27 @@ class BrowserEngine {
     });
   }
 
+  restoreStoredProxyCredentials(incoming) {
+    const previous = this.profiles.get(incoming.id);
+    if (!previous) return incoming;
+    const nextProxy = String(incoming.proxy || '');
+    const prevProxy = String(previous.proxy || '');
+    const nextHasAuth = /:\/\/[^/@]+@/.test(nextProxy) || nextProxy.split(':').length >= 4;
+    const prevHasAuth = /:\/\/[^/@]+@/.test(prevProxy) || prevProxy.split(':').length >= 4;
+    if (!prevHasAuth || nextHasAuth) return incoming;
+    try {
+      const prev = parseProxy(prevProxy);
+      const bare = parseProxy(nextProxy);
+      if (prev && bare && prev.host === bare.host && prev.port === bare.port) {
+        return this.sanitizeProfile({ ...incoming, networkMode: 'proxy', proxy: prevProxy });
+      }
+    } catch (_) {}
+    return incoming;
+  }
+
   async start(raw) {
     // let: language/timezone resolution reassigns profile via applyResolvedLocale
-    let profile = this.sanitizeProfile(raw); this.profiles.set(profile.id, profile);
+    let profile = this.restoreStoredProxyCredentials(this.sanitizeProfile(raw)); this.profiles.set(profile.id, profile);
     if (this.running.has(profile.id)) {
       if (!profile.advanced.multiOpen) return this.publicRunning(profile.id);
       return this.publicRunning(profile.id);
@@ -1963,6 +1981,8 @@ class BrowserEngine {
     }
     if (proxy) {
       args.push(`--proxy-server=${proxy}`);
+      // HTTP/SOCKS proxies are IPv4; disable IPv6 so Chrome cannot skip the proxy.
+      if (!args.includes('--disable-ipv6')) args.push('--disable-ipv6');
       // 本机启动页必须直连，不走代理；可叠加用户直连白名单
       let bypass = '<-loopback>;127.0.0.1;localhost';
       if (profile.proxyMeta?.directBypass && profile.proxyMeta.bypassList) {
