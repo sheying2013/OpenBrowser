@@ -35,6 +35,8 @@
     "selftest:themes": "node theme-nes-light-selftest.js && node theme-retro-desktop-selftest.js",
     "selftest:fplog": "node fingerprint-log-growth-selftest.js",
     "selftest:syncslave": "node sync-slave-isolation-selftest.js",
+    "selftest:lifecycle": "node lifecycle-selftest.js",
+    "selftest:fullscreen": "node fullscreen-window-sync-selftest.js",
     "selftest:hooks": "node fingerprint-native-hooks-selftest.js",
     "selftest:persona": "node device-persona-selftest.js",
     "selftest:devprofile": "node device-profile-wiring-selftest.js",

@@ -331,7 +331,7 @@ class LocalApiServer {
       let created;
       try {
         created = this.engine.sanitizeProfile(profile);
-        this.engine.syncProfiles([created]);
+        await this.engine.syncProfiles([created]);
       } catch (error) {
         return fail(`invalid profile: ${error.message}`, 400);
       }
@@ -424,7 +424,7 @@ class LocalApiServer {
           mediaLabels: undefined,
         },
       });
-      this.engine.syncProfiles([next]);
+      await this.engine.syncProfiles([next]);
       if (typeof this.engine.persist === 'function') await this.engine.persist();
       return ok({ profile_id: id, profile: this.engine.profiles.get(id) || next });
     }

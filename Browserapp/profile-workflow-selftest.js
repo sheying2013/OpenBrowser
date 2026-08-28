@@ -69,7 +69,8 @@ async function main() {
     assert.ok(fingerprint.includes("Emulation.clearDeviceMetricsOverride"), 'desktop viewport must remain resize-responsive');
     assert.ok(!fingerprint.includes("softOverride('Emulation.setDeviceMetricsOverride'"), 'desktop viewport must not be fixed by device metrics');
     assert.ok(fingerprint.includes("Object.defineProperty(window, 'innerWidth'"), 'native fixed viewport must be bridged to the live DOM viewport');
-    assert.ok(liveSync.includes('this.nativePopupActive || this.extensionConnections.size'), 'window geometry sync must pause for native/extension popups');
+    assert.ok(liveSync.includes('this.nativePopupActive'), 'window geometry sync must pause for native popups');
+    assert.ok(liveSync.includes('hasVisibleExtensionSurface'), 'window geometry sync must inspect extension popup visibility');
     assert.ok(nativeMirror.includes('NATIVE_POPUP_ACTIVE='), 'native bridge must report popup foreground state');
 
     process.stdout.write(JSON.stringify({ success: true, checks: 18 }, null, 2));

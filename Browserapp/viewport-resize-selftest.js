@@ -40,7 +40,11 @@ async function main() {
     const tab = await cdp.firstTab(session.port);
     assert.ok(tab?.webSocketDebuggerUrl, 'browser tab with CDP socket required');
 
-    await cdp.setWindowBounds(session.port, { left: 20, top: 20, width: 820, height: 640 });
+    // Keep the baseline below the smallest Windows logical work area used by
+    // the test machine (1280px at 150% scaling reports roughly 836px to
+    // Chromium). The second request still exercises the real enlargement path
+    // without mistaking OS work-area clamping for a resize regression.
+    await cdp.setWindowBounds(session.port, { left: 20, top: 20, width: 640, height: 480 });
     await wait(700);
     const smallBounds = (await cdp.windowForPort(session.port)).bounds;
     const small = await viewport(tab);

@@ -4,6 +4,8 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { spawn, execFileSync } = require('child_process');
 
+const PROCESS_INSPECT_TIMEOUT_MS = 2000;
+
 /**
  * Cross-platform helpers for Win/macOS/Linux.
  */
@@ -121,7 +123,12 @@ function inspectWindowsProcess(pid) {
       '-NoProfile',
       '-NonInteractive',
       '-Command', script,
-    ], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    ], {
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: PROCESS_INSPECT_TIMEOUT_MS,
+    }).trim();
     if (!output) return { ok: false, reason: 'process is not running' };
     const record = JSON.parse(output);
     return {
@@ -179,7 +186,11 @@ function processIdentity(pid, options = {}) {
   }
   let command;
   try {
-    command = execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    command = execFileSync('ps', ['-p', String(pid), '-o', 'command='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: PROCESS_INSPECT_TIMEOUT_MS,
+    }).trim();
   } catch (_) {
     return { ok: false, reason: 'unable to inspect process identity' };
   }
@@ -207,6 +218,7 @@ function processIdentity(pid, options = {}) {
 
 function killProcessTree(pid, options = {}) {
   const force = options.force !== false;
+  const timeoutMs = Math.max(500, Number(options.timeoutMs) || 5000);
   return new Promise((resolve) => {
     if (!pid) return resolve(false);
     const identity = processIdentity(pid, options);
@@ -214,12 +226,28 @@ function killProcessTree(pid, options = {}) {
     if (isWindows()) {
       const args = force ? ['/PID', String(pid), '/T', '/F'] : ['/PID', String(pid), '/T'];
       const child = spawn('taskkill.exe', args, { windowsHide: true, stdio: 'ignore' });
-      child.once('exit', (code) => resolve(code === 0));
-      child.once('error', () => resolve(false));
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const timer = setTimeout(() => {
+        try { child.kill(); } catch (_) {}
+        finish(false);
+      }, timeoutMs);
+      timer.unref?.();
+      child.once('exit', (code) => finish(code === 0));
+      child.once('error', () => finish(false));
       return;
     }
     try {
-      const pgid = execFileSync('ps', ['-p', String(pid), '-o', 'pgid='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      const pgid = execFileSync('ps', ['-p', String(pid), '-o', 'pgid='], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: PROCESS_INSPECT_TIMEOUT_MS,
+      }).trim();
       if (String(Number(pgid)) === String(Number(pid))) process.kill(-pid, force ? 'SIGKILL' : 'SIGTERM');
       else process.kill(pid, force ? 'SIGKILL' : 'SIGTERM');
       return resolve(true);
