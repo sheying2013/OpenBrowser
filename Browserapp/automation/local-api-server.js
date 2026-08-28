@@ -58,6 +58,113 @@ async function readBody(req) {
   }
 }
 
+function parseResolution(value) {
+  if (value && typeof value === 'object') {
+    return [Number(value.width), Number(value.height)];
+  }
+  const text = String(value || '').trim();
+  const match = text.match(/(\d+)\s*[x×*]\s*(\d+)/i) || text.match(/^(\d+)[,\s]+(\d+)$/);
+  if (!match) return [NaN, NaN];
+  return [Number(match[1]), Number(match[2])];
+}
+
+function parseGeolocation(value) {
+  if (value && typeof value === 'object') {
+    return [Number(value.latitude ?? value.lat), Number(value.longitude ?? value.lon ?? value.lng)];
+  }
+  const parts = String(value || '').split(/[,;:\s]+/).map(Number);
+  if (parts.length >= 2 && parts.every(Number.isFinite)) return [parts[0], parts[1]];
+  return [NaN, NaN];
+}
+
+/**
+ * Accept both the UI's camelCase profile shape and the MCP/API snake_case
+ * shape. The profile engine only understands a few top-level fields
+ * (width/height/userAgent/startUrl/note), while the rest live under
+ * privacy/privacy.fingerprint. Without this bridge, MCP fields such as
+ * start_url, user_agent, resolution or fingerprint were silently dropped.
+ */
+function normalizeProfileInput(input = {}) {
+  const out = { ...input };
+  const privacy = { ...(out.privacy && typeof out.privacy === 'object' ? out.privacy : {}) };
+  let fingerprint = out.fingerprint && typeof out.fingerprint === 'object' ? { ...out.fingerprint } : {};
+  const clearFingerprint = out.fingerprint === null || out.privacy?.fingerprint === null;
+
+  if (out.start_url !== undefined) out.startUrl = out.start_url;
+  if (out.user_agent !== undefined) out.userAgent = out.user_agent;
+  if (out.network_mode !== undefined) out.networkMode = out.network_mode;
+  if (out.language_code !== undefined) out.languageCode = out.language_code;
+  if (typeof out.platform === 'string') out.platform = { type: out.platform };
+
+  const sizeValue = out.resolution ?? out.window_size ?? out.windowSize;
+  if (sizeValue !== undefined) {
+    const [width, height] = parseResolution(sizeValue);
+    if (Number.isFinite(width)) out.width = width;
+    if (Number.isFinite(height)) out.height = height;
+  }
+  if (out.notes !== undefined) out.note = out.notes;
+  if (out.privacy_extra && typeof out.privacy_extra === 'object') Object.assign(privacy, out.privacy_extra);
+
+  if (out.timezone !== undefined && String(out.timezone).trim()) {
+    privacy.timezone = String(out.timezone).trim();
+    privacy.timezoneMode = 'custom';
+  }
+  if (out.locale !== undefined && String(out.locale).trim()) {
+    privacy.uiLanguage = String(out.locale).trim();
+    privacy.languageMode = String(out.locale).trim();
+  }
+  if (out.geolocation !== undefined) {
+    const [lat, lon] = parseGeolocation(out.geolocation);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      privacy.latitude = lat;
+      privacy.longitude = lon;
+      privacy.geoMode = 'custom';
+    }
+  }
+  if (out.webgl_vendor !== undefined && String(out.webgl_vendor).trim()) {
+    fingerprint.webglVendor = String(out.webgl_vendor).trim();
+    privacy.webglMeta = 'custom';
+  }
+  if (out.webgl_renderer !== undefined && String(out.webgl_renderer).trim()) {
+    fingerprint.webglRenderer = String(out.webgl_renderer).trim();
+    privacy.webglMeta = 'custom';
+  }
+  if (out.hardware_concurrency !== undefined) {
+    const n = Number(out.hardware_concurrency);
+    if (Number.isFinite(n)) {
+      privacy.cores = n;
+      fingerprint.hardwareConcurrency = n;
+    }
+  }
+  if (out.device_memory !== undefined) {
+    const n = Number(out.device_memory);
+    if (Number.isFinite(n)) {
+      privacy.memory = n;
+      fingerprint.deviceMemory = n;
+    }
+  }
+  if (out.do_not_track !== undefined) {
+    const enabled = out.do_not_track === true || out.do_not_track === 'on' || out.do_not_track === '1';
+    privacy.dnt = enabled;
+    privacy.dntMode = enabled ? 'on' : 'off';
+  }
+
+  if (clearFingerprint) {
+    fingerprint = null;
+    delete privacy.fingerprint;
+  }
+  if (fingerprint) {
+    out.fingerprint = fingerprint;
+    privacy.fingerprint = fingerprint;
+  } else {
+    delete out.fingerprint;
+    delete privacy.fingerprint;
+  }
+  out.privacy = privacy;
+  out.__clearFingerprint = clearFingerprint;
+  return out;
+}
+
 /**
  * Local HTTP API for OpenBrowser control plane.
  * Response envelope uses {code,msg,data}.
@@ -188,7 +295,7 @@ class LocalApiServer {
 
     if (pathname === '/api/v1/user/create' || pathname === '/api/v2/browser-profile/create' || pathname === '/api/profiles/create') {
       if (!this.engine) return fail('profile engine unavailable');
-      const body = input && typeof input.profile === 'object' ? { ...input, ...input.profile } : input;
+      const body = normalizeProfileInput(input && typeof input.profile === 'object' ? { ...input, ...input.profile } : input);
       const existingIds = new Set(this.engine.profiles ? [...this.engine.profiles.keys()] : []);
       let id = String(body.user_id || body.profile_id || body.id || '').trim();
       if (!id) {
@@ -233,6 +340,95 @@ class LocalApiServer {
       return ok({ user_id: id, profile_id: id, id, profile: created });
     }
 
+    if (pathname === '/api/v2/browser-profile/update' || pathname === '/api/profiles/update') {
+      if (!this.engine) return fail('profile engine unavailable');
+      const id = String(input.profile_id || input.user_id || input.id || '');
+      if (!id) return fail('profile id required');
+      const current = this.engine.profiles.get(id);
+      if (!current) return fail('profile not found');
+      const clearFingerprint = Boolean(input.__clearFingerprint) || input.fingerprint === null || input.privacy?.fingerprint === null;
+      const body = normalizeProfileInput(input);
+      const allowed = new Set([
+        'name', 'title', 'number', 'language', 'proxy', 'networkMode', 'startUrl', 'os', 'platform',
+        'browser', 'userAgent', 'resolution', 'windowSize', 'timezone', 'locale', 'languageCode',
+        'geolocation', 'webglVendor', 'webglRenderer', 'hardwareConcurrency', 'deviceMemory', 'doNotTrack',
+        'privacy', 'fingerprint', 'user_proxy_config', 'note', 'width', 'height', 'advanced',
+        'proxyMeta', 'tag', 'groupId', 'group_name',
+      ]);
+      const patch = {};
+      for (const [key, value] of Object.entries(body)) {
+        if (!allowed.has(key)) continue;
+        if (key === 'startUrl' && value !== undefined) patch.startUrl = value;
+        else if (key === 'userAgent' && value !== undefined) patch.userAgent = value;
+        else if (key === 'windowSize' && value !== undefined) patch.windowSize = value;
+        else if (key === 'networkMode' && value !== undefined) patch.networkMode = value;
+        else if (key === 'languageCode' && value !== undefined) patch.languageCode = value;
+        else if (key === 'privacy' && value !== undefined) {
+          const next = { ...(current.privacy || {}), ...(value && typeof value === 'object' ? value : {}) };
+          if (clearFingerprint) delete next.fingerprint;
+          patch.privacy = next;
+        }
+        else if (key === 'platform' && value && typeof value === 'object') patch.platform = { ...(current.platform || {}), ...value };
+        else if (key === 'advanced' && value && typeof value === 'object') patch.advanced = { ...(current.advanced || {}), ...value };
+        else if (key === 'proxyMeta' && value && typeof value === 'object') patch.proxyMeta = { ...(current.proxyMeta || {}), ...value };
+        else if (key === 'user_proxy_config' && value && typeof value === 'object') {
+          const { proxy_type, proxy_host, proxy_port, proxy_user, proxy_password } = value;
+          if (proxy_host && proxy_port) {
+            const type = String(proxy_type || 'http').toLowerCase();
+            patch.proxy = (type === 'socks' ? 'socks5' : type) + '://' +
+              (proxy_user ? encodeURIComponent(proxy_user) + ':' + encodeURIComponent(proxy_password || '') + '@' : '') +
+              proxy_host + ':' + proxy_port;
+            patch.networkMode = 'proxy';
+          }
+        }
+      else if (key === 'fingerprint' && value && typeof value === 'object') patch.fingerprint = { ...value };
+        else if (key !== 'profile_id' && key !== 'user_id' && key !== 'id') patch[key] = value;
+      }
+      if (clearFingerprint) {
+        delete patch.fingerprint;
+        if (!Object.prototype.hasOwnProperty.call(patch, 'privacy')) {
+          const nextPrivacy = { ...(current.privacy || {}) };
+          delete nextPrivacy.fingerprint;
+          patch.privacy = nextPrivacy;
+        }
+      }
+      const next = this.engine.sanitizeProfile({ ...current, ...patch, id });
+      this.engine.profiles.set(id, next);
+      if (typeof this.engine.persist === 'function') await this.engine.persist();
+      return ok({ profile_id: id, profile: this.engine.profiles.get(id) });
+    }
+
+    if (pathname === '/api/v2/browser-profile/duplicate' || pathname === '/api/profiles/duplicate') {
+      if (!this.engine) return fail('profile engine unavailable');
+      const sourceId = String(input.source_profile_id || input.profile_id || input.id || '');
+      const source = this.engine.profiles.get(sourceId);
+      if (!source) return fail('source profile not found');
+      const numbers = [...this.engine.profiles.values()].map((item) => Number(item.number)).filter((n) => Number.isInteger(n) && n > 0);
+      const number = (Math.max(0, ...numbers) || 0) + 1;
+      const id = 'ob-' + Date.now().toString(36) + '-' + crypto.randomBytes(5).toString('hex');
+      const base = this.engine.sanitizeProfile(source);
+      const next = this.engine.sanitizeProfile({
+        ...base,
+        id,
+        number,
+        name: String(input.name || (base.name ? base.name + ' Copy' : 'Environment ' + number)),
+        title: String(input.name || base.title || base.name || ('Environment ' + number)),
+        startUrl: input.start_url !== undefined ? input.start_url : base.startUrl,
+        profileId: id,
+        exitCheckedAt: undefined,
+        exitNetwork: undefined,
+        privacy: {
+          ...(base.privacy || {}),
+          fingerprint: undefined,
+          batterySnapshot: undefined,
+          mediaLabels: undefined,
+        },
+      });
+      this.engine.syncProfiles([next]);
+      if (typeof this.engine.persist === 'function') await this.engine.persist();
+      return ok({ profile_id: id, profile: this.engine.profiles.get(id) || next });
+    }
+
     if (pathname === '/api/v1/user/delete' || pathname === '/api/v2/browser-profile/delete' || pathname === '/api/profiles/delete') {
       if (!this.engine) return fail('profile engine unavailable');
       const rawIds = Array.isArray(input.user_ids) ? input.user_ids : (Array.isArray(input.profile_ids) ? input.profile_ids : (Array.isArray(input.ids) ? input.ids : [input.user_id || input.profile_id || input.id]));
@@ -270,7 +466,7 @@ class LocalApiServer {
       return ok({ user_id: id });
     }
 
-    if (pathname === '/api/v2/browser-profile/stop-all' || pathname === '/api/browser/stop-all') {
+    if (pathname === '/api/v1/browser/stop-all' || pathname === '/api/v2/browser-profile/stop-all' || pathname === '/api/browser/stop-all') {
       await this.engine.stopAll();
       return ok({ stopped: true });
     }
@@ -317,6 +513,14 @@ class LocalApiServer {
       if (!raw) return fail('proxy required');
       const result = await this.engine.testProxy({ id: 'proxy-check', name: 'proxy-check', proxy: raw, proxyMeta: { ipChannel: item?.ipChannel || input.ipChannel || 'ip-api' } });
       if (item) await this.proxyStore.markCheck(item.id, result);
+      return ok(result);
+    }
+    if (pathname === '/api/proxy/check-profile') {
+      if (!this.engine) return fail('profile engine unavailable');
+      const id = String(input.profile_id || input.user_id || input.id || '');
+      const profile = this.engine.profiles.get(id);
+      if (!profile) return fail('profile not found');
+      const result = await this.engine.checkProxy(profile, { allowExtract: false, persist: true });
       return ok(result);
     }
 

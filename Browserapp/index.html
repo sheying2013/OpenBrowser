@@ -820,6 +820,7 @@
             <div class="rpa-section table-card">
               <h2 class="rpa-h2">MCP</h2>
               <p class="rpa-desc">可选：让 Claude / Cursor 等 AI 通过对话操作本机浏览器（启动、停止、同步、自动脚本）。不用 AI 编程的话可忽略。</p>
+              <p class="rpa-muted">权限等级：<code>admin</code>（全部）/ <code>manage</code>（环境、代理、RPA 配置）/ <code>run</code>（启动、同步、执行）/ <code>read</code>（只读）。启动 MCP 时可通过 <code>OPENBROWSER_MCP_MODE</code>、<code>OPENBROWSER_MCP_TOOL_BLACKLIST</code>、<code>OPENBROWSER_MCP_TOOL_WHITELIST</code> 环境变量限制工具范围。</p>
               <div class="rpa-row">
                 <span class="rpa-label">配置类型</span>
                 <div class="rpa-seg" id="mcp-config-tabs">
@@ -831,6 +832,7 @@
                 <pre class="rpa-code-block" id="mcp-config-json"></pre>
                 <button type="button" class="outline" id="mcp-copy-config"><i data-lucide="copy"></i>复制代码</button>
               </div>
+              <p class="rpa-muted" id="mcp-key-note"></p>
             </div>
 
             <div class="rpa-section table-card">
