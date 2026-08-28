@@ -4035,7 +4035,13 @@ $('#proxy-dialog-test')?.addEventListener('click', async () => {
     const draft = readProxyForm();
     output.className = 'proxy-test-result';
     output.textContent = tx('正在检测…');
-    const result = await window.ops.proxyCheck(draft.id ? { id: draft.id } : { proxy: draft.raw || undefined, ...draft });
+    let proxyValue = draft.raw;
+    if (!proxyValue && draft.host && Number.isInteger(draft.port) && draft.port > 0 && draft.port <= 65535) {
+      const auth = draft.username ? `${encodeURIComponent(draft.username)}:${encodeURIComponent(draft.password || '')}@` : '';
+      proxyValue = `${draft.protocol || 'socks5'}://${auth}${draft.host}:${draft.port}`;
+    }
+    if (!proxyValue) throw new Error(tx('请先填写主机和端口'));
+    const result = await window.ops.proxyCheck(draft.id ? { id: draft.id } : { proxy: proxyValue, ...draft });
     output.className = 'proxy-test-result success';
     output.textContent = tx('连接成功 · ') + result.ip + (result.countryCode ? ' · ' + result.countryCode : '');
     if (draft.id) await refreshProxies();
