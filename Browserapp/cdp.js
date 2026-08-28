@@ -57,26 +57,64 @@ class PersistentConnection {
   constructor(webSocketUrl, options = {}) {
     this.webSocketUrl = webSocketUrl;
     this.onEvent = typeof options.onEvent === 'function' ? options.onEvent : null;
+    this.onDisconnect = typeof options.onDisconnect === 'function' ? options.onDisconnect : null;
     this.nextId = 1;
     this.pending = new Map();
     this.socket = options.socket || null;
     this.closed = false;
+    this.opened = false;
+    this.disconnectNotified = false;
   }
 
   async open(timeout = 6000) {
     if (typeof WebSocket !== 'function') throw new Error('WebSocket API is unavailable in this host runtime');
+    if (this.closed) throw new Error('CDP persistent connection is closed');
     await new Promise((resolve, reject) => {
       const socket = new WebSocket(this.webSocketUrl);
       this.socket = socket;
-      const timer = setTimeout(() => { try { socket.close(); } catch (_) {} reject(new Error('CDP connection timeout')); }, timeout);
-      socket.addEventListener('open', () => { clearTimeout(timer); resolve(); });
+      let settled = false;
+      const fail = (error, closeSocket = false) => {
+        const value = error instanceof Error ? error : new Error(String(error || 'CDP persistent socket failed'));
+        // Do not leave a disconnected transport available for later commands. A stale
+        // socket would otherwise make those commands wait until their individual timeout.
+        if (this.socket === socket) {
+          this.socket = null;
+          this.closed = true;
+        }
+        const unexpectedDisconnect = this.opened && !this.disconnectNotified;
+        this.opened = false;
+        this.failAll(value);
+        if (unexpectedDisconnect) {
+          this.disconnectNotified = true;
+          try { this.onDisconnect?.(value, this); } catch (_) {}
+        }
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (closeSocket) {
+          try { socket.close(); } catch (_) {}
+        }
+        reject(value);
+      };
+      const timer = setTimeout(() => {
+        fail(new Error('CDP connection timeout'));
+        try { socket.close(); } catch (_) {}
+      }, timeout);
+      socket.addEventListener('open', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.opened = true;
+        resolve();
+      });
       socket.addEventListener('message', (event) => this.handleMessage(event));
       socket.addEventListener('error', () => {
-        clearTimeout(timer);
-        if (!this.closed) this.failAll(new Error('CDP persistent socket error'));
+        const error = new Error('CDP persistent socket error');
+        if (!this.closed) fail(error, true);
       });
       socket.addEventListener('close', () => {
-        if (!this.closed) this.failAll(new Error('CDP persistent socket closed'));
+        const error = new Error('CDP persistent socket closed');
+        if (!this.closed) fail(error);
       });
     });
     return this;
@@ -111,8 +149,24 @@ class PersistentConnection {
         reject(new Error(`CDP timeout: ${method}`));
       }, timeout);
       this.pending.set(id, { resolve, reject, timer });
-      try { this.socket.send(JSON.stringify(message)); }
-      catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
+      const socket = this.socket;
+      try { socket.send(JSON.stringify(message)); }
+      catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+        if (this.socket === socket) {
+          this.socket = null;
+          this.closed = true;
+          const unexpectedDisconnect = this.opened && !this.disconnectNotified;
+          this.opened = false;
+          this.failAll(error);
+          if (unexpectedDisconnect) {
+            this.disconnectNotified = true;
+            try { this.onDisconnect?.(error, this); } catch (_) {}
+          }
+        }
+      }
     });
   }
 
@@ -127,6 +181,7 @@ class PersistentConnection {
   close() {
     if (this.closed) return;
     this.closed = true;
+    this.opened = false;
     this.failAll(new Error('CDP persistent connection closed'));
     try { this.socket?.close(); } catch (_) {}
     this.socket = null;
@@ -278,7 +333,7 @@ async function setWindowState(port, state) {
   return { windowId: value.windowId, state };
 }
 
-async function setWindowBounds(port, bounds) {
+async function setWindowBounds(port, bounds, options = {}) {
   const value = await windowForPort(port);
   const next = {
     left: Math.round(Number(bounds.left) || 0),
@@ -286,10 +341,18 @@ async function setWindowBounds(port, bounds) {
     width: Math.max(320, Math.round(Number(bounds.width) || 800)),
     height: Math.max(240, Math.round(Number(bounds.height) || 600)),
   };
-  // Maximized / fullscreen windows ignore position; force normal first, then apply bounds.
-  try { await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: 'normal' } }); } catch (_) {}
+  const forceNormal = options.forceNormal !== false;
+  // Explicit layout commands keep the historical behavior. Background live-sync callers
+  // can opt out so a geometry refresh never collapses fullscreen/maximized windows or
+  // dismisses browser-owned menus merely by re-applying windowState=normal.
+  if (forceNormal) {
+    try { await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: 'normal' } }); } catch (_) {}
+  }
   await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: next });
-  // Some Chromium builds need a second pass after leaving maximized state.
+  // Some Chromium builds need a second pass after leaving maximized state. Passive
+  // synchronization deliberately avoids the retry: even a redundant resize can close a
+  // native menu, picker, or extension popup owned by the browser chrome.
+  if (!forceNormal) return { windowId: value.windowId, bounds: next };
   try {
     const current = await call(value.socket, 'Browser.getWindowBounds', { windowId: value.windowId });
     const actual = current?.bounds || {};

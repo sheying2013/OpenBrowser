@@ -4,6 +4,10 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
+
+const PROCESS_SCAN_TIMEOUT_MS = 2000;
+const UNKNOWN_STARTUP_LOCK_RECOVERY_MS = 15000;
 
 /**
  * Multi-open isolation helpers (profile data dirs, locks, audits).
@@ -14,56 +18,282 @@ function lockPath(profileRoot) {
   return path.join(profileRoot, '.openbrowser-instance.lock');
 }
 
+function lockIdentity(profileRoot, meta = {}) {
+  return {
+    profileRoot: path.resolve(String(profileRoot || '')),
+    profileId: meta.profileId == null ? null : String(meta.profileId),
+  };
+}
+
+function readJsonFileSync(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function lockBelongsToProfile(lock, identity) {
+  if (!lock || typeof lock !== 'object' || Array.isArray(lock)) return false;
+  if (lock.profileRoot != null
+    && normalizedPath(lock.profileRoot) !== normalizedPath(identity.profileRoot)) return false;
+  if (identity.profileId != null
+    && String(lock.profileId || '') !== identity.profileId) return false;
+  return true;
+}
+
+function lockOwnerError(code, message, lock = null) {
+  const error = new Error(message);
+  error.code = code;
+  if (lock) error.lock = lock;
+  return error;
+}
+
+function hasLockField(lock, field) {
+  return Boolean(lock && Object.prototype.hasOwnProperty.call(lock, field));
+}
+
+function validPid(value) {
+  const numeric = Number(value);
+  return Number.isSafeInteger(numeric) && numeric > 0;
+}
+
+function extractUserDataDir(command) {
+  const match = String(command || '').match(
+    /(?:^|\s)--user-data-dir=(?:"([^"]*)"|'([^']*)'|((?:(?!\s--).)*))/i,
+  );
+  return String(match?.slice(1).find((value) => value !== undefined) || '').trim();
+}
+
+function commandUsesProfile(command, profileRoot) {
+  const userDataDir = extractUserDataDir(command);
+  if (!userDataDir) return false;
+  return normalizedPath(userDataDir) === normalizedPath(profileRoot);
+}
+
+function scanProcessesUsingProfile(profileRoot) {
+  try {
+    if (process.platform === 'win32') {
+      const output = execFileSync('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '[Console]::Out.Write((Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress))',
+      ], {
+        encoding: 'utf8',
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: PROCESS_SCAN_TIMEOUT_MS,
+      }).trim();
+      if (!output) return { known: true, pids: [] };
+      const parsed = JSON.parse(output);
+      const records = Array.isArray(parsed) ? parsed : [parsed];
+      return {
+        known: true,
+        pids: records
+          .filter((record) => Number(record?.ProcessId) !== process.pid && commandUsesProfile(record?.CommandLine, profileRoot))
+          .map((record) => Number(record.ProcessId))
+          .filter(validPid),
+      };
+    }
+
+    const output = execFileSync('ps', ['-axo', 'pid=,command='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: PROCESS_SCAN_TIMEOUT_MS,
+    });
+    const pids = [];
+    for (const line of String(output || '').split(/\r?\n/)) {
+      const match = line.match(/^\s*(\d+)\s+(.*)$/);
+      if (!match || Number(match[1]) === process.pid) continue;
+      if (commandUsesProfile(match[2], profileRoot)) pids.push(Number(match[1]));
+    }
+    return { known: true, pids: pids.filter(validPid) };
+  } catch (_) {
+    return { known: false, pids: [] };
+  }
+}
+
+function lockAgeMs(lock) {
+  const timestamp = Date.parse(String(lock?.browserStartedAt || lock?.createdAt || ''));
+  return Number.isFinite(timestamp) ? Math.max(0, Date.now() - timestamp) : null;
+}
+
 async function acquireProfileLock(profileRoot, meta = {}) {
   await fsp.mkdir(profileRoot, { recursive: true });
   const file = lockPath(profileRoot);
   const guard = file + '.guard';
-  const guardPayload = { pid: process.pid, createdAt: new Date().toISOString() };
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await fsp.mkdir(guard);
-      await fsp.writeFile(path.join(guard, 'owner.json'), JSON.stringify(guardPayload), 'utf8');
-      break;
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      let owner = null;
-      try { owner = JSON.parse(await fsp.readFile(path.join(guard, 'owner.json'), 'utf8')); } catch (_) {}
-      if (owner?.pid && !isPidAlive(owner.pid)) {
-        await fsp.rm(guard, { recursive: true, force: true }).catch(() => {});
-        continue;
-      }
-      if (attempt >= 100) throw new Error('Timed out acquiring profile lock guard');
-      await new Promise((resolve) => setTimeout(resolve, 20));
+  const identity = lockIdentity(profileRoot, meta);
+  // Older builds used a directory guard and could crash after mkdir() but before
+  // owner.json was written. The guard is now advisory compatibility state; the
+  // atomic lock file below is the sole authority for current instances.
+  try {
+    const owner = readJsonFileSync(path.join(guard, 'owner.json'));
+    if (lockBelongsToProfile(owner, identity) && owner?.pid && isPidAlive(owner.pid)) {
+      throw lockOwnerError('PROFILE_LOCKED', `Profile startup is guarded (pid ${owner.pid})`, owner);
     }
+    if (lockBelongsToProfile(owner, identity) && owner?.pid && !isPidAlive(owner.pid)) {
+      await fsp.rm(guard, { recursive: true, force: true }).catch(() => {});
+    }
+    // Unknown or malformed legacy guards are deliberately retained, but they do
+    // not block the new atomic lock path because no owner PID can be verified.
+  } catch (error) {
+    if (error?.code === 'PROFILE_LOCKED') throw error;
   }
 
-  try {
-    let existing = null;
-    try { existing = JSON.parse(await fsp.readFile(file, 'utf8')); } catch (_) {}
-    if (existing?.pid && isPidAlive(existing.pid)) {
-      const err = new Error(`Profile already running (pid ${existing.pid})`);
-      err.code = 'PROFILE_LOCKED';
-      err.lock = existing;
-      throw err;
+  const payload = {
+    ...meta,
+    profileRoot: identity.profileRoot,
+    pid: process.pid,
+    token: crypto.randomBytes(24).toString('hex'),
+    createdAt: new Date().toISOString(),
+    // Mark the new lock as identity-pending until engine.js binds the spawned
+    // Chromium pid. A crash in that tiny window must remain fail-closed.
+    browserPid: null,
+  };
+  for (;;) {
+    let handle;
+    try {
+      // wx is the actual inter-process exclusion. Unlike the old directory
+      // protocol, there is no empty guard window that can deadlock a profile.
+      handle = await fsp.open(file, 'wx', 0o600);
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      let existing;
+      try { existing = JSON.parse(await fsp.readFile(file, 'utf8')); } catch (_) {
+        throw lockOwnerError('PROFILE_LOCK_UNRECOVERABLE', 'Profile lock is malformed and cannot be recovered');
+      }
+      const numericPid = Number(existing?.pid);
+      const pidValid = Number.isSafeInteger(numericPid) && numericPid > 0;
+      if (!pidValid || !lockBelongsToProfile(existing, identity)) {
+        throw lockOwnerError(
+          'PROFILE_LOCK_UNRECOVERABLE',
+          'Profile lock ownership cannot be verified; refusing to remove it',
+          existing,
+        );
+      }
+      if (isPidAlive(numericPid)) {
+        throw lockOwnerError('PROFILE_LOCKED', `Profile already running (pid ${numericPid})`, existing);
+      }
+      // Newer owners also bind the lock to the Chromium child. The Electron
+      // owner can disappear during an app restart while that child continues
+      // using the profile; never recover such a lock until the child is gone.
+      // A malformed browserPid is fail-closed for the same reason.
+      if (hasLockField(existing, 'browserPid')) {
+        if (existing.browserPid !== null && !validPid(existing.browserPid)) {
+          throw lockOwnerError(
+            'PROFILE_LOCK_UNRECOVERABLE',
+            'Profile lock browser ownership cannot be verified; refusing to remove it',
+            existing,
+          );
+        }
+        const browserPid = Number(existing.browserPid);
+        if (validPid(existing.browserPid) && isPidAlive(browserPid)) {
+          throw lockOwnerError(
+            'PROFILE_LOCKED',
+            `Profile browser is still running (pid ${browserPid})`,
+            existing,
+          );
+        }
+      }
+      // A crash can occur in the tiny gap between spawn() returning a child and
+      // updateProfileLock() writing its pid. Search the OS process list by the
+      // exact --user-data-dir argument before deciding that a pending lock is
+      // stale. This keeps an app restart from stealing a live Chromium profile.
+      const processScan = scanProcessesUsingProfile(profileRoot);
+      if (processScan.known && processScan.pids.length) {
+        throw lockOwnerError(
+          'PROFILE_LOCKED',
+          `Profile browser is still running (pid ${processScan.pids[0]})`,
+          { ...existing, browserPids: processScan.pids },
+        );
+      }
+      if (!processScan.known) {
+        const age = lockAgeMs(existing);
+        if (age === null || age < UNKNOWN_STARTUP_LOCK_RECOVERY_MS) {
+          throw lockOwnerError(
+            'PROFILE_LOCK_UNRECOVERABLE',
+            'Profile startup lock cannot be verified yet; refusing to remove it',
+            existing,
+          );
+        }
+      }
+      // Recovery is allowed only after exact profile ownership and a definitely
+      // absent PID have both been established. A race with another opener is
+      // handled by the next wx attempt.
+      await fsp.rm(file, { force: true });
+      continue;
     }
-    if (existing || fs.existsSync(file)) await fsp.rm(file, { force: true });
-
-    const payload = {
-      ...meta,
-      pid: process.pid,
-      token: crypto.randomBytes(24).toString('hex'),
-      createdAt: new Date().toISOString(),
-    };
-    const handle = await fsp.open(file, 'wx', 0o600);
     try {
       await handle.writeFile(JSON.stringify(payload, null, 2), 'utf8');
       await handle.sync();
+      return payload;
+    } catch (error) {
+      await fsp.rm(file, { force: true }).catch(() => {});
+      throw error;
     } finally {
-      await handle.close();
+      await handle.close().catch(() => {});
     }
-    return payload;
-  } finally {
-    await fsp.rm(guard, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Terminate Chromium helpers that still advertise the exact profile path.
+ * This is used after the tracked browser child exits, when a process-group
+ * kill can no longer safely identify the original root process.
+ */
+function terminateProcessesUsingProfile(profileRoot) {
+  const scan = scanProcessesUsingProfile(profileRoot);
+  if (!scan.known || !scan.pids.length) return scan;
+  for (const pid of scan.pids) {
+    try {
+      if (process.platform === 'win32') {
+        execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+          windowsHide: true,
+          stdio: 'ignore',
+          timeout: PROCESS_SCAN_TIMEOUT_MS,
+        });
+      } else {
+        process.kill(pid, 'SIGKILL');
+      }
+    } catch (_) {}
+  }
+  return scan;
+}
+
+/**
+ * Attach the spawned browser identity to an existing owner lock.
+ *
+ * The Electron pid remains the lock owner for backwards compatibility; the
+ * browser pid is additional evidence used during stale-lock recovery.
+ */
+async function updateProfileLock(profileRoot, owner = null, patch = {}) {
+  const file = lockPath(profileRoot);
+  if (!owner?.token) return false;
+  let existing;
+  try { existing = JSON.parse(await fsp.readFile(file, 'utf8')); } catch (_) { return false; }
+  if (existing.pid !== owner.pid || existing.token !== owner.token) return false;
+  if (existing.profileRoot != null
+    && normalizedPath(existing.profileRoot) !== normalizedPath(path.resolve(profileRoot))) return false;
+  if (hasLockField(patch, 'browserPid') && !validPid(patch.browserPid)) {
+    throw lockOwnerError('PROFILE_LOCK_UPDATE_INVALID', 'Browser pid must be a positive integer');
+  }
+
+  const updated = {
+    ...existing,
+    ...patch,
+    profileRoot: path.resolve(profileRoot),
+    pid: existing.pid,
+    token: existing.token,
+  };
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  try {
+    await fsp.writeFile(temporary, JSON.stringify(updated, null, 2), { encoding: 'utf8', mode: 0o600 });
+    await fsp.rename(temporary, file);
+    return updated;
+  } catch (error) {
+    await fsp.rm(temporary, { force: true }).catch(() => {});
+    throw error;
   }
 }
 
@@ -73,6 +303,8 @@ async function releaseProfileLock(profileRoot, owner = null) {
   let existing;
   try { existing = JSON.parse(await fsp.readFile(file, 'utf8')); } catch (_) { return false; }
   if (existing.pid !== owner.pid || existing.token !== owner.token) return false;
+  if (existing.profileRoot != null
+    && normalizedPath(existing.profileRoot) !== normalizedPath(path.resolve(profileRoot))) return false;
   await fsp.rm(file, { force: true });
   return true;
 }
@@ -355,7 +587,10 @@ async function assertSafeProfileChild(profileRoot, target, options = {}) {
 module.exports = {
   lockPath,
   acquireProfileLock,
+  updateProfileLock,
   releaseProfileLock,
+  scanProcessesUsingProfile,
+  terminateProcessesUsingProfile,
   isPidAlive,
   isValidProfileId,
   assertProfileId,

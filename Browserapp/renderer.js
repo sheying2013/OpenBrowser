@@ -1479,6 +1479,37 @@ function parseEditorProxy(value) {
   return { mode: 'custom', type: parts.length >= 4 ? 'socks5' : 'http', host: parts[0] || '', port: parts[1] || '', username: parts[2] || '', password: parts.slice(3).join(':') };
 }
 
+function proxyHasCredentials(value) {
+  const parsed = parseEditorProxy(value);
+  return Boolean(String(parsed.username || '') || String(parsed.password || ''));
+}
+
+function mergeRemoteProxy(localValue, remoteValue) {
+  const local = String(localValue || '').trim();
+  const remote = String(remoteValue || '').trim();
+  // Renderer storage deliberately redacts proxy credentials. Prefer the main
+  // process value when it is the only side that still has the credentials.
+  if (remote && proxyHasCredentials(remote) && !proxyHasCredentials(local)) return remote;
+  if (local) return local;
+  return remote;
+}
+
+function proxyAuthActionForUpdate(currentValue, nextValue, networkMode = 'proxy') {
+  if (networkMode === 'direct') return null;
+  const current = parseEditorProxy(currentValue);
+  const next = parseEditorProxy(nextValue);
+  const sameEndpoint = current.mode === 'custom'
+    && next.mode === 'custom'
+    && current.type === next.type
+    && current.host === next.host
+    && String(current.port || '') === String(next.port || '');
+  if (sameEndpoint
+    && (String(current.username || '') || String(current.password || ''))
+    && !String(next.username || '')
+    && !String(next.password || '')) return 'clear';
+  return null;
+}
+
 function editorSet(id, value) { const field = $(id); if (field) field.value = value ?? ''; }
 function editorCheck(id, value) { const field = $(id); if (field) field.checked = Boolean(value); }
 function editorSelectedNetwork() { return document.querySelector('input[name="editor-network"]:checked')?.value || 'direct'; }
@@ -1614,6 +1645,8 @@ function editorDraft(strict = true) {
     }
     privacy.latitude = latitude; privacy.longitude = longitude;
   }
+  const proxy = serializeEditorProxy(strict);
+  const proxyAuthAction = proxyAuthActionForUpdate(current.proxy, proxy, editorSelectedNetwork());
   return normalizeProfileSettings({
     ...current,
     ...(editorNetworkResult ? {
@@ -1658,7 +1691,8 @@ function editorDraft(strict = true) {
     groupId: $('#editor-group')?.value || UNGROUPED_ID,
     note: ($('#editor-note')?.value || '').trim(),
     networkMode: editorSelectedNetwork() === 'direct' ? 'direct' : 'proxy',
-    proxy: serializeEditorProxy(strict),
+    proxy,
+    ...(proxyAuthAction ? { proxyAuthAction } : {}),
     width: resolution.width,
     height: resolution.height,
     platform: {
@@ -4326,7 +4360,7 @@ async function initialize() {
             exitNetworkType: remote.exitNetworkType,
           } : {}),
           cookies: local.cookies || remote.cookies || '',
-          proxy: local.proxy && !/^(direct)$/i.test(local.proxy) ? local.proxy : (remote.proxy || local.proxy),
+          proxy: mergeRemoteProxy(local.proxy, remote.proxy),
           platform: {
             ...(local.platform || {}),
             password: local.platform?.password || remote.platform?.password || '',

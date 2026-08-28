@@ -86,6 +86,9 @@ async function startAutomation(context = {}) {
     async stop() {
       await rpaEngine.stop();
       await localApi.stop();
+      // Proxy credentials are written through a serialized queue. Wait for the
+      // queue before Electron is allowed to tear down the main process.
+      await proxyStore.flush?.();
     },
   };
 }

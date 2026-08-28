@@ -86,19 +86,27 @@ class LiveSyncController {
   scheduleRefreshTick() {
     if (this.timer) clearTimeout(this.timer);
     if (!this.master) return;
+    const refreshGeneration = this.getRefreshGeneration?.();
     const idleMs = Date.now() - (this.lastActivityAt || 0);
     // Active: ~450ms; recent: ~700ms; idle: ~1400ms. Caps CDP churn when user is not driving.
     this.refreshIntervalMs = idleMs < 2500 ? 450 : idleMs < 12000 ? 700 : 1400;
-    this.timer = setTimeout(() => { this.runRefreshTick().finally(() => this.scheduleRefreshTick()); }, this.refreshIntervalMs);
+    this.timer = setTimeout(() => { this.runRefreshTick(refreshGeneration).finally(() => this.scheduleRefreshTick()); }, this.refreshIntervalMs);
     this.timer.unref?.();
   }
 
   markActivity() { this.lastActivityAt = Date.now(); }
 
-  async runRefreshTick() {
+  async runRefreshTick(refreshGeneration = null) {
+    if (refreshGeneration != null && this.getRefreshGeneration && refreshGeneration !== this.getRefreshGeneration()) return;
     if (!this.master || this.refreshInFlight) { if (this.refreshInFlight) this.skippedRefreshes += 1; return; }
     this.refreshInFlight = true; this.tickCount = (this.tickCount || 0) + 1;
-    try { await this.refreshMasterTabs(); } catch (error) { this.handleWatchError(error); }
+    try {
+      await this.refreshMasterTabs(refreshGeneration);
+    } catch (error) {
+      if (refreshGeneration == null || !this.getRefreshGeneration || refreshGeneration === this.getRefreshGeneration()) {
+        this.handleWatchError(error, refreshGeneration);
+      }
+    }
     finally { this.refreshInFlight = false; }
   }
 
@@ -200,7 +208,12 @@ class LiveSyncController {
 
   async handle(tabId, event) {
     if (event.method === 'Runtime.executionContextCreated') {
-      const contextId = event.params?.context?.id; const connection = this.connections.get(tabId)?.connection;
+      const context = event.params?.context;
+      const contextId = context?.id; const connection = this.connections.get(tabId)?.connection;
+      // The DOM event bridge must be installed once in Chromium's default
+      // world. Isolated worlds receive the same DOM events but keep their own
+      // window sentinel, which otherwise duplicates every forwarded action.
+      if (context?.auxData?.isDefault === false) return;
       if (contextId && connection) connection.command('Runtime.evaluate', { expression: injection, contextId }).catch(() => {});
     }
     if (event.method === 'Runtime.bindingCalled' && event.params?.name === 'openBrowserSync') {

@@ -12,12 +12,17 @@ async function main() {
   const dataRoot = path.join(__dirname, '..', 'live-sync-v5-selftest-data'); await fs.rm(dataRoot, { recursive: true, force: true }); await fs.mkdir(dataRoot, { recursive: true });
   const server = http.createServer((request, response) => { const page = request.url.includes('tab2') ? 'tab2' : 'tab1'; response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); response.end(`<!doctype html><meta charset="utf-8"><title>${page}</title><body data-page="${page}"><h1>${page}</h1><input id="message"><button id="action" data-count="0" onclick="this.dataset.count=String(Number(this.dataset.count)+1)">action</button></body>`); });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)); const origin = `http://127.0.0.1:${server.address().port}`;
-  const app = { getPath(name) { if (name === 'userData') return dataRoot; throw new Error(name); } }; const engine = new BrowserEngine(app); let sync;
+  const app = { getPath(name) { if (name === 'userData') return dataRoot; throw new Error(name); } }; const engine = new BrowserEngine(app); let sync; const lifecycleEvents = []; const syncEvents = [];
+  const unsubscribeEngine = engine.on((event) => {
+    if (event?.type === 'status' || event?.type === 'master-closed' || event?.type === 'sync-disconnected' || event?.type === 'sync-error') lifecycleEvents.push(event);
+  });
   const profiles = [{ id: 'v5-master', name: 'V5 Master', browser: 'Google Chrome', proxy: 'Direct' }, { id: 'v5-slave', name: 'V5 Slave', browser: 'Google Chrome', proxy: 'Direct' }];
   try {
     await engine.init(null); engine.syncProfiles(profiles); const master = await engine.start(profiles[0]); const slave = await engine.start(profiles[1]);
     await Promise.all([cdp.navigate(master.port, origin + '/tab1'), cdp.navigate(slave.port, origin + '/tab1')]); await sleep(900);
-    sync = new LiveSyncController(engine, () => {}); await sync.start(profiles.map((item) => item.id));
+    sync = new LiveSyncController(engine, (event) => {
+      if (event?.type === 'sync-disconnected' || event?.type === 'master-closed' || event?.type === 'sync-error') syncEvents.push(event);
+    }); await sync.start(profiles.map((item) => item.id));
     const initialMasterTab = webTabs(await cdp.tabs(master.port))[0]; const initialSlaveTab = webTabs(await cdp.tabs(slave.port))[0];
     const marker = { master: await evaluate(initialMasterTab, `Boolean(document.getElementById('openbrowser-master-marker'))`), slave: await evaluate(initialSlaveTab, `Boolean(document.getElementById('openbrowser-master-marker'))`) };
     if (!marker.master || marker.slave) throw new Error('Master marker failed: ' + JSON.stringify(marker));
@@ -46,11 +51,19 @@ async function main() {
     if (duringBlank !== beforeBlank + 1) throw new Error('Blank-tab open mirror failed: ' + JSON.stringify({ beforeBlank, duringBlank }));
     await cdp.closeTab(master.port, masterBlank.id); await sleep(1600); const afterBlank = (await cdp.tabs(slave.port)).length;
     if (afterBlank !== beforeBlank) throw new Error('Blank-tab close mirror failed: ' + JSON.stringify({ beforeBlank, duringBlank, afterBlank }));
-    await cdp.newTab(master.port, origin + '/persist'); await sleep(900); await engine.stop(profiles[0].id); for (let attempt = 0; attempt < 50 && engine.status().some((item) => item.running); attempt += 1) await sleep(200);
-    const closedTogether = engine.status().every((item) => !item.running); if (!closedTogether) throw new Error('Master-close cascade failed: ' + JSON.stringify(engine.status()));
+    await cdp.newTab(master.port, origin + '/persist'); await sleep(900); await engine.stop(profiles[0].id); for (let attempt = 0; attempt < 60 && engine.status().some((item) => item.running || item.stopping); attempt += 1) await sleep(200);
+    const closedTogether = engine.status().every((item) => !item.running); const disconnected = syncEvents.find((event) => event.type === 'sync-disconnected'); const masterClosed = syncEvents.find((event) => event.type === 'master-closed');
+    if (!closedTogether || !disconnected || !masterClosed || (masterClosed.remaining && masterClosed.remaining.length)) throw new Error('Master-close cascade failed: ' + JSON.stringify({ status: engine.status(), events: lifecycleEvents, syncEvents }));
     const restarted = await engine.start(profiles[0]); await sleep(700); const resetTabs = await cdp.tabs(restarted.port);
-    if (resetTabs.length !== 1 || !resetTabs[0].url.toLowerCase().includes('openbrowser-start.html')) throw new Error('Restart tab reset failed: ' + JSON.stringify(resetTabs));
-    process.stdout.write(JSON.stringify({ success: true, browser: master.browser, opened: 2, active: visibility, exactMapping: values, remainingAfterClose: slaveTabs.map((tab) => tab.url), blankLifecycle: { beforeBlank, duringBlank, afterBlank }, marker, closedTogether, restartTabs: resetTabs.map((tab) => tab.url) }, null, 2));
-  } finally { sync?.stop(); await engine.stopAll().catch(() => {}); await new Promise((resolve) => server.close(resolve)); await fs.rm(dataRoot, { recursive: true, force: true }).catch(() => {}); }
+    if (resetTabs.length !== 1 || !engine.isStartPageUrl(resetTabs[0].url)) throw new Error('Restart tab reset failed: ' + JSON.stringify(resetTabs));
+    process.stdout.write(JSON.stringify({ success: true, browser: master.browser, opened: 2, active: visibility, exactMapping: values, remainingAfterClose: slaveTabs.map((tab) => tab.url), blankLifecycle: { beforeBlank, duringBlank, afterBlank }, marker, closedTogether, cascade: { disconnected: { master: disconnected.master, slaves: disconnected.slaves }, masterClosed: { controlled: masterClosed.controlled, remaining: masterClosed.remaining } }, restartTabs: resetTabs.map((tab) => tab.url) }, null, 2));
+  } finally {
+    try { sync?.stop(); } catch (_) {}
+    await engine.stopAll().catch(() => {});
+    try { await engine.startPageServer?.stop?.(); } catch (_) {}
+    unsubscribeEngine?.();
+    await new Promise((resolve) => server.close(resolve));
+    await fs.rm(dataRoot, { recursive: true, force: true }).catch(() => {});
+  }
 }
 main().catch((error) => { process.stderr.write(error.stack || error.message); process.exitCode = 1; });

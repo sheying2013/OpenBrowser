@@ -3,7 +3,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 const cdp = require('./cdp');
-const { LiveSyncController: LiveSyncV4, PersistentCdp, injection } = require('./live-sync-v4');
+const { LiveSyncController: LiveSyncV4, injection } = require('./live-sync-v4');
 const { planFanoutFromPayload } = require('./automation/protocol/sync-fanout');
 const { settingsToOperateList } = require('./automation/protocol/event-map');
 const { syncCapabilities } = require('./automation/protocol/cross-platform');
@@ -12,6 +12,240 @@ const masterMarker = String.raw`(() => {
   const install = () => { if (!document.documentElement) return requestAnimationFrame(install); if (document.getElementById('openbrowser-master-marker')) return; const marker = document.createElement('div'); marker.id='openbrowser-master-marker'; marker.textContent='\u4e3b\u63a7\u7a97\u53e3'; marker.style.cssText='position:fixed;left:12px;top:12px;z-index:2147483647;background:#123a8c;color:white;padding:8px 14px;border-radius:8px;font:700 14px Segoe UI,sans-serif;box-shadow:0 4px 18px #0005;pointer-events:none'; document.documentElement.appendChild(marker); document.documentElement.style.boxShadow='inset 0 0 0 5px #123a8c'; };
   install();
 })();`;
+
+const fullscreenInjection = String.raw`(() => {
+  // Install in every execution context. A player inside an iframe (including an
+  // OOPIF) owns its own fullscreen document, so restricting this to window.top
+  // silently loses fullscreenchange events from otherwise valid players.
+  if (window.__openBrowserFullscreenSyncV5) return;
+  window.__openBrowserFullscreenSyncV5 = true;
+  const escape = (value) => {
+    try { return CSS.escape(String(value)); } catch (_) { return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&'); }
+  };
+  const localSelector = (element) => {
+    if (!(element instanceof Element)) return '';
+    if (element.id) return '#' + escape(element.id);
+    const parts = [];
+    let current = element;
+    while (current && current.nodeType === 1 && parts.length < 8) {
+      let part = current.tagName.toLowerCase();
+      if (current.parentElement) {
+        const siblings = [...current.parentElement.children].filter((item) => item.tagName === current.tagName);
+        if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')';
+      }
+      parts.unshift(part);
+      current = current.parentElement;
+    }
+    return parts.join(' > ');
+  };
+  const selector = (element) => {
+    const segments = [];
+    let current = element;
+    while (current instanceof Element) {
+      segments.unshift(localSelector(current));
+      const root = current.getRootNode();
+      current = root instanceof ShadowRoot ? root.host : null;
+    }
+    return segments.filter(Boolean).join(' >>> ');
+  };
+  const fullscreenElement = () => {
+    let root = document;
+    let element = null;
+    const seen = new Set();
+    while (root && !seen.has(root)) {
+      seen.add(root);
+      element = root.fullscreenElement || root.webkitFullscreenElement || null;
+      if (!element || !element.shadowRoot) return element;
+      root = element.shadowRoot;
+    }
+    return element;
+  };
+  const frameInfo = () => {
+    const info = { frameUrl: String(location.href || ''), frameName: String(window.name || ''), frameDepth: 0, framePath: '' };
+    try {
+      // frameElement can be blocked for a cross-origin frame. Chromium still
+      // exposes ancestorOrigins, which is enough to route the request through
+      // Page.getFrameTree even when a CSS path cannot be recovered.
+      try { info.frameDepth = Number(location.ancestorOrigins?.length) || 0; } catch (_) {}
+      const segments = [];
+      let current = window;
+      let traversedDepth = 0;
+      while (current !== current.top) {
+        const frame = current.frameElement;
+        if (!(frame instanceof Element)) break;
+        segments.unshift(localSelector(frame));
+        traversedDepth += 1;
+        current = current.parent;
+      }
+      info.frameDepth = Math.max(info.frameDepth, traversedDepth);
+      info.framePath = segments.filter(Boolean).join(' >>> ');
+    } catch (_) {}
+    return info;
+  };
+  let queued = false;
+  let lastReport = '';
+  let lastReportAt = 0;
+  const report = (error) => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(() => {
+      queued = false;
+      const element = fullscreenElement();
+      try {
+        const payload = {
+          type: 'fullscreen',
+          active: Boolean(element),
+          selector: selector(element),
+          tag: String(element?.tagName || '').toLowerCase(),
+          id: String(element?.id || ''),
+          ...frameInfo(),
+          error: error ? String(error.message || error) : '',
+        };
+        const signature = JSON.stringify(payload);
+        const now = Date.now();
+        if (signature === lastReport && now - lastReportAt < 50) return;
+        lastReport = signature; lastReportAt = now;
+        window.openBrowserSync(JSON.stringify(payload));
+      } catch (_) {}
+    });
+  };
+  const installShadowRoot = (root) => {
+    if (!root || root.__openBrowserFullscreenSyncV5) return;
+    try { Object.defineProperty(root, '__openBrowserFullscreenSyncV5', { value: true }); } catch (_) {}
+    root.addEventListener('fullscreenchange', () => report(), true);
+    root.addEventListener('webkitfullscreenchange', () => report(), true);
+    root.addEventListener('fullscreenerror', () => report('Fullscreen request was rejected'), true);
+    root.addEventListener('webkitfullscreenerror', () => report('Fullscreen request was rejected'), true);
+  };
+  try {
+    const attachShadow = Element.prototype.attachShadow;
+    if (typeof attachShadow === 'function') {
+      Element.prototype.attachShadow = function (...args) {
+        const root = attachShadow.apply(this, args);
+        installShadowRoot(root);
+        return root;
+      };
+    }
+  } catch (_) {}
+  const scanShadowRoots = (root) => {
+    for (const element of root.querySelectorAll?.('*') || []) {
+      if (!element.shadowRoot) continue;
+      installShadowRoot(element.shadowRoot);
+      scanShadowRoots(element.shadowRoot);
+    }
+  };
+  try { scanShadowRoots(document); } catch (_) {}
+  document.addEventListener('fullscreenchange', () => report(), true);
+  document.addEventListener('webkitfullscreenchange', () => report(), true);
+  document.addEventListener('fullscreenerror', () => report('Fullscreen request was rejected'), true);
+  document.addEventListener('webkitfullscreenerror', () => report('Fullscreen request was rejected'), true);
+})();`;
+
+function fullscreenExpression(payload = {}) {
+  const active = payload.active === true;
+  const selector = JSON.stringify(String(payload.selector || ''));
+  const tag = JSON.stringify(String(payload.tag || '').toLowerCase());
+  const id = JSON.stringify(String(payload.id || ''));
+  return `(async () => {
+    try {
+      const current = document.fullscreenElement || document.webkitFullscreenElement || null;
+      if (!${active}) {
+        if (!current) return { active: false, changed: false };
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if (!exit) return { active: true, changed: false, unsupported: true };
+        await exit.call(document);
+        return { active: Boolean(document.fullscreenElement || document.webkitFullscreenElement), changed: true };
+      }
+      if (document.fullscreenEnabled === false) return { active: Boolean(current), changed: false, unsupported: true, reason: 'fullscreen-disabled' };
+      const deep = (path) => {
+        if (!path) return null;
+        let root = document;
+        let element = null;
+        for (const part of path.split(/\\s*>>>\\s*/)) {
+          try { element = root.querySelector(part); } catch (_) { return null; }
+          if (!element) return null;
+          root = element.shadowRoot || element;
+        }
+        return element;
+      };
+      let element = deep(${selector});
+      if (!element && ${id}) element = document.getElementById(${id});
+      if (!element && !${selector} && !${id} && ${tag}) element = document.querySelector(${tag});
+      if (!element && (${selector} || ${id} || ${tag})) return { active: Boolean(current), changed: false, unsupported: true, reason: 'fullscreen-target-not-found' };
+      if (!element) element = document.documentElement;
+      if (current === element) return { active: true, changed: false };
+      const request = element.requestFullscreen || element.webkitRequestFullscreen
+        || (String(element.tagName || '').toLowerCase() === 'video' && element.webkitEnterFullscreen);
+      if (!request) return { active: Boolean(current), changed: false, unsupported: true };
+      await Promise.resolve(request.call(element));
+      return { active: Boolean(document.fullscreenElement || document.webkitFullscreenElement), changed: true };
+    } catch (error) {
+      return { active: Boolean(document.fullscreenElement || document.webkitFullscreenElement), changed: false, error: String(error && error.message || error) };
+    }
+  })()`;
+}
+
+function flattenFrameTree(node, result = [], depth = 0) {
+  if (!node) return result;
+  const frame = node.frame || node;
+  result.push({ frame, depth });
+  for (const child of node.childFrames || []) flattenFrameTree(child, result, depth + 1);
+  return result;
+}
+
+function frameUrlKey(value) {
+  try {
+    const url = new URL(String(value || ''));
+    url.hash = '';
+    return url.href.replace(/\/$/, '').toLowerCase();
+  } catch (_) {
+    return String(value || '').split('#')[0].replace(/\/$/, '').toLowerCase();
+  }
+}
+
+function chooseFullscreenFrame(frameTree, payload = {}) {
+  const entries = flattenFrameTree(frameTree?.frameTree || frameTree);
+  if (!entries.length) return null;
+  const requestedUrl = frameUrlKey(payload.frameUrl);
+  const requestedName = String(payload.frameName || '');
+  const requestedDepth = Number.isInteger(payload.frameDepth) ? payload.frameDepth : null;
+  const requestedPath = String(payload.framePath || '');
+  const pathOnlyRequest = Boolean(requestedPath && !requestedUrl && !requestedName);
+  let candidates = entries;
+  if (requestedUrl) {
+    const exact = candidates.filter((entry) => frameUrlKey(entry.frame?.url) === requestedUrl);
+    candidates = exact.length
+      ? exact
+      : candidates.filter((entry) => frameUrlKey(entry.frame?.url).split('?')[0] === requestedUrl.split('?')[0]);
+    if (!candidates.length) return null;
+  }
+  if (requestedName) {
+    candidates = candidates.filter((entry) => String(entry.frame?.name || '') === requestedName);
+    if (!candidates.length) return null;
+  }
+  if (requestedDepth !== null) {
+    candidates = candidates.filter((entry) => entry.depth === requestedDepth);
+    if (!candidates.length) return null;
+  }
+  let best = null;
+  let bestScore = -Infinity;
+  for (const entry of candidates) {
+    const frame = entry.frame || {};
+    let score = 0;
+    if (requestedUrl && frameUrlKey(frame.url) === requestedUrl) score += 1000;
+    else if (requestedUrl) score += 250;
+    if (requestedName) score += 300;
+    if (requestedDepth !== null) score += 120;
+    if (requestedPath) score += 1;
+    if (entry.depth === 0 && !requestedUrl && requestedDepth === null) score += 10;
+    if (score > bestScore) { best = entry; bestScore = score; }
+  }
+  if (pathOnlyRequest) {
+    const depth = requestedDepth === null ? 0 : requestedDepth;
+    return candidates.length === 1 && candidates[0].depth === depth ? candidates[0].frame : null;
+  }
+  return bestScore > 0 ? best.frame : null;
+}
 
 function environmentMarker(id, master) { const text = (master ? '\u4e3b\u63a7 | ' : '') + '\u73af\u5883\u7f16\u53f7: ' + id; const color = master ? '#123a8c' : '#334155'; return `(() => { const install=()=>{if(!document.documentElement)return requestAnimationFrame(install);let e=document.getElementById('openbrowser-environment-marker');if(!e){e=document.createElement('div');e.id='openbrowser-environment-marker';document.documentElement.appendChild(e);}e.textContent=${JSON.stringify(text)};e.style.cssText='position:fixed;right:12px;top:12px;z-index:2147483646;background:${color};color:white;padding:7px 12px;border-radius:8px;font:700 13px Segoe UI,sans-serif;box-shadow:0 4px 16px #0004;pointer-events:none';};install();})()`; }
 
@@ -59,7 +293,15 @@ class LiveSyncController extends LiveSyncV4 {
     this.extensionMap = new Map(); this.extensionConnections = new Map();
     this.mappingReady = false;
     this.activeMasterTab = null; this.lastWindowSync = 0; this.lastHealthCheck = 0; this.nativeInputMirror = null; this.nativePopupActive = false;
+    this.geometryPausedUntil = 0; this.geometryPending = new Map(); this.fullscreenByTab = new Map(); this.fullscreenSessions = new Map(); this.fullscreenActiveSessions = new Map();
+    this.browserOwnedUntil = 0; this.nativeInputStdoutBuffer = '';
     this.nativeRestartTimer = null; this.nativeRestartCount = 0; this.nativeDevToolsMode = false;
+    this.nativeBridgeState = process.platform === 'win32' ? 'down' : 'disabled';
+    this.nativeBridgeReadyTimer = null;
+    // Keep the logical session identity separate from the live CDP objects. A
+    // browser-close disconnect can clear `master` before the engine emits its
+    // final status event, but the controlled environments still need closing.
+    this.syncSession = null; this.syncGeneration = 0; this.masterClosePromise = null; this.masterCloseGeneration = null;
     this.syncSettings = { keyboard: true, click: true, scroll: true, track: true, delayClick: false, delayInput: false, inputMinMs: 300, inputMaxMs: 300, clickMinMs: 100, clickMaxMs: 300 };
   }
 
@@ -106,30 +348,85 @@ class LiveSyncController extends LiveSyncV4 {
   randomDelay(min, max) { return min + Math.random() * Math.max(0, max - min); }
 
   async start(ids) {
+    const pendingClose = this.masterClosePromise;
+    // Invalidate refresh/error callbacks from the previous session before
+    // waiting for its controlled environments to finish closing.
+    this.syncGeneration += 1;
+    if (pendingClose) await pendingClose.catch(() => {});
     const result = await super.start(ids);
     this.nativeRestartCount = 0; this.startNativeInputMirror();
-    this.unsubscribeMasterClose = this.engine.on((event) => { if (event.type === 'status' && event.running === false && event.id === this.master?.id) this.closeControlledAfterMaster().catch((error) => this.emit({ type: 'sync-error', action: 'master-close', message: error.message })); });
+    const masterId = this.master?.id;
+    const controlledIds = this.slaves.map((item) => item.id);
+    const session = { masterId, controlledIds: [...controlledIds], generation: this.syncGeneration };
+    this.syncSession = session;
+    // super.start() scheduled a tick before the session identity existed.
+    // Re-arm it now so every future tick carries the current generation.
+    this.scheduleRefreshTick();
+    this.unsubscribeMasterClose = this.engine.on((event) => {
+      if (this.syncSession !== session || event?.type !== 'status' || event.running !== false || event.id !== session.masterId) return;
+      this.scheduleMasterClose(session.controlledIds, session);
+    });
     return result;
   }
 
+  getRefreshGeneration() {
+    return this.syncGeneration;
+  }
+
+  isRefreshGenerationCurrent(generation) {
+    return generation == null || generation === this.syncGeneration;
+  }
+
+  handleWatchError(error, refreshGeneration = null) {
+    if (!this.isRefreshGenerationCurrent(refreshGeneration)) return;
+    const message = String(error?.message || error || 'Unknown sync error');
+    const session = this.syncSession;
+    if (/ECONNREFUSED|connection refused|fetch failed|CDP (?:persistent )?socket (?:error|closed)|CDP connection closed/i.test(message) && session?.masterId) {
+      const master = session.masterId;
+      const slaves = [...session.controlledIds];
+      this.emit({ type: 'sync-disconnected', active: false, master, slaves, message: '浏览器环境已关闭或调试端口失效，同步已自动停止' });
+      this.scheduleMasterClose(slaves, session);
+      return;
+    }
+    return super.handleWatchError(error);
+  }
+
   startNativeInputMirror() {
+    const previousPopup = this.nativePopupActive;
     this.stopNativeInputMirror(false);
+    this.nativePopupActive = previousPopup;
     if (!this.master) return;
     if (process.platform !== 'win32') {
+      this.nativeBridgeState = 'disabled';
       this.emit({ type: 'native-input', active: false, mode: 'cdp-only', platform: process.platform, message: 'macOS/Linux 使用 CDP 页面同步；Chrome 原生 UI 输入镜像仅 Windows 支持' });
       return;
     }
     const executable = path.join(__dirname, 'native-input-mirror.exe');
-    if (!fs.existsSync(executable)) { this.emit({ type: 'sync-error', action: 'native-input', message: 'Windows input bridge is missing' }); return; }
+    if (!fs.existsSync(executable)) { this.nativeBridgeState = 'down'; this.emit({ type: 'sync-error', action: 'native-input', message: 'Windows input bridge is missing' }); return; }
     const masterPid = this.engine.running.get(this.master.id)?.pid;
     const slavePids = this.slaves.map((slave) => this.engine.running.get(slave.id)?.pid).filter((pid) => Number.isInteger(pid) && pid > 0);
-    if (!Number.isInteger(masterPid) || masterPid <= 0 || !slavePids.length) return;
+    if (!Number.isInteger(masterPid) || masterPid <= 0 || !slavePids.length) { this.nativeBridgeState = 'down'; return; }
     const nativeEnv = { ...process.env, OPENBROWSER_SYNC_KEYBOARD: this.syncSettings.keyboard ? '1' : '0', OPENBROWSER_SYNC_CLICK: this.syncSettings.click ? '1' : '0', OPENBROWSER_SYNC_SCROLL: this.syncSettings.scroll ? '1' : '0', OPENBROWSER_SYNC_TRACK: this.syncSettings.track ? '1' : '0', OPENBROWSER_DELAY_CLICK: this.syncSettings.delayClick ? '1' : '0', OPENBROWSER_DELAY_INPUT: this.syncSettings.delayInput ? '1' : '0', OPENBROWSER_INPUT_MIN_MS: String(this.syncSettings.inputMinMs), OPENBROWSER_INPUT_MAX_MS: String(this.syncSettings.inputMaxMs), OPENBROWSER_CLICK_MIN_MS: String(this.syncSettings.clickMinMs), OPENBROWSER_CLICK_MAX_MS: String(this.syncSettings.clickMaxMs) };
     const child = spawn(executable, [String(masterPid), ...slavePids.map(String)], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: nativeEnv });
     this.nativeInputMirror = child;
+    this.nativeBridgeState = 'starting';
+    this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 1200);
+    this.nativeInputStdoutBuffer = '';
+    this.nativeBridgeReadyTimer = setTimeout(() => {
+      if (this.nativeInputMirror === child && this.nativeBridgeState === 'starting') this.nativeBridgeState = 'ready';
+    }, 1200);
+    this.nativeBridgeReadyTimer.unref?.();
     child.stdout?.setEncoding('utf8');
     child.stdout?.on('data', (chunk) => {
-      for (const line of String(chunk).split(/\r?\n/)) {
+      if (this.nativeInputMirror === child) {
+        this.nativeBridgeState = 'ready';
+        if (this.nativeBridgeReadyTimer) clearTimeout(this.nativeBridgeReadyTimer);
+        this.nativeBridgeReadyTimer = null;
+      }
+      this.nativeInputStdoutBuffer += String(chunk || '');
+      const lines = this.nativeInputStdoutBuffer.split(/\r?\n/);
+      this.nativeInputStdoutBuffer = lines.pop() || '';
+      for (const line of lines) {
         const match = line.match(/^DEVTOOLS_MODE=([01])$/);
         if (match) { this.nativeDevToolsMode = match[1] === '1'; this.emit({ type: 'native-devtools', active: this.nativeDevToolsMode }); }
         const popup = line.match(/^NATIVE_POPUP_ACTIVE=([01])$/);
@@ -137,11 +434,32 @@ class LiveSyncController extends LiveSyncV4 {
       }
     });
     child.once('error', (error) => {
-      if (this.nativeInputMirror === child) { this.nativeInputMirror = null; this.scheduleNativeInputRestart(error.message); }
+      if (this.nativeInputMirror === child) {
+        this.nativeInputMirror = null;
+        if (this.nativeBridgeReadyTimer) clearTimeout(this.nativeBridgeReadyTimer);
+        this.nativeBridgeReadyTimer = null;
+        this.nativeBridgeState = 'down';
+        this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 1200);
+        this.nativeInputStdoutBuffer = '';
+        this.nativeDevToolsMode = false;
+        this.nativePopupActive = false;
+        this.scheduleNativeInputRestart(error.message);
+      }
       this.emit({ type: 'sync-error', action: 'native-input', message: error.message });
     });
     child.once('exit', (code) => {
       if (this.nativeInputMirror !== child) return; this.nativeInputMirror = null;
+      if (this.nativeBridgeReadyTimer) clearTimeout(this.nativeBridgeReadyTimer);
+      this.nativeBridgeReadyTimer = null;
+      this.nativeBridgeState = 'down';
+      this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 1200);
+      this.nativeInputStdoutBuffer = '';
+      const wasDevTools = this.nativeDevToolsMode;
+      const wasPopup = this.nativePopupActive;
+      this.nativeDevToolsMode = false;
+      this.nativePopupActive = false;
+      if (wasDevTools) this.emit({ type: 'native-devtools', active: false });
+      if (wasPopup) this.emit({ type: 'native-popup', active: false });
       if (code && this.master) { this.emit({ type: 'sync-error', action: 'native-input', message: 'Windows input bridge exited: ' + code }); this.scheduleNativeInputRestart('exit ' + code); }
     });
     this.emit({ type: 'native-input', active: true, master: this.master.id, slaves: this.slaves.map((slave) => slave.id) });
@@ -158,8 +476,10 @@ class LiveSyncController extends LiveSyncV4 {
 
   stopNativeInputMirror(resetAttempts = true) {
     if (this.nativeRestartTimer) clearTimeout(this.nativeRestartTimer); this.nativeRestartTimer = null;
+    if (this.nativeBridgeReadyTimer) clearTimeout(this.nativeBridgeReadyTimer); this.nativeBridgeReadyTimer = null;
     if (resetAttempts) this.nativeRestartCount = 0;
     const child = this.nativeInputMirror; this.nativeInputMirror = null; this.nativeDevToolsMode = false; this.nativePopupActive = false;
+    this.nativeBridgeState = process.platform === 'win32' ? 'down' : 'disabled';
     if (child && !child.killed) { try { child.kill(); } catch (_) {} }
   }
 
@@ -172,10 +492,15 @@ class LiveSyncController extends LiveSyncV4 {
       if (!this.syncSettings.scroll && ['wheel', 'scroll'].includes(type)) return;
       if (this.nativeDevToolsMode && ['click', 'mouse', 'wheel', 'scroll'].includes(type)) return;
     }
+    if (['click', 'focus', 'beforeinput', 'input'].includes(type)) {
+      this.pauseGeometrySync(1200, 'page-interaction');
+      this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 1800);
+    }
     return super.enqueueForward(tabId, payload, action);
   }
 
   async forward(tabId, payload) {
+    if (payload?.type === 'fullscreen') return this.syncFullscreen(tabId, payload);
     // Protocol gate: operate flags (click+move / scroll+move / keyboard)
     const plan = this.planProtocolFanout(payload);
     if (plan.skip && plan.reason === 'operate-gate') return;
@@ -196,26 +521,169 @@ class LiveSyncController extends LiveSyncV4 {
     return result;
   }
 
-  async closeControlledAfterMaster() {
-    const controlled = this.slaves.map((item) => item.id); this.stop();
-    await Promise.all(controlled.map((id) => this.engine.stop(id)));
-    this.emit({ type: 'master-closed', controlled });
+  async closeControlledAfterMaster(controlledIds = null, session = null) {
+    const generation = session?.generation ?? this.syncGeneration;
+    if (session && generation !== this.syncGeneration) return;
+    const controlled = [...new Set((controlledIds || this.slaves.map((item) => item.id)).filter(Boolean))];
+    this.stop({ invalidate: false });
+    let remaining = controlled;
+    for (let attempt = 0; attempt < 2 && remaining.length; attempt += 1) {
+      if (session && generation !== this.syncGeneration) return;
+      await Promise.allSettled(remaining.map((id) => this.engine.stop(id)));
+      if (session && generation !== this.syncGeneration) return;
+      const running = this.engine.running instanceof Map
+        ? new Set(this.engine.running.keys())
+        : new Set((this.engine.status?.() || []).filter((item) => item.running).map((item) => item.id));
+      remaining = remaining.filter((id) => running.has(id));
+      if (remaining.length && attempt === 0) await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    if (remaining.length) this.emit({ type: 'sync-error', action: 'master-close', message: `从控环境停止未收敛：${remaining.join(', ')}` });
+    this.emit({ type: 'master-closed', controlled, remaining });
   }
 
-  stop() {
+  scheduleMasterClose(controlledIds, session = null) {
+    if (this.masterClosePromise) return this.masterClosePromise;
+    const task = this.closeControlledAfterMaster(controlledIds, session).catch((error) => {
+      this.emit({ type: 'sync-error', action: 'master-close', message: String(error?.message || error) });
+    });
+    this.masterClosePromise = task;
+    this.masterCloseGeneration = session?.generation ?? null;
+    task.finally(() => {
+      // An older close task must never clear a newer session's close barrier.
+      if (this.masterClosePromise === task) {
+        this.masterClosePromise = null;
+        this.masterCloseGeneration = null;
+      }
+    }).catch(() => {});
+    return task;
+  }
+
+  stop(options = {}) {
+    if (options.invalidate !== false) this.syncGeneration += 1;
     this.stopNativeInputMirror();
     this.unsubscribeMasterClose?.(); this.unsubscribeMasterClose = null;
-    this.tabMap?.clear(); this.desiredUrlMap?.clear(); this.mappingReady = false; this.activeMasterTab = null;
+    this.syncSession = null;
+    this.tabMap?.clear(); this.desiredUrlMap?.clear(); this.geometryPending?.clear(); this.fullscreenByTab?.clear(); this.fullscreenSessions?.clear(); this.fullscreenActiveSessions?.clear(); this.mappingReady = false; this.activeMasterTab = null; this.geometryPausedUntil = 0; this.browserOwnedUntil = 0;
     for (const value of this.extensionConnections.values()) value.connection.close();
     this.extensionConnections.clear(); this.extensionMap.clear();
     super.stop();
   }
 
   async attach(tab) {
-    await super.attach(tab); const value = this.connections.get(tab.id); if (!value) return;
-    await value.connection.command('Page.addScriptToEvaluateOnNewDocument', { source: masterMarker });
-    await value.connection.command('Runtime.evaluate', { expression: masterMarker });
-    const environment = environmentMarker(environmentNumber(this.engine, this.master.id), true); await value.connection.command('Page.addScriptToEvaluateOnNewDocument', { source: environment }); await value.connection.command('Runtime.evaluate', { expression: environment });
+    const connection = new cdp.PersistentConnection(tab.webSocketDebuggerUrl, {
+      onEvent: (event) => this.handle(tab.id, event),
+    });
+    await connection.open();
+    const value = { tab, connection, scroll: { x: 0, y: 0 } };
+    this.connections.set(tab.id, value);
+    try {
+      await connection.command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
+      await connection.command('Runtime.addBinding', { name: 'openBrowserSync' });
+      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: injection });
+      await connection.command('Runtime.enable');
+      await connection.command('Runtime.evaluate', { expression: injection });
+      await connection.command('Page.enable');
+      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: masterMarker });
+      await connection.command('Runtime.evaluate', { expression: masterMarker });
+      const environment = environmentMarker(environmentNumber(this.engine, this.master.id), true);
+      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: environment });
+      await connection.command('Runtime.evaluate', { expression: environment });
+      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: fullscreenInjection });
+      await connection.command('Runtime.evaluate', { expression: fullscreenInjection });
+      const position = await connection.command('Runtime.evaluate', { expression: '({x:scrollX,y:scrollY})', returnByValue: true }).catch(() => null);
+      value.scroll = position?.result?.value || { x: 0, y: 0 };
+    } catch (error) {
+      connection.close(); this.connections.delete(tab.id); throw error;
+    }
+  }
+
+  async configureFullscreenSession(tabId, sessionId, connection) {
+    if (!sessionId || !connection) return;
+    const sessions = this.fullscreenSessions.get(tabId) || new Set();
+    if (sessions.has(sessionId)) return;
+    sessions.add(sessionId); this.fullscreenSessions.set(tabId, sessions);
+    const command = (method, params = {}) => connection.command(method, params, { sessionId, timeout: 10000 });
+    await command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
+    await command('Runtime.addBinding', { name: 'openBrowserSync' }).catch(() => {});
+    await command('Page.addScriptToEvaluateOnNewDocument', { source: fullscreenInjection }).catch(() => {});
+    await command('Runtime.enable').catch(() => {});
+    await command('Page.enable').catch(() => {});
+    await command('Runtime.evaluate', { expression: fullscreenInjection }).catch(() => {});
+  }
+
+  async handle(tabId, event) {
+    const connection = this.connections.get(tabId)?.connection;
+    if (event.method === 'Target.attachedToTarget') {
+      this.configureFullscreenSession(tabId, event.params?.sessionId, connection).catch(() => {});
+    }
+    if (event.method === 'Target.detachedFromTarget') {
+      const sessionId = event.params?.sessionId;
+      const sessions = this.fullscreenSessions.get(tabId);
+      sessions?.delete(sessionId);
+      if (sessions && !sessions.size) this.fullscreenSessions.delete(tabId);
+      const active = this.fullscreenActiveSessions.get(tabId);
+      active?.delete(sessionId);
+      if (active && !active.size) {
+        this.fullscreenActiveSessions.delete(tabId);
+        this.clearFullscreenState(tabId, 'oopif-detached');
+      }
+    }
+    if (event.method === 'Page.frameNavigated') {
+      this.fullscreenByTab.delete(tabId);
+      this.fullscreenActiveSessions.delete(tabId);
+    }
+    if (event.method === 'Runtime.executionContextCreated') {
+      const context = event.params?.context;
+      const contextId = context?.id;
+      if (contextId && connection) connection.command('Runtime.evaluate', { expression: fullscreenInjection, contextId }, event.sessionId ? { sessionId: event.sessionId } : {}).catch(() => {});
+    }
+    if (event.method === 'Runtime.bindingCalled' && event.params?.name === 'openBrowserSync') {
+      let payload;
+      try { payload = JSON.parse(event.params.payload); } catch (_) { return; }
+      if (payload?.type === 'fullscreen') {
+        if (payload.error) {
+          const cleared = this.clearFullscreenState(tabId, 'fullscreen-error');
+          this.emit({
+            type: 'live-sync-fullscreen-error',
+            masterTabId: tabId,
+            message: String(payload.error),
+            frameUrl: String(payload.frameUrl || ''),
+            cleared,
+          });
+          return;
+        }
+        this.fullscreenByTab.set(tabId, payload.active === true);
+        if (event.sessionId) {
+          const active = this.fullscreenActiveSessions.get(tabId) || new Set();
+          if (payload.active === true) active.add(event.sessionId);
+          else active.delete(event.sessionId);
+          if (active.size) this.fullscreenActiveSessions.set(tabId, active);
+          else this.fullscreenActiveSessions.delete(tabId);
+        }
+        this.pauseGeometrySync(1800, 'fullscreen-transition');
+      }
+    }
+    return super.handle(tabId, event);
+  }
+
+  pauseGeometrySync(durationMs = 1200, reason = 'interaction') {
+    const duration = Math.max(0, Math.min(10000, Number(durationMs) || 0));
+    this.geometryPausedUntil = Math.max(this.geometryPausedUntil || 0, Date.now() + duration);
+    this.lastGeometryPauseReason = reason;
+  }
+
+  clearFullscreenState(tabId, reason = 'fullscreen-reset') {
+    const cleared = this.fullscreenByTab.delete(tabId);
+    // A rejected fullscreen request must not leave the geometry guard waiting
+    // on a state transition that will never produce fullscreenchange.
+    if (this.lastGeometryPauseReason === 'fullscreen-transition' || this.lastGeometryPauseReason === 'fullscreen-error') {
+      const recoveryUntil = Date.now() + 250;
+      this.geometryPausedUntil = this.geometryPausedUntil
+        ? Math.min(this.geometryPausedUntil, recoveryUntil)
+        : recoveryUntil;
+      this.lastGeometryPauseReason = reason;
+    }
+    return cleared;
   }
 
   /**
@@ -240,12 +708,13 @@ class LiveSyncController extends LiveSyncV4 {
     for (const id of [...this._slaveErrorAt.keys()]) if (!active.has(id)) this._slaveErrorAt.delete(id);
   }
 
-  async refreshMasterTabs() {
-    if (!this.master) return;
+  async refreshMasterTabs(refreshGeneration = null) {
+    if (!this.isRefreshGenerationCurrent(refreshGeneration) || !this.master) return;
     const tick = (this.tickCount || 0);
     // Heavy work (extension pages / geometry / zoom) only every N ticks to cut CDP load.
     const doHeavy = tick % 3 === 0;
     const allMasterTargets = await cdp.targets(this.master.item.port);
+    if (!this.isRefreshGenerationCurrent(refreshGeneration)) return;
     const tabs = normalTabs(allMasterTargets.filter((target) => target.type === 'page'));
     const masterExtensionPages = doHeavy ? extensionPages(allMasterTargets) : null;
     const live = new Set(tabs.map((tab) => tab.id));
@@ -253,11 +722,11 @@ class LiveSyncController extends LiveSyncV4 {
     for (const [id, value] of this.connections) {
       if (!live.has(id) || value.connection.socket?.readyState !== 1) {
         value.connection.close(); this.connections.delete(id);
-        if (!live.has(id)) { await this.closeMappedTabs(id); this.tabMap.delete(id); }
+        if (!live.has(id)) { await this.closeMappedTabs(id); this.tabMap.delete(id); this.fullscreenByTab.delete(id); }
       }
     }
 
-    for (const id of [...this.tabMap.keys()]) if (!live.has(id)) { await this.closeMappedTabs(id); this.tabMap.delete(id); }
+    for (const id of [...this.tabMap.keys()]) if (!live.has(id)) { await this.closeMappedTabs(id); this.tabMap.delete(id); this.fullscreenByTab.delete(id); }
     this.masterTabs = tabs;
     const slaveLists = new Map(); const slaveExtensionLists = new Map();
     // Parallel slave target fetch (was sequential). Each slave is isolated: a closed or
@@ -275,16 +744,22 @@ class LiveSyncController extends LiveSyncV4 {
         failedSlaves.push({ id: slave.id, message: String(error?.message || error) });
       }
     }));
+    if (!this.isRefreshGenerationCurrent(refreshGeneration)) return;
     if (failedSlaves.length) this.reportUnreachableSlaves(failedSlaves);
-    for (let index = 0; index < tabs.length; index += 1) await this.ensureMapping(tabs[index], index, slaveLists);
+    for (let index = 0; index < tabs.length; index += 1) {
+      if (!this.isRefreshGenerationCurrent(refreshGeneration)) return;
+      await this.ensureMapping(tabs[index], index, slaveLists);
+    }
     this.mappingReady = true;
 
     // Reconcile extras less often unless tab count changed.
     const tabCountChanged = !this._lastMasterTabCount || this._lastMasterTabCount !== tabs.length;
     this._lastMasterTabCount = tabs.length;
     if (doHeavy || tabCountChanged) await this.reconcileSlaveTabs(tabs, slaveLists);
+    if (!this.isRefreshGenerationCurrent(refreshGeneration)) return;
     for (const tab of tabs) if (!this.connections.has(tab.id)) await this.attach(tab);
     if (doHeavy && masterExtensionPages) await this.refreshExtensionConnections(masterExtensionPages, slaveExtensionLists);
+    if (!this.isRefreshGenerationCurrent(refreshGeneration)) return;
     await Promise.all([...this.connections.entries()].map(async ([id, value]) => {
       try { await this.pollTabState(value, { heavy: doHeavy }); }
       catch (error) {
@@ -321,7 +796,10 @@ class LiveSyncController extends LiveSyncV4 {
         if (target) mapping.set(slave.id, target);
       }
       this.extensionMap.set(masterTarget.id, mapping);
-      if (!this.extensionConnections.has(masterTarget.id)) await this.attachExtensionPage(masterTarget);
+      if (!this.extensionConnections.has(masterTarget.id)) {
+        this.pauseGeometrySync(1200, 'extension-surface-attached');
+        await this.attachExtensionPage(masterTarget);
+      }
     }
   }
 
@@ -446,9 +924,12 @@ class LiveSyncController extends LiveSyncV4 {
   }
 
   async activateMapped(masterTabId) {
-    // Target.activateTarget dismisses native menus/pickers. The bridge reports the
-    // short interval in which a separate Chrome popup owns the foreground.
-    if (process.platform === 'win32' && this.nativePopupActive) {
+    // Target.activateTarget dismisses native menus/pickers. Keep activation out of
+    // the way while browser chrome, DevTools, extension popups, or a page picker
+    // owns the foreground.
+    if (this.nativePopupActive || this.nativeDevToolsMode
+      || await this.hasVisibleExtensionSurface()
+      || await this.hasBrowserOwnedInteraction()) {
       this.emit({ type: 'live-sync-tab', masterTabId, targets: this.slaves.length, native: true });
       return;
     }
@@ -495,24 +976,259 @@ class LiveSyncController extends LiveSyncV4 {
     if (corrected) this.emit({ type: 'live-sync-zoom', masterTabId, factor, corrected });
   }
 
+  async evaluateFullscreen(tab, payload, expression, slavePort = null, diagnostics = []) {
+    const base = {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+      userGesture: true,
+    };
+    const frameDepth = Number(payload?.frameDepth);
+    const frameRequested = Boolean(payload?.framePath || payload?.frameName)
+      || frameDepth > 0
+      || (payload?.frameDepth === undefined && Boolean(payload?.frameUrl));
+    if (!frameRequested) return cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', base, 10000);
+
+    // Site-isolated iframe targets are not always present in Page.getFrameTree
+    // on the page session. When the slave port is available, route directly to
+    // the matching iframe target before falling back to same-process frames.
+    if (slavePort) {
+      try {
+        const requestedUrl = frameUrlKey(payload.frameUrl);
+        const targets = await cdp.targets(slavePort);
+        const candidates = targets.filter((item) => String(item.type || '') === 'iframe');
+        const target = candidates.find((item) => requestedUrl && frameUrlKey(item.url) === requestedUrl)
+          || candidates.find((item) => requestedUrl && frameUrlKey(item.url).split('?')[0] === requestedUrl.split('?')[0])
+          || (!requestedUrl && !payload.framePath && !payload.frameName && Number(payload.frameDepth) <= 0 && candidates.length === 1 ? candidates[0] : null);
+        if (target?.webSocketDebuggerUrl) {
+          try {
+            return await cdp.call(target.webSocketDebuggerUrl, 'Runtime.evaluate', base, 10000);
+          } catch (error) {
+            diagnostics.push({
+              stage: 'oopif-runtime-evaluate',
+              severity: 'error',
+              message: String(error?.message || error),
+              targetId: String(target.id || ''),
+              targetUrl: String(target.url || ''),
+              fallback: 'none',
+            });
+            throw error;
+          }
+        }
+        if (candidates.length) {
+          diagnostics.push({
+            stage: 'oopif-target-mismatch',
+            severity: 'warning',
+            message: `No OOPIF target matched frame URL ${String(payload.frameUrl || '(unknown)')}`,
+            targetCount: candidates.length,
+            fallback: 'same-process-frame-tree',
+          });
+        }
+      } catch (error) {
+        if (diagnostics.some((item) => item.stage === 'oopif-runtime-evaluate')) throw error;
+        if (!diagnostics.some((item) => item.stage === 'oopif-target-discovery')) {
+          diagnostics.push({
+            stage: 'oopif-target-discovery',
+            severity: 'warning',
+            message: String(error?.message || error),
+            fallback: 'same-process-frame-tree',
+          });
+        }
+      }
+    }
+
+    let frame = null;
+    try {
+      const tree = await cdp.call(tab.webSocketDebuggerUrl, 'Page.getFrameTree', {}, 10000);
+      frame = chooseFullscreenFrame(tree, payload);
+    } catch (error) {
+      diagnostics.push({
+        stage: 'frame-tree-discovery',
+        severity: 'warning',
+        message: String(error?.message || error),
+        fallback: 'top-document',
+      });
+    }
+    if (!frame || !frame.parentId) {
+      const error = new Error('Fullscreen target frame could not be resolved');
+      diagnostics.push({ stage: 'frame-target-not-found', severity: 'error', message: error.message, fallback: 'none' });
+      throw error;
+    }
+
+    // Runtime.evaluate without a contextId always runs in the top document. An
+    // isolated world gives iframe/OOPIF content its own document while retaining
+    // the userGesture flag required by the Fullscreen API.
+    try {
+      const world = await cdp.call(tab.webSocketDebuggerUrl, 'Page.createIsolatedWorld', {
+        frameId: frame.id,
+        worldName: 'openbrowser-fullscreen-sync-v5',
+      }, 10000);
+      if (world?.executionContextId) {
+        try {
+          return await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', { ...base, contextId: world.executionContextId }, 10000);
+        } catch (error) {
+          diagnostics.push({
+            stage: 'frame-runtime-evaluate',
+            severity: 'error',
+            message: String(error?.message || error),
+            frameId: String(frame.id || ''),
+            fallback: 'none',
+          });
+          throw error;
+        }
+      }
+    } catch (error) {
+      if (diagnostics.some((item) => item.stage === 'frame-runtime-evaluate')) throw error;
+      diagnostics.push({
+        stage: 'frame-isolated-world',
+        severity: 'warning',
+        message: String(error?.message || error),
+        frameId: String(frame.id || ''),
+        fallback: 'none',
+      });
+    }
+    const error = new Error('Fullscreen frame runtime is unavailable');
+    diagnostics.push({ stage: 'frame-runtime-unavailable', severity: 'error', message: error.message, frameId: String(frame.id || ''), fallback: 'none' });
+    throw error;
+  }
+
+  async syncFullscreen(masterTabId, payload) {
+    const desired = payload?.active === true;
+    const expression = fullscreenExpression(payload);
+    this.pauseGeometrySync(1800, 'fullscreen-transition');
+    let applied = 0;
+    let failed = 0;
+    await this.eachSlave(masterTabId, async (tab, slave) => {
+      const diagnostics = [];
+      try {
+        const result = await this.evaluateFullscreen(tab, payload, expression, slave?.port, diagnostics);
+        const state = result.result?.value;
+        if (state && Boolean(state.active) === desired) applied += 1;
+        else failed += 1;
+      } catch (error) {
+        failed += 1;
+        if (!diagnostics.length) diagnostics.push({ stage: 'fullscreen-evaluate', severity: 'error', message: String(error?.message || error), fallback: 'none' });
+      }
+      for (const diagnostic of diagnostics) this.emit({
+        type: 'live-sync-fullscreen-route-error',
+        masterTabId,
+        slaveId: String(slave?.id || ''),
+        tabId: String(tab?.id || ''),
+        frameUrl: String(payload?.frameUrl || ''),
+        frameDepth: Number.isInteger(payload?.frameDepth) ? payload.frameDepth : null,
+        ...diagnostic,
+      });
+    });
+    this.markActivity?.();
+    this.emit({ type: 'live-sync-fullscreen', masterTabId, active: desired, applied, failed });
+    return { active: desired, applied, failed };
+  }
+
   async syncWindowGeometry() {
     // Mirror only size (for coordinate mapping), never left/top — so tile/cascade layouts stay put.
-    if (!this.master || Date.now() - this.lastWindowSync < 2800) return; this.lastWindowSync = Date.now();
-    // Resizing a Chrome top-level window closes native menus, date pickers and extension
-    // popups. Wait until the interaction has settled and no popup target is present.
-    if (this.nativePopupActive || this.extensionConnections.size) return;
-    const source = await cdp.windowForPort(this.master.item.port); const bounds = source.bounds || {}; if (bounds.windowState && bounds.windowState !== 'normal') return;
+    const now = Date.now();
+    if (!this.master || now - this.lastWindowSync < 2800 || now < (this.geometryPausedUntil || 0)) return;
+    // The native bridge owns Windows-only UI input, while CDP still owns the
+    // browser viewport. Pause only during bridge startup; if the bridge is
+    // down, keep geometry healing so a failed helper cannot leave blank space.
+    if (process.platform === 'win32' && this.nativeBridgeState === 'starting') {
+      this.pauseGeometrySync(900, 'native-bridge');
+      return;
+    }
+    if (now < (this.browserOwnedUntil || 0)) {
+      this.pauseGeometrySync(900, 'browser-owned-grace');
+      return;
+    }
+    if (this.nativePopupActive || [...this.fullscreenByTab.values()].some(Boolean)) {
+      this.pauseGeometrySync(900, this.nativePopupActive ? 'native-popup' : 'fullscreen-active');
+      return;
+    }
+    if (await this.hasVisibleExtensionSurface()) {
+      this.pauseGeometrySync(900, 'extension-popup');
+      return;
+    }
+    if (await this.hasBrowserOwnedInteraction()) {
+      this.pauseGeometrySync(900, 'browser-owned-interaction');
+      return;
+    }
+
+    const source = await cdp.windowForPort(this.master.item.port);
+    const bounds = source.bounds || {};
+    if (bounds.windowState && bounds.windowState !== 'normal') {
+      this.pauseGeometrySync(900, 'master-window-state');
+      return;
+    }
     if (!Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) return;
+    const targetWidth = Math.round(bounds.width);
+    const targetHeight = Math.round(bounds.height);
+    this.lastWindowSync = now;
     await Promise.all(this.slaves.map(async (slave) => {
       const current = await cdp.windowForPort(slave.port); const own = current.bounds || {};
-      if (Math.abs((own.width || 0) - bounds.width) < 8 && Math.abs((own.height || 0) - bounds.height) < 8) return;
+      if (own.windowState && own.windowState !== 'normal') return;
+      if (Math.abs((own.width || 0) - targetWidth) < 8 && Math.abs((own.height || 0) - targetHeight) < 8) {
+        this.geometryPending.delete(slave.id);
+        return;
+      }
+      const pending = this.geometryPending.get(slave.id);
+      const desired = { width: targetWidth, height: targetHeight };
+      if (pending?.width === targetWidth && pending?.height === targetHeight && (pending.attempts || 0) >= 2 && now - (pending.at || 0) < 10000) return;
       await cdp.setWindowBounds(slave.port, {
         left: Number.isFinite(own.left) ? own.left : 0,
         top: Number.isFinite(own.top) ? own.top : 0,
-        width: bounds.width,
-        height: bounds.height,
+        ...desired,
+      }, { forceNormal: false });
+      // Chromium builds occasionally acknowledge setWindowBounds before the
+      // native widget has applied it. Remember the desired size so the next
+      // quiet tick can retry once, fixing the large blank viewport symptom
+      // without issuing a second resize while a menu/picker is open.
+      this.geometryPending.set(slave.id, {
+        ...desired,
+        attempts: pending?.width === targetWidth && pending?.height === targetHeight ? (pending.attempts || 0) + 1 : 1,
+        at: now,
       });
     }));
+  }
+
+  async hasBrowserOwnedInteraction() {
+    const value = this.connections.get(this.activeMasterTab)
+      || [...this.connections.values()].find((item) => item?.tab?.id === this.activeMasterTab)
+      || [...this.connections.values()][0];
+    if (!value?.connection?.command) return false;
+    try {
+      const result = await value.connection.command('Runtime.evaluate', {
+        expression: "(() => { const e = document.activeElement; const tag = String(e?.tagName || '').toLowerCase(); const type = String(e?.type || '').toLowerCase(); const picker = tag === 'select' || (tag === 'input' && /^(date|datetime-local|month|time|week|color|file)$/.test(type)); return { focused: typeof document.hasFocus === 'function' ? document.hasFocus() : true, picker }; })()",
+        returnByValue: true,
+      });
+      const state = result.result?.value || {};
+      return state.focused === false
+        || (state.picker === true
+          && ((process.platform === 'win32' && this.nativePopupActive)
+            || Date.now() < (this.browserOwnedUntil || 0)));
+    } catch (_) {
+      // A page target that is changing focus/navigation is exactly when a
+      // top-level resize is most likely to dismiss browser-owned UI.
+      return true;
+    }
+  }
+
+  async hasVisibleExtensionSurface() {
+    const values = [...this.extensionConnections.values()];
+    if (!values.length) return false;
+    const states = await Promise.all(values.map(async (value) => {
+      try {
+        const result = await value.connection.command('Runtime.evaluate', {
+          expression: "({visible:document.visibilityState==='visible',focused:typeof document.hasFocus==='function'&&document.hasFocus()})",
+          returnByValue: true,
+        });
+        const state = result.result?.value || {};
+        return state.visible === true || state.focused === true;
+      } catch (_) {
+        // A target that cannot be queried may be in the middle of opening or
+        // closing. Suppress one geometry pass rather than risking a popup tear.
+        return true;
+      }
+    }));
+    return states.some(Boolean);
   }
 
   async pollTabState(value, options = {}) {
@@ -551,4 +1267,4 @@ class LiveSyncController extends LiveSyncV4 {
   }
 }
 
-module.exports = { LiveSyncController };
+module.exports = { LiveSyncController, __test: { fullscreenInjection, fullscreenExpression } };

@@ -677,7 +677,7 @@ async function applyBackupBody(body, { mode = 'merge', localProfiles = null, loc
   }
 
   await saveLocalSettings({ ...localSettingsCache, uiGroups: groups });
-  if (engine) engine.syncProfiles(merged.profiles);
+  if (engine) await engine.syncProfiles(merged.profiles);
 
   return {
     profiles: merged.profiles,
@@ -790,6 +790,7 @@ let engine;
 let liveSync;
 let automation = null;
 let quitting = false;
+let quitCleanupPromise = null;
 let syncSelection = [];
 let syncState = { active: false, master: null, selected: [] };
 const windows = new Set();
@@ -2017,30 +2018,37 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   quitting = true;
   const cloud = localSettingsCache?.cloud || {};
-  Promise.resolve()
+  quitCleanupPromise = Promise.resolve()
+    .then(() => automation?.stop?.())
+    .catch((error) => {
+      console.warn('OpenBrowser quit automation cleanup failed:', error?.message || error);
+    })
+    .then(() => (engine ? engine.stopAll() : null))
+    .then(() => engine?.flushPersistence?.())
     .then(async () => {
-      if (cloud.enabled && cloud.autoSyncOnQuit) {
+      // Stop browsers and flush close-time state before packaging browser data.
+      // Otherwise the backup can capture stale cookies or locked SQLite/LevelDB files.
+      if (!cloud.enabled || !cloud.autoSyncOnQuit) return;
+      try {
+        await runCloudBackup({
+          profiles: [...(engine?.profiles?.values?.() || [])],
+          groups: localSettingsCache.uiGroups || [],
+          cloud,
+        });
+      } catch (error) {
+        console.warn('OpenBrowser quit auto-backup failed:', error.message);
         try {
-          await runCloudBackup({
-            profiles: [...(engine?.profiles?.values?.() || [])],
-            groups: localSettingsCache.uiGroups || [],
-            cloud,
-          });
-        } catch (error) {
-          console.warn('OpenBrowser quit auto-backup failed:', error.message);
-          try {
-            localSettingsCache.cloud = { ...cloud, lastError: error.message };
-            await saveLocalSettings(localSettingsCache);
-          } catch (_) {}
-        }
+          localSettingsCache.cloud = { ...cloud, lastError: error.message };
+          await saveLocalSettings(localSettingsCache);
+        } catch (_) {}
       }
     })
-    .then(() => automation?.stop?.())
-    .then(() => (engine ? engine.stopAll() : null))
     .finally(() => app.quit());
 });
 app.on('will-quit', () => {
   stopShortcutBridge();
-  automation?.stop?.().catch(() => {});
+  // before-quit owns the awaited shutdown chain. Do not invoke automation.stop()
+  // a second time while local API/RPA/proxy resources are already being closed.
+  if (!quitCleanupPromise) automation?.stop?.().catch(() => {});
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
