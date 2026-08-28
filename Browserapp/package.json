@@ -20,6 +20,7 @@
     "selftest:startup": "node browser-startup-diagnostic-selftest.js",
     "selftest:cloud": "node automation/cloud-sync-security-selftest.js",
     "selftest:localapi": "node automation/local-api-profile-selftest.js",
+    "selftest:mcp": "node automation/mcp-control-selftest.js",
     "selftest:profiles": "node profile-workflow-selftest.js",
     "selftest:viewport": "node viewport-resize-selftest.js",
     "log:startup": "node scripts/read-startup-log.js",

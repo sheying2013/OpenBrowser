@@ -11,6 +11,7 @@
 | `app-center.js` | 应用中心（团队 / 推荐 / 本地） |
 | `mcp-server.js` | stdio MCP（给 Cursor/Claude） |
 | `automation-selftest.js` | 自动化模块自测 |
+| `mcp-control-selftest.js` | MCP 权限 / 指纹控制 / Local API 控制面自测 |
 | `index.js` | 主进程挂载入口 |
 
 ## 验证
@@ -19,6 +20,9 @@
 npm run selftest:automation
 # 或
 node automation/automation-selftest.js
+
+# MCP 完整控制面（环境、指纹、代理、扩展、同步、RPA、权限策略）
+npm run selftest:mcp
 ```
 
 ## 日志
@@ -69,6 +73,40 @@ curl -s -X POST http://127.0.0.1:50325/api/sync/start \
   -H 'Content-Type: application/json' \
   -d '{"profile_ids":["A","B","C"],"operate":"click,move,scroll,keyboard"}'
 
+# 新建环境（MCP/API 的 snake_case 字段会映射到引擎结构）
+curl -s -X POST http://127.0.0.1:50325/api/v1/user/create \
+  -H 'api-key: YOUR_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "profile_id":"demo-001",
+    "name":"Demo",
+    "proxy":"Direct",
+    "start_url":"https://example.com",
+    "user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "resolution":"1920x1080",
+    "timezone":"Asia/Shanghai",
+    "hardware_concurrency":8,
+    "fingerprint":{"os":"Windows 11","canvasId":4242}
+  }'
+
+# 更新环境
+curl -s -X POST http://127.0.0.1:50325/api/v2/browser-profile/update \
+  -H 'api-key: YOUR_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"profile_id":"demo-001","start_url":"https://openai.com","fingerprint":{"os":"macOS"}}'
+
+# 复制环境（不复制 Cookie/凭据/出口检测/指纹身份）
+curl -s -X POST http://127.0.0.1:50325/api/v2/browser-profile/duplicate \
+  -H 'api-key: YOUR_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"source_profile_id":"demo-001","name":"Demo Copy"}'
+
+# 检测并持久化环境出口 IP / 国家 / 时区
+curl -s -X POST http://127.0.0.1:50325/api/proxy/check-profile \
+  -H 'api-key: YOUR_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"profile_id":"demo-001"}'
+
 # RPA 步骤
 curl -s -X POST http://127.0.0.1:50325/api/rpa/run \
   -H 'api-key: YOUR_API_KEY' \
@@ -91,3 +129,44 @@ OPENBROWSER_API_PORT=50325 OPENBROWSER_API_KEY=YOUR_API_KEY node automation/mcp-
 ```
 
 `YOUR_API_KEY` 从 UI 的 API & MCP 页面复制；Cursor 配置示例见 `mcp-server.js` 文件头注释。
+
+MCP 提供 45+ 个工具，覆盖：
+
+- 系统：状态、API Key 校验、MCP 权限策略、隔离审计
+- 环境：创建 / 更新 / 删除 / 复制 / 启动 / 停止 / 批量停止 / 代理检测
+- 指纹：读取、覆盖、重置、每次启动重新生成
+- 代理库：列表 / 创建 / 批量导入 / 更新 / 删除 / 测试
+- 扩展：列表 / 分配
+- 窗口同步：设置 / 状态 / 启动 / 停止 / 重启 / 排列
+- RPA：计划 / 任务 / 模板 / 运行 / 停止
+- 应用中心：列表
+
+### 权限控制
+
+每个工具标注最低权限等级，`tools/list` 和 `tools/call` 都会执行检查：
+
+| 等级 | 可操作内容 |
+|------|-----------|
+| `admin` | 全部工具，含修改 MCP 权限策略 |
+| `manage` | 环境 CRUD、指纹覆盖、代理库、扩展、RPA 计划/模板、同步设置 |
+| `run` | 启动/停止环境、窗口同步、RPA 执行、代理测试、扩展分配 |
+| `read` | 列表、状态、指纹读取、隔离审计 |
+
+启动 MCP 时可限制权限：
+
+```bash
+# 只读模式：只暴露 list/status/fingerprint 等查询工具
+OPENBROWSER_MCP_MODE=read OPENBROWSER_API_PORT=50325 OPENBROWSER_API_KEY=YOUR_API_KEY node automation/mcp-server.js
+
+# 黑名单：禁用指定工具
+OPENBROWSER_MCP_TOOL_BLACKLIST='["create_profile","rpa_run_steps"]' node automation/mcp-server.js
+
+# 白名单：只保留指定工具
+OPENBROWSER_MCP_TOOL_WHITELIST='["list_profiles","start_profile","stop_profile"]' node automation/mcp-server.js
+```
+
+运行时可通过 `mcp_update_policy`（仅 `admin` 模式）调整当前进程的策略；持久策略请写入 MCP 客户端的环境变量。
+
+### MCP 错误提示
+
+Local API 返回 401 时，MCP 会明确提示 `Set OPENBROWSER_API_KEY to the key shown on the OpenBrowser API & MCP page`，避免把 401 静默包装成其他错误。
