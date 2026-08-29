@@ -1,11 +1,12 @@
 const http = require('http');
+const fs = require('fs/promises');
+const os = require('os');
 const path = require('path');
 const { BrowserEngine } = require('./engine');
 const cdp = require('./cdp');
 
-const root = path.resolve(__dirname, '..', 'functional-selftest-data');
-const fakeApp = { getPath(name) { if (name === 'userData') return root; throw new Error(`Unsupported path: ${name}`); } };
-const engine = new BrowserEngine(fakeApp);
+let root = null;
+let engine = null;
 
 const server = http.createServer((_request, response) => {
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -24,6 +25,9 @@ async function evaluate(port, expression) {
 
 async function main() {
   let results = {};
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-functional-selftest-'));
+  const fakeApp = { getPath(name) { if (name === 'userData') return root; throw new Error(`Unsupported path: ${name}`); } };
+  engine = new BrowserEngine(fakeApp);
   try {
     await engine.init(path.join(__dirname, 'bundled-extension'));
     const profiles = [
@@ -56,7 +60,11 @@ async function main() {
     process.stdout.write(JSON.stringify(results, null, 2));
   } finally {
     await engine.stopAll().catch(() => {});
-    server.close();
+    await new Promise((resolve) => {
+      if (!server.listening) return resolve();
+      server.close(() => resolve());
+    });
+    await fs.rm(root, { recursive: true, force: true }).catch(() => {});
   }
 }
 

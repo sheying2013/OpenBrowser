@@ -115,15 +115,19 @@ function normalizeProxyRecord(input = {}, existing = null) {
     const portInput = ownValue(input, ['port', 'proxy_port', 'proxyPort']);
     const usernameInput = ownValue(input, ['username', 'user', 'proxy_user', 'proxy_username', 'proxyUsername']);
     const passwordInput = ownValue(input, ['password', 'pass', 'proxy_password', 'proxyPassword']);
+    const blankAuthPatch = usernameInput.present && passwordInput.present
+      && String(usernameInput.value) === '' && String(passwordInput.value) === ''
+      && !clearExplicitAuth;
 
     if (protocolInput.present && String(protocolInput.value).trim()) {
       protocol = String(protocolInput.value).trim().toLowerCase();
     }
     if (hostInput.present && String(hostInput.value).trim()) host = String(hostInput.value).trim();
     if (portInput.present && Number(portInput.value) > 0) port = Number(portInput.value);
-    // Empty form fields are commonly emitted by partial updates and must not erase stored auth.
-    if (usernameInput.present && String(usernameInput.value) !== '') username = String(usernameInput.value);
-    if (passwordInput.present && String(passwordInput.value) !== '') password = String(passwordInput.value);
+    if (!blankAuthPatch) {
+      if (usernameInput.present) username = String(usernameInput.value);
+      if (passwordInput.present) password = String(passwordInput.value);
+    }
   }
 
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('主机和端口必填');

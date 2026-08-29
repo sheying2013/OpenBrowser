@@ -81,7 +81,8 @@ curl -s -X DELETE -H 'api-key: YOUR_API_KEY' http://127.0.0.1:50325/api/rpa/task
 环境变量：
 
 - `OPENBROWSER_API_PORT`（默认 `50325`）
-- `OPENBROWSER_API_KEY`（可选；不设置时会在本次启动中自动生成，请以 UI 的 API & MCP 页面显示为准）
+- `OPENBROWSER_API_KEY`（可选；不设置时会生成并持久化到 `userData/local-api-key.txt`）
+- `OPENBROWSER_API_KEY_FILE`（可选；独立 MCP 进程从该文件读取 key，适合不把 key 直接写进客户端配置）
 
 ## HTTP 示例
 
@@ -156,10 +157,10 @@ curl -s -X POST http://127.0.0.1:50325/api/rpa/run \
 ## MCP
 
 ```bash
-OPENBROWSER_API_PORT=50325 OPENBROWSER_API_KEY=YOUR_API_KEY node automation/mcp-server.js
+OPENBROWSER_API_PORT=50325 OPENBROWSER_API_KEY_FILE=/path/to/local-api-key.txt node automation/mcp-server.js
 ```
 
-`YOUR_API_KEY` 从 UI 的 API & MCP 页面复制；Cursor 配置示例见 `mcp-server.js` 文件头注释。
+`OPENBROWSER_API_KEY_FILE` 使用 OpenBrowser API & MCP 页面显示的本机 key 文件路径；也可以把 `OPENBROWSER_API_KEY=YOUR_API_KEY` 直接写入客户端环境。Cursor 配置示例见 `mcp-server.js` 文件头注释。
 
 MCP 提供 45+ 个工具，覆盖：
 
@@ -200,4 +201,4 @@ OPENBROWSER_MCP_TOOL_WHITELIST='["list_profiles","start_profile","stop_profile"]
 
 ### MCP 错误提示
 
-Local API 返回 401 时，MCP 会明确提示 `Set OPENBROWSER_API_KEY to the key shown on the OpenBrowser API & MCP page`，避免把 401 静默包装成其他错误。
+Local API 返回 401 时，MCP 会明确提示设置 `OPENBROWSER_API_KEY` 或 `OPENBROWSER_API_KEY_FILE`，避免把 401 静默包装成其他错误。

@@ -14,7 +14,8 @@ const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = re
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
 const { platformPreflight } = require('./automation/platform-preflight');
 const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
-const { acquireProfileLock, updateProfileLock, releaseProfileLock, terminateProcessesUsingProfile, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = require('./automation/isolation');
+const isolation = require('./automation/isolation');
+const { lockPath, acquireProfileLock, updateProfileLock, releaseProfileLock, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = isolation;
 const { BrowserKernelManager, ensureKernelReadyForLaunch } = require('./automation/browser-kernel');
 const { ensureStartPageServer, getStartPageServer } = require('./automation/start-page-server');
 const {
@@ -26,6 +27,12 @@ const { fpLog, summarizeFp, LIVE_PROBE_EXPRESSION, logPath: fingerprintLogPath }
 
 const KERNEL_POLICY_VERSION = 4;
 const MAX_PROFILE_PROXY_LENGTH = 64 * 1024;
+// Chromium's Windows renderer/GPU helpers can outlive the browser process by
+// several seconds while profile databases close. Keep the profile lock until
+// the OS process list confirms they are gone, but give taskkill enough time to
+// finish on slower RDP/VM hosts.
+const HELPER_CLEANUP_ATTEMPTS = process.platform === 'win32' ? 32 : 3;
+const HELPER_CLEANUP_DELAY_MS = process.platform === 'win32' ? 250 : 120;
 
 function parsedProxy(value) {
   try {
@@ -1919,13 +1926,13 @@ class BrowserEngine {
       // The tracked browser process can exit before Chromium's renderer/GPU
       // helpers. Re-scan the exact user-data-dir and terminate only those
       // helpers before releasing the profile lock.
-      if (options.kill && item.child?.exitCode !== null && item.child?.exitCode !== undefined && item.root) {
+      if (item.child?.exitCode !== null && item.child?.exitCode !== undefined && item.root) {
         let helpersGone = false;
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          const scan = terminateProcessesUsingProfile(item.root);
+        for (let attempt = 0; attempt < HELPER_CLEANUP_ATTEMPTS; attempt += 1) {
+          const scan = isolation.terminateProcessesUsingProfile(item.root);
           if (!scan.known) break;
           if (!scan.pids.length) { helpersGone = true; break; }
-          await new Promise((resolve) => setTimeout(resolve, 120));
+          await new Promise((resolve) => setTimeout(resolve, HELPER_CLEANUP_DELAY_MS));
         }
         if (!helpersGone) {
           const failure = new Error(`Chromium helper exit was not confirmed for profile ${profileId}; cleanup is fail-closed`);
@@ -1942,7 +1949,14 @@ class BrowserEngine {
       }
       await item.proxyForwarder?.close().catch(() => {});
       stopIpcStubForWindow(item.kernelWindowName);
-      await releaseProfileLock(item.root, item.profileLock).catch(() => {});
+      const lockReleased = await releaseProfileLock(item.root, item.profileLock).catch(() => false);
+      if (!lockReleased && item.profileLock && fs.existsSync(lockPath(item.root))) {
+        item.cleanupFailed = true;
+        const failure = new Error(`Profile lock release failed for profile ${profileId}; cleanup is fail-closed`);
+        failure.code = "PROFILE_LOCK_RELEASE_FAILED";
+        item.cleanupError = failure;
+        throw failure;
+      }
       // Existing behavior intentionally marks the profile clean after watchdog
       // cleanup as well, preventing Chromium's restore bubble on the next launch.
       if (options.markCleanExit !== false) await this.markProfileCleanExit(item.root).catch(() => {});
@@ -2034,8 +2048,26 @@ class BrowserEngine {
         // process that may still be alive must keep the lock as a tombstone.
         return { exited: false, lockReleased: false, cleanupBlocked: true };
       }
+      if (resources.root) {
+        let helpersGone = false;
+        for (let attempt = 0; attempt < HELPER_CLEANUP_ATTEMPTS; attempt += 1) {
+          const scan = isolation.terminateProcessesUsingProfile(resources.root);
+          if (!scan.known) return { exited: false, lockReleased: false, cleanupBlocked: true };
+          if (!scan.pids.length) {
+            helpersGone = true;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, HELPER_CLEANUP_DELAY_MS));
+        }
+        if (!helpersGone) return { exited: false, lockReleased: false, cleanupBlocked: true };
+      }
       if (resources.profileLock && resources.root) {
-        await releaseProfileLock(resources.root, resources.profileLock).catch(() => {});
+        const released = await releaseProfileLock(resources.root, resources.profileLock).catch(() => false);
+        const lockStillPresent = fs.existsSync(lockPath(resources.root));
+        if (!released && lockStillPresent) {
+          return { exited: false, lockReleased: false, cleanupBlocked: true };
+        }
+        return { exited, lockReleased: !lockStillPresent };
       }
       return { exited, lockReleased: true };
     };
@@ -2924,6 +2956,13 @@ class BrowserEngine {
     }
     const remaining = [...new Set([...this.running.keys(), ...this.starting.keys(), ...this.stopping.keys()])];
     if (remaining.length) failed.push(`lifecycle resources remain: ${remaining.join(', ')}`);
+    if (this.startPageServer?.server) {
+      try {
+        await this.startPageServer.stop();
+      } catch (error) {
+        failed.push(`start page server: ${error.message || error}`);
+      }
+    }
     if (failed.length) this.emit({ type: 'sync-error', action: 'stop-all', message: `部分环境停止失败：${[...new Set(failed)].join('; ')}` });
   }
 

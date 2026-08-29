@@ -1523,11 +1523,7 @@ function serializeEditorProxy(strict = true) {
     if (strict) throw new Error(tx('请填写有效的代理主机和端口'));
     return protocol.toUpperCase() + ' · 待完善';
   }
-  if ((username && !password) || (!username && password)) {
-    if (strict) throw new Error(tx('代理账号和密码必须同时填写'));
-    return protocol + '://' + host + ':' + port;
-  }
-  const auth = username ? encodeURIComponent(username) + ':' + encodeURIComponent(password) + '@' : '';
+  const auth = (username || password) ? encodeURIComponent(username || '') + ':' + encodeURIComponent(password || '') + '@' : '';
   return protocol + '://' + auth + host + ':' + port;
 }
 
@@ -3687,6 +3683,7 @@ $('#profile-form').addEventListener('submit', async (event) => {
     os: 'Windows',
     location: 'Local',
     platform: { type: 'other', startUrl },
+    advanced: { startUrls: startUrl },
     // Browser UI language defaults to exit-IP country; fixed locale is optional in editor.
     // New profiles get a coherent device persona; existing ones are left as they were.
     privacy: { languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona' },
@@ -5234,6 +5231,7 @@ async function refreshApiMcpPage() {
     const port = info?.port || paths?.port || 50325;
     const base = (info?.url || ('http://127.0.0.1:' + port + '/')).replace(/\/?$/, '/');
     const apiKey = paths?.apiKey || '';
+    const apiKeyFile = paths?.apiKeyFile || '';
     if (pill) {
       pill.textContent = info ? tx('运行中') : tx('未启动');
       pill.classList.toggle('off', !info);
@@ -5246,7 +5244,9 @@ async function refreshApiMcpPage() {
     if (keyNote) {
       keyNote.textContent = apiKey
         ? '配置已写入当前 API Key。如要限制 AI 权限，请在 MCP 环境变量中追加 OPENBROWSER_MCP_MODE=manage|run|read（可选黑/白名单）。'
-        : '未取到 API Key：请先从上方 API Key 框复制，再手动填入下方配置；否则 MCP 会返回 401。';
+        : (apiKeyFile
+          ? 'MCP 配置会从本机 key 文件读取鉴权；如迁移到另一台电脑，请同时迁移该文件或改填 API Key。'
+          : '未取到 API Key：请先从上方 API Key 框复制，再手动填入下方配置；否则 MCP 会返回 401。');
     }
     const common = {
       mcpServers: {
@@ -5258,6 +5258,7 @@ async function refreshApiMcpPage() {
             OPENBROWSER_API_PORT: String(port),
             API_KEY: keyPlaceholder,
             OPENBROWSER_API_KEY: keyPlaceholder,
+            ...(apiKeyFile ? { OPENBROWSER_API_KEY_FILE: apiKeyFile } : {}),
           },
         },
       },
@@ -5271,13 +5272,19 @@ async function refreshApiMcpPage() {
           env: {
             OPENBROWSER_API_PORT: String(port),
             OPENBROWSER_API_KEY: keyPlaceholder,
+            ...(apiKeyFile ? { OPENBROWSER_API_KEY_FILE: apiKeyFile } : {}),
           },
         },
       },
     };
     const tab = document.querySelector('#mcp-config-tabs button.active')?.dataset.mcpTab || 'common';
     if (mcpTa) mcpTa.textContent = JSON.stringify(tab === 'platform' ? window.__mcpConfigPlatform : window.__mcpConfigCommon, null, 2);
-    if (mcpHint) mcpHint.textContent = 'OPENBROWSER_API_PORT=' + shellQuote(port) + ' OPENBROWSER_API_KEY=' + shellQuote(keyPlaceholder) + ' node ' + shellQuote(mcpScript);
+    if (mcpHint) {
+      const keyEnv = apiKeyFile
+        ? ' OPENBROWSER_API_KEY_FILE=' + shellQuote(apiKeyFile)
+        : ' OPENBROWSER_API_KEY=' + shellQuote(keyPlaceholder);
+      mcpHint.textContent = 'OPENBROWSER_API_PORT=' + shellQuote(port) + keyEnv + ' node ' + shellQuote(mcpScript);
+    }
     if (curlHint) curlHint.textContent = 'curl -s -H ' + shellQuote('api-key: ' + keyPlaceholder) + ' ' + shellQuote(base + 'api/getVersion');
     setLocalApiStatus(!!info);
   } catch (error) {
@@ -5944,5 +5951,103 @@ window.ops.onEvent((value) => {
   if (value?.type === 'kernel-ready') refreshKernelPanel().catch(() => {});
   if (value?.type === 'cloud-sync') {
     refreshCloudPanel().catch(() => {});
+  }
+});
+
+$('#batch-edit-preferences')?.addEventListener('click', () => {
+  const sources = ui.profiles.filter((profile) => selectedProfiles.has(profile.id));
+  if (!sources.length) return toast(tx('请先选择环境'));
+  const templateSelect = $('#batch-pref-template');
+  if (templateSelect) {
+    templateSelect.replaceChildren(new Option('手动指定下方偏好设置', ''));
+    ui.profiles.forEach((profile) => templateSelect.append(new Option(
+      `环境 ${displayProfileNumber(profile)}${profile.title ? ' · ' + profile.title : ''}`,
+      profile.id,
+    )));
+  }
+  $('#batch-pref-start-url').value = '';
+  $('#batch-pref-clear-start-url').checked = false;
+  $('#batch-pref-os').value = '';
+  $('#batch-pref-resolution').value = '';
+  ['batch-pref-block-images', 'batch-pref-block-sound', 'batch-pref-clear-cache', 'batch-pref-multi-open']
+    .forEach((id) => { const el = $('#' + id); if (el) el.value = 'keep'; });
+  const summary = $('#batch-pref-summary');
+  if (summary) summary.textContent = `将偏好设置统一应用到已勾选的 ${sources.length} 个环境`;
+  $('#batch-preferences-dialog')?.showModal();
+});
+
+$('#batch-preferences-form')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (event.submitter?.value === 'cancel') return $('#batch-preferences-dialog')?.close();
+  const sources = ui.profiles.filter((profile) => selectedProfiles.has(profile.id));
+  if (!sources.length) return toast(tx('请先选择环境'));
+
+  const templateId = $('#batch-pref-template')?.value;
+  const templateProfile = templateId ? ui.profiles.find((item) => item.id === templateId) : null;
+  let startUrl = '';
+  try { startUrl = normalizeOptionalWebUrl($('#batch-pref-start-url')?.value || ''); } catch (e) { return toast(e.message); }
+  const clearStartUrl = Boolean($('#batch-pref-clear-start-url')?.checked);
+  const os = $('#batch-pref-os')?.value;
+  const resolution = $('#batch-pref-resolution')?.value;
+  const preferenceModes = {
+    blockImages: $('#batch-pref-block-images')?.value || 'keep',
+    blockSound: $('#batch-pref-block-sound')?.value || 'keep',
+    clearCacheOnStart: $('#batch-pref-clear-cache')?.value || 'keep',
+    multiOpen: $('#batch-pref-multi-open')?.value || 'keep',
+  };
+
+  let width, height;
+  if (resolution) {
+    const [w, h] = resolution.split('x').map(Number);
+    if (w && h) { width = w; height = h; }
+  }
+
+  const before = new Map(sources.map((item) => [item.id, structuredClone(item)]));
+  const submit = event.submitter;
+  if (submit) submit.disabled = true;
+  try {
+    for (const item of sources) {
+      if (templateProfile) {
+        const prefs = cloneProfilePreferences(templateProfile);
+        const currentPlatform = item.platform || {};
+        prefs.platform = {
+          ...(prefs.platform || {}),
+          username: currentPlatform.username || '',
+          password: currentPlatform.password || '',
+          totpSecret: currentPlatform.totpSecret || '',
+        };
+        Object.assign(item, prefs);
+      }
+      if (clearStartUrl) {
+        item.platform = { ...(item.platform || {}), startUrl: '' };
+        item.advanced = { ...(item.advanced || {}), startUrls: '' };
+      } else if (startUrl) {
+        item.platform = { ...(item.platform || {}), startUrl };
+        item.advanced = { ...(item.advanced || {}), startUrls: startUrl };
+      }
+      if (os) item.os = os;
+      if (width && height) { item.width = width; item.height = height; }
+      for (const [key, mode] of Object.entries(preferenceModes)) {
+        if (mode !== 'keep') item.advanced = { ...(item.advanced || {}), [key]: mode === 'on' };
+      }
+    }
+
+    save();
+    engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    $('#batch-preferences-dialog')?.close();
+    renderProfiles();
+    log('Batch', `已批量更新 ${sources.length} 个环境的偏好设置`);
+    toast(`已批量更新 ${sources.length} 个环境的偏好设置`);
+  } catch (error) {
+    for (const item of sources) {
+      const original = before.get(item.id);
+      if (!original) continue;
+      const index = ui.profiles.findIndex((profile) => profile.id === item.id);
+      if (index >= 0) ui.profiles[index] = original;
+    }
+    save();
+    toast('批量偏好设置失败：' + error.message);
+  } finally {
+    if (submit) submit.disabled = false;
   }
 });

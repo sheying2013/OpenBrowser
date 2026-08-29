@@ -54,13 +54,27 @@ async function main() {
     const largeBounds = (await cdp.windowForPort(session.port)).bounds;
     const large = await viewport(tab);
 
-    assert.ok((largeBounds.width || 0) - (smallBounds.width || 0) > 150, `browser window did not resize: ${JSON.stringify({ smallBounds, largeBounds })}`);
-    assert.ok(large.innerWidth - small.innerWidth > 150, `innerWidth did not follow resize: ${JSON.stringify({ small, large })}`);
-    assert.ok(large.innerHeight - small.innerHeight > 100, `innerHeight did not follow resize: ${JSON.stringify({ small, large })}`);
+    const requestedLarge = { width: 1320, height: 900 };
+    const widthDelta = (largeBounds.width || 0) - (smallBounds.width || 0);
+    const heightDelta = (largeBounds.height || 0) - (smallBounds.height || 0);
+    const viewportWidthDelta = large.innerWidth - small.innerWidth;
+    const viewportHeightDelta = large.innerHeight - small.innerHeight;
+    const clampedByWorkArea = process.platform === 'win32'
+      && ((largeBounds.width || 0) < requestedLarge.width - 100 || (largeBounds.height || 0) < requestedLarge.height - 100);
+    if (clampedByWorkArea) {
+      // A small Windows/RDP work area can clamp the requested size. The test
+      // still requires a real enlargement and a matching page viewport.
+      assert.ok(widthDelta > 0 && heightDelta > 0, `browser window did not enlarge before work-area clamp: ${JSON.stringify({ smallBounds, largeBounds })}`);
+      assert.ok(viewportWidthDelta > 0 && viewportHeightDelta > 0, `page viewport did not follow clamped resize: ${JSON.stringify({ small, large })}`);
+    } else {
+      assert.ok(widthDelta > 150, `browser window did not resize: ${JSON.stringify({ smallBounds, largeBounds })}`);
+      assert.ok(viewportWidthDelta > 150, `innerWidth did not follow resize: ${JSON.stringify({ small, large })}`);
+      assert.ok(viewportHeightDelta > 100, `innerHeight did not follow resize: ${JSON.stringify({ small, large })}`);
+    }
     assert.ok(Math.abs(large.innerWidth - large.visualWidth) < 3, `visual viewport is fixed/cropped: ${JSON.stringify(large)}`);
     assert.ok(Math.abs(large.innerWidth - large.clientWidth) < 3, `document viewport does not fill window: ${JSON.stringify(large)}`);
 
-    process.stdout.write(JSON.stringify({ success: true, smallBounds, largeBounds, small, large }, null, 2));
+    process.stdout.write(JSON.stringify({ success: true, clampedByWorkArea, smallBounds, largeBounds, small, large }, null, 2));
   } finally {
     await engine.stopAll().catch(() => {});
     await getStartPageServer()?.stop?.().catch(() => {});

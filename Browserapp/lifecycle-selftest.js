@@ -308,6 +308,8 @@ async function main() {
   await testStartupResourceCleanup();
   await testCleanupFailsClosedWhenChildSurvives();
   await testStopAllDrainsLateRestart();
+  await testLockReleaseFailureRetainsRunningItem();
+  await testStartupResourceCleanupUnknownScan();
   const profile = { id: 'lifecycle-env', name: 'Lifecycle environment' };
   const engine = makeEngine();
   let startCount = 0;
@@ -381,3 +383,58 @@ main().catch((error) => {
   process.stderr.write((error && error.stack) || String(error));
   process.exitCode = 1;
 });
+
+
+async function testLockReleaseFailureRetainsRunningItem() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-lock-fail-'));
+  const profileRoot = path.join(root, 'env-lock-fail');
+  const engine = makeEngine();
+  engine.emit = () => {};
+  engine.markProfileCleanExit = async () => {};
+  const profile = { id: 'env-lock-fail' };
+  const profileLock = await acquireProfileLock(profileRoot, { profileId: profile.id });
+  const item = {
+    child: { pid: 1234, exitCode: 0, signalCode: null, once() {}, removeListener() {} },
+    pid: 1234,
+    profile,
+    root: profileRoot,
+    profileLock: { pid: process.pid, token: 'invalid-token-to-fail-release' },
+    cleanedUp: false,
+    stopping: false,
+    cleanupPromise: null,
+  };
+  engine.running.set(profile.id, item);
+  try {
+    await assert.rejects(
+      engine.cleanupRunningItem(profile.id, item, { expected: true }),
+      (error) => error.code === 'PROFILE_LOCK_RELEASE_FAILED',
+    );
+    assert.strictEqual(engine.running.get(profile.id), item, 'failed lock release must retain running item in memory');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function testStartupResourceCleanupUnknownScan() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-startup-scan-'));
+  const profileRoot = path.join(root, 'env-startup-scan');
+  const engine = makeEngine();
+  const profileLock = await acquireProfileLock(profileRoot, { profileId: 'env-startup-scan' });
+  const resources = {
+    root: profileRoot,
+    profileLock,
+    child: { exitCode: 0, signalCode: null },
+  };
+  const isolation = require('./automation/isolation');
+  const origTerminate = isolation.terminateProcessesUsingProfile;
+  isolation.terminateProcessesUsingProfile = () => ({ known: false, pids: [] });
+  try {
+    const res = await engine.cleanupStartupResources(resources);
+    assert.strictEqual(res.lockReleased, false, 'unknown scan must keep lock');
+    assert.strictEqual(res.cleanupBlocked, true, 'unknown scan must block cleanup');
+    assert.strictEqual(await fs.stat(lockPath(profileRoot)).then(() => true, () => false), true, 'lock file must be retained');
+  } finally {
+    isolation.terminateProcessesUsingProfile = origTerminate;
+    await fs.rm(root, { recursive: true, force: true }).catch(() => {});
+  }
+}
