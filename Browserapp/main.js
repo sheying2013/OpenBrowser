@@ -2006,6 +2006,7 @@ app.whenReady().then(async () => {
     appRoot: __dirname,
     port: automation?.info?.port || Number(process.env.OPENBROWSER_API_PORT || 50325),
     apiKey: automation?.apiKey || process.env.OPENBROWSER_API_KEY || '',
+    apiKeyFile: automation?.apiKeyFile || path.join(app.getPath('userData'), 'local-api-key.txt'),
     localApi: automation?.info || null,
   }));
 
@@ -2051,4 +2052,6 @@ app.on('will-quit', () => {
   // a second time while local API/RPA/proxy resources are already being closed.
   if (!quitCleanupPromise) automation?.stop?.().catch(() => {});
 });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin' && !quitting) app.quit();
+});

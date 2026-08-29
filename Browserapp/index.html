@@ -93,7 +93,7 @@
           </div>
           <div class="profile-selection-bar" id="profile-selection-bar" hidden>
             <strong id="profile-selection-count">已选择 0 个环境</strong>
-            <div class="selection-actions"><button class="outline" id="start-selected"><i data-lucide="play"></i><span data-i18n="profiles.startSelected">启动选中</span></button><button class="outline" id="stop-selected"><i data-lucide="square"></i><span data-i18n="profiles.stopSelected">停止选中</span></button><button class="outline" id="copy-selected" type="button" title="复制选中环境的配置，不复制 Cookie 和账号密码"><i data-lucide="copy"></i><span>复制环境</span></button><button class="outline" id="batch-update"><i data-lucide="refresh-cw"></i><span data-i18n="profiles.batchNetwork">切换网络/IP</span></button><button class="outline" id="batch-set-direct" type="button" title="将选中环境改为本地直连"><i data-lucide="wifi"></i><span data-i18n="profiles.direct">本地直连</span></button>
+            <div class="selection-actions"><button class="outline" id="start-selected"><i data-lucide="play"></i><span data-i18n="profiles.startSelected">启动选中</span></button><button class="outline" id="stop-selected"><i data-lucide="square"></i><span data-i18n="profiles.stopSelected">停止选中</span></button><button class="outline" id="copy-selected" type="button" title="复制选中环境的配置，不复制 Cookie 和账号密码"><i data-lucide="copy"></i><span>复制环境</span></button><button class="outline" id="batch-edit-preferences" type="button" title="批量修改选中环境的启动页、系统和高级偏好"><i data-lucide="sliders-horizontal"></i><span>批量偏好</span></button><button class="outline" id="batch-update"><i data-lucide="refresh-cw"></i><span data-i18n="profiles.batchNetwork">切换网络/IP</span></button><button class="outline" id="batch-set-direct" type="button" title="将选中环境改为本地直连"><i data-lucide="wifi"></i><span data-i18n="profiles.direct">本地直连</span></button>
               <label class="batch-group-assign"><span data-i18n="profiles.moveGroup">移到分组</span>
                 <select id="batch-assign-group"></select>
               </label>
@@ -1171,6 +1171,29 @@
       <label>代理列表（每行一个，数量须与新增环境数一致）<textarea id="batch-add-proxies" placeholder="127.0.0.1:7890&#10;socks5://127.0.0.1:1080"></textarea></label>
     </div>
     <div class="dialog-actions"><button value="cancel" class="outline">取消</button><button value="default" class="primary">立即批量创建</button></div>
+  </form></dialog>
+
+  <dialog id="batch-preferences-dialog"><form method="dialog" id="batch-preferences-form">
+    <div class="dialog-head"><div><h2>批量偏好设置</h2><p id="batch-pref-summary">将偏好设置统一应用到已勾选的环境</p></div><button value="cancel">&times;</button></div>
+    <label>偏好模板
+      <select id="batch-pref-template"><option value="">手动指定下方偏好设置</option></select>
+      <small class="field-hint">选择模板会复制启动页、系统、窗口和高级偏好，但不会复制指纹、Cookie、账号密码。</small>
+    </label>
+    <label>打开指定网页（可选）<input id="batch-pref-start-url" type="text" inputmode="url" placeholder="留空表示保持原设置" autocomplete="off" spellcheck="false"></label>
+    <label class="assign-item"><input id="batch-pref-clear-start-url" type="checkbox"> 清空选中环境的启动网页</label>
+    <div class="form-two">
+      <label>系统画像<select id="batch-pref-os"><option value="">保持不变</option><option value="Windows">Windows</option><option value="macOS">macOS</option><option value="Linux">Linux</option></select></label>
+      <label>窗口尺寸<select id="batch-pref-resolution"><option value="">保持不变</option><option value="1280x820">1280 × 820</option><option value="1440x900">1440 × 900</option><option value="1600x1000">1600 × 1000</option><option value="1920x1080">1920 × 1080</option></select></label>
+    </div>
+    <div class="form-two">
+      <label>拦截图片<select id="batch-pref-block-images"><option value="keep">保持不变</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+      <label>拦截声音<select id="batch-pref-block-sound"><option value="keep">保持不变</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+    </div>
+    <div class="form-two">
+      <label>启动时清缓存<select id="batch-pref-clear-cache"><option value="keep">保持不变</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+      <label>多开模式<select id="batch-pref-multi-open"><option value="keep">保持不变</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+    </div>
+    <div class="dialog-actions"><button value="cancel" class="outline">取消</button><button value="default" class="primary" id="batch-preferences-submit">应用到选中环境</button></div>
   </form></dialog>
 
   <dialog id="batch-delete-dialog"><form method="dialog" id="batch-delete-form"><div class="dialog-head"><div><h2>&#25209;&#37327;&#21024;&#38500;&#29615;&#22659;</h2><p id="batch-delete-summary"></p></div><button value="cancel">&times;</button></div><div class="delete-warning">&#27492;&#25805;&#20316;&#20250;&#20174;&#29615;&#22659;&#21015;&#34920;&#20013;&#31227;&#38500;&#25152;&#26377;&#24050;&#21246;&#36873;&#39033;&#12290;&#36816;&#34892;&#20013;&#30340;&#29615;&#22659;&#20250;&#20808;&#23433;&#20840;&#20572;&#27490;&#12290;</div><label class="assign-item"><input id="batch-delete-data" type="checkbox" checked> &#21516;&#26102;&#21024;&#38500;&#29420;&#31435;&#27983;&#35272;&#22120;&#25968;&#25454;&#65288;Cookie&#12289;&#32531;&#23384;&#12289;&#26412;&#22320;&#23384;&#20648;&#65289;</label><div class="dialog-actions"><button value="cancel" class="outline">&#21462;&#28040;</button><button value="default" class="danger">&#30830;&#35748;&#25209;&#37327;&#21024;&#38500;</button></div></form></dialog>

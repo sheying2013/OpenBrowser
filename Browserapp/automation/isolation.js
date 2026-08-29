@@ -6,7 +6,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
-const PROCESS_SCAN_TIMEOUT_MS = 2000;
+// PowerShell startup plus the WMI provider can exceed two seconds on a busy
+// Windows/RDP host. A short timeout turns a safe process check into a false
+// "unknown" result and strands otherwise recoverable profile locks.
+const PROCESS_SCAN_TIMEOUT_MS = process.platform === 'win32' ? 8000 : 2000;
 const UNKNOWN_STARTUP_LOCK_RECOVERY_MS = 15000;
 
 /**
@@ -67,24 +70,37 @@ function extractUserDataDir(command) {
 
 function commandUsesProfile(command, profileRoot) {
   const userDataDir = extractUserDataDir(command);
-  if (!userDataDir) return false;
-  return normalizedPath(userDataDir) === normalizedPath(profileRoot);
+  if (userDataDir && normalizedPath(userDataDir) === normalizedPath(profileRoot)) return true;
+  // Chromium helpers sometimes expose only a child path such as Crashpad or
+  // GPU cache instead of repeating --user-data-dir. Those processes still own
+  // the profile and must be included in the fail-closed cleanup scan.
+  if (process.platform !== 'win32') return false;
+  const commandText = String(command || '').replace(/["']/g, '').toLowerCase();
+  const root = normalizedPath(profileRoot).toLowerCase().replace(/[\\/]+$/, '');
+  return Boolean(root && (commandText.includes(`${root}\\`) || commandText.includes(`${root}/`)));
+}
+
+function decodeProcessListOutput(value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value || ''), 'utf8');
+  const utf8 = bytes.toString('utf8').replace(/^\uFEFF/, '').trim();
+  if (utf8.startsWith('{') || utf8.startsWith('[')) return utf8;
+  return bytes.toString('utf16le').replace(/^\uFEFF/, '').trim();
 }
 
 function scanProcessesUsingProfile(profileRoot) {
   try {
     if (process.platform === 'win32') {
-      const output = execFileSync('powershell.exe', [
+      const output = decodeProcessListOutput(execFileSync('powershell.exe', [
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        '[Console]::Out.Write((Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress))',
+        '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); [Console]::Out.Write((Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress))',
       ], {
-        encoding: 'utf8',
+        encoding: 'buffer',
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: PROCESS_SCAN_TIMEOUT_MS,
-      }).trim();
+      }));
       if (!output) return { known: true, pids: [] };
       const parsed = JSON.parse(output);
       const records = Array.isArray(parsed) ? parsed : [parsed];
@@ -201,14 +217,21 @@ async function acquireProfileLock(profileRoot, meta = {}) {
       // exact --user-data-dir argument before deciding that a pending lock is
       // stale. This keeps an app restart from stealing a live Chromium profile.
       const processScan = scanProcessesUsingProfile(profileRoot);
-      if (processScan.known && processScan.pids.length) {
+      if (!processScan.known) {
+        throw lockOwnerError(
+          'PROFILE_LOCK_UNRECOVERABLE',
+          'Profile process scan is unconfirmed; refusing to remove profile lock',
+          existing,
+        );
+      }
+      if (processScan.pids.length) {
         throw lockOwnerError(
           'PROFILE_LOCKED',
           `Profile browser is still running (pid ${processScan.pids[0]})`,
           { ...existing, browserPids: processScan.pids },
         );
       }
-      if (!processScan.known) {
+      if (hasLockField(existing, 'browserPid') && existing.browserPid === null) {
         const age = lockAgeMs(existing);
         if (age === null || age < UNKNOWN_STARTUP_LOCK_RECOVERY_MS) {
           throw lockOwnerError(
@@ -305,7 +328,8 @@ async function releaseProfileLock(profileRoot, owner = null) {
   if (existing.pid !== owner.pid || existing.token !== owner.token) return false;
   if (existing.profileRoot != null
     && normalizedPath(existing.profileRoot) !== normalizedPath(path.resolve(profileRoot))) return false;
-  await fsp.rm(file, { force: true });
+  await fsp.rm(file, { force: true }).catch(() => {});
+  if (fs.existsSync(file)) return false;
   return true;
 }
 

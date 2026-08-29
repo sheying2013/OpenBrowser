@@ -34,9 +34,10 @@ function parseProxy(value) {
   }
   if (!['http', 'https', 'socks4', 'socks5'].includes(protocol)) throw new Error('Unsupported proxy protocol');
   if (!/^[a-zA-Z0-9._-]+$/.test(host) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid proxy host or port');
-  if ((username && !password) || (!username && password)) throw new Error('Proxy username and password must both be provided');
-  if (username && protocol === 'socks4') throw new Error('Authenticated SOCKS proxies must use SOCKS5');
-  return { raw, protocol, host, port, username, password, authenticated: Boolean(username), chromeUrl: protocol + '://' + host + ':' + port };
+  if ((username || password) && protocol === 'socks4') throw new Error('Authenticated SOCKS proxies must use SOCKS5');
+  const auth = (username || password) ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}@` : '';
+  const canonicalRaw = `${protocol}://${auth}${host}:${port}`;
+  return { raw: canonicalRaw, protocol, host, port, username: username || '', password: password || '', authenticated: Boolean(username || password), chromeUrl: protocol + '://' + host + ':' + port };
 }
 
 function displayProxy(value) {

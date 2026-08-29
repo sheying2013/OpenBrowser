@@ -65,7 +65,7 @@ class LiveSyncController {
     this.engine = engine; this.emit = emit; this.master = null; this.slaves = []; this.connections = new Map(); this.masterTabs = []; this.timer = null;
     this.forwardQueue = []; this.forwardQueueRunning = false; this.coalescedForwards = new Map();
     this.forwardStats = { coalesced: 0, dropped: 0, processed: 0, lastLatencyMs: 0 }; this.lastHealthEmitAt = 0;
-    this.lastWatchErrorAt = 0; this.refreshInFlight = false; this.skippedRefreshes = 0;
+    this.lastWatchErrorAt = 0; this.refreshInFlight = false; this.refreshTask = null; this.refreshEpoch = 0; this.skippedRefreshes = 0;
     // Adaptive sync poll: active input stays fast; idle stretches to save CPU/CDP load.
     this.lastActivityAt = 0; this.refreshIntervalMs = 700; this.tickCount = 0;
   }
@@ -87,19 +87,29 @@ class LiveSyncController {
     if (this.timer) clearTimeout(this.timer);
     if (!this.master) return;
     const refreshGeneration = this.getRefreshGeneration?.();
+    const refreshEpoch = this.refreshEpoch;
     const idleMs = Date.now() - (this.lastActivityAt || 0);
     // Active: ~450ms; recent: ~700ms; idle: ~1400ms. Caps CDP churn when user is not driving.
     this.refreshIntervalMs = idleMs < 2500 ? 450 : idleMs < 12000 ? 700 : 1400;
-    this.timer = setTimeout(() => { this.runRefreshTick(refreshGeneration).finally(() => this.scheduleRefreshTick()); }, this.refreshIntervalMs);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.runRefreshTick(refreshGeneration, refreshEpoch).finally(() => {
+        if (this.refreshEpoch !== refreshEpoch) return;
+        if (this.getRefreshGeneration && refreshGeneration !== this.getRefreshGeneration()) return;
+        this.scheduleRefreshTick();
+      });
+    }, this.refreshIntervalMs);
     this.timer.unref?.();
   }
 
   markActivity() { this.lastActivityAt = Date.now(); }
 
-  async runRefreshTick(refreshGeneration = null) {
+  async runRefreshTick(refreshGeneration = null, refreshEpoch = this.refreshEpoch) {
+    if (refreshEpoch !== this.refreshEpoch) return;
     if (refreshGeneration != null && this.getRefreshGeneration && refreshGeneration !== this.getRefreshGeneration()) return;
     if (!this.master || this.refreshInFlight) { if (this.refreshInFlight) this.skippedRefreshes += 1; return; }
-    this.refreshInFlight = true; this.tickCount = (this.tickCount || 0) + 1;
+    const task = { epoch: refreshEpoch, generation: refreshGeneration };
+    this.refreshTask = task; this.refreshInFlight = true; this.tickCount = (this.tickCount || 0) + 1;
     try {
       await this.refreshMasterTabs(refreshGeneration);
     } catch (error) {
@@ -107,7 +117,12 @@ class LiveSyncController {
         this.handleWatchError(error, refreshGeneration);
       }
     }
-    finally { this.refreshInFlight = false; }
+    finally {
+      if (this.refreshTask === task) {
+        this.refreshTask = null;
+        this.refreshInFlight = false;
+      }
+    }
   }
 
   handleWatchError(error) {
@@ -123,7 +138,8 @@ class LiveSyncController {
   }
 
   stop() {
-    this.lastWatchErrorAt = 0; this.refreshInFlight = false; this.skippedRefreshes = 0;
+    this.refreshEpoch += 1;
+    this.lastWatchErrorAt = 0; this.refreshTask = null; this.refreshInFlight = false; this.skippedRefreshes = 0;
     this.forwardQueue.length = 0; this.coalescedForwards.clear(); this.forwardQueueRunning = false;
     if (this.timer) clearTimeout(this.timer); this.timer = null; this.tickCount = 0;
     for (const value of this.connections.values()) value.connection.close(); this.connections.clear();

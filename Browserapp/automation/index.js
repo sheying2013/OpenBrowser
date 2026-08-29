@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { LocalApiServer } = require('./local-api-server');
@@ -8,6 +9,20 @@ const { RpaStore } = require('./rpa-store');
 const { WindowSyncBridge } = require('./window-sync-bridge');
 const { AppCenter } = require('./app-center');
 const { ProxyStore } = require('./proxy-store');
+
+function writeApiKeyAtomically(filePath, value) {
+  const temporary = `${filePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+  try {
+    fs.writeFileSync(temporary, `${String(value)}\n`, { encoding: 'utf8', mode: 0o600 });
+    try { fs.chmodSync(temporary, 0o600); } catch (_) {}
+    fs.renameSync(temporary, filePath);
+    try { fs.chmodSync(filePath, 0o600); } catch (_) {}
+    return true;
+  } catch (_) {
+    try { fs.unlinkSync(temporary); } catch (_) {}
+    return false;
+  }
+}
 
 /**
  * Mount automation stack (Local API + RPA + window-sync + app center + proxy library).
@@ -27,8 +42,23 @@ async function startAutomation(context = {}) {
     tile,
     emit = () => {},
     port = Number(process.env.OPENBROWSER_API_PORT || 50325),
-    apiKey = process.env.OPENBROWSER_API_KEY || crypto.randomBytes(32).toString('base64url'),
   } = context;
+
+  const keyFilePath = path.join(app.getPath("userData"), "local-api-key.txt");
+  let effectiveApiKey = process.env.OPENBROWSER_API_KEY || context.apiKey;
+  if (!effectiveApiKey) {
+    try {
+      if (fs.existsSync(keyFilePath)) {
+        effectiveApiKey = fs.readFileSync(keyFilePath, "utf8").trim();
+        try { fs.chmodSync(keyFilePath, 0o600); } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  if (!effectiveApiKey) {
+    effectiveApiKey = crypto.randomBytes(32).toString("base64url");
+    writeApiKeyAtomically(keyFilePath, effectiveApiKey);
+  }
+  const apiKey = effectiveApiKey;
 
   const storePath = path.join(app.getPath('userData'), 'rpa-store.json');
   const rpaStore = new RpaStore(storePath);
@@ -83,6 +113,7 @@ async function startAutomation(context = {}) {
     proxyStore,
     info,
     apiKey,
+    apiKeyFile: keyFilePath,
     async stop() {
       await rpaEngine.stop();
       await localApi.stop();

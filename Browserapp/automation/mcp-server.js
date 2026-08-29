@@ -16,10 +16,39 @@
  */
 
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 
 const PORT = Number(process.env.OPENBROWSER_API_PORT || process.env.PORT || 50325);
 const HOST = process.env.OPENBROWSER_API_HOST || '127.0.0.1';
-const API_KEY = process.env.OPENBROWSER_API_KEY || process.env.API_KEY || '';
+
+function cleanApiKey(value) {
+  let key = String(value || '').trim();
+  if (key.startsWith('"') && key.endsWith('"')) key = key.slice(1, -1).trim();
+  if (key.startsWith("'") && key.endsWith("'")) key = key.slice(1, -1).trim();
+  return key;
+}
+
+function loadApiKey() {
+  const configured = cleanApiKey(process.env.OPENBROWSER_API_KEY || process.env.API_KEY);
+  if (configured) return configured;
+
+  const candidates = [
+    process.env.OPENBROWSER_API_KEY_FILE,
+    process.env.OPENBROWSER_LOCAL_API_KEY_FILE,
+    process.env.API_KEY_FILE,
+    process.env.OPENBROWSER_USER_DATA ? path.join(process.env.OPENBROWSER_USER_DATA, 'local-api-key.txt') : '',
+  ].filter(Boolean);
+  for (const filePath of candidates) {
+    try {
+      const key = cleanApiKey(fs.readFileSync(filePath, 'utf8'));
+      if (key) return key;
+    } catch (_) {}
+  }
+  return '';
+}
+
+const API_KEY = loadApiKey();
 let MCP_MODE = ['admin', 'manage', 'run', 'read'].includes(String(process.env.OPENBROWSER_MCP_MODE || 'admin').toLowerCase())
   ? String(process.env.OPENBROWSER_MCP_MODE || 'admin').toLowerCase()
   : 'admin';
@@ -60,7 +89,7 @@ function request(method, path, body) {
         let parsed;
         try { parsed = JSON.parse(data || '{}'); }
         catch (_) { return reject(new Error(`Invalid JSON from Local API (HTTP ${res.statusCode}): ${data.slice(0, 200)}`)); }
-        if (res.statusCode === 401) return reject(new Error('MCP: Local API rejected the API key (401). Set OPENBROWSER_API_KEY to the key shown on the OpenBrowser API & MCP page.'));
+        if (res.statusCode === 401) return reject(new Error('MCP: Local API rejected the API key (401). Set OPENBROWSER_API_KEY or OPENBROWSER_API_KEY_FILE to the key shown on the OpenBrowser API & MCP page.'));
         if (res.statusCode >= 400) return reject(new Error(`Local API error (HTTP ${res.statusCode}): ${parsed.msg || parsed.message || res.statusCode}`));
         resolve(parsed);
       });

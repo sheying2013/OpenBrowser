@@ -393,8 +393,10 @@ class LiveSyncController extends LiveSyncV4 {
 
   startNativeInputMirror() {
     const previousPopup = this.nativePopupActive;
+    const previousDevTools = this.nativeDevToolsMode;
     this.stopNativeInputMirror(false);
     this.nativePopupActive = previousPopup;
+    this.nativeDevToolsMode = previousDevTools;
     if (!this.master) return;
     if (process.platform !== 'win32') {
       this.nativeBridgeState = 'disabled';
@@ -418,11 +420,12 @@ class LiveSyncController extends LiveSyncV4 {
     this.nativeBridgeReadyTimer.unref?.();
     child.stdout?.setEncoding('utf8');
     child.stdout?.on('data', (chunk) => {
-      if (this.nativeInputMirror === child) {
-        this.nativeBridgeState = 'ready';
-        if (this.nativeBridgeReadyTimer) clearTimeout(this.nativeBridgeReadyTimer);
-        this.nativeBridgeReadyTimer = null;
-      }
+      // A stopped bridge may flush stdout after a replacement bridge has been
+      // installed. Never let stale bytes mutate the replacement's state.
+      if (this.nativeInputMirror !== child) return;
+      this.nativeBridgeState = 'ready';
+      if (this.nativeBridgeReadyTimer) clearTimeout(this.nativeBridgeReadyTimer);
+      this.nativeBridgeReadyTimer = null;
       this.nativeInputStdoutBuffer += String(chunk || '');
       const lines = this.nativeInputStdoutBuffer.split(/\r?\n/);
       this.nativeInputStdoutBuffer = lines.pop() || '';
@@ -448,7 +451,8 @@ class LiveSyncController extends LiveSyncV4 {
       this.emit({ type: 'sync-error', action: 'native-input', message: error.message });
     });
     child.once('exit', (code) => {
-      if (this.nativeInputMirror !== child) return; this.nativeInputMirror = null;
+      if (this.nativeInputMirror !== child) return;
+      this.nativeInputMirror = null;
       if (this.nativeBridgeReadyTimer) clearTimeout(this.nativeBridgeReadyTimer);
       this.nativeBridgeReadyTimer = null;
       this.nativeBridgeState = 'down';
@@ -460,7 +464,11 @@ class LiveSyncController extends LiveSyncV4 {
       this.nativePopupActive = false;
       if (wasDevTools) this.emit({ type: 'native-devtools', active: false });
       if (wasPopup) this.emit({ type: 'native-popup', active: false });
-      if (code && this.master) { this.emit({ type: 'sync-error', action: 'native-input', message: 'Windows input bridge exited: ' + code }); this.scheduleNativeInputRestart('exit ' + code); }
+      const exitMessage = code !== null ? 'exit ' + code : 'terminated';
+      if (this.master) {
+        this.emit({ type: 'sync-error', action: 'native-input', message: 'Windows input bridge exited: ' + (code ?? 'signal') });
+        this.scheduleNativeInputRestart(exitMessage);
+      }
     });
     this.emit({ type: 'native-input', active: true, master: this.master.id, slaves: this.slaves.map((slave) => slave.id) });
   }
@@ -928,6 +936,8 @@ class LiveSyncController extends LiveSyncV4 {
     // the way while browser chrome, DevTools, extension popups, or a page picker
     // owns the foreground.
     if (this.nativePopupActive || this.nativeDevToolsMode
+      || Date.now() < (this.geometryPausedUntil || 0)
+      || Date.now() < (this.browserOwnedUntil || 0)
       || await this.hasVisibleExtensionSurface()
       || await this.hasBrowserOwnedInteraction()) {
       this.emit({ type: 'live-sync-tab', masterTabId, targets: this.slaves.length, native: true });
@@ -1125,9 +1135,18 @@ class LiveSyncController extends LiveSyncV4 {
   }
 
   async syncWindowGeometry() {
+    const generation = this.syncGeneration;
+    const masterId = this.master?.id;
+    const slaveIds = (this.slaves || []).map((slave) => slave.id);
+    const sessionIsCurrent = () => generation === this.syncGeneration
+      && this.master?.id === masterId
+      && this.slaves.length === slaveIds.length
+      && this.slaves.every((slave, index) => slave.id === slaveIds[index]);
+
+    if (!sessionIsCurrent()) return;
     // Mirror only size (for coordinate mapping), never left/top — so tile/cascade layouts stay put.
     const now = Date.now();
-    if (!this.master || now - this.lastWindowSync < 2800 || now < (this.geometryPausedUntil || 0)) return;
+    if (now - this.lastWindowSync < 2800 || now < (this.geometryPausedUntil || 0)) return;
     // The native bridge owns Windows-only UI input, while CDP still owns the
     // browser viewport. Pause only during bridge startup; if the bridge is
     // down, keep geometry healing so a failed helper cannot leave blank space.
@@ -1147,13 +1166,31 @@ class LiveSyncController extends LiveSyncV4 {
       this.pauseGeometrySync(900, 'extension-popup');
       return;
     }
+    if (!sessionIsCurrent()) return;
     if (await this.hasBrowserOwnedInteraction()) {
       this.pauseGeometrySync(900, 'browser-owned-interaction');
       return;
     }
+    if (!sessionIsCurrent()) return;
 
     const source = await cdp.windowForPort(this.master.item.port);
+    if (!sessionIsCurrent()) return;
     const bounds = source.bounds || {};
+    if (bounds.windowState === 'maximized') {
+      this.lastWindowSync = now;
+      await Promise.all(this.slaves.map(async (slave) => {
+        if (!sessionIsCurrent()) return;
+        try {
+          const current = await cdp.windowForPort(slave.port);
+          if (!sessionIsCurrent()) return;
+          const own = current.bounds || {};
+          if (own.windowState !== 'maximized') {
+            await cdp.setWindowBounds(slave.port, { windowState: 'maximized' }, { forceNormal: false });
+          }
+        } catch (_) {}
+      }));
+      return;
+    }
     if (bounds.windowState && bounds.windowState !== 'normal') {
       this.pauseGeometrySync(900, 'master-window-state');
       return;
@@ -1163,7 +1200,10 @@ class LiveSyncController extends LiveSyncV4 {
     const targetHeight = Math.round(bounds.height);
     this.lastWindowSync = now;
     await Promise.all(this.slaves.map(async (slave) => {
-      const current = await cdp.windowForPort(slave.port); const own = current.bounds || {};
+      if (!sessionIsCurrent()) return;
+      const current = await cdp.windowForPort(slave.port);
+      if (!sessionIsCurrent()) return;
+      const own = current.bounds || {};
       if (own.windowState && own.windowState !== 'normal') return;
       if (Math.abs((own.width || 0) - targetWidth) < 8 && Math.abs((own.height || 0) - targetHeight) < 8) {
         this.geometryPending.delete(slave.id);
@@ -1177,6 +1217,7 @@ class LiveSyncController extends LiveSyncV4 {
         top: Number.isFinite(own.top) ? own.top : 0,
         ...desired,
       }, { forceNormal: false });
+      if (!sessionIsCurrent()) return;
       // Chromium builds occasionally acknowledge setWindowBounds before the
       // native widget has applied it. Remember the desired size so the next
       // quiet tick can retry once, fixing the large blank viewport symptom

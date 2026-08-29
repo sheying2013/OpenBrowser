@@ -186,15 +186,16 @@ class LocalApiServer {
     this.startedAt = null;
   }
 
-  authOk(req) {
+  authOk(req, url = null) {
+    if (!this.apiKey) return true;
     const headerKey = req.headers['api-key'] || req.headers['x-api-key'] || '';
     const auth = String(req.headers.authorization || '');
     const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
-    const supplied = String(headerKey || bearer || '');
+    const queryKey = url?.searchParams ? (url.searchParams.get('api_key') || url.searchParams.get('api_token') || url.searchParams.get('key') || '') : '';
+    let supplied = String(headerKey || bearer || queryKey || '').trim();
+    if (supplied.startsWith('"') && supplied.endsWith('"')) supplied = supplied.slice(1, -1);
+    if (supplied.startsWith("'") && supplied.endsWith("'")) supplied = supplied.slice(1, -1);
     if (!supplied) return false;
-    // Compare byte lengths (not JS string length): a multibyte input of equal character
-    // length would otherwise make timingSafeEqual throw on unequal Buffer sizes, surfacing
-    // as a 500 instead of a clean 401.
     const suppliedBuf = Buffer.from(supplied);
     const keyBuf = Buffer.from(this.apiKey);
     if (suppliedBuf.length !== keyBuf.length) return false;
@@ -245,7 +246,7 @@ class LocalApiServer {
       const url = new URL(req.url || '/', `http://${this.host}:${this.port}`);
       const pathname = url.pathname.replace(/\/+$/, '') || '/';
 
-      if (!this.authOk(req)) {
+      if (!this.authOk(req, url)) {
         return sendJson(res, 401, fail('unauthorized', 401), origin);
       }
 
@@ -502,7 +503,9 @@ class LocalApiServer {
     }
     if (pathname === '/api/v2/proxy-list/delete' || pathname === '/api/proxy/delete') {
       if (!this.proxyStore) return fail('proxy store unavailable');
-      const ids = Array.isArray(input.proxy_id) ? input.proxy_id : (Array.isArray(input.ids) ? input.ids : [input.id || input.proxy_id]);
+      const ids = Array.isArray(input.proxy_ids)
+        ? input.proxy_ids
+        : (Array.isArray(input.proxy_id) ? input.proxy_id : (Array.isArray(input.ids) ? input.ids : [input.id || input.proxy_id]));
       return ok(await this.proxyStore.remove(ids.filter(Boolean)));
     }
     if (pathname === '/api/proxy/check' || pathname === '/api/checkProxy') {
