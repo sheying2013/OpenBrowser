@@ -1,9 +1,12 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
 const http = require('http');
+const path = require('path');
 const cdp = require('./cdp');
 const { LiveSyncController, __test } = require('./live-sync-v5');
+const { injection: baseInjection } = require('./live-sync-v4');
 
 class FakeWebSocket {
   constructor(url) {
@@ -30,7 +33,14 @@ class FakeWebSocket {
     const message = JSON.parse(String(raw));
     FakeWebSocket.commands.push(message);
     let result = {};
-    if (message.method === 'Browser.getWindowForTarget') {
+    const custom = FakeWebSocket.handler?.(message);
+    if (custom?.error) {
+      queueMicrotask(() => this.dispatch('message', { data: JSON.stringify({ id: message.id, error: custom.error }) }));
+      return;
+    }
+    if (custom?.result !== undefined) {
+      result = custom.result;
+    } else if (message.method === 'Browser.getWindowForTarget') {
       result = { windowId: 17, bounds: { left: 10, top: 20, width: 640, height: 480, windowState: 'normal' } };
     } else if (message.method === 'Browser.getWindowBounds') {
       result = { bounds: { left: 30, top: 40, width: 900, height: 700, windowState: 'normal' } };
@@ -51,6 +61,7 @@ class FakeWebSocket {
   }
 }
 FakeWebSocket.commands = [];
+FakeWebSocket.handler = null;
 
 async function listen(server) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -98,7 +109,30 @@ async function testWindowBoundsOption() {
       'Browser.getWindowBounds',
     ]);
     assert.strictEqual(explicit[1].params.bounds.windowState, 'normal');
+
+    let windowState = 'normal';
+    FakeWebSocket.handler = (message) => {
+      if (message.method === 'Browser.getWindowForTarget') {
+        return { result: { windowId: 17, bounds: { left: 10, top: 20, width: 640, height: 480, windowState } } };
+      }
+      if (message.method === 'Browser.setWindowBounds') {
+        const requested = message.params.bounds.windowState;
+        if (requested && requested !== 'fullscreen') windowState = requested;
+        return { result: {} };
+      }
+      if (message.method === 'Browser.getWindowBounds') return { result: { bounds: { windowState } } };
+      return null;
+    };
+    const degraded = await cdp.setWindowState(port, 'fullscreen', {
+      verify: true,
+      fallbackState: 'maximized',
+      attempts: 1,
+    });
+    assert.strictEqual(degraded.requestedState, 'fullscreen');
+    assert.strictEqual(degraded.state, 'maximized');
+    assert.strictEqual(degraded.degraded, true);
   } finally {
+    FakeWebSocket.handler = null;
     global.WebSocket = originalWebSocket;
     await close(server);
   }
@@ -128,6 +162,10 @@ async function testOopifSessionAttachment() {
     });
     const childContext = FakeWebSocket.commands.find((item) => item.method === 'Runtime.evaluate' && item.sessionId === 'oopif-session' && item.params.contextId === 99);
     assert.ok(childContext, 'new OOPIF execution contexts must stay on their child session');
+    assert.ok(FakeWebSocket.commands.some((item) => item.method === 'Runtime.evaluate'
+      && item.sessionId === 'oopif-session'
+      && item.params.contextId === 99
+      && item.params.expression === baseInjection), 'the inherited input bridge must also target the OOPIF session');
   } finally {
     global.WebSocket = originalWebSocket;
     controller.stop();
@@ -135,6 +173,16 @@ async function testOopifSessionAttachment() {
 }
 
 async function testFullscreenAndGeometrySync() {
+  const mainSource = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+  const liveSyncSource = fs.readFileSync(path.join(__dirname, 'live-sync-v5.js'), 'utf8');
+  const rendererSource = fs.readFileSync(path.join(__dirname, 'renderer.js'), 'utf8');
+  assert.ok(mainSource.includes("['minimized', 'normal', 'maximized', 'fullscreen']"), 'sync:window must allow fullscreen');
+  assert.ok(mainSource.includes("fallbackState: 'maximized'"), 'fullscreen window actions must retain a compatibility fallback');
+  assert.ok(mainSource.includes("pauseGeometrySync?.(3500"), 'manual tile/cascade must invalidate in-flight geometry sync');
+  assert.ok(baseInjection.includes("send('surface'"), 'page focus changes must protect browser-owned surfaces');
+  assert.ok(baseInjection.includes("addEventListener('blur'"));
+  assert.ok(baseInjection.includes("addEventListener('visibilitychange'"));
+  assert.ok(baseInjection.includes("addEventListener('pagehide'"), 'page teardown must report browser surface ownership');
   assert.ok(__test.fullscreenInjection.includes("addEventListener('fullscreenchange'"));
   assert.ok(__test.fullscreenInjection.includes("addEventListener('webkitfullscreenchange'"));
   assert.ok(!__test.fullscreenInjection.includes("window !== window.top"), 'fullscreen hooks must also install in iframe contexts');
@@ -146,9 +194,24 @@ async function testFullscreenAndGeometrySync() {
   assert.ok(!__test.fullscreenInjection.includes("addEventListener('fullscreenchange', report"), 'fullscreenchange must not pass the Event object as an error');
   assert.ok(!__test.fullscreenInjection.includes("addEventListener('webkitfullscreenchange', report"), 'webkitfullscreenchange must not pass the Event object as an error');
   assert.ok(__test.fullscreenInjection.includes("addEventListener('fullscreenerror'"));
+  assert.ok(__test.fullscreenInjection.includes('requestedActive'));
+  assert.ok(__test.fullscreenInjection.includes("report('webkit-begin')"));
+  assert.ok(__test.fullscreenInjection.includes("report('webkit-end')"));
+  assert.ok(__test.fullscreenInjection.includes("report('initial')"), 'new frame contexts must publish their initial fullscreen state');
+  assert.ok(!__test.fullscreenInjection.includes('requestAnimationFrame(() => setTimeout(flush'), 'hidden frame reports must not depend on requestAnimationFrame');
+  assert.ok(liveSyncSource.includes('const guardIsCurrent = () => generation === this.syncGeneration'), 'tab activation must retain a transition generation guard');
+  assert.ok(liveSyncSource.includes('if (!guardIsCurrent()) return;'), 'tab activation must re-check the guard after async mapping');
+  assert.ok(liveSyncSource.includes('if (heavy && foreground)'), 'background tabs must not fan out zoom changes');
+  assert.ok(rendererSource.includes('new ResizeObserver(scheduleShellLayoutReconcile)'), 'renderer must reconcile native window resize geometry');
+  assert.ok(rendererSource.includes('result ? button === windowButton : button === previous'), 'window action state must only commit after backend success');
   assert.ok(__test.fullscreenExpression({ active: true, selector: '#player', tag: 'video' }).includes('requestFullscreen'));
   assert.ok(__test.fullscreenExpression({ active: true, selector: '#player', tag: 'video' }).includes('webkitEnterFullscreen'));
   assert.ok(__test.fullscreenExpression({ active: true, selector: '#player', tag: 'video' }).includes('fullscreenEnabled'));
+  assert.ok(__test.fullscreenExpression({ active: true, selector: '#player', tag: 'video' }).includes('waitForState'));
+  assert.ok(__test.fullscreenExpression({ active: true, selector: '#player', tag: 'video' }).includes('data-openbrowser-sync-had-style'));
+  assert.ok(__test.fullscreenExpression({ active: true, selector: '#player', tag: 'video' }).includes('data-openbrowser-sync-root-style-saved'));
+  assert.ok(__test.fullscreenExpression({ active: true, selector: '#player', tag: 'video' }).includes("findDeep(document, 'video')"));
+  assert.ok(__test.fullscreenExpression({ active: true, selector: '#player', tag: 'video' }).includes("style.setProperty('transform', 'none'"));
   assert.ok(__test.fullscreenExpression({ active: false }).includes('exitFullscreen'));
 
   const events = [];
@@ -290,6 +353,49 @@ async function testFullscreenFrameRoutingAndPopupVisibility() {
     calls.length = 0;
     cdp.call = async (url, method, params) => {
       calls.push({ url, method, params });
+      if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'root', url: 'https://example.test/' } } };
+      if (method === 'Runtime.evaluate' && url === 'ws://oopif') {
+        return { result: { value: { active: true, mode: 'visual', degraded: true, reason: 'user-gesture-rejected' } } };
+      }
+      if (method === 'Runtime.evaluate') return { result: { value: { active: true, mode: 'visual', degraded: true } } };
+      return {};
+    };
+    const degradedOopif = await controller.syncFullscreen('master-tab', {
+      active: true,
+      selector: '#host >>> video',
+      tag: 'video',
+      frameUrl: 'https://video.example/player',
+      frameDepth: 1,
+    });
+    assert.deepStrictEqual(degradedOopif, { active: true, applied: 1, failed: 0 });
+    assert.deepStrictEqual(calls.filter((item) => item.method === 'Runtime.evaluate').map((item) => item.url), [
+      'ws://oopif',
+      'ws://slave',
+    ], 'a visual OOPIF fallback must also expand its embedding frame');
+    assert.ok(events.some((event) => event.type === 'live-sync-fullscreen-degraded'
+      && event.reason === 'user-gesture-rejected'));
+
+    calls.length = 0;
+    cdp.call = async (url, method, params) => {
+      calls.push({ url, method, params });
+      if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'root', url: 'https://example.test/' } } };
+      if (method === 'Runtime.evaluate') return { result: { value: { active: false, mode: 'none' } } };
+      return {};
+    };
+    const exitedOopif = await controller.syncFullscreen('master-tab', {
+      active: false,
+      frameUrl: 'https://video.example/player',
+      frameDepth: 1,
+    });
+    assert.deepStrictEqual(exitedOopif, { active: false, applied: 1, failed: 0 });
+    assert.deepStrictEqual(calls.filter((item) => item.method === 'Runtime.evaluate').map((item) => item.url), [
+      'ws://oopif',
+      'ws://slave',
+    ], 'fullscreen exit must clean both the OOPIF and its embedding frame');
+
+    calls.length = 0;
+    cdp.call = async (url, method, params) => {
+      calls.push({ url, method, params });
       if (method === 'Runtime.evaluate') throw new Error('OOPIF runtime unavailable');
       return {};
     };
@@ -308,10 +414,11 @@ async function testFullscreenFrameRoutingAndPopupVisibility() {
 
     controller.eachSlave = async (_tabId, action) => action({ id: 'slave-tab', webSocketDebuggerUrl: 'ws://slave' }, controller.slaves[0]);
     const forwarded = [];
+    const enqueueForward = controller.enqueueForward;
     controller.enqueueForward = (_tabId, payload) => forwarded.push(payload);
     await controller.handle('master-tab', {
       method: 'Runtime.bindingCalled',
-      params: { name: 'openBrowserSync', payload: JSON.stringify({ type: 'fullscreen', active: true, frameDepth: 1, frameUrl: 'https://video.example/player' }) },
+      params: { name: 'openBrowserSync', payload: JSON.stringify({ type: 'fullscreen', active: true, frameToken: 'active-frame', frameDepth: 1, frameUrl: 'https://video.example/player' }) },
     });
     assert.strictEqual(controller.fullscreenByTab.get('master-tab'), true);
     assert.strictEqual(forwarded.length, 1);
@@ -320,16 +427,25 @@ async function testFullscreenFrameRoutingAndPopupVisibility() {
     controller.lastGeometryPauseReason = 'fullscreen-transition';
     await controller.handle('master-tab', {
       method: 'Runtime.bindingCalled',
-      params: { name: 'openBrowserSync', payload: JSON.stringify({ type: 'fullscreen', active: false, error: 'NotAllowedError' }) },
+      params: { name: 'openBrowserSync', payload: JSON.stringify({ type: 'fullscreen', active: false, frameToken: 'failed-frame', error: 'NotAllowedError' }) },
     });
     assert.strictEqual(forwarded.length, 0, 'permission failures must not force slaves to exit fullscreen');
-    assert.strictEqual(controller.fullscreenByTab.has('master-tab'), false, 'fullscreen errors must clear stale tab state');
-    assert.ok(controller.geometryPausedUntil <= Date.now() + 500, 'fullscreen errors must release the geometry pause promptly');
+    assert.strictEqual(controller.fullscreenByTab.get('master-tab'), true, 'a fullscreenerror in another frame must preserve the active frame');
     assert.ok(events.some((event) => event.type === 'live-sync-fullscreen-error'));
 
-    controller.fullscreenByTab.set('master-tab', true);
+    await controller.handle('master-tab', {
+      method: 'Runtime.bindingCalled',
+      params: { name: 'openBrowserSync', payload: JSON.stringify({ type: 'fullscreen', active: false, frameToken: 'active-frame', frameDepth: 1, frameUrl: 'https://video.example/player' }) },
+    });
+    assert.strictEqual(controller.fullscreenByTab.has('master-tab'), false, 'the matching fullscreen exit must clear the active frame');
+    assert.ok(controller.geometryPausedUntil <= Date.now() + 500, 'fullscreen exit must release the geometry pause promptly');
+
+    controller.updateFullscreenContext('master-tab', 'page:navigating-frame', { active: true, frameToken: 'navigating-frame' });
     await controller.handle('master-tab', { method: 'Page.frameNavigated', params: { frame: { id: 'child', parentId: 'root', url: 'https://video.example/next' } } });
-    assert.strictEqual(controller.fullscreenByTab.has('master-tab'), false, 'navigation must clear stale fullscreen state');
+    assert.strictEqual(controller.fullscreenByTab.get('master-tab'), true, 'a sibling frame navigation must not clear another fullscreen context');
+    await controller.handle('master-tab', { method: 'Page.frameNavigated', params: { frame: { id: 'root', url: 'https://example.test/next' } } });
+    assert.strictEqual(controller.fullscreenByTab.has('master-tab'), false, 'top-level navigation must clear stale fullscreen state');
+    controller.enqueueForward = enqueueForward;
 
     cdp.windowForPort = async (port) => port === 100
       ? { bounds: { left: 0, top: 0, width: 1000, height: 700, windowState: 'normal' } }
@@ -384,6 +500,23 @@ async function testFullscreenFrameRoutingAndPopupVisibility() {
     controller.geometryPausedUntil = 0; controller.lastWindowSync = 0;
     await controller.syncWindowGeometry();
     assert.strictEqual(resizeCalls.length, 2, 'native popup state must continue blocking geometry writes');
+
+    controller.nativePopupActive = false;
+    controller.fullscreenByTab.set('background-master-tab', true);
+    controller.activeMasterTab = 'master-tab';
+    controller.geometryPausedUntil = 0; controller.lastWindowSync = 0;
+    await controller.syncWindowGeometry();
+    assert.strictEqual(resizeCalls.length, 2, 'fullscreen in any tracked master context must block geometry writes');
+
+    controller.fullscreenByTab.clear();
+    controller.geometryPausedUntil = 0; controller.browserOwnedUntil = 0;
+    controller.enqueueForward('master-tab', { type: 'surface', focused: false, visible: true });
+    assert.ok(controller.geometryPausedUntil > Date.now(), 'page blur must create a geometry transition guard');
+    assert.ok(controller.browserOwnedUntil > Date.now(), 'page blur must protect an external browser menu from activation');
+
+    const generationBeforePopup = controller.windowGuardGeneration;
+    controller.pauseGeometrySync(500, 'native-menu-race');
+    assert.ok(controller.windowGuardGeneration > generationBeforePopup, 'a newly opened browser surface must invalidate in-flight geometry work');
   } finally {
     cdp.call = originalCall;
     cdp.targets = originalTargets;

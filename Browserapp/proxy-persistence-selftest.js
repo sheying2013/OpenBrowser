@@ -96,6 +96,31 @@ async function main() {
 
     await store.update('encoded-auth', {
       raw: 'socks5://proxy.test:1080',
+      username: '',
+      password: '',
+    });
+    assert.strictEqual(store.get('encoded-auth').username, 'user@mail');
+    assert.strictEqual(store.get('encoded-auth').password, 'p:a/ss%');
+
+    await store.update('encoded-auth', {
+      raw: 'socks5://proxy.test:1080',
+      username: '********',
+      password: '••••••••',
+    });
+    assert.strictEqual(store.get('encoded-auth').username, 'user@mail');
+    assert.strictEqual(store.get('encoded-auth').password, 'p:a/ss%');
+
+    await assert.rejects(store.createMany([
+      { id: 'duplicate-batch', raw: 'http://one.test:8080' },
+      { id: 'duplicate-batch', raw: 'http://two.test:8081' },
+    ]), /批量导入代理 ID 重复/);
+    assert.strictEqual(store.get('duplicate-batch'), null);
+    await assert.rejects(store.createMany([
+      { id: 'encoded-auth', raw: 'http://existing-id.test:8082' },
+    ]), /代理 ID 已存在/);
+
+    await store.update('encoded-auth', {
+      raw: 'socks5://proxy.test:1080',
       proxyAuthAction: 'clear',
     });
     assert.strictEqual(store.get('encoded-auth').username, '');
@@ -272,7 +297,7 @@ async function main() {
     assert.strictEqual(replacedRestart.list().length, 1);
     assert.strictEqual(replacedRestart.get('long-credential').password, longPassword);
 
-    console.log('PROXY_PERSISTENCE_SELFTEST_OK migration=1 restart=1 encoding=1 escaped_separator=1 special_credentials=1 remark=1 blank_patch=1 explicit_clear=1 clear_restart=1 mutation_queue=1 flush=1 tmp_scan=1 backup_recovery=1 corrupt_preserved=1 rollback=1 replace_all=1 long_credentials=1');
+    console.log('PROXY_PERSISTENCE_SELFTEST_OK migration=1 restart=1 encoding=1 escaped_separator=1 special_credentials=1 remark=1 blank_patch=1 masked_patch=1 explicit_clear=1 clear_restart=1 duplicate_ids=1 mutation_queue=1 flush=1 tmp_scan=1 backup_recovery=1 corrupt_preserved=1 rollback=1 replace_all=1 long_credentials=1');
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

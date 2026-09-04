@@ -3,27 +3,29 @@
 const http = require('http');
 const crypto = require('crypto');
 const { URL } = require('url');
+const { cleanApiKey } = require('./api-key');
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
-function responseHeaders(origin = '') {
+function responseHeaders(origin = '', extra = {}) {
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
+    ...extra,
   };
   if (origin) {
     headers['Access-Control-Allow-Origin'] = origin;
     headers.Vary = 'Origin';
     headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, api-key, x-api-key';
-    headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS';
+    headers['Access-Control-Allow-Methods'] = 'GET,POST,DELETE,OPTIONS';
   }
   return headers;
 }
 
-function sendJson(res, status, body, origin = '') {
+function sendJson(res, status, body, origin = '', extraHeaders = {}) {
   const payload = JSON.stringify(body);
-  res.writeHead(status, responseHeaders(origin));
+  res.writeHead(status, responseHeaders(origin, extraHeaders));
   res.end(payload);
 }
 
@@ -33,6 +35,119 @@ function ok(data = {}, msg = 'success') {
 
 function fail(msg, code = -1, data = null) {
   return { code, msg: String(msg || 'error'), data };
+}
+
+const ROUTE_METHODS = new Map();
+
+function registerRouteMethods(methods, paths) {
+  const allowed = Object.freeze(methods.map((method) => String(method).toUpperCase()));
+  for (const pathname of paths) ROUTE_METHODS.set(pathname, allowed);
+}
+
+registerRouteMethods(['GET'], [
+  '/', '/status', '/api/getVersion', '/api/v1/version',
+  '/api/v1/user/list', '/api/v2/browser-profile/list', '/api/profiles',
+  '/api/v1/browser/active', '/api/v2/browser-profile/active', '/api/browser/active',
+  '/api/v2/proxy-list/list', '/api/proxy/list',
+  '/api/fingerprint', '/api/v1/fingerprint', '/api/isolation/audit', '/api/v1/isolation/audit',
+  '/api/v1/application/list', '/api/application/list', '/api/apps',
+  '/api/application/recommended', '/api/apps/recommended',
+  '/api/extension/list', '/api/extensions', '/api/extension/update', '/api/getExtensionStatus',
+  '/api/sync/status', '/api/window-sync/status', '/api/getRpaStatus', '/api/rpa/status',
+]);
+registerRouteMethods(['POST'], [
+  '/api/v1/user/create', '/api/v2/browser-profile/create', '/api/profiles/create',
+  '/api/v2/browser-profile/update', '/api/profiles/update',
+  '/api/v2/browser-profile/duplicate', '/api/profiles/duplicate',
+  '/api/v1/user/delete', '/api/v2/browser-profile/delete', '/api/profiles/delete',
+  '/api/v1/browser/start', '/api/v2/browser-profile/start', '/api/browser/start',
+  '/api/v1/browser/stop', '/api/v2/browser-profile/stop', '/api/browser/stop',
+  '/api/v1/browser/stop-all', '/api/v2/browser-profile/stop-all', '/api/browser/stop-all',
+  '/api/v2/proxy-list/create', '/api/proxy/create',
+  '/api/v2/proxy-list/update', '/api/proxy/update',
+  '/api/v2/proxy-list/delete', '/api/proxy/delete',
+  '/api/proxy/check', '/api/checkProxy', '/api/proxy/check-profile',
+  '/api/extension/assign', '/api/extensions/assign',
+  '/api/sync/start', '/api/window-sync/start', '/api/sync/stop', '/api/window-sync/stop',
+  '/api/sync/restart', '/api/window-sync/restart', '/api/sync/arrange', '/api/window-sync/arrange',
+  '/api/rpa/run', '/api/rpa', '/api/rpav2', '/api/stopRpa', '/api/rpa/stop',
+]);
+registerRouteMethods(['GET', 'POST'], ['/api/sync/settings', '/api/rpa/plans', '/api/rpa/templates']);
+registerRouteMethods(['GET'], ['/api/rpa/tasks']);
+
+function allowedMethodsForPath(pathname) {
+  const exact = ROUTE_METHODS.get(pathname);
+  if (exact) return exact;
+  if (pathname.startsWith('/api/rpa/plans/')) return ['DELETE'];
+  if (pathname.startsWith('/api/rpa/tasks/')) return ['GET', 'DELETE'];
+  if (pathname.startsWith('/api/rpa/templates/') && pathname.endsWith('/install')) return ['POST'];
+  if (pathname.startsWith('/api/rpa/templates/')) return ['GET', 'DELETE'];
+  return null;
+}
+
+function decodePathId(value, label) {
+  try {
+    return decodeURIComponent(String(value || ''));
+  } catch (_) {
+    const error = new Error(`invalid encoded ${label} id`);
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+function redactProxyRecord(item) {
+  if (!item || typeof item !== 'object') return item;
+  const safe = { ...item };
+  delete safe.raw;
+  delete safe.username;
+  delete safe.password;
+  const protocol = String(item.protocol || 'http').replace(/:$/, '').toLowerCase();
+  const host = String(item.host || '').trim();
+  const displayHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  const port = Number(item.port) || '';
+  const endpoint = host && port ? `${protocol}://${displayHost}:${port}` : '';
+  const hasCredentials = Boolean(item.authenticated || item.username || item.password);
+  return {
+    ...safe,
+    chromeUrl: endpoint,
+    endpoint,
+    credentials_redacted: hasCredentials,
+  };
+}
+
+function booleanValue(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const normalized = String(value).trim().toLowerCase();
+  if (['0', 'false', 'off', 'no', 'disabled'].includes(normalized)) return false;
+  if (['1', 'true', 'on', 'yes', 'enabled'].includes(normalized)) return true;
+  return Boolean(value);
+}
+
+function firstDefined(input, keys, fallback = undefined) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(input || {}, key) && input[key] !== undefined) return input[key];
+  }
+  return fallback;
+}
+
+function firstArray(input, keys) {
+  for (const key of keys) {
+    if (Array.isArray(input?.[key])) return input[key];
+  }
+  return null;
+}
+
+function firstString(input, keys, fallback = '') {
+  const value = firstDefined(input, keys, fallback);
+  return value == null ? String(fallback) : String(value);
+}
+
+function timingSafeStringEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left));
+  const rightBuffer = Buffer.from(String(right));
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 async function readBody(req) {
@@ -87,13 +202,27 @@ function parseGeolocation(value) {
 function normalizeProfileInput(input = {}) {
   const out = { ...input };
   const privacy = { ...(out.privacy && typeof out.privacy === 'object' ? out.privacy : {}) };
-  let fingerprint = out.fingerprint && typeof out.fingerprint === 'object' ? { ...out.fingerprint } : {};
+  const hasTopLevelFingerprint = Object.prototype.hasOwnProperty.call(out, 'fingerprint');
+  const hasPrivacyFingerprint = Object.prototype.hasOwnProperty.call(privacy, 'fingerprint');
+  const legacyFingerprintKeys = [
+    'webgl_vendor', 'webglVendor', 'webgl_renderer', 'webglRenderer',
+    'hardware_concurrency', 'hardwareConcurrency', 'device_memory', 'deviceMemory',
+  ];
+  const hasLegacyFingerprint = legacyFingerprintKeys.some((key) => Object.prototype.hasOwnProperty.call(out, key));
+  const hasFingerprintInput = hasTopLevelFingerprint || hasPrivacyFingerprint || hasLegacyFingerprint;
+  let fingerprint = out.fingerprint && typeof out.fingerprint === 'object'
+    ? { ...out.fingerprint }
+    : (privacy.fingerprint && typeof privacy.fingerprint === 'object' ? { ...privacy.fingerprint } : null);
   const clearFingerprint = out.fingerprint === null || out.privacy?.fingerprint === null;
 
+  if (out.profile_id === undefined && out.profileId !== undefined) out.profile_id = out.profileId;
+  if (out.user_id === undefined && out.userId !== undefined) out.user_id = out.userId;
   if (out.start_url !== undefined) out.startUrl = out.start_url;
   if (out.user_agent !== undefined) out.userAgent = out.user_agent;
   if (out.network_mode !== undefined) out.networkMode = out.network_mode;
   if (out.language_code !== undefined) out.languageCode = out.language_code;
+  if (out.user_proxy_config === undefined && out.userProxyConfig !== undefined) out.user_proxy_config = out.userProxyConfig;
+  if (out.privacy_extra === undefined && out.privacyExtra !== undefined) out.privacy_extra = out.privacyExtra;
   if (typeof out.platform === 'string') out.platform = { type: out.platform };
 
   const sizeValue = out.resolution ?? out.window_size ?? out.windowSize;
@@ -121,30 +250,39 @@ function normalizeProfileInput(input = {}) {
       privacy.geoMode = 'custom';
     }
   }
-  if (out.webgl_vendor !== undefined && String(out.webgl_vendor).trim()) {
-    fingerprint.webglVendor = String(out.webgl_vendor).trim();
+  const webglVendor = firstDefined(out, ['webgl_vendor', 'webglVendor']);
+  if (webglVendor !== undefined && String(webglVendor).trim()) {
+    fingerprint = fingerprint || {};
+    fingerprint.webglVendor = String(webglVendor).trim();
     privacy.webglMeta = 'custom';
   }
-  if (out.webgl_renderer !== undefined && String(out.webgl_renderer).trim()) {
-    fingerprint.webglRenderer = String(out.webgl_renderer).trim();
+  const webglRenderer = firstDefined(out, ['webgl_renderer', 'webglRenderer']);
+  if (webglRenderer !== undefined && String(webglRenderer).trim()) {
+    fingerprint = fingerprint || {};
+    fingerprint.webglRenderer = String(webglRenderer).trim();
     privacy.webglMeta = 'custom';
   }
-  if (out.hardware_concurrency !== undefined) {
-    const n = Number(out.hardware_concurrency);
+  const hardwareConcurrency = firstDefined(out, ['hardware_concurrency', 'hardwareConcurrency']);
+  if (hardwareConcurrency !== undefined) {
+    const n = Number(hardwareConcurrency);
     if (Number.isFinite(n)) {
+      fingerprint = fingerprint || {};
       privacy.cores = n;
       fingerprint.hardwareConcurrency = n;
     }
   }
-  if (out.device_memory !== undefined) {
-    const n = Number(out.device_memory);
+  const deviceMemory = firstDefined(out, ['device_memory', 'deviceMemory']);
+  if (deviceMemory !== undefined) {
+    const n = Number(deviceMemory);
     if (Number.isFinite(n)) {
+      fingerprint = fingerprint || {};
       privacy.memory = n;
       fingerprint.deviceMemory = n;
     }
   }
-  if (out.do_not_track !== undefined) {
-    const enabled = out.do_not_track === true || out.do_not_track === 'on' || out.do_not_track === '1';
+  const doNotTrack = firstDefined(out, ['do_not_track', 'doNotTrack']);
+  if (doNotTrack !== undefined) {
+    const enabled = doNotTrack === true || doNotTrack === 'on' || doNotTrack === '1';
     privacy.dnt = enabled;
     privacy.dntMode = enabled ? 'on' : 'off';
   }
@@ -153,23 +291,58 @@ function normalizeProfileInput(input = {}) {
     fingerprint = null;
     delete privacy.fingerprint;
   }
-  if (fingerprint) {
+  if (hasFingerprintInput && fingerprint) {
     out.fingerprint = fingerprint;
     privacy.fingerprint = fingerprint;
-  } else {
+  } else if (clearFingerprint) {
     delete out.fingerprint;
     delete privacy.fingerprint;
+  } else {
+    delete out.fingerprint;
   }
   out.privacy = privacy;
   out.__clearFingerprint = clearFingerprint;
   return out;
 }
 
+function normalizeProxyInput(input = {}) {
+  const out = { ...input };
+  if (out.refreshUrl === undefined && out.refresh_url !== undefined) out.refreshUrl = out.refresh_url;
+  if (out.ipChannel === undefined && out.ip_channel !== undefined) out.ipChannel = out.ip_channel;
+  if (out.proxyAuthAction === undefined && out.proxy_auth_action !== undefined) out.proxyAuthAction = out.proxy_auth_action;
+  return out;
+}
+
+function normalizeRpaInput(input = {}) {
+  const out = { ...input };
+  const aliases = [
+    ['profile_id', 'profileId'], ['user_id', 'userId'],
+    ['profile_ids', 'profileIds'], ['user_ids', 'userIds'],
+    ['plan_id', 'planId'], ['task_id', 'taskId'], ['template_id', 'templateId'],
+    ['process_name', 'processName'], ['plan_name', 'planName'], ['save_as', 'saveAs'],
+  ];
+  for (const [snakeCase, camelCase] of aliases) {
+    if (out[snakeCase] === undefined && out[camelCase] !== undefined) out[snakeCase] = out[camelCase];
+  }
+  return out;
+}
+
 function readProxyAssociation(input = {}) {
   const source = input && typeof input.profile === 'object' ? { ...input, ...input.profile } : input;
-  for (const key of ['proxy_id', 'proxy_library_id', 'proxyId', 'proxyLibraryId']) {
+  const keys = ['proxy_id', 'proxy_library_id', 'proxyId', 'proxyLibraryId'];
+  for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(source || {}, key)) {
       return { present: true, value: source[key] == null ? '' : String(source[key]).trim() };
+    }
+  }
+  const hasExplicitManualProxy = ['proxy', 'user_proxy_config', 'userProxyConfig', 'network_mode', 'networkMode']
+    .some((key) => Object.prototype.hasOwnProperty.call(source || {}, key));
+  if (!hasExplicitManualProxy && source?.proxyMeta && typeof source.proxyMeta === 'object') {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(source.proxyMeta, key)) {
+        const value = source.proxyMeta[key];
+        return { present: true, value: value == null ? '' : String(value).trim() };
+      }
     }
   }
   return { present: false, value: '' };
@@ -177,12 +350,14 @@ function readProxyAssociation(input = {}) {
 
 function proxySummary(profile, proxyStore, explicitProxyId = undefined) {
   const proxyMeta = profile?.proxyMeta && typeof profile.proxyMeta === 'object' ? profile.proxyMeta : {};
-  const profileProxyId = Object.prototype.hasOwnProperty.call(profile || {}, 'proxyId')
-    ? profile.proxyId
-    : (Object.prototype.hasOwnProperty.call(profile || {}, 'proxy_id') ? profile.proxy_id : undefined);
-  const metaProxyId = Object.prototype.hasOwnProperty.call(proxyMeta, 'proxyId')
-    ? proxyMeta.proxyId
-    : proxyMeta.proxy_id;
+  const profileProxyId = profile?.proxyId
+    ?? profile?.proxy_id
+    ?? profile?.proxyLibraryId
+    ?? profile?.proxy_library_id;
+  const metaProxyId = proxyMeta.proxyId
+    ?? proxyMeta.proxy_id
+    ?? proxyMeta.proxyLibraryId
+    ?? proxyMeta.proxy_library_id;
   const proxyId = explicitProxyId === undefined
     ? String((profileProxyId !== undefined ? profileProxyId : metaProxyId) || '').trim()
     : String(explicitProxyId || '').trim();
@@ -230,7 +405,7 @@ class LocalApiServer {
     const configuredPort = options.port === undefined ? 50325 : Number(options.port);
     this.requestedPort = Number.isFinite(configuredPort) && configuredPort >= 0 ? configuredPort : 50325;
     this.port = this.requestedPort;
-    this.apiKey = options.apiKey ? String(options.apiKey) : crypto.randomBytes(32).toString('base64url');
+    this.apiKey = cleanApiKey(options.apiKey) || crypto.randomBytes(32).toString('base64url');
     this.allowedOrigins = new Set(options.allowedOrigins || []);
     this.engine = options.engine;
     this.rpaEngine = options.rpaEngine;
@@ -245,18 +420,20 @@ class LocalApiServer {
 
   authOk(req, url = null) {
     if (!this.apiKey) return true;
-    const headerKey = req.headers['api-key'] || req.headers['x-api-key'] || '';
     const auth = String(req.headers.authorization || '');
     const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
-    const queryKey = url?.searchParams ? (url.searchParams.get('api_key') || url.searchParams.get('api_token') || url.searchParams.get('key') || '') : '';
-    let supplied = String(headerKey || bearer || queryKey || '').trim();
-    if (supplied.startsWith('"') && supplied.endsWith('"')) supplied = supplied.slice(1, -1);
-    if (supplied.startsWith("'") && supplied.endsWith("'")) supplied = supplied.slice(1, -1);
-    if (!supplied) return false;
-    const suppliedBuf = Buffer.from(supplied);
-    const keyBuf = Buffer.from(this.apiKey);
-    if (suppliedBuf.length !== keyBuf.length) return false;
-    return crypto.timingSafeEqual(suppliedBuf, keyBuf);
+    const candidates = [
+      req.headers['api-key'],
+      req.headers['x-api-key'],
+      bearer,
+      url?.searchParams?.get('api_key'),
+      url?.searchParams?.get('api_token'),
+      url?.searchParams?.get('key'),
+    ];
+    return candidates
+      .map((candidate) => cleanApiKey(candidate))
+      .filter(Boolean)
+      .some((candidate) => timingSafeStringEqual(candidate, this.apiKey));
   }
 
   allowedOrigin(req) {
@@ -298,27 +475,46 @@ class LocalApiServer {
   }
 
   async handle(req, res) {
+    let origin = '';
     try {
-      const origin = this.allowedOrigin(req);
+      origin = this.allowedOrigin(req);
       if (origin === null) return sendJson(res, 403, fail('origin not allowed', 403));
       if (req.method === 'OPTIONS') return sendJson(res, 204, ok(), origin);
       const url = new URL(req.url || '/', `http://${this.host}:${this.port}`);
       const pathname = url.pathname.replace(/\/+$/, '') || '/';
 
       if (!this.authOk(req, url)) {
-        return sendJson(res, 401, fail('unauthorized', 401), origin);
+        return sendJson(res, 401, fail('unauthorized', 401), origin, { 'WWW-Authenticate': 'Bearer' });
       }
 
-      const body = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method || '') ? await readBody(req) : {};
-      const query = Object.fromEntries(url.searchParams.entries());
-      const input = { ...query, ...body };
+      const method = String(req.method || 'GET').toUpperCase();
+      const allowedMethods = allowedMethodsForPath(pathname);
+      if (allowedMethods && !allowedMethods.includes(method)) {
+        return sendJson(
+          res,
+          405,
+          fail(`method ${method} not allowed`, 405),
+          origin,
+          { Allow: allowedMethods.join(', ') },
+        );
+      }
 
-      const result = await this.route(req.method || 'GET', pathname, input, req);
+      const body = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) ? await readBody(req) : {};
+      const query = Object.fromEntries(url.searchParams.entries());
+      // Keep array request bodies as arrays. Object-spreading a batch payload
+      // turns it into {"0": ..., "1": ...}, so /api/proxy/create can no
+      // longer recognize the direct batch form. Query values still need to be
+      // available for compatibility, therefore attach them as non-index keys.
+      const input = Array.isArray(body)
+        ? Object.assign(body.slice(), query)
+        : { ...query, ...(body && typeof body === 'object' ? body : {}) };
+
+      const result = await this.route(method, pathname, input, req);
       if (result === undefined) return sendJson(res, 404, fail('not found', 404), origin);
       return sendJson(res, 200, result, origin);
     } catch (error) {
       const status = Number(error.statusCode) || 500;
-      return sendJson(res, status, fail(status === 500 ? 'internal error' : error.message, status));
+      return sendJson(res, status, fail(status === 500 ? 'internal error' : error.message, status), origin || '');
     }
   }
 
@@ -358,9 +554,12 @@ class LocalApiServer {
       if (!this.engine) return fail('profile engine unavailable');
       let body = normalizeProfileInput(input && typeof input.profile === 'object' ? { ...input, ...input.profile } : input);
       const association = this.resolveProxyAssociation(input, body);
+      const hasManualProxyConfiguration = !association.present && [
+        'proxy', 'user_proxy_config', 'network_mode', 'networkMode',
+      ].some((key) => Object.prototype.hasOwnProperty.call(body || {}, key));
       if (association.present) body = { ...body, ...association.patch };
       const existingIds = new Set(this.engine.profiles ? [...this.engine.profiles.keys()] : []);
-      let id = String(body.user_id || body.profile_id || body.id || '').trim();
+      let id = firstString(body, ['user_id', 'userId', 'profile_id', 'profileId', 'id']).trim();
       if (!id) {
         do { id = 'ob-' + Date.now().toString(36) + '-' + crypto.randomBytes(5).toString('hex'); } while (existingIds.has(id));
       }
@@ -394,7 +593,9 @@ class LocalApiServer {
       let created;
       try {
         created = this.engine.sanitizeProfile(profile);
-        created = this.normalizeProxyAssociationState(created, association);
+        created = this.normalizeProxyAssociationState(created, association.present
+          ? association
+          : (hasManualProxyConfiguration ? { present: true, value: '' } : association));
         await this.engine.syncProfiles([created]);
       } catch (error) {
         return fail(`invalid profile: ${error.message}`, 400);
@@ -406,18 +607,32 @@ class LocalApiServer {
 
     if (pathname === '/api/v2/browser-profile/update' || pathname === '/api/profiles/update') {
       if (!this.engine) return fail('profile engine unavailable');
-      const id = String(input.profile_id || input.user_id || input.id || '');
+      const id = firstString(input, ['profile_id', 'profileId', 'user_id', 'userId', 'id']);
       if (!id) return fail('profile id required');
       const current = this.engine.profiles.get(id);
       if (!current) return fail('profile not found');
       const clearFingerprint = Boolean(input.__clearFingerprint) || input.fingerprint === null || input.privacy?.fingerprint === null;
       let body = normalizeProfileInput(input);
       const association = this.resolveProxyAssociation(input, current);
-      if (association.present) body = { ...body, ...association.patch };
-      else if (Object.prototype.hasOwnProperty.call(input || {}, 'proxy')
+      const hasManualProxyPatch = !association.present && (
+        Object.prototype.hasOwnProperty.call(input || {}, 'proxy')
         || Object.prototype.hasOwnProperty.call(input || {}, 'user_proxy_config')
-        || String(input?.network_mode || '').toLowerCase() === 'direct') {
-        body = { ...body, proxyId: null };
+        || Object.prototype.hasOwnProperty.call(input || {}, 'userProxyConfig')
+        || Object.prototype.hasOwnProperty.call(input || {}, 'network_mode')
+        || Object.prototype.hasOwnProperty.call(input || {}, 'networkMode')
+      );
+      if (association.present) body = { ...body, ...association.patch };
+      else if (hasManualProxyPatch) {
+        const rawProxy = String(input?.proxy || '').trim();
+        const directRequested = String(input?.network_mode ?? input?.networkMode ?? '').toLowerCase() === 'direct'
+          || /^(direct|offline|none)$/i.test(rawProxy);
+        body = {
+          ...body,
+          ...(directRequested && !rawProxy ? { proxy: 'Direct' } : {}),
+          networkMode: directRequested ? 'direct' : 'proxy',
+          proxyId: null,
+          proxyMeta: this.proxyMetaWithAssociation(current.proxyMeta, null),
+        };
       }
       const allowed = new Set([
         'name', 'title', 'number', 'language', 'proxy', 'networkMode', 'startUrl', 'os', 'platform',
@@ -453,7 +668,7 @@ class LocalApiServer {
             patch.networkMode = 'proxy';
           }
         }
-      else if (key === 'fingerprint' && value && typeof value === 'object') patch.fingerprint = { ...value };
+        else if (key === 'fingerprint' && value && typeof value === 'object') patch.fingerprint = { ...value };
         else if (key !== 'profile_id' && key !== 'user_id' && key !== 'id') patch[key] = value;
       }
       if (clearFingerprint) {
@@ -464,8 +679,20 @@ class LocalApiServer {
           patch.privacy = nextPrivacy;
         }
       }
-      const next = this.engine.sanitizeProfile({ ...current, ...patch, id });
-      this.normalizeProxyAssociationState(next, association);
+      const mergedProfile = { ...current, ...patch, id };
+      if (clearFingerprint) {
+        // Older callers/tests may still carry a duplicated top-level
+        // fingerprint alongside privacy.fingerprint. Remove both copies so a
+        // reset cannot be undone by the merge before sanitization.
+        delete mergedProfile.fingerprint;
+        if (mergedProfile.privacy && typeof mergedProfile.privacy === 'object') {
+          delete mergedProfile.privacy.fingerprint;
+        }
+      }
+      const next = this.engine.sanitizeProfile(mergedProfile);
+      this.normalizeProxyAssociationState(next, association.present
+        ? association
+        : (hasManualProxyPatch ? { present: true, value: '' } : association));
       this.engine.profiles.set(id, next);
       if (typeof this.engine.persist === 'function') await this.engine.persist();
       const profile = this.engine.profiles.get(id);
@@ -478,7 +705,8 @@ class LocalApiServer {
 
     if (pathname === '/api/v2/browser-profile/duplicate' || pathname === '/api/profiles/duplicate') {
       if (!this.engine) return fail('profile engine unavailable');
-      const sourceId = String(input.source_profile_id || input.profile_id || input.id || '');
+      const duplicateInput = normalizeProfileInput(input);
+      const sourceId = firstString(duplicateInput, ['source_profile_id', 'sourceProfileId', 'profile_id', 'profileId', 'id']);
       const source = this.engine.profiles.get(sourceId);
       if (!source) return fail('source profile not found');
       const numbers = [...this.engine.profiles.values()].map((item) => Number(item.number)).filter((n) => Number.isInteger(n) && n > 0);
@@ -489,12 +717,24 @@ class LocalApiServer {
         ...base,
         id,
         number,
-        name: String(input.name || (base.name ? base.name + ' Copy' : 'Environment ' + number)),
-        title: String(input.name || base.title || base.name || ('Environment ' + number)),
-        startUrl: input.start_url !== undefined ? input.start_url : base.startUrl,
+        name: String(duplicateInput.name || (base.name ? base.name + ' Copy' : 'Environment ' + number)),
+        title: String(duplicateInput.name || base.title || base.name || ('Environment ' + number)),
+        startUrl: duplicateInput.startUrl !== undefined ? duplicateInput.startUrl : base.startUrl,
         profileId: id,
+        cookies: '',
+        username: '',
+        password: '',
+        totpSecret: '',
+        otp: '',
         exitCheckedAt: undefined,
         exitNetwork: undefined,
+        platform: {
+          ...(base.platform || {}),
+          username: '',
+          password: '',
+          totpSecret: '',
+          otp: '',
+        },
         privacy: {
           ...(base.privacy || {}),
           fingerprint: undefined,
@@ -509,12 +749,16 @@ class LocalApiServer {
 
     if (pathname === '/api/v1/user/delete' || pathname === '/api/v2/browser-profile/delete' || pathname === '/api/profiles/delete') {
       if (!this.engine) return fail('profile engine unavailable');
-      const rawIds = Array.isArray(input.user_ids) ? input.user_ids : (Array.isArray(input.profile_ids) ? input.profile_ids : (Array.isArray(input.ids) ? input.ids : [input.user_id || input.profile_id || input.id]));
+      const rawIds = firstArray(input, ['user_ids', 'userIds', 'profile_ids', 'profileIds', 'ids'])
+        || [firstDefined(input, ['user_id', 'userId', 'profile_id', 'profileId', 'id'])];
       const ids = rawIds.map((value) => String(value || '').trim()).filter(Boolean);
       if (!ids.length) return fail('profile id required');
       let result;
       try {
-        result = await this.engine.deleteProfiles(ids, input.delete_data !== false && input.deleteData !== false);
+        const deleteData = input.delete_data !== undefined
+          ? booleanValue(input.delete_data, true)
+          : booleanValue(input.deleteData, true);
+        result = await this.engine.deleteProfiles(ids, deleteData);
       } catch (error) {
         // e.g. isolation root validation rejection while removing profile data —
         // surface as a request error, not an internal 500.
@@ -524,7 +768,7 @@ class LocalApiServer {
     }
 
     if (pathname === '/api/v1/browser/start' || pathname === '/api/v2/browser-profile/start' || pathname === '/api/browser/start') {
-      const id = String(input.user_id || input.profile_id || input.id || '');
+      const id = firstString(input, ['user_id', 'userId', 'profile_id', 'profileId', 'id']);
       const profile = this.engine.profiles.get(id);
       if (!profile) return fail('profile not found');
       const started = await this.engine.start(profile);
@@ -539,7 +783,7 @@ class LocalApiServer {
     }
 
     if (pathname === '/api/v1/browser/stop' || pathname === '/api/v2/browser-profile/stop' || pathname === '/api/browser/stop') {
-      const id = String(input.user_id || input.profile_id || input.id || '');
+      const id = firstString(input, ['user_id', 'userId', 'profile_id', 'profileId', 'id']);
       await this.engine.stop(id);
       return ok({ user_id: id });
     }
@@ -561,43 +805,43 @@ class LocalApiServer {
     // ---- proxy library ----
     if (pathname === '/api/v2/proxy-list/list' || pathname === '/api/proxy/list') {
       if (!this.proxyStore) return fail('proxy store unavailable');
-      const list = this.proxyStore.list(input);
+      const list = this.proxyStore.list(input).map(redactProxyRecord);
       return ok({ list, page: 1, page_size: list.length });
     }
     if (pathname === '/api/v2/proxy-list/create' || pathname === '/api/proxy/create') {
       if (!this.proxyStore) return fail('proxy store unavailable');
       if (Array.isArray(input) || Array.isArray(input.data)) {
         const body = Array.isArray(input) ? input : input.data;
-        return ok({ list: await this.proxyStore.createMany(body) });
+        return ok({ list: await this.proxyStore.createMany(body.map(normalizeProxyInput)) });
       }
-      return ok(await this.proxyStore.create(input));
+      return ok(await this.proxyStore.create(normalizeProxyInput(input)));
     }
     if (pathname === '/api/v2/proxy-list/update' || pathname === '/api/proxy/update') {
       if (!this.proxyStore) return fail('proxy store unavailable');
-      const id = String(input.proxy_id || input.id || '');
+      const id = String(input.proxy_id || input.proxy_library_id || input.proxyId || input.proxyLibraryId || input.id || '');
       if (!id) return fail('id required');
-      return ok(await this.proxyStore.update(id, input));
+      return ok(await this.proxyStore.update(id, normalizeProxyInput(input)));
     }
     if (pathname === '/api/v2/proxy-list/delete' || pathname === '/api/proxy/delete') {
       if (!this.proxyStore) return fail('proxy store unavailable');
-      const ids = Array.isArray(input.proxy_ids)
-        ? input.proxy_ids
-        : (Array.isArray(input.proxy_id) ? input.proxy_id : (Array.isArray(input.ids) ? input.ids : [input.id || input.proxy_id]));
+      const ids = firstArray(input, ['proxy_ids', 'proxyIds', 'proxy_library_ids', 'proxyLibraryIds', 'proxy_id', 'proxyId', 'ids'])
+        || [firstDefined(input, ['id', 'proxy_id', 'proxyId', 'proxy_library_id', 'proxyLibraryId'])];
       return ok(await this.proxyStore.remove(ids.filter(Boolean)));
     }
     if (pathname === '/api/proxy/check' || pathname === '/api/checkProxy') {
       if (!this.proxyStore || !this.engine) return fail('proxy check unavailable');
-      const id = String(input.proxy_id || input.id || '');
+      const id = String(input.proxy_id || input.proxy_library_id || input.proxyId || input.proxyLibraryId || input.id || '');
       const item = id ? this.proxyStore.get(id) : null;
       const raw = item?.raw || input.proxy || input.raw;
       if (!raw) return fail('proxy required');
-      const result = await this.engine.testProxy({ id: 'proxy-check', name: 'proxy-check', proxy: raw, proxyMeta: { ipChannel: item?.ipChannel || input.ipChannel || 'ip-api' } });
+      const ipChannel = firstString(input, ['ip_channel', 'ipChannel'], 'ip-api');
+      const result = await this.engine.testProxy({ id: 'proxy-check', name: 'proxy-check', proxy: raw, proxyMeta: { ipChannel: item?.ipChannel || ipChannel } });
       if (item) await this.proxyStore.markCheck(item.id, result);
       return ok(result);
     }
     if (pathname === '/api/proxy/check-profile') {
       if (!this.engine) return fail('profile engine unavailable');
-      const id = String(input.profile_id || input.user_id || input.id || '');
+      const id = firstString(input, ['profile_id', 'profileId', 'user_id', 'userId', 'id']);
       const profile = this.engine.profiles.get(id);
       if (!profile) return fail('profile not found');
       const result = await this.engine.checkProxy(profile, { allowExtract: false, persist: true });
@@ -606,7 +850,7 @@ class LocalApiServer {
 
     // ---- fingerprint / isolation ----
     if (pathname === '/api/fingerprint' || pathname === '/api/v1/fingerprint') {
-      const id = String(input.user_id || input.profile_id || input.id || '');
+      const id = firstString(input, ['user_id', 'userId', 'profile_id', 'profileId', 'id']);
       if (!id) return fail('profile_id required');
       try {
         return ok(this.engine.fingerprintFor(id));
@@ -631,9 +875,9 @@ class LocalApiServer {
       return ok({ list: this.engine.listExtensions() });
     }
     if (pathname === '/api/extension/assign' || pathname === '/api/extensions/assign') {
-      const extensionId = String(input.extension_id || input.id || '');
+      const extensionId = firstString(input, ['extension_id', 'extensionId', 'id']);
       const ids = this.parseIds(input);
-      const enabled = input.enabled === undefined ? true : !(input.enabled === false || input.enabled === '0' || input.enabled === 0);
+      const enabled = booleanValue(input.enabled, true);
       if (!extensionId || !ids.length) return fail('extension_id and profile_ids required');
       await this.engine.assignExtension(extensionId, ids, enabled);
       return ok({ extension_id: extensionId, profile_ids: ids, enabled });
@@ -647,13 +891,16 @@ class LocalApiServer {
       return ok(this.syncBridge.status());
     }
     if (pathname === '/api/sync/start' || pathname === '/api/window-sync/start') {
+      if (Object.prototype.hasOwnProperty.call(input || {}, 'settings')) {
+        const error = new Error('sync settings must be updated through /api/sync/settings');
+        error.statusCode = 400;
+        throw error;
+      }
       const ids = this.parseIds(input);
       if (input.operate) this.syncBridge.updateOperateList(input.operate);
-      if (input.settings) this.syncBridge.updateSettings?.(input.settings);
       const result = await this.syncBridge.start(ids, {
-        tile: input.tile !== false && input.tile !== '0',
-        cascade: input.cascade === true || input.cascade === '1',
-        settings: input.settings,
+        tile: booleanValue(input.tile, true),
+        cascade: booleanValue(input.cascade, false),
       });
       return ok(result);
     }
@@ -675,41 +922,45 @@ class LocalApiServer {
     }
 
     // ---- RPA ----
+    const rpaInput = normalizeRpaInput(input);
     if (pathname === '/api/rpa/plans' && method === 'GET') {
       return ok({ list: this.rpaStore.listPlans() });
     }
     if (pathname === '/api/rpa/plans' && method === 'POST') {
-      return ok(await this.rpaStore.upsertPlan(input));
+      return ok(await this.rpaStore.upsertPlan({
+        ...rpaInput,
+        id: rpaInput.id ?? rpaInput.plan_id,
+      }));
     }
     if (pathname.startsWith('/api/rpa/plans/') && method === 'DELETE') {
-      const id = pathname.split('/').pop();
+      const id = decodePathId(pathname.slice('/api/rpa/plans/'.length), 'RPA plan');
       return ok(await this.rpaStore.deletePlan(id));
     }
     if (pathname === '/api/rpa/tasks' && method === 'GET') {
-      const list = this.rpaStore.listTasks(input);
-      const limit = Math.max(1, Math.min(500, Number(input.limit) || 50));
+      const list = this.rpaStore.listTasks(rpaInput);
+      const limit = Math.max(1, Math.min(500, Number(rpaInput.limit) || 50));
       return ok({ list: list.slice(0, limit), total: list.length });
     }
     if (pathname.startsWith('/api/rpa/tasks/') && method === 'GET') {
-      const id = decodeURIComponent(pathname.slice('/api/rpa/tasks/'.length));
+      const id = decodePathId(pathname.slice('/api/rpa/tasks/'.length), 'RPA task');
       const task = this.rpaStore.getTask(id);
       if (!task) return fail('task not found: ' + id);
       return ok({ task });
     }
     if (pathname.startsWith('/api/rpa/tasks/') && method === 'DELETE') {
-      const id = decodeURIComponent(pathname.slice('/api/rpa/tasks/'.length));
+      const id = decodePathId(pathname.slice('/api/rpa/tasks/'.length), 'RPA task');
       return ok(await this.rpaStore.deleteTask(id));
     }
     if (pathname === '/api/rpa/run' || pathname === '/api/rpa' || pathname === '/api/rpav2') {
-      if (input.plan_id) return ok(await this.rpaEngine.runPlan(String(input.plan_id), input));
-      if (input.task_id) return ok(await this.rpaEngine.runTask(String(input.task_id), input));
-      if (Array.isArray(input.steps)) {
+      if (rpaInput.plan_id) return ok(await this.rpaEngine.runPlan(String(rpaInput.plan_id), rpaInput));
+      if (rpaInput.task_id) return ok(await this.rpaEngine.runTask(String(rpaInput.task_id), rpaInput));
+      if (Array.isArray(rpaInput.steps)) {
         const task = await this.rpaStore.createTask({
-          profile_id: String(input.profile_id || input.user_id || ''),
-          process_name: String(input.name || 'adhoc'),
-          steps: input.steps,
+          profile_id: firstString(rpaInput, ['profile_id', 'user_id']),
+          process_name: String(rpaInput.process_name || rpaInput.name || 'adhoc'),
+          steps: rpaInput.steps,
         });
-        return ok(await this.rpaEngine.runTask(task.id, input));
+        return ok(await this.rpaEngine.runTask(task.id, rpaInput));
       }
       return fail('plan_id, task_id or steps required');
     }
@@ -720,41 +971,41 @@ class LocalApiServer {
       });
     }
     if (pathname === '/api/stopRpa' || pathname === '/api/rpa/stop') {
-      return ok(await this.rpaEngine.stop(input.task_id || null));
+      return ok(await this.rpaEngine.stop(rpaInput.task_id || null));
     }
 
     // ---- RPA template store ----
     if (pathname === '/api/rpa/templates' && method === 'GET') {
       return ok({
-        list: this.rpaStore.listTemplates(input),
+        list: this.rpaStore.listTemplates(rpaInput),
         categories: this.rpaStore.listTemplateCategories(),
       });
     }
     if (pathname === '/api/rpa/templates' && method === 'POST') {
-      if (input.action === 'install' || input.install) {
-        return ok(await this.rpaStore.installTemplate(String(input.id || input.template_id), input));
+      if (rpaInput.action === 'install' || rpaInput.install) {
+        return ok(await this.rpaStore.installTemplate(String(rpaInput.id || rpaInput.template_id), rpaInput));
       }
-      if (input.action === 'import') {
-        return ok(await this.rpaStore.importTemplates(input.payload || input.data || input));
+      if (rpaInput.action === 'import') {
+        return ok(await this.rpaStore.importTemplates(rpaInput.payload || rpaInput.data || rpaInput));
       }
-      if (input.action === 'save_as' || input.save_as) {
-        return ok(await this.rpaStore.saveAsTemplate(input));
+      if (rpaInput.action === 'save_as' || rpaInput.save_as) {
+        return ok(await this.rpaStore.saveAsTemplate(rpaInput));
       }
-      return ok(await this.rpaStore.upsertTemplate(input));
+      return ok(await this.rpaStore.upsertTemplate(rpaInput));
     }
     if (pathname.startsWith('/api/rpa/templates/') && pathname.endsWith('/install') && method === 'POST') {
-      const parts = pathname.split('/').filter(Boolean);
-      const id = parts[parts.length - 2];
-      return ok(await this.rpaStore.installTemplate(id, input));
+      const encodedId = pathname.slice('/api/rpa/templates/'.length, -'/install'.length);
+      const id = decodePathId(encodedId, 'RPA template');
+      return ok(await this.rpaStore.installTemplate(id, rpaInput));
     }
     if (pathname.startsWith('/api/rpa/templates/') && method === 'GET') {
-      const id = pathname.split('/').filter(Boolean).pop();
+      const id = decodePathId(pathname.slice('/api/rpa/templates/'.length), 'RPA template');
       const tpl = this.rpaStore.getTemplate(id);
       if (!tpl) return fail('template not found');
       return ok(tpl);
     }
     if (pathname.startsWith('/api/rpa/templates/') && method === 'DELETE') {
-      const id = pathname.split('/').filter(Boolean).pop();
+      const id = decodePathId(pathname.slice('/api/rpa/templates/'.length), 'RPA template');
       return ok(await this.rpaStore.deleteTemplate(id));
     }
 
@@ -770,7 +1021,7 @@ class LocalApiServer {
         value: '',
         patch: {
           proxyId: null,
-          proxyMeta: { ...(base.proxyMeta || {}), proxyId: null },
+          proxyMeta: this.proxyMetaWithAssociation(base.proxyMeta, null),
         },
       };
     }
@@ -793,38 +1044,39 @@ class LocalApiServer {
         proxyId: item.id,
         proxy: item.raw,
         networkMode: 'proxy',
-        proxyMeta: {
+        proxyMeta: this.proxyMetaWithAssociation({
           ...(base.proxyMeta || {}),
-          proxyId: item.id,
           ipChannel: item.ipChannel || base.proxyMeta?.ipChannel || 'ip-api',
-        },
+          refreshUrl: item.refreshUrl || base.proxyMeta?.refreshUrl || '',
+        }, item.id),
       },
     };
   }
 
+  proxyMetaWithAssociation(value, proxyId) {
+    const proxyMeta = value && typeof value === 'object' ? { ...value } : {};
+    for (const key of ['proxy_id', 'proxy_library_id', 'proxyLibraryId', 'proxyIdAlias']) delete proxyMeta[key];
+    proxyMeta.proxyId = proxyId == null || String(proxyId).trim() === '' ? null : String(proxyId).trim();
+    return proxyMeta;
+  }
+
   normalizeProxyAssociationState(profile, association) {
     if (!profile || !association?.present) return profile;
-    for (const key of ['proxy_id', 'proxy_library_id', 'proxyIdAlias', 'proxyLibraryId']) delete profile[key];
+    for (const key of ['proxy_id', 'proxy_library_id', 'proxyLibraryId', 'proxyIdAlias']) delete profile[key];
     const proxyId = association.value || null;
     profile.proxyId = proxyId;
-    const proxyMeta = profile.proxyMeta && typeof profile.proxyMeta === 'object' ? { ...profile.proxyMeta } : {};
-    delete proxyMeta.proxy_id;
-    delete proxyMeta.proxy_library_id;
-    delete proxyMeta.proxyLibraryId;
-    proxyMeta.proxyId = proxyId;
-    profile.proxyMeta = proxyMeta;
+    profile.proxyMeta = this.proxyMetaWithAssociation(profile.proxyMeta, proxyId);
     return profile;
   }
 
   parseIds(input) {
     const { assertProfileId } = require('./isolation');
-    let ids = [];
-    if (Array.isArray(input.profile_ids)) ids = input.profile_ids;
-    else if (Array.isArray(input.ids)) ids = input.ids;
-    else if (Array.isArray(input.user_ids)) ids = input.user_ids;
-    else if (input.handles) ids = String(input.handles).split(',').map((s) => s.trim()).filter(Boolean);
-    else if (input.user_id) ids = [input.user_id];
-    else if (input.profile_id) ids = [input.profile_id];
+    let ids = firstArray(input, ['profile_ids', 'profileIds', 'ids', 'user_ids', 'userIds']);
+    if (!ids && input.handles) ids = String(input.handles).split(',').map((s) => s.trim()).filter(Boolean);
+    else if (!ids) {
+      const id = firstDefined(input, ['user_id', 'userId', 'profile_id', 'profileId']);
+      ids = id !== undefined && id !== null && id !== '' ? [id] : [];
+    }
     if (ids.length > 200) throw new Error('Invalid profile selection');
     return [...new Set(ids.map((id) => assertProfileId(String(id))))];
   }

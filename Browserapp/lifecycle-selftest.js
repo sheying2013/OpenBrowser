@@ -267,6 +267,9 @@ async function testCleanupFailsClosedWhenChildSurvives() {
       engine.cleanupRunningItem(profile.id, item, { waitForExit: true, exitTimeout: 10 }),
       (error) => error.code === 'BROWSER_EXIT_UNCONFIRMED',
     );
+    assert.strictEqual(item.cleanupPromise, null, 'failed cleanup promise must be cleared for an explicit retry');
+    assert.strictEqual(item.cleanedUp, false, 'failed cleanup must not claim the item is cleaned');
+    assert.strictEqual(item.stopping, true, 'failed cleanup must remain visibly stopping');
     assert.strictEqual(await fs.stat(lockPath(profileRoot)).then(() => true, () => false), true, 'unconfirmed child must retain profile lock');
     assert.strictEqual(engine.running.get(profile.id), item, 'unconfirmed child must remain in running map');
     await assert.rejects(
@@ -357,6 +360,26 @@ async function testLateOldGenerationExitIsolation() {
   assert.strictEqual(cleanupOptions.emitStatus, false, 'old generation must not emit current status');
 }
 
+async function testLateExitWhileReplacementStarts() {
+  const engine = makeEngine();
+  const oldItem = { lifecycleGeneration: 1, cleanupPromise: null };
+  const replacementStart = new Promise(() => {});
+  replacementStart.lifecycleGeneration = 2;
+  engine.lifecycleGenerations.set('replacement-env', 2);
+  engine.starting.set('replacement-env', replacementStart);
+  let cleanupOptions = null;
+  engine.cleanupRunningItem = async (_id, item, options) => {
+    assert.strictEqual(item, oldItem);
+    cleanupOptions = options;
+    return { id: 'replacement-env', running: false };
+  };
+
+  await engine.handleBrowserGone('replacement-env', oldItem, 'late-exit-during-restart');
+  assert.strictEqual(engine.starting.get('replacement-env'), replacementStart, 'old exit must not disturb replacement start');
+  assert.strictEqual(engine.stopping.has('replacement-env'), false, 'old exit must not install a stop barrier for replacement start');
+  assert.strictEqual(cleanupOptions.emitStatus, false, 'old exit must stay silent while replacement starts');
+}
+
 async function testStopAllBoundsHungEnvironment() {
   const engine = makeEngine();
   engine.stopAllItemTimeoutMs = 35;
@@ -379,6 +402,16 @@ async function testStopAllBoundsHungEnvironment() {
   assert.ok(result.errors.some((message) => message.includes('Timed out stopping browser environment hung-env')));
 }
 
+async function testAppQuitCleanupContract() {
+  const source = await fs.readFile(path.join(__dirname, 'main.js'), 'utf8');
+  assert.ok(source.includes('async function stopAllForQuit()'), 'application quit must use a dedicated browser drain');
+  assert.ok(source.includes('for (let attempt = 0; attempt < 2 && remaining.length; attempt += 1)'), 'quit must retry explicit remaining environments');
+  assert.ok(source.includes('if (stopResult.remaining.length) return;'), 'quit backup must not read browser data while processes remain');
+  assert.ok(source.includes("app.on('window-all-closed'"), 'closing the final control window must enter application shutdown');
+  assert.ok(!source.includes("if (process.platform !== 'darwin' && !quitting) app.quit();"), 'macOS final-window close must not bypass browser cleanup');
+  assert.ok(source.includes('liveSync?.stop?.()'), 'quit must invalidate live-sync work before stopping environments');
+}
+
 async function main() {
   await testStateRecovery();
   await testProfileLockRecovery();
@@ -388,7 +421,9 @@ async function main() {
   await testStopAllDrainsLateRestart();
   await testStopCancelsInFlightStart();
   await testLateOldGenerationExitIsolation();
+  await testLateExitWhileReplacementStarts();
   await testStopAllBoundsHungEnvironment();
+  await testAppQuitCleanupContract();
   await testLockReleaseFailureRetainsRunningItem();
   await testStartupResourceCleanupUnknownScan();
   const profile = { id: 'lifecycle-env', name: 'Lifecycle environment' };

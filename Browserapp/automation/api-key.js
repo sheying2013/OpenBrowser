@@ -1,0 +1,51 @@
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+function cleanApiKey(value) {
+  let key = String(value ?? '').trim();
+  for (let index = 0; index < 2; index += 1) {
+    if (key.length >= 2 && ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'")))) {
+      key = key.slice(1, -1).trim();
+    } else {
+      break;
+    }
+  }
+  return key;
+}
+
+function isApiKeyPlaceholder(value) {
+  const key = cleanApiKey(value);
+  if (!key) return true;
+  if (/^<[^>\r\n]{1,200}>$/.test(key)) return true;
+  return /^(?:your|replace|change|set|copy|paste|enter|todo)(?:[-_ ]|$)/i.test(key);
+}
+
+function apiKeyFileCandidates({ env = process.env, userDataPath = '' } = {}) {
+  const candidates = [
+    env.OPENBROWSER_API_KEY_FILE,
+    env.OPENBROWSER_LOCAL_API_KEY_FILE,
+    env.API_KEY_FILE,
+    userDataPath ? path.join(userDataPath, 'local-api-key.txt') : '',
+    env.OPENBROWSER_USER_DATA ? path.join(env.OPENBROWSER_USER_DATA, 'local-api-key.txt') : '',
+  ];
+  return [...new Set(candidates.map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+function resolveApiKey({ configured = '', env = process.env, userDataPath = '' } = {}) {
+  for (const value of [configured, env.OPENBROWSER_API_KEY, env.API_KEY]) {
+    const direct = cleanApiKey(value);
+    if (direct && !isApiKeyPlaceholder(direct)) return { key: direct, filePath: null, source: 'environment' };
+  }
+
+  for (const filePath of apiKeyFileCandidates({ env, userDataPath })) {
+    try {
+      const key = cleanApiKey(fs.readFileSync(filePath, 'utf8'));
+      if (key && !isApiKeyPlaceholder(key)) return { key, filePath, source: 'file' };
+    } catch (_) {}
+  }
+  return { key: '', filePath: null, source: 'none' };
+}
+
+module.exports = { cleanApiKey, isApiKeyPlaceholder, apiKeyFileCandidates, resolveApiKey };

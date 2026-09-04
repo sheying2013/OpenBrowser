@@ -319,24 +319,106 @@ async function reload(port) {
   return { targetId: tab.id };
 }
 
-async function windowForPort(port) {
-  const tab = await firstTab(port);
+async function windowForTarget(port, targetId = null) {
+  const tab = targetId
+    ? (await tabs(port)).find((item) => String(item.id) === String(targetId))
+    : await firstTab(port);
   if (!tab) throw new Error('No page tab is available');
   const socket = await browserSocket(port);
   const result = await call(socket, 'Browser.getWindowForTarget', { targetId: tab.id });
-  return { socket, tab, windowId: result.windowId, bounds: result.bounds };
+  let bounds = result.bounds || {};
+  if ((!bounds || typeof bounds !== 'object' || !Object.keys(bounds).length) && result.windowId !== undefined) {
+    // Older Chromium builds omit bounds from getWindowForTarget. A missing or
+    // unsupported follow-up must not prevent callers from changing state.
+    try { bounds = (await call(socket, 'Browser.getWindowBounds', { windowId: result.windowId })).bounds || {}; } catch (_) {}
+  }
+  return { socket, tab, windowId: result.windowId, bounds: bounds || {} };
 }
 
-async function setWindowState(port, state) {
+async function windowForPort(port, targetId = null) {
+  return windowForTarget(port, targetId);
+}
+
+async function readWindowBounds(socket, windowId, targetId = null) {
+  try {
+    const result = await call(socket, 'Browser.getWindowBounds', { windowId });
+    if (result?.bounds && typeof result.bounds === 'object') return result.bounds;
+  } catch (error) {
+    if (!targetId) throw error;
+  }
+  if (!targetId) return {};
+  const result = await call(socket, 'Browser.getWindowForTarget', { targetId });
+  return result?.bounds || {};
+}
+
+async function waitForWindowState(socket, windowId, expected, options = {}) {
+  const attempts = Math.max(1, Math.min(8, Number(options.attempts) || 3));
+  const delayMs = Math.max(0, Math.min(500, Number(options.delayMs) || 60));
+  let bounds = {};
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    bounds = await readWindowBounds(socket, windowId, options.targetId || null);
+    if (String(bounds.windowState || '').toLowerCase() === expected) return { matched: true, bounds };
+    if (attempt + 1 < attempts && delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return { matched: false, bounds };
+}
+
+async function setWindowState(port, state, options = {}) {
   const normalized = String(state || '').toLowerCase();
   if (!['normal', 'minimized', 'maximized', 'fullscreen'].includes(normalized)) throw new Error(`Invalid browser window state: ${state}`);
-  const value = await windowForPort(port);
-  await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: normalized } });
-  return { windowId: value.windowId, state: normalized };
+  const value = await windowForPort(port, options.targetId || null);
+  let primaryError = null;
+  try {
+    await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: normalized } });
+  } catch (error) {
+    primaryError = error;
+  }
+  if (!primaryError && options.verify !== true) return { windowId: value.windowId, state: normalized };
+
+  let verified = null;
+  if (!primaryError) {
+    verified = await waitForWindowState(value.socket, value.windowId, normalized, { ...options, targetId: value.tab.id }).catch((error) => {
+      primaryError = error;
+      return null;
+    });
+    if (verified?.matched) return { windowId: value.windowId, state: normalized, bounds: verified.bounds, degraded: false };
+    if (!primaryError && verified && !verified.bounds?.windowState) {
+      return { windowId: value.windowId, state: normalized, bounds: verified.bounds, degraded: false, unverified: true };
+    }
+  }
+
+  const fallback = String(options.fallbackState || '').toLowerCase();
+  if (fallback && fallback !== normalized && ['normal', 'minimized', 'maximized'].includes(fallback)) {
+    try {
+      await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: fallback } });
+      const fallbackState = options.verify === true
+        ? await waitForWindowState(value.socket, value.windowId, fallback, { ...options, targetId: value.tab.id })
+        : { matched: true, bounds: { windowState: fallback } };
+      if (fallbackState.matched) {
+        return {
+          windowId: value.windowId,
+          requestedState: normalized,
+          state: fallback,
+          bounds: fallbackState.bounds,
+          degraded: true,
+          error: String(primaryError?.message || `Window state ${normalized} was not applied`),
+        };
+      }
+    } catch (error) {
+      if (!primaryError) primaryError = error;
+    }
+  }
+
+  const actual = String(verified?.bounds?.windowState || value.bounds?.windowState || '').toLowerCase();
+  const error = primaryError || new Error(`Browser window state did not converge to ${normalized}${actual ? ` (actual: ${actual})` : ''}`);
+  error.code = error.code || 'WINDOW_STATE_NOT_APPLIED';
+  error.requestedState = normalized;
+  error.actualState = actual || null;
+  throw error;
 }
 
 async function setWindowBounds(port, bounds, options = {}) {
-  const value = await windowForPort(port);
+  const value = await windowForPort(port, options.targetId || null);
   const requestedState = String(bounds?.windowState || '').toLowerCase();
   if (requestedState && !['normal', 'minimized', 'maximized', 'fullscreen'].includes(requestedState)) throw new Error(`Invalid browser window state: ${bounds.windowState}`);
   const hasGeometry = ['left', 'top', 'width', 'height'].some((key) => bounds?.[key] !== undefined);
@@ -377,4 +459,4 @@ async function setWindowBounds(port, bounds, options = {}) {
   return { windowId: value.windowId, bounds: next };
 }
 
-module.exports = { json, call, connect, PersistentConnection, targets, tabs, browserSocket, newTab, closeTab, activateTab, firstTab, focusedEditableTab, insertText, clearFocused, navigate, reload, windowForPort, setWindowState, setWindowBounds, __test: { focusedEditableExpression, chooseFocusedEditable, textWasInserted } };
+module.exports = { json, call, connect, PersistentConnection, targets, tabs, browserSocket, newTab, closeTab, activateTab, firstTab, focusedEditableTab, insertText, clearFocused, navigate, reload, windowForTarget, windowForPort, setWindowState, setWindowBounds, __test: { focusedEditableExpression, chooseFocusedEditable, textWasInserted, waitForWindowState } };

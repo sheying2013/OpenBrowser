@@ -9,6 +9,7 @@ const { RpaStore } = require('./rpa-store');
 const { WindowSyncBridge } = require('./window-sync-bridge');
 const { AppCenter } = require('./app-center');
 const { ProxyStore } = require('./proxy-store');
+const { resolveApiKey } = require('./api-key');
 
 function writeApiKeyAtomically(filePath, value) {
   const temporary = `${filePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
@@ -44,19 +45,23 @@ async function startAutomation(context = {}) {
     port = Number(process.env.OPENBROWSER_API_PORT || 50325),
   } = context;
 
-  const keyFilePath = path.join(app.getPath("userData"), "local-api-key.txt");
-  let effectiveApiKey = process.env.OPENBROWSER_API_KEY || context.apiKey;
-  if (!effectiveApiKey) {
-    try {
-      if (fs.existsSync(keyFilePath)) {
-        effectiveApiKey = fs.readFileSync(keyFilePath, "utf8").trim();
-        try { fs.chmodSync(keyFilePath, 0o600); } catch (_) {}
-      }
-    } catch (_) {}
+  const defaultKeyFilePath = path.join(app.getPath('userData'), 'local-api-key.txt');
+  const keyResolution = resolveApiKey({
+    configured: context.apiKey,
+    userDataPath: app.getPath('userData'),
+  });
+  let effectiveApiKey = keyResolution.key;
+  const keyFilePath = keyResolution.filePath || defaultKeyFilePath;
+  if (keyResolution.filePath) {
+    try { fs.chmodSync(keyResolution.filePath, 0o600); } catch (_) {}
   }
   if (!effectiveApiKey) {
     effectiveApiKey = crypto.randomBytes(32).toString("base64url");
-    writeApiKeyAtomically(keyFilePath, effectiveApiKey);
+    if (!writeApiKeyAtomically(keyFilePath, effectiveApiKey)) {
+      const error = new Error(`Failed to persist local API key: ${keyFilePath}`);
+      error.code = 'API_KEY_PERSIST_FAILED';
+      throw error;
+    }
   }
   const apiKey = effectiveApiKey;
 
@@ -66,6 +71,7 @@ async function startAutomation(context = {}) {
 
   const proxyStore = new ProxyStore(path.join(app.getPath('userData'), 'proxy-library.json'));
   await proxyStore.load();
+  await engine?.setProxyStore?.(proxyStore);
 
   const rpaEngine = new RpaEngine({
     engine,
