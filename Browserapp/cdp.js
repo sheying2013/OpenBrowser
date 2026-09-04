@@ -133,7 +133,7 @@ class PersistentConnection {
       return;
     }
     if (value.method && this.onEvent) {
-      try { this.onEvent(value, this); } catch (_) {}
+      try { Promise.resolve(this.onEvent(value, this)).catch(() => {}); } catch (_) {}
     }
   }
 
@@ -328,13 +328,26 @@ async function windowForPort(port) {
 }
 
 async function setWindowState(port, state) {
+  const normalized = String(state || '').toLowerCase();
+  if (!['normal', 'minimized', 'maximized', 'fullscreen'].includes(normalized)) throw new Error(`Invalid browser window state: ${state}`);
   const value = await windowForPort(port);
-  await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: state } });
-  return { windowId: value.windowId, state };
+  await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: normalized } });
+  return { windowId: value.windowId, state: normalized };
 }
 
 async function setWindowBounds(port, bounds, options = {}) {
   const value = await windowForPort(port);
+  const requestedState = String(bounds?.windowState || '').toLowerCase();
+  if (requestedState && !['normal', 'minimized', 'maximized', 'fullscreen'].includes(requestedState)) throw new Error(`Invalid browser window state: ${bounds.windowState}`);
+  const hasGeometry = ['left', 'top', 'width', 'height'].some((key) => bounds?.[key] !== undefined);
+  if (requestedState && requestedState !== 'normal') {
+    await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: requestedState } });
+    return { windowId: value.windowId, bounds: { windowState: requestedState } };
+  }
+  if (!hasGeometry) {
+    if (requestedState === 'normal') await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: 'normal' } });
+    return { windowId: value.windowId, bounds: requestedState ? { windowState: requestedState } : {} };
+  }
   const next = {
     left: Math.round(Number(bounds.left) || 0),
     top: Math.round(Number(bounds.top) || 0),
@@ -345,7 +358,7 @@ async function setWindowBounds(port, bounds, options = {}) {
   // Explicit layout commands keep the historical behavior. Background live-sync callers
   // can opt out so a geometry refresh never collapses fullscreen/maximized windows or
   // dismisses browser-owned menus merely by re-applying windowState=normal.
-  if (forceNormal) {
+  if (forceNormal || requestedState === 'normal') {
     try { await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: 'normal' } }); } catch (_) {}
   }
   await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: next });

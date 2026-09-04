@@ -10,34 +10,157 @@ function normalizeIpLookupChannel(value) {
 }
 
 function decode(value) {
-  try { return decodeURIComponent(value); } catch (_) { return value; }
+  const raw = String(value || '');
+  try { return decodeURIComponent(raw); } catch (_) {
+    return raw.replace(/(?:%[0-9a-f]{2})+/gi, (encoded) => {
+      try { return decodeURIComponent(encoded); } catch (_) { return encoded; }
+    });
+  }
+}
+
+function normalizeProxyProtocol(value) {
+  const protocol = String(value || 'http').trim().replace(/:$/, '').toLowerCase();
+  if (protocol === 'socks5h' || protocol === 'socks5s') return 'socks5';
+  return protocol;
+}
+
+function splitProxyRemark(value) {
+  const raw = String(value || '').trim();
+  const marker = raw.indexOf('#');
+  if (marker < 0) return { source: raw, remark: '' };
+  return {
+    source: raw.slice(0, marker).trim(),
+    remark: decode(raw.slice(marker + 1)).trim(),
+  };
+}
+
+function normalizeProxyHost(value) {
+  const raw = String(value || '').trim();
+  return raw.startsWith('[') && raw.endsWith(']') ? raw.slice(1, -1) : raw;
+}
+
+function proxyHostForUrl(host) {
+  return net.isIP(host) === 6 ? `[${host}]` : host;
+}
+
+function buildProxyConfig(input = {}) {
+  const protocol = normalizeProxyProtocol(input.protocol);
+  const host = normalizeProxyHost(input.host);
+  const port = Number(input.port);
+  const username = String(input.username || '');
+  const password = String(input.password || '');
+  const remark = String(input.remark || '').trim();
+  const name = String(input.name || '').trim();
+
+  if (!['http', 'https', 'socks4', 'socks5'].includes(protocol)) throw new Error('Unsupported proxy protocol');
+  if ((!net.isIP(host) && !/^[a-zA-Z0-9._-]+$/.test(host))
+    || !Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('Invalid proxy host or port');
+  }
+  if ((username || password) && protocol === 'socks4') throw new Error('Authenticated SOCKS proxies must use SOCKS5');
+
+  const urlHost = proxyHostForUrl(host);
+  const auth = username || password
+    ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}@`
+    : '';
+  const canonicalRemark = remark ? `#${encodeURIComponent(remark)}` : '';
+  const chromeUrl = `${protocol}://${urlHost}:${port}`;
+  return {
+    raw: `${protocol}://${auth}${urlHost}:${port}${canonicalRemark}`,
+    protocol,
+    host,
+    port,
+    username,
+    password,
+    authenticated: Boolean(username || password),
+    chromeUrl,
+    remark,
+    name: name || remark || `${protocol.toUpperCase()} ${host}:${port}`,
+  };
+}
+
+function parseProxyString(value) {
+  const { source, remark } = splitProxyRemark(value);
+  if (!source || /^(direct|offline|none)$/i.test(source)) return null;
+
+  let protocol = 'http';
+  let body = source;
+  const scheme = source.match(/^([a-z][a-z0-9+.-]*):\/\/([\s\S]*)$/i);
+  if (scheme) {
+    protocol = normalizeProxyProtocol(scheme[1]);
+    body = scheme[2];
+  }
+
+  let host = '';
+  let port = 0;
+  let username = '';
+  let password = '';
+
+  const legacyScheme = scheme && body.match(/^([a-zA-Z0-9._-]+):(\d{1,5}):([^:]*):([\s\S]*)$/);
+  if (legacyScheme) {
+    host = legacyScheme[1];
+    port = Number(legacyScheme[2]);
+    username = decode(legacyScheme[3]);
+    password = decode(legacyScheme[4]);
+  } else if (scheme) {
+    // Match the endpoint from the right so raw @, / and backslashes remain
+    // valid inside credentials. Some proxy vendors escape the final separator
+    // as \@; only that final compatibility slash is discarded.
+    const authority = body.match(/^([\s\S]*?)(?:(\\@|@))?(\[[^\]]+\]|[a-zA-Z0-9._-]+)(?::(\d{1,5}))?$/);
+    if (!authority) {
+      throw new Error('Invalid proxy format');
+    } else {
+      const userinfo = authority[1];
+      const hasAuthSeparator = Boolean(authority[2]);
+      host = normalizeProxyHost(authority[3]);
+      port = Number(authority[4] || (protocol === 'https' ? 443 : 0));
+      if (hasAuthSeparator) {
+        const separator = userinfo.indexOf(':');
+        username = decode(separator < 0 ? userinfo : userinfo.slice(0, separator));
+        password = decode(separator < 0 ? '' : userinfo.slice(separator + 1));
+      } else if (userinfo) {
+        throw new Error('Invalid proxy format');
+      }
+    }
+  } else {
+    const legacy = body.match(/^(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5})(?::([\s\S]*))?$/);
+    if (!legacy) throw new Error('Invalid proxy format; use host:port or protocol://username:password@host:port');
+    host = normalizeProxyHost(legacy[1]);
+    port = Number(legacy[2]);
+    if (legacy[3] != null) {
+      const separator = legacy[3].indexOf(':');
+      if (separator < 0) throw new Error('Invalid proxy format; use host:port:user:password');
+      protocol = 'socks5';
+      username = decode(legacy[3].slice(0, separator));
+      password = decode(legacy[3].slice(separator + 1));
+    }
+  }
+
+  return buildProxyConfig({ protocol, host, port, username, password, remark });
+}
+
+function parseProxyInput(value) {
+  if (value && typeof value === 'object' && !Buffer.isBuffer(value)) {
+    const raw = value.raw ?? value.proxy ?? value.proxy_url ?? value.proxyUrl;
+    const hasRaw = raw != null && String(raw).trim();
+    const parsed = hasRaw ? parseProxyString(raw) : null;
+    const host = value.host ?? value.proxy_host ?? value.proxyHost ?? value.server;
+    if (hasRaw && !parsed && host == null) return null;
+    return buildProxyConfig({
+      protocol: value.protocol ?? value.type ?? value.proxy_type ?? value.proxyType ?? parsed?.protocol,
+      host: host ?? parsed?.host,
+      port: value.port ?? value.proxy_port ?? value.proxyPort ?? parsed?.port,
+      username: value.username ?? value.user ?? value.proxy_user ?? value.proxy_username ?? value.proxyUsername ?? parsed?.username,
+      password: value.password ?? value.pass ?? value.proxy_password ?? value.proxyPassword ?? parsed?.password,
+      remark: value.remark ?? value.note ?? parsed?.remark ?? '',
+      name: value.name ?? '',
+    });
+  }
+  return parseProxyString(value);
 }
 
 function parseProxy(value) {
-  const raw = String(value || '').trim();
-  if (!raw || /^(direct|offline|none)$/i.test(raw)) return null;
-  let protocol = 'http'; let host = ''; let port = 0; let username = ''; let password = '';
-  const legacyScheme = raw.match(/^(https?|socks5):\/\/([^:@/]+):(\d{1,5}):([^:]+):(.+)$/i);
-  if (legacyScheme) {
-    protocol = legacyScheme[1].toLowerCase(); host = legacyScheme[2]; port = Number(legacyScheme[3]); username = legacyScheme[4]; password = legacyScheme[5];
-  } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
-    let parsed;
-    try { parsed = new URL(raw); } catch (_) { throw new Error('Invalid proxy format'); }
-    protocol = parsed.protocol.replace(':', '').toLowerCase();
-    host = parsed.hostname; port = Number(parsed.port || (protocol === 'https' ? 443 : 0));
-    username = decode(parsed.username); password = decode(parsed.password);
-  } else {
-    const parts = raw.split(':');
-    if (parts.length === 2) [host, port] = [parts[0], Number(parts[1])];
-    else if (parts.length >= 4) { protocol = 'socks5'; host = parts[0]; port = Number(parts[1]); username = parts[2]; password = parts.slice(3).join(':'); }
-    else throw new Error('Invalid proxy format; use host:port or protocol://username:password@host:port');
-  }
-  if (!['http', 'https', 'socks4', 'socks5'].includes(protocol)) throw new Error('Unsupported proxy protocol');
-  if (!/^[a-zA-Z0-9._-]+$/.test(host) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid proxy host or port');
-  if ((username || password) && protocol === 'socks4') throw new Error('Authenticated SOCKS proxies must use SOCKS5');
-  const auth = (username || password) ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}@` : '';
-  const canonicalRaw = `${protocol}://${auth}${host}:${port}`;
-  return { raw: canonicalRaw, protocol, host, port, username: username || '', password: password || '', authenticated: Boolean(username || password), chromeUrl: protocol + '://' + host + ':' + port };
+  return parseProxyInput(value);
 }
 
 function displayProxy(value) {
@@ -241,8 +364,34 @@ async function readSocksAddress(reader, atyp) {
 }
 
 function encodeSocksAddress(host) {
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return Buffer.from([1, ...host.split('.').map(Number)]);
-  const value = Buffer.from(host, 'utf8'); if (!value.length || value.length > 255) throw new Error('SOCKS5 target hostname is invalid');
+  const normalizedHost = normalizeProxyHost(host);
+  if (net.isIP(normalizedHost) === 4) return Buffer.from([1, ...normalizedHost.split('.').map(Number)]);
+  if (net.isIP(normalizedHost) === 6) {
+    const parts = normalizedHost.split('::');
+    if (parts.length > 2) throw new Error('SOCKS5 target IPv6 address is invalid');
+    const parseWords = (value) => {
+      if (!value) return [];
+      return value.split(':').flatMap((part) => {
+        if (part.includes('.')) {
+          if (net.isIP(part) !== 4) throw new Error('SOCKS5 target IPv6 address is invalid');
+          const octets = part.split('.').map(Number);
+          return [(octets[0] << 8) | octets[1], (octets[2] << 8) | octets[3]];
+        }
+        if (!/^[0-9a-f]{1,4}$/i.test(part)) throw new Error('SOCKS5 target IPv6 address is invalid');
+        return [Number.parseInt(part, 16)];
+      });
+    };
+    const left = parseWords(parts[0]);
+    const right = parseWords(parts[1] || '');
+    const words = parts.length === 2
+      ? [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill(0), ...right]
+      : [...left];
+    if (words.length !== 8 || (parts.length === 2 && left.length + right.length >= 8)) {
+      throw new Error('SOCKS5 target IPv6 address is invalid');
+    }
+    return Buffer.from([4, ...words.flatMap((word) => [word >> 8, word & 255])]);
+  }
+  const value = Buffer.from(normalizedHost, 'utf8'); if (!value.length || value.length > 255) throw new Error('SOCKS5 target hostname is invalid');
   return Buffer.concat([Buffer.from([3, value.length]), value]);
 }
 
@@ -1256,6 +1405,7 @@ async function probeProxyHttps(config, hostname = 'www.google.com', pathname = '
 
 module.exports = {
   parseProxy,
+  parseProxyInput,
   displayProxy,
   normalizeIpLookupChannel,
   startAuthenticatedProxy,
@@ -1276,6 +1426,7 @@ module.exports = {
   isPrivateOrLocalHostname,
   extractProxyStrings,
   extractProxyFromApi,
+  encodeSocksAddress,
   invokeProxyRefresh,
   resolveTlsProfile,
   tlsConnectOptionsFromProfile,

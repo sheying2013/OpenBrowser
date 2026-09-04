@@ -39,6 +39,17 @@ async function main() {
           username: 'split-user',
           password: 'split-pass',
         },
+        {
+          id: 'escaped-vendor-format',
+          raw: 'socks5://fa8a524c:2c1f8c80\\@192.168.1.22:31055#🇪🇸isp马德里-1',
+        },
+        {
+          id: 'split-special-auth',
+          raw: 'socks5://special.test:1080#旧备注',
+          username: '用@户:名/%\\',
+          password: '密@码:/100%\\尾',
+          remark: '持久化备注',
+        },
       ],
     }, null, 2));
 
@@ -52,11 +63,25 @@ async function main() {
     assert.strictEqual(store.get('split-auth').username, 'split-user');
     assert.strictEqual(store.get('split-auth').password, 'split-pass');
     assert.strictEqual(store.get('split-auth').raw, 'socks5://split-user:split-pass@split.test:1080');
+    assert.strictEqual(store.get('escaped-vendor-format').username, 'fa8a524c');
+    assert.strictEqual(store.get('escaped-vendor-format').password, '2c1f8c80');
+    assert.strictEqual(store.get('escaped-vendor-format').remark, '🇪🇸isp马德里-1');
+    assert.strictEqual(store.get('split-special-auth').username, '用@户:名/%\\');
+    assert.strictEqual(store.get('split-special-auth').password, '密@码:/100%\\尾');
+    assert.strictEqual(store.get('split-special-auth').remark, '持久化备注');
+    assert.ok(store.get('split-special-auth').raw.endsWith('#' + encodeURIComponent('持久化备注')));
 
     const migratedDisk = JSON.parse(await fs.readFile(filePath, 'utf8'));
     assert.strictEqual(migratedDisk.version, 2);
     assert.strictEqual(migratedDisk.items[0].username, 'user@mail');
     assert.strictEqual(migratedDisk.items[0].password, 'p:a/ss%');
+
+    const migratedRestart = new ProxyStore(filePath);
+    await migratedRestart.load();
+    assert.strictEqual(migratedRestart.get('escaped-vendor-format').password, '2c1f8c80');
+    assert.strictEqual(migratedRestart.get('split-special-auth').username, '用@户:名/%\\');
+    assert.strictEqual(migratedRestart.get('split-special-auth').password, '密@码:/100%\\尾');
+    assert.strictEqual(migratedRestart.get('split-special-auth').remark, '持久化备注');
 
     await store.update('encoded-auth', {
       name: 'Blank patch keeps auth',
@@ -106,7 +131,7 @@ async function main() {
 
     const concurrentRestart = new ProxyStore(filePath);
     await concurrentRestart.load();
-    assert.strictEqual(concurrentRestart.list().length, 43);
+    assert.strictEqual(concurrentRestart.list().length, 45);
     assert.strictEqual(concurrentRestart.get(created[0].id).password, 'race-pass-19');
     JSON.parse(await fs.readFile(filePath, 'utf8'));
     const leftovers = (await fs.readdir(directory)).filter((name) => name.includes('.tmp-'));
@@ -247,7 +272,7 @@ async function main() {
     assert.strictEqual(replacedRestart.list().length, 1);
     assert.strictEqual(replacedRestart.get('long-credential').password, longPassword);
 
-    console.log('PROXY_PERSISTENCE_SELFTEST_OK migration=1 restart=1 encoding=1 blank_patch=1 explicit_clear=1 clear_restart=1 mutation_queue=1 flush=1 tmp_scan=1 backup_recovery=1 corrupt_preserved=1 rollback=1 replace_all=1 long_credentials=1');
+    console.log('PROXY_PERSISTENCE_SELFTEST_OK migration=1 restart=1 encoding=1 escaped_separator=1 special_credentials=1 remark=1 blank_patch=1 explicit_clear=1 clear_restart=1 mutation_queue=1 flush=1 tmp_scan=1 backup_recovery=1 corrupt_preserved=1 rollback=1 replace_all=1 long_credentials=1');
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

@@ -4,7 +4,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 
 // PowerShell startup plus the WMI provider can exceed two seconds on a busy
 // Windows/RDP host. A short timeout turns a safe process check into a false
@@ -96,7 +96,7 @@ function scanProcessesUsingProfile(profileRoot) {
         '-Command',
         '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); [Console]::Out.Write((Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress))',
       ], {
-        encoding: 'buffer',
+        encoding: null,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: PROCESS_SCAN_TIMEOUT_MS,
@@ -128,6 +128,100 @@ function scanProcessesUsingProfile(profileRoot) {
   } catch (_) {
     return { known: false, pids: [] };
   }
+}
+
+function execFileBuffered(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, options, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
+}
+
+async function scanProcessesUsingProfileAsync(profileRoot) {
+  try {
+    if (process.platform === 'win32') {
+      const output = decodeProcessListOutput(await execFileBuffered('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); [Console]::Out.Write((Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress))',
+      ], {
+        encoding: 'buffer',
+        windowsHide: true,
+        timeout: PROCESS_SCAN_TIMEOUT_MS,
+        maxBuffer: 16 * 1024 * 1024,
+      }));
+      if (!output) return { known: true, pids: [] };
+      const parsed = JSON.parse(output);
+      const records = Array.isArray(parsed) ? parsed : [parsed];
+      return {
+        known: true,
+        pids: records
+          .filter((record) => Number(record?.ProcessId) !== process.pid && commandUsesProfile(record?.CommandLine, profileRoot))
+          .map((record) => Number(record.ProcessId))
+          .filter(validPid),
+      };
+    }
+
+    const output = await execFileBuffered('ps', ['-axo', 'pid=,command='], {
+      encoding: 'utf8',
+      timeout: PROCESS_SCAN_TIMEOUT_MS,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    const pids = [];
+    for (const line of String(output || '').split(/\r?\n/)) {
+      const match = line.match(/^\s*(\d+)\s+(.*)$/);
+      if (!match || Number(match[1]) === process.pid) continue;
+      if (commandUsesProfile(match[2], profileRoot)) pids.push(Number(match[1]));
+    }
+    return { known: true, pids: pids.filter(validPid) };
+  } catch (_) {
+    return { known: false, pids: [] };
+  }
+}
+
+async function terminateProcessIds(pids) {
+  await Promise.allSettled([...new Set((pids || []).map(Number).filter(validPid))].map(async (pid) => {
+    try {
+      if (process.platform === 'win32') {
+        await execFileBuffered('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+          windowsHide: true,
+          timeout: PROCESS_SCAN_TIMEOUT_MS,
+        });
+      } else {
+        process.kill(pid, 'SIGKILL');
+      }
+    } catch (_) {}
+  }));
+}
+
+async function drainProcessesUsingProfile(profileRoot, options = {}) {
+  const attempts = Math.max(1, Number(options.attempts) || 1);
+  const delayMs = Math.max(0, Number(options.delayMs) || 0);
+  const deadline = Date.now() + Math.max(250, Number(options.timeoutMs) || 10000);
+  let last = { known: true, pids: [] };
+
+  for (let attempt = 1; attempt <= attempts && Date.now() < deadline; attempt += 1) {
+    last = await scanProcessesUsingProfileAsync(profileRoot);
+    if (!last.known) return { ...last, attempts: attempt, timedOut: false };
+    if (!last.pids.length) return { known: true, pids: [], attempts: attempt, timedOut: false };
+    await terminateProcessIds(last.pids);
+    if (attempt < attempts && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(delayMs, Math.max(0, deadline - Date.now()))));
+    }
+  }
+
+  // Verify once after the final kill attempt. Returning the pre-kill PID list
+  // would falsely keep the profile lock even when taskkill completed normally.
+  last = await scanProcessesUsingProfileAsync(profileRoot);
+  return {
+    known: last.known,
+    pids: last.pids || [],
+    attempts,
+    timedOut: Boolean(last.known && last.pids?.length),
+  };
 }
 
 function lockAgeMs(lock) {
@@ -614,7 +708,9 @@ module.exports = {
   updateProfileLock,
   releaseProfileLock,
   scanProcessesUsingProfile,
+  scanProcessesUsingProfileAsync,
   terminateProcessesUsingProfile,
+  drainProcessesUsingProfile,
   isPidAlive,
   isValidProfileId,
   assertProfileId,

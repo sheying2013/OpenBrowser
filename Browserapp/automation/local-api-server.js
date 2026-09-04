@@ -165,6 +165,61 @@ function normalizeProfileInput(input = {}) {
   return out;
 }
 
+function readProxyAssociation(input = {}) {
+  const source = input && typeof input.profile === 'object' ? { ...input, ...input.profile } : input;
+  for (const key of ['proxy_id', 'proxy_library_id', 'proxyId', 'proxyLibraryId']) {
+    if (Object.prototype.hasOwnProperty.call(source || {}, key)) {
+      return { present: true, value: source[key] == null ? '' : String(source[key]).trim() };
+    }
+  }
+  return { present: false, value: '' };
+}
+
+function proxySummary(profile, proxyStore, explicitProxyId = undefined) {
+  const proxyMeta = profile?.proxyMeta && typeof profile.proxyMeta === 'object' ? profile.proxyMeta : {};
+  const profileProxyId = Object.prototype.hasOwnProperty.call(profile || {}, 'proxyId')
+    ? profile.proxyId
+    : (Object.prototype.hasOwnProperty.call(profile || {}, 'proxy_id') ? profile.proxy_id : undefined);
+  const metaProxyId = Object.prototype.hasOwnProperty.call(proxyMeta, 'proxyId')
+    ? proxyMeta.proxyId
+    : proxyMeta.proxy_id;
+  const proxyId = explicitProxyId === undefined
+    ? String((profileProxyId !== undefined ? profileProxyId : metaProxyId) || '').trim()
+    : String(explicitProxyId || '').trim();
+  if (proxyId) {
+    const summary = {
+      proxy_id: proxyId,
+      proxy_library_id: proxyId,
+      proxy_status: proxyStore?.get(proxyId) ? 'linked' : 'missing',
+    };
+    return {
+      ...summary,
+      proxy: {
+        id: proxyId,
+        proxyId,
+        proxy_id: proxyId,
+        proxy_library_id: proxyId,
+        status: summary.proxy_status,
+      },
+    };
+  }
+  const summary = {
+    proxy_id: null,
+    proxy_library_id: null,
+    proxy_status: profile?.networkMode === 'proxy' ? 'manual' : 'direct',
+  };
+  return {
+    ...summary,
+    proxy: {
+      id: null,
+      proxyId: null,
+      proxy_id: null,
+      proxy_library_id: null,
+      status: summary.proxy_status,
+    },
+  };
+}
+
 /**
  * Local HTTP API for OpenBrowser control plane.
  * Response envelope uses {code,msg,data}.
@@ -172,7 +227,9 @@ function normalizeProfileInput(input = {}) {
 class LocalApiServer {
   constructor(options = {}) {
     this.host = options.host || '127.0.0.1';
-    this.port = Number(options.port) || 50325;
+    const configuredPort = options.port === undefined ? 50325 : Number(options.port);
+    this.requestedPort = Number.isFinite(configuredPort) && configuredPort >= 0 ? configuredPort : 50325;
+    this.port = this.requestedPort;
     this.apiKey = options.apiKey ? String(options.apiKey) : crypto.randomBytes(32).toString('base64url');
     this.allowedOrigins = new Set(options.allowedOrigins || []);
     this.engine = options.engine;
@@ -213,7 +270,9 @@ class LocalApiServer {
     this.server = http.createServer((req, res) => this.handle(req, res));
     await new Promise((resolve, reject) => {
       this.server.once('error', reject);
-      this.server.listen(this.port, this.host, () => {
+      this.server.listen(this.requestedPort, this.host, () => {
+        const address = this.server.address();
+        if (address && typeof address === 'object' && Number.isFinite(address.port)) this.port = address.port;
         this.startedAt = Date.now();
         resolve();
       });
@@ -290,13 +349,16 @@ class LocalApiServer {
         status: item.running ? 'Active' : 'Inactive',
         ws: item.port ? { puppeteer: `http://127.0.0.1:${item.port}`, selenium: `127.0.0.1:${item.port}` } : null,
         debug_port: item.port || null,
+        ...proxySummary(item, this.proxyStore),
       }));
       return ok({ list, page: 1, page_size: list.length });
     }
 
     if (pathname === '/api/v1/user/create' || pathname === '/api/v2/browser-profile/create' || pathname === '/api/profiles/create') {
       if (!this.engine) return fail('profile engine unavailable');
-      const body = normalizeProfileInput(input && typeof input.profile === 'object' ? { ...input, ...input.profile } : input);
+      let body = normalizeProfileInput(input && typeof input.profile === 'object' ? { ...input, ...input.profile } : input);
+      const association = this.resolveProxyAssociation(input, body);
+      if (association.present) body = { ...body, ...association.patch };
       const existingIds = new Set(this.engine.profiles ? [...this.engine.profiles.keys()] : []);
       let id = String(body.user_id || body.profile_id || body.id || '').trim();
       if (!id) {
@@ -332,13 +394,14 @@ class LocalApiServer {
       let created;
       try {
         created = this.engine.sanitizeProfile(profile);
+        created = this.normalizeProxyAssociationState(created, association);
         await this.engine.syncProfiles([created]);
       } catch (error) {
         return fail(`invalid profile: ${error.message}`, 400);
       }
       if (typeof this.engine.persist === 'function') await this.engine.persist();
       created = this.engine.profiles.get(id) || created;
-      return ok({ user_id: id, profile_id: id, id, profile: created });
+      return ok({ user_id: id, profile_id: id, id, ...proxySummary(created, this.proxyStore), profile: created });
     }
 
     if (pathname === '/api/v2/browser-profile/update' || pathname === '/api/profiles/update') {
@@ -348,13 +411,21 @@ class LocalApiServer {
       const current = this.engine.profiles.get(id);
       if (!current) return fail('profile not found');
       const clearFingerprint = Boolean(input.__clearFingerprint) || input.fingerprint === null || input.privacy?.fingerprint === null;
-      const body = normalizeProfileInput(input);
+      let body = normalizeProfileInput(input);
+      const association = this.resolveProxyAssociation(input, current);
+      if (association.present) body = { ...body, ...association.patch };
+      else if (Object.prototype.hasOwnProperty.call(input || {}, 'proxy')
+        || Object.prototype.hasOwnProperty.call(input || {}, 'user_proxy_config')
+        || String(input?.network_mode || '').toLowerCase() === 'direct') {
+        body = { ...body, proxyId: null };
+      }
       const allowed = new Set([
         'name', 'title', 'number', 'language', 'proxy', 'networkMode', 'startUrl', 'os', 'platform',
         'browser', 'userAgent', 'resolution', 'windowSize', 'timezone', 'locale', 'languageCode',
         'geolocation', 'webglVendor', 'webglRenderer', 'hardwareConcurrency', 'deviceMemory', 'doNotTrack',
         'privacy', 'fingerprint', 'user_proxy_config', 'note', 'width', 'height', 'advanced',
         'proxyMeta', 'tag', 'groupId', 'group_name',
+        'proxyId',
       ]);
       const patch = {};
       for (const [key, value] of Object.entries(body)) {
@@ -394,9 +465,15 @@ class LocalApiServer {
         }
       }
       const next = this.engine.sanitizeProfile({ ...current, ...patch, id });
+      this.normalizeProxyAssociationState(next, association);
       this.engine.profiles.set(id, next);
       if (typeof this.engine.persist === 'function') await this.engine.persist();
-      return ok({ profile_id: id, profile: this.engine.profiles.get(id) });
+      const profile = this.engine.profiles.get(id);
+      return ok({
+        profile_id: id,
+        ...proxySummary(profile, this.proxyStore, association.present ? association.value : undefined),
+        profile,
+      });
     }
 
     if (pathname === '/api/v2/browser-profile/duplicate' || pathname === '/api/profiles/duplicate') {
@@ -682,6 +759,61 @@ class LocalApiServer {
     }
 
     return undefined;
+  }
+
+  resolveProxyAssociation(input = {}, base = {}) {
+    const association = readProxyAssociation(input);
+    if (!association.present) return { present: false, patch: {} };
+    if (!association.value) {
+      return {
+        present: true,
+        value: '',
+        patch: {
+          proxyId: null,
+          proxyMeta: { ...(base.proxyMeta || {}), proxyId: null },
+        },
+      };
+    }
+    if (!this.proxyStore) {
+      const error = new Error('proxy store unavailable');
+      error.statusCode = 503;
+      throw error;
+    }
+    const item = this.proxyStore.get(association.value);
+    if (!item) {
+      const error = new Error('proxy library entry not found: ' + association.value);
+      error.statusCode = 404;
+      throw error;
+    }
+    return {
+      present: true,
+      value: item.id,
+      item,
+      patch: {
+        proxyId: item.id,
+        proxy: item.raw,
+        networkMode: 'proxy',
+        proxyMeta: {
+          ...(base.proxyMeta || {}),
+          proxyId: item.id,
+          ipChannel: item.ipChannel || base.proxyMeta?.ipChannel || 'ip-api',
+        },
+      },
+    };
+  }
+
+  normalizeProxyAssociationState(profile, association) {
+    if (!profile || !association?.present) return profile;
+    for (const key of ['proxy_id', 'proxy_library_id', 'proxyIdAlias', 'proxyLibraryId']) delete profile[key];
+    const proxyId = association.value || null;
+    profile.proxyId = proxyId;
+    const proxyMeta = profile.proxyMeta && typeof profile.proxyMeta === 'object' ? { ...profile.proxyMeta } : {};
+    delete proxyMeta.proxy_id;
+    delete proxyMeta.proxy_library_id;
+    delete proxyMeta.proxyLibraryId;
+    proxyMeta.proxyId = proxyId;
+    profile.proxyMeta = proxyMeta;
+    return profile;
   }
 
   parseIds(input) {

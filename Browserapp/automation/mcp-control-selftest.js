@@ -185,6 +185,27 @@ async function main() {
   record('local-api create maps snake_case fields', createdProfile?.startUrl === 'https://example.com' && createdProfile?.userAgent === 'Mozilla/5.0 MCP' && createdProfile?.width === 1440 && createdProfile?.height === 900 && createdProfile?.note === 'created via mcp selftest');
   record('local-api create merges top-level fingerprint into privacy', createdProfile?.privacy?.fingerprint?.os === 'Linux' && createdProfile?.privacy?.fingerprint?.hardwareConcurrency === 8 && createdProfile?.privacy?.timezone === 'Asia/Shanghai');
 
+  const proxyLibraryCreate = await request('POST', '/api/proxy/create', {
+    raw: 'socks5://proxy-user:proxy-pass@127.0.0.1:1080#MCP%20proxy',
+    name: 'MCP Library Proxy',
+  });
+  const proxyLibraryId = proxyLibraryCreate.body.data?.id;
+  record('local-api creates proxy library entry', proxyLibraryCreate.status === 200 && proxyLibraryCreate.body.code === 0 && proxyLibraryId);
+  const linkedCreate = await request('POST', '/api/v1/user/create', {
+    profile_id: 'mcp-linked', name: 'MCP Linked', proxy_id: proxyLibraryId,
+  });
+  const linkedProfile = linkedCreate.body.data?.profile;
+  record('local-api create links proxy library entry', linkedCreate.status === 200 && linkedProfile?.proxyId === proxyLibraryId && linkedProfile?.proxy === 'socks5://proxy-user:proxy-pass@127.0.0.1:1080#MCP%20proxy');
+  const unlink = await request('POST', '/api/v2/browser-profile/update', { profile_id: 'mcp-linked', proxy_id: '' });
+  record('local-api update unlinks proxy library entry', unlink.status === 200 && unlink.body.data?.proxy?.proxyId === null);
+  const relink = await request('POST', '/api/v2/browser-profile/update', { profile_id: 'mcp-linked', proxy_id: proxyLibraryId });
+  record('local-api update relinks proxy library entry', relink.status === 200 && relink.body.data?.proxy?.proxyId === proxyLibraryId);
+  await proxyStore.remove([proxyLibraryId]);
+  const linkedList = await request('GET', '/api/v1/user/list');
+  const missingProxy = linkedList.body.data?.list?.find((item) => item.user_id === 'mcp-linked');
+  record('local-api reports deleted proxy node as missing', linkedList.status === 200 && missingProxy?.proxy_status === 'missing');
+  const mcpProxy = await proxyStore.create({ raw: 'http://mcp-user:mcp-pass@127.0.0.1:8080', name: 'MCP Tool Proxy' });
+
   const updateResult = await request('POST', '/api/v2/browser-profile/update', {
     profile_id: 'mcp-fp',
     name: 'MCP Fingerprint Updated',
@@ -257,6 +278,7 @@ async function main() {
 
   const admin = await spawnMcp({ OPENBROWSER_MCP_MODE: 'admin' }, [
     { name: 'fingerprint_set', args: { profile_id: 'mcp-fp', fingerprint: { os: 'Windows 11', hardwareConcurrency: 16 }, resolution: '1920x1080' } },
+    { name: 'create_profile', args: { profile_id: 'mcp-tool-linked', name: 'MCP Tool Linked', proxy_id: mcpProxy.id } },
   ]);
   record('mcp initialize', admin.get(1)?.result?.serverInfo?.name === 'openbrowser-control-mcp');
   record('mcp tools/list >= 43', (admin.get(2)?.result?.tools?.length || 0) >= 43);
@@ -264,6 +286,7 @@ async function main() {
   record('mcp list_profiles', admin.get(5)?.result?.isError === false);
   record('mcp get_fingerprint', admin.get(6)?.result?.isError === false);
   record('mcp fingerprint_set', admin.get(8)?.result?.isError === false && engine.profiles.get('mcp-fp')?.privacy?.fingerprint?.os === 'Windows 11' && engine.profiles.get('mcp-fp')?.width === 1920);
+  record('mcp create_profile links proxy library entry', admin.get(9)?.result?.isError === false && engine.profiles.get('mcp-tool-linked')?.proxyId === mcpProxy.id);
 
   const adminFp = await spawnMcp({ OPENBROWSER_MCP_MODE: 'admin' }, [
     { name: 'fingerprint_reset', args: { profile_id: 'mcp-fp' } },

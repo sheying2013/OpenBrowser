@@ -224,6 +224,8 @@
                   <label><input type="radio" name="editor-network" value="direct" checked>本地直连</label>
                   <label><input type="radio" name="editor-network" value="custom">代理模式</label>
                 </div>
+                <label>代理库节点<select id="editor-proxy-library"><option value="">手动填写代理（不关联代理库）</option></select></label>
+                <div class="network-mode-hint" id="editor-proxy-library-status">未关联代理库节点</div>
                 <div id="editor-proxy-fields">
                   <div class="form-two">
                     <label>代理类型<select id="editor-proxy-type"><option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
@@ -1122,6 +1124,7 @@
       <p class="network-mode-hint">本地直连使用本机网络，不配置代理。</p>
     </div>
     <div id="create-proxy-fields" hidden>
+      <label>代理库节点<select id="create-proxy-library"><option value="">手动填写代理（不关联代理库）</option></select></label>
       <div class="form-two">
         <label>代理类型
           <select id="create-proxy-type" name="proxyType">
@@ -1168,6 +1171,7 @@
       </div>
     </div>
     <div id="batch-add-proxy-fields" hidden>
+      <label>代理库快捷选择（可选，所有新环境共用）<select id="batch-add-proxy-library"><option value="">逐行填写代理</option></select></label>
       <label>代理列表（每行一个，数量须与新增环境数一致）<textarea id="batch-add-proxies" placeholder="127.0.0.1:7890&#10;socks5://127.0.0.1:1080"></textarea></label>
     </div>
     <div class="dialog-actions"><button value="cancel" class="outline">取消</button><button value="default" class="primary">立即批量创建</button></div>
