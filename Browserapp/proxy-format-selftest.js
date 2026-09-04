@@ -130,10 +130,25 @@ assert.strictEqual(replacementRaw.protocol, 'http');
 assert.strictEqual(replacementRaw.host, 'new-proxy.test');
 assert.strictEqual(replacementRaw.username, 'fresh@user');
 
-const clearedAuth = normalizeProxyRecord({ raw: 'socks5://old-proxy.test:1080' }, existing);
-assert.strictEqual(clearedAuth.username, '');
-assert.strictEqual(clearedAuth.password, '');
-assert.strictEqual(clearedAuth.authenticated, false);
+const redactedRawPatch = normalizeProxyRecord({ raw: 'socks5://old-proxy.test:1080' }, existing);
+assert.strictEqual(redactedRawPatch.username, 'saved-user');
+assert.strictEqual(redactedRawPatch.password, 'saved-pass');
+assert.strictEqual(redactedRawPatch.authenticated, true);
+
+const maskedPatch = normalizeProxyRecord({
+  raw: 'socks5://old-proxy.test:1080',
+  username: '********',
+  password: '••••••••',
+}, existing);
+assert.strictEqual(maskedPatch.username, 'saved-user');
+assert.strictEqual(maskedPatch.password, 'saved-pass');
+
+const changedEndpointWithFields = normalizeProxyRecord({
+  raw: 'http://new-field-proxy.test:8080',
+  username: 'field-user',
+  password: 'field-pass',
+}, existing);
+assert.strictEqual(changedEndpointWithFields.raw, 'http://field-user:field-pass@new-field-proxy.test:8080');
 
 const legacyFields = normalizeProxyRecord({
   proxy_type: 'http',
@@ -144,4 +159,4 @@ const legacyFields = normalizeProxyRecord({
 });
 assert.strictEqual(legacyFields.raw, 'http://legacy-user:legacy-pass@legacy.test:3128');
 
-console.log('PROXY_FORMAT_SELFTEST_OK bare_socks5=1 bare_http=1 bare_https=1 explicit=1 alias=1 encoding=1 escaped_separator=1 special_credentials=1 remark=1 merge=1 redacted_restore=1 explicit_clear=1 ui_clear=1 raw_priority=1 legacy=1');
+console.log('PROXY_FORMAT_SELFTEST_OK bare_socks5=1 bare_http=1 bare_https=1 explicit=1 alias=1 encoding=1 escaped_separator=1 special_credentials=1 remark=1 merge=1 redacted_restore=1 masked_restore=1 explicit_clear=1 ui_clear=1 raw_priority=1 legacy=1');

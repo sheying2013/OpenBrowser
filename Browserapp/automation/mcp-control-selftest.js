@@ -1,8 +1,10 @@
 'use strict';
 
 const http = require('http');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const { LocalApiServer } = require('./local-api-server');
+const { resolveApiKey } = require('./api-key');
 const { ProxyStore } = require('./proxy-store');
 const { RpaStore } = require('./rpa-store');
 const { RpaEngine } = require('./rpa-engine');
@@ -106,6 +108,17 @@ async function main() {
   const checks = [];
   const record = (name, ok) => checks.push({ name, ok });
 
+  const keyFile = '/tmp/openbrowser-mcp-api-key-' + process.pid + '.txt';
+  fs.writeFileSync(keyFile, 'mcp-file-key\n', 'utf8');
+  const resolvedKey = resolveApiKey({
+    env: {
+      OPENBROWSER_API_KEY: '<从上方 API Key 框复制>',
+      API_KEY: '',
+      OPENBROWSER_API_KEY_FILE: keyFile,
+    },
+  });
+  record('api key placeholder falls back to configured file', resolvedKey.key === 'mcp-file-key' && resolvedKey.filePath === keyFile);
+
   const engine = fakeEngine();
   const proxyStore = new ProxyStore('/tmp/openbrowser-mcp-proxy-' + process.pid + '.json');
   await proxyStore.load();
@@ -114,6 +127,7 @@ async function main() {
   const rpa = new RpaEngine({ engine, store: rpaStore, emit: () => {} });
   const syncState = { active: false, selected: [] };
   let syncTileCount = 0;
+  let syncSettingsUpdateCount = 0;
   const syncBridge = new WindowSyncBridge({
     getLiveSync: () => null,
     beginSync: async (ids) => { syncState.active = Boolean(ids?.length); syncState.selected = ids || []; return syncState; },
@@ -123,7 +137,7 @@ async function main() {
     setSelection: (ids) => { syncState.selected = ids; },
     tile: async () => { syncTileCount += 1; return true; },
     getSettings: () => ({}),
-    updateSettings: (patch) => patch,
+    updateSettings: (patch) => { syncSettingsUpdateCount += 1; return patch; },
   });
   const appCenter = new AppCenter({ engine });
   const api = new LocalApiServer({
@@ -140,8 +154,9 @@ async function main() {
   await api.start();
   const apiPort = api.port;
 
-  const request = (method, path, body, apiKey = 'mcp-selftest-key') => new Promise((resolve, reject) => {
+  const request = (method, path, body, credentials = 'mcp-selftest-key') => new Promise((resolve, reject) => {
     const payload = body === undefined ? null : JSON.stringify(body);
+    const auth = typeof credentials === 'string' ? { apiKey: credentials } : (credentials || {});
     const req = http.request({
       host: '127.0.0.1',
       port: apiPort,
@@ -149,7 +164,9 @@ async function main() {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'api-key': apiKey,
+        ...(auth.apiKey !== undefined ? { 'api-key': auth.apiKey } : {}),
+        ...(auth.xApiKey !== undefined ? { 'x-api-key': auth.xApiKey } : {}),
+        ...(auth.authorization !== undefined ? { Authorization: auth.authorization } : {}),
         ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
       },
       timeout: 5000,
@@ -157,7 +174,7 @@ async function main() {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
-        try { resolve({ status: res.statusCode, body: JSON.parse(data || '{}') }); }
+        try { resolve({ status: res.statusCode, headers: res.headers, body: JSON.parse(data || '{}') }); }
         catch (error) { reject(error); }
       });
     });
@@ -178,6 +195,8 @@ async function main() {
     device_memory: 16,
     webgl_vendor: 'Google Inc. (MCP)',
     notes: 'created via mcp selftest',
+    cookies: '[{"name":"session","value":"secret"}]',
+    platform: { type: 'Website', username: 'platform-user', password: 'platform-pass', totpSecret: '123456' },
     fingerprint: { os: 'Linux' },
   });
   const createdProfile = createResult.body.data?.profile;
@@ -191,14 +210,44 @@ async function main() {
   });
   const proxyLibraryId = proxyLibraryCreate.body.data?.id;
   record('local-api creates proxy library entry', proxyLibraryCreate.status === 200 && proxyLibraryCreate.body.code === 0 && proxyLibraryId);
+  const redactedProxyList = await request('GET', '/api/proxy/list');
+  const redactedProxy = redactedProxyList.body.data?.list?.find((item) => item.id === proxyLibraryId);
+  const storedProxy = proxyStore.get(proxyLibraryId);
+  record('local-api proxy list redacts credentials without changing store', redactedProxyList.status === 200
+    && !Object.prototype.hasOwnProperty.call(redactedProxy || {}, 'username')
+    && !Object.prototype.hasOwnProperty.call(redactedProxy || {}, 'password')
+    && !Object.prototype.hasOwnProperty.call(redactedProxy || {}, 'raw')
+    && redactedProxy?.endpoint === 'socks5://127.0.0.1:1080'
+    && redactedProxy?.credentials_redacted === true
+    && storedProxy?.username === 'proxy-user'
+    && storedProxy?.password === 'proxy-pass');
+  const directBatchProxyCreate = await request('POST', '/api/proxy/create?source=mcp-selftest', [
+    { raw: 'http://batch-one:pass-one@127.0.0.1:18080', name: 'MCP Batch One' },
+    { raw: 'socks5://127.0.0.1:18081', name: 'MCP Batch Two' },
+  ]);
+  record('local-api preserves direct array proxy batch body', directBatchProxyCreate.status === 200
+    && directBatchProxyCreate.body.code === 0
+    && directBatchProxyCreate.body.data?.list?.length === 2
+    && directBatchProxyCreate.body.data.list.every((item) => item.id && item.raw));
   const linkedCreate = await request('POST', '/api/v1/user/create', {
     profile_id: 'mcp-linked', name: 'MCP Linked', proxy_id: proxyLibraryId,
   });
   const linkedProfile = linkedCreate.body.data?.profile;
   record('local-api create links proxy library entry', linkedCreate.status === 200 && linkedProfile?.proxyId === proxyLibraryId && linkedProfile?.proxy === 'socks5://proxy-user:proxy-pass@127.0.0.1:1080#MCP%20proxy');
-  const unlink = await request('POST', '/api/v2/browser-profile/update', { profile_id: 'mcp-linked', proxy_id: '' });
-  record('local-api update unlinks proxy library entry', unlink.status === 200 && unlink.body.data?.proxy?.proxyId === null);
-  const relink = await request('POST', '/api/v2/browser-profile/update', { profile_id: 'mcp-linked', proxy_id: proxyLibraryId });
+  const unlink = await request('POST', '/api/v2/browser-profile/update', {
+    profile_id: 'mcp-linked',
+    proxy: 'Direct',
+    proxyMeta: { proxy_library_id: null, proxyLibraryId: proxyLibraryId },
+  });
+  const unlinkedProfile = unlink.body.data?.profile;
+  record('local-api update unlinks proxy library entry and clears aliases', unlink.status === 200
+    && unlink.body.data?.proxy?.proxyId === null
+    && unlinkedProfile?.proxyId === null
+    && unlinkedProfile?.proxyMeta?.proxyId === null
+    && !Object.prototype.hasOwnProperty.call(unlinkedProfile?.proxyMeta || {}, 'proxy_id')
+    && !Object.prototype.hasOwnProperty.call(unlinkedProfile?.proxyMeta || {}, 'proxy_library_id')
+    && !Object.prototype.hasOwnProperty.call(unlinkedProfile?.proxyMeta || {}, 'proxyLibraryId'));
+  const relink = await request('POST', '/api/v2/browser-profile/update', { profile_id: 'mcp-linked', proxyMeta: { proxyLibraryId: proxyLibraryId } });
   record('local-api update relinks proxy library entry', relink.status === 200 && relink.body.data?.proxy?.proxyId === proxyLibraryId);
   await proxyStore.remove([proxyLibraryId]);
   const linkedList = await request('GET', '/api/v1/user/list');
@@ -220,20 +269,110 @@ async function main() {
   record('local-api update profile', updateResult.status === 200 && updateResult.body.code === 0 && updatedProfile?.name === 'MCP Fingerprint Updated' && updatedProfile?.privacy?.fingerprint?.os === 'macOS' && updatedProfile?.privacy?.fingerprint?.canvasId === 4242);
   record('local-api update maps snake_case fields', updatedProfile?.startUrl === 'https://openai.com' && updatedProfile?.userAgent === 'Mozilla/5.0 Updated' && updatedProfile?.width === 2560 && updatedProfile?.height === 1440 && updatedProfile?.privacy?.timezone === 'America/New_York' && updatedProfile?.privacy?.fingerprint?.webglRenderer === 'ANGLE (MCP GPU)');
 
-  const duplicateResult = await request('POST', '/api/v2/browser-profile/duplicate', { source_profile_id: 'mcp-fp', name: 'MCP Fingerprint Copy' });
+  const preservedFingerprint = { ...(updatedProfile?.privacy?.fingerprint || {}) };
+  const camelUpdate = await request('POST', '/api/v2/browser-profile/update', {
+    profileId: 'mcp-fp',
+    name: 'MCP Camel Update',
+    startUrl: 'https://example.org/camel',
+  });
+  const camelUpdatedProfile = camelUpdate.body.data?.profile;
+  record('local-api camelCase update preserves omitted fingerprint', camelUpdate.status === 200
+    && camelUpdatedProfile?.startUrl === 'https://example.org/camel'
+    && JSON.stringify(camelUpdatedProfile?.privacy?.fingerprint || {}) === JSON.stringify(preservedFingerprint));
+
+  const duplicateResult = await request('POST', '/api/v2/browser-profile/duplicate', {
+    sourceProfileId: 'mcp-fp',
+    name: 'MCP Fingerprint Copy',
+    startUrl: 'https://example.org/duplicate',
+  });
   record('local-api duplicate profile without exit data', duplicateResult.status === 200 && duplicateResult.body.code === 0 && duplicateResult.body.data.profile?.id !== 'mcp-fp' && duplicateResult.body.data.profile?.exitNetwork === undefined);
+  record('local-api duplicate profile clears cookies and platform credentials', duplicateResult.body.data.profile?.cookies === ''
+    && duplicateResult.body.data.profile?.platform?.username === ''
+    && duplicateResult.body.data.profile?.platform?.password === ''
+    && duplicateResult.body.data.profile?.platform?.totpSecret === ''
+    && duplicateResult.body.data.profile?.startUrl === 'https://example.org/duplicate');
 
   const checkResult = await request('POST', '/api/proxy/check-profile', { profile_id: 'mcp-fp' });
   record('local-api check profile proxy persists', checkResult.status === 200 && checkResult.body.code === 0 && checkResult.body.data?.country === 'Test' && engine.profiles.get('mcp-fp')?.exitNetwork?.country === 'Test');
 
   const badKey = await request('GET', '/api/v1/user/list', undefined, 'wrong-key');
-  record('local-api rejects wrong key', badKey.status === 401);
+  record('local-api rejects wrong key with bearer challenge', badKey.status === 401 && badKey.headers['www-authenticate'] === 'Bearer');
+  const bearerFallback = await request('GET', '/api/v1/user/list', undefined, {
+    apiKey: 'wrong-key',
+    authorization: 'Bearer mcp-selftest-key',
+  });
+  record('local-api accepts correct bearer after wrong api-key', bearerFallback.status === 200);
+  const alternateHeaderFallback = await request('GET', '/api/v1/user/list', undefined, {
+    apiKey: 'wrong-key',
+    xApiKey: 'mcp-selftest-key',
+  });
+  record('local-api accepts correct x-api-key after wrong api-key', alternateHeaderFallback.status === 200);
+  const queryFallback = await request('GET', '/api/v1/user/list?api_key=mcp-selftest-key', undefined, {
+    apiKey: 'wrong-key',
+    authorization: 'Bearer also-wrong',
+  });
+  record('local-api accepts correct query key after wrong headers', queryFallback.status === 200);
+  const allCredentialsWrong = await request('GET', '/api/v1/user/list?key=query-wrong', undefined, {
+    apiKey: 'header-wrong',
+    xApiKey: 'alternate-wrong',
+    authorization: 'Bearer bearer-wrong',
+  });
+  record('local-api rejects when every credential candidate is wrong', allCredentialsWrong.status === 401
+    && allCredentialsWrong.headers['www-authenticate'] === 'Bearer');
+
+  const wrongCreateMethod = await request('GET', '/api/v1/user/create');
+  record('local-api rejects wrong method for mutating routes', wrongCreateMethod.status === 405 && wrongCreateMethod.headers.allow === 'POST');
+  const wrongRpaMethod = await request('GET', '/api/rpa/run');
+  record('local-api rejects GET execution for RPA', wrongRpaMethod.status === 405 && wrongRpaMethod.headers.allow === 'POST');
+  const wrongReadMethod = await request('POST', '/api/v1/user/list', {});
+  record('local-api rejects POST for read-only routes', wrongReadMethod.status === 405 && wrongReadMethod.headers.allow === 'GET');
+  const wrongDualMethod = await request('DELETE', '/api/sync/settings');
+  record('local-api reports both methods for dual-method routes', wrongDualMethod.status === 405 && wrongDualMethod.headers.allow === 'GET, POST');
+  const wrongDynamicPlanMethod = await request('POST', '/api/rpa/plans/static-id', {});
+  record('local-api enforces dynamic RPA plan method', wrongDynamicPlanMethod.status === 405 && wrongDynamicPlanMethod.headers.allow === 'DELETE');
+  const wrongTemplateInstallMethod = await request('GET', '/api/rpa/templates/static-id/install');
+  record('local-api prioritizes template install method rule', wrongTemplateInstallMethod.status === 405 && wrongTemplateInstallMethod.headers.allow === 'POST');
 
   const start = await request('POST', '/api/v1/browser/start', { profile_id: 'mcp-fp' });
   record('local-api start profile', start.status === 200 && start.body.data.debug_port > 0);
 
-  const syncStart = await request('POST', '/api/sync/start', { profile_ids: ['mcp-fp', 'fp1'], operate: 'click,scroll' });
+  const rejectedSyncSettings = await request('POST', '/api/sync/start', {
+    profile_ids: ['mcp-fp', 'fp1'],
+    settings: { keyboard: false },
+  });
+  record('local-api sync start rejects inline settings', rejectedSyncSettings.status === 400 && syncSettingsUpdateCount === 0);
+  const dedicatedSyncSettings = await request('POST', '/api/sync/settings', { keyboard: false });
+  record('local-api sync settings use dedicated route', dedicatedSyncSettings.status === 200 && syncSettingsUpdateCount === 1);
+  const syncStart = await request('POST', '/api/sync/start', { profileIds: ['mcp-fp', 'fp1'], operate: 'click,scroll' });
   record('local-api sync start', syncStart.status === 200 && syncStart.body.code === 0 && syncTileCount === 1 && syncState.active === true);
+
+  const encodedPlanId = 'plan id/encoded';
+  await rpaStore.upsertPlan({ id: encodedPlanId, plan_name: 'Encoded Plan', profile_ids: ['fp1'], steps: [{ type: 'wait', ms: 1 }] });
+  const updateEncodedPlan = await request('POST', '/api/rpa/plans', {
+    planId: encodedPlanId,
+    planName: 'Encoded Plan Updated',
+    profileIds: ['mcp-fp'],
+    steps: [{ type: 'wait', ms: 2 }],
+  });
+  record('local-api maps camelCase RPA plan id when updating', updateEncodedPlan.status === 200
+    && rpaStore.getPlan(encodedPlanId)?.plan_name === 'Encoded Plan Updated'
+    && rpaStore.getPlan(encodedPlanId)?.profile_ids?.[0] === 'mcp-fp');
+  const deleteEncodedPlan = await request('DELETE', '/api/rpa/plans/' + encodeURIComponent(encodedPlanId));
+  record('local-api decodes RPA plan ids', deleteEncodedPlan.status === 200 && !rpaStore.getPlan(encodedPlanId));
+  const encodedTemplateId = 'template id/encoded';
+  await rpaStore.upsertTemplate({ id: encodedTemplateId, name: 'Encoded Template', steps: [{ type: 'wait', ms: 1 }] });
+  const getEncodedTemplate = await request('GET', '/api/rpa/templates/' + encodeURIComponent(encodedTemplateId));
+  const installEncodedTemplate = await request('POST', '/api/rpa/templates/' + encodeURIComponent(encodedTemplateId) + '/install', {
+    planName: 'Camel Template Install',
+    profileIds: ['mcp-fp'],
+  });
+  const deleteEncodedTemplate = await request('DELETE', '/api/rpa/templates/' + encodeURIComponent(encodedTemplateId));
+  record('local-api decodes RPA template ids', getEncodedTemplate.status === 200
+    && getEncodedTemplate.body.data?.id === encodedTemplateId
+    && installEncodedTemplate.body.data?.plan?.plan_name === 'Camel Template Install'
+    && installEncodedTemplate.body.data?.plan?.profile_ids?.[0] === 'mcp-fp'
+    && deleteEncodedTemplate.status === 200
+    && !rpaStore.getTemplate(encodedTemplateId));
 
   const stopAll = await request('POST', '/api/v1/browser/stop-all', {});
   record('local-api stop all', stopAll.status === 200 && stopAll.body.data.stopped === true);
@@ -279,6 +418,8 @@ async function main() {
   const admin = await spawnMcp({ OPENBROWSER_MCP_MODE: 'admin' }, [
     { name: 'fingerprint_set', args: { profile_id: 'mcp-fp', fingerprint: { os: 'Windows 11', hardwareConcurrency: 16 }, resolution: '1920x1080' } },
     { name: 'create_profile', args: { profile_id: 'mcp-tool-linked', name: 'MCP Tool Linked', proxy_id: mcpProxy.id } },
+    { name: 'create_profile', args: { profileId: 'mcp-tool-camel', name: 'MCP Tool Camel', startUrl: 'https://example.org/mcp-camel', proxyId: mcpProxy.id } },
+    { name: 'check_api_key', args: {} },
   ]);
   record('mcp initialize', admin.get(1)?.result?.serverInfo?.name === 'openbrowser-control-mcp');
   record('mcp tools/list >= 43', (admin.get(2)?.result?.tools?.length || 0) >= 43);
@@ -287,12 +428,29 @@ async function main() {
   record('mcp get_fingerprint', admin.get(6)?.result?.isError === false);
   record('mcp fingerprint_set', admin.get(8)?.result?.isError === false && engine.profiles.get('mcp-fp')?.privacy?.fingerprint?.os === 'Windows 11' && engine.profiles.get('mcp-fp')?.width === 1920);
   record('mcp create_profile links proxy library entry', admin.get(9)?.result?.isError === false && engine.profiles.get('mcp-tool-linked')?.proxyId === mcpProxy.id);
+  record('mcp accepts camelCase aliases in schema and call mapping', admin.get(10)?.result?.isError === false
+    && engine.profiles.get('mcp-tool-camel')?.startUrl === 'https://example.org/mcp-camel'
+    && engine.profiles.get('mcp-tool-camel')?.proxyId === mcpProxy.id);
+  record('mcp check_api_key verifies the Local API credential', admin.get(11)?.result?.isError === false);
+  const adminTools = admin.get(2)?.result?.tools || [];
+  const createProfileTool = adminTools.find((tool) => tool.name === 'create_profile');
+  record('mcp schema exposes camelCase aliases', Boolean(createProfileTool?.inputSchema?.properties?.profileId)
+    && Boolean(createProfileTool?.inputSchema?.properties?.startUrl)
+    && Boolean(createProfileTool?.inputSchema?.properties?.proxyId));
+  const syncStartTool = adminTools.find((tool) => tool.name === 'window_sync_start');
+  record('mcp window_sync_start schema excludes settings', syncStartTool
+    && !Object.prototype.hasOwnProperty.call(syncStartTool.inputSchema?.properties || {}, 'settings'));
 
   const adminFp = await spawnMcp({ OPENBROWSER_MCP_MODE: 'admin' }, [
     { name: 'fingerprint_reset', args: { profile_id: 'mcp-fp' } },
     { name: 'fingerprint_regenerate', args: { profile_id: 'mcp-fp' } },
   ]);
-  record('mcp fingerprint_reset', adminFp.get(8)?.result?.isError === false && Object.keys(engine.profiles.get('mcp-fp')?.privacy?.fingerprint || {}).length === 0);
+  const resetPayload = (() => {
+    try { return JSON.parse(adminFp.get(8)?.result?.content?.[0]?.text || '{}'); }
+    catch (_) { return {}; }
+  })();
+  record('mcp fingerprint_reset', adminFp.get(8)?.result?.isError === false
+    && Object.keys(resetPayload.data?.profile?.privacy?.fingerprint || {}).length === 0);
   record('mcp fingerprint_regenerate', adminFp.get(9)?.result?.isError === false && engine.profiles.get('mcp-fp')?.privacy?.refreshFingerprintOnStart === true && engine.profiles.get('mcp-fp')?.privacy?.stabilityMode === 'off');
 
   const read = await spawnMcp({ OPENBROWSER_MCP_MODE: 'read' });
@@ -302,6 +460,31 @@ async function main() {
   const blocked = read.get(4)?.error?.message || '';
   record('mcp read mode blocks create_profile', blocked.includes('requires permission level manage'));
   record('mcp read mode allows list_profiles', read.get(5)?.result?.isError === false);
+
+  const run = await spawnMcp({ OPENBROWSER_MCP_MODE: 'run' });
+  const runTools = run.get(2)?.result?.tools || [];
+  record('mcp run mode hides unrestricted rpa_run_steps', !runTools.some((tool) => tool.name === 'rpa_run_steps'));
+  record('mcp run mode blocks unrestricted rpa_run_steps', String(run.get(7)?.error?.message || '').includes('requires permission level manage'));
+
+  const plain401Server = http.createServer((_req, res) => {
+    res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('unauthorized');
+  });
+  await new Promise((resolve, reject) => {
+    plain401Server.once('error', reject);
+    plain401Server.listen(0, '127.0.0.1', resolve);
+  });
+  const plain401Port = plain401Server.address().port;
+  const plain401 = await spawnMcp({
+    OPENBROWSER_MCP_MODE: 'read',
+    OPENBROWSER_API_PORT: String(plain401Port),
+    OPENBROWSER_API_KEY: 'rejected-key',
+  });
+  const plain401Message = String(plain401.get(5)?.error?.message || '');
+  record('mcp reports friendly error for non-json 401', plain401Message.includes('rejected all supplied API credentials (401)')
+    && plain401Message.includes('OPENBROWSER_API_KEY_FILE')
+    && plain401Message.includes(`127.0.0.1:${plain401Port}`));
+  await new Promise((resolve) => plain401Server.close(resolve));
 
   const blacklist = await spawnMcp({ OPENBROWSER_MCP_MODE: 'admin', OPENBROWSER_MCP_TOOL_BLACKLIST: JSON.stringify(['create_profile', 'rpa_run_steps']) });
   record('mcp blacklist hides tools', !(blacklist.get(2)?.result?.tools || []).some((tool) => tool.name === 'create_profile'));
@@ -315,6 +498,7 @@ async function main() {
   for (const check of checks) console.log((check.ok ? 'PASS' : 'FAIL') + '  ' + check.name);
   await api.stop();
   await proxyStore.deleteFile?.();
+  try { fs.unlinkSync(keyFile); } catch (_) {}
   if (fail.length) {
     console.error(JSON.stringify({ success: false, checks: checks.length, failed: fail.map((item) => item.name) }, null, 2));
     process.exitCode = 1;

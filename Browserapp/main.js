@@ -866,7 +866,8 @@ async function tile(ids, cascade = false) {
   if (!entries.length) throw new Error('No selected browser has a CDP session');
   const work = pickWorkArea();
   // Pause geometry mirroring while we rearrange so live-sync does not fight tile layout.
-  if (liveSync) liveSync.lastWindowSync = Date.now() + 2500;
+  liveSync?.pauseGeometrySync?.(3500, cascade ? 'manual-cascade' : 'manual-tile');
+  if (liveSync) liveSync.lastWindowSync = Date.now();
   if (cascade) {
     // Cascade layout: left + vs * index
     const { computeCascadeBounds } = require('./automation/protocol/window-sync-protocol');
@@ -897,6 +898,7 @@ async function tile(ids, cascade = false) {
       }));
     }));
   }
+  liveSync?.pauseGeometrySync?.(900, cascade ? 'manual-cascade-settle' : 'manual-tile-settle');
   return { success: true, count: entries.length, mode: cascade ? 'cascade' : 'tile', platform: process.platform, workArea: work };
 }
 
@@ -1698,9 +1700,11 @@ app.whenReady().then(async () => {
     const ids = sanitizeIds(payload.ids); const entries = engine.runningWithCdp(ids); const action = String(payload.action);
     if (action === 'tile') return tile(ids, false);
     if (action === 'cascade') return tile(ids, true);
-    if (!['minimized', 'normal', 'maximized'].includes(action)) throw new Error('Unknown window action');
-    await Promise.all(entries.map(({ item }) => cdp.setWindowState(item.port, action)));
-    return { success: true, count: entries.length };
+    if (!['minimized', 'normal', 'maximized', 'fullscreen'].includes(action)) throw new Error('Unknown window action');
+    const transitions = await Promise.all(entries.map(({ item }) => cdp.setWindowState(item.port, action, action === 'fullscreen'
+      ? { verify: true, fallbackState: 'maximized' }
+      : {})));
+    return { success: true, count: entries.length, degraded: transitions.filter((value) => value?.degraded).length };
   });
   registerTrustedIpc('sync:text', async (_event, payload) => {
     const ids = sanitizeIds(payload.ids); const action = String(payload.action); const text = String(payload.text || '').slice(0, 100000);
@@ -2014,21 +2018,59 @@ app.whenReady().then(async () => {
   startAppUpdateWatcher();
 });
 
-app.on('before-quit', (event) => {
-  if (quitting) return;
-  event.preventDefault();
+async function stopAllForQuit() {
+  if (!engine) return { stopped: true, remaining: [], errors: [] };
+  const lifecycleIds = () => [...new Set([
+    ...(engine.running?.keys?.() || []),
+    ...(engine.starting?.keys?.() || []),
+    ...(engine.stopping?.keys?.() || []),
+  ])];
+  let result = null;
+  const errors = [];
+  try { result = await engine.stopAll(); } catch (error) {
+    errors.push(String(error?.message || error));
+  }
+  let remaining = Array.isArray(result?.remaining) ? result.remaining : [];
+  if (!result) remaining = lifecycleIds();
+  if (Array.isArray(result?.errors)) errors.push(...result.errors);
+  for (let attempt = 0; attempt < 2 && remaining.length; attempt += 1) {
+    await Promise.allSettled(remaining.map((id) => engine.stop(id)));
+    await sleep(150 * (attempt + 1));
+    try { result = await engine.stopAll(); } catch (error) {
+      errors.push(String(error?.message || error));
+      result = null;
+    }
+    remaining = Array.isArray(result?.remaining) ? result.remaining : lifecycleIds();
+    if (Array.isArray(result?.errors)) errors.push(...result.errors);
+  }
+  if (remaining.length) {
+    console.warn('OpenBrowser quit left browser environments running:', remaining.join(', '));
+  }
+  return { ...(result || {}), stopped: remaining.length === 0, remaining, errors: [...new Set(errors)] };
+}
+
+function beginQuitCleanup() {
+  if (quitCleanupPromise) return quitCleanupPromise;
   quitting = true;
   const cloud = localSettingsCache?.cloud || {};
+  let stopResult = { stopped: true, remaining: [], errors: [] };
   quitCleanupPromise = Promise.resolve()
-    .then(() => automation?.stop?.())
-    .catch((error) => {
-      console.warn('OpenBrowser quit automation cleanup failed:', error?.message || error);
+    .then(() => {
+      try { liveSync?.stop?.(); } catch (error) {
+        console.warn('OpenBrowser quit live-sync cleanup failed:', error?.message || error);
+      }
     })
-    .then(() => (engine ? engine.stopAll() : null))
+    .then(async () => {
+      try { await automation?.stop?.(); } catch (error) {
+        console.warn('OpenBrowser quit automation cleanup failed:', error?.message || error);
+      }
+    })
+    .then(async () => { stopResult = await stopAllForQuit(); })
     .then(() => engine?.flushPersistence?.())
     .then(async () => {
       // Stop browsers and flush close-time state before packaging browser data.
       // Otherwise the backup can capture stale cookies or locked SQLite/LevelDB files.
+      if (stopResult.remaining.length) return;
       if (!cloud.enabled || !cloud.autoSyncOnQuit) return;
       try {
         await runCloudBackup({
@@ -2045,6 +2087,13 @@ app.on('before-quit', (event) => {
       }
     })
     .finally(() => app.quit());
+  return quitCleanupPromise;
+}
+
+app.on('before-quit', (event) => {
+  if (quitting) return;
+  event.preventDefault();
+  beginQuitCleanup();
 });
 app.on('will-quit', () => {
   stopShortcutBridge();
@@ -2053,5 +2102,8 @@ app.on('will-quit', () => {
   if (!quitCleanupPromise) automation?.stop?.().catch(() => {});
 });
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin' && !quitting) app.quit();
+  // OpenBrowser owns external browser processes. Closing its last control
+  // window must run the same awaited shutdown path on every platform so proxy
+  // exits cannot remain active behind a hidden macOS application.
+  if (!quitting) app.quit();
 });

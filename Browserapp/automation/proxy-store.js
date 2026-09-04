@@ -49,9 +49,15 @@ function firstCredential(input, keys) {
   return '';
 }
 
-function proxyKey(proxy) {
+function proxyEndpointKey(proxy) {
   if (!proxy) return '';
-  return [proxy.protocol, proxy.host, proxy.port, proxy.username, proxy.password].join('\u0000');
+  return [proxy.protocol, proxy.host, proxy.port].join('\u0000');
+}
+
+function isRedactedCredential(value) {
+  const text = String(value ?? '');
+  if (!text) return true;
+  return /^(?:\*{3,}|•{3,}|<redacted>|\[redacted\])$/i.test(text.trim());
 }
 
 function parseStoredProxy(value) {
@@ -66,8 +72,8 @@ function parseStoredProxy(value) {
 function normalizeProxyRecord(input = {}, existing = null) {
   const isMigration = Boolean(existing && input === existing);
   const requestedName = String(input.name || existing?.name || '').trim().slice(0, 120);
-  const refreshUrl = String(input.refreshUrl || input.refresh_url || existing?.refreshUrl || '').slice(0, 1000);
-  const ipChannel = normalizeIpLookupChannel(input.ipChannel || existing?.ipChannel);
+  const refreshUrl = String(input.refreshUrl ?? input.refresh_url ?? existing?.refreshUrl ?? '').slice(0, 1000);
+  const ipChannel = normalizeIpLookupChannel(input.ipChannel ?? input.ip_channel ?? existing?.ipChannel);
 
   const existingRaw = firstNonEmpty(existing, ['raw', 'proxy', 'proxy_url', 'proxyUrl']);
   const explicitRaw = firstNonEmpty(input, ['raw', 'proxy', 'proxy_url', 'proxyUrl']);
@@ -76,16 +82,31 @@ function normalizeProxyRecord(input = {}, existing = null) {
   }
   const existingParsed = parseStoredProxy(existingRaw);
   const explicitParsed = explicitRaw ? parseProxy(explicitRaw) : null;
-  const explicitAuthAction = String(input.proxyAuthAction || '').trim().toLowerCase();
+  const explicitAuthAction = String(input.proxyAuthAction ?? input.proxy_auth_action ?? '').trim().toLowerCase();
   const clearExplicitAuth = explicitAuthAction === 'clear';
+  const protocolInput = ownValue(input, ['protocol', 'type', 'proxy_type', 'proxyType']);
+  const hostInput = ownValue(input, ['host', 'proxy_host', 'proxyHost', 'server']);
+  const portInput = ownValue(input, ['port', 'proxy_port', 'proxyPort']);
+  const usernameInput = ownValue(input, ['username', 'user', 'proxy_user', 'proxy_username', 'proxyUsername']);
+  const passwordInput = ownValue(input, ['password', 'pass', 'proxy_password', 'proxyPassword']);
+  const existingUsername = String(existingParsed?.username
+    || firstCredential(existing, ['username', 'user', 'proxy_user', 'proxy_username', 'proxyUsername']));
+  const existingPassword = String(existingParsed?.password
+    || firstCredential(existing, ['password', 'pass', 'proxy_password', 'proxyPassword']));
+  const credentialPatchChangesExisting = (usernameInput.present
+    && !isRedactedCredential(usernameInput.value)
+    && String(usernameInput.value) !== existingUsername)
+    || (passwordInput.present
+      && !isRedactedCredential(passwordInput.value)
+      && String(passwordInput.value) !== existingPassword);
+  const endpointChanged = Boolean(explicitParsed && existingParsed
+    && proxyEndpointKey(explicitParsed) !== proxyEndpointKey(existingParsed));
   const rawIsAuthoritative = clearExplicitAuth || (Boolean(explicitParsed)
-    // A round-tripped copy of the current record is only the endpoint/base
-    // value. Explicit username/password fields in the same patch must still
-    // be able to replace its old credentials. A genuinely new raw value (new
-    // endpoint or embedded credentials) remains authoritative.
-    && (existingParsed
-      ? proxyKey(explicitParsed) !== proxyKey(existingParsed)
-      : Boolean(explicitParsed.authenticated)));
+    // A bare URL for the same endpoint is the normal redacted round-trip form,
+    // not an instruction to erase credentials. A changed credential field wins
+    // over an echoed raw URL; otherwise embedded auth/new endpoints stay authoritative.
+    && !credentialPatchChangesExisting
+    && (Boolean(explicitParsed.authenticated) || endpointChanged));
 
   const base = explicitParsed || existingParsed || {
     protocol: 'socks5', host: '', port: 0, username: '', password: '',
@@ -110,24 +131,15 @@ function normalizeProxyRecord(input = {}, existing = null) {
   }
 
   if (!rawIsAuthoritative) {
-    const protocolInput = ownValue(input, ['protocol', 'type', 'proxy_type', 'proxyType']);
-    const hostInput = ownValue(input, ['host', 'proxy_host', 'proxyHost', 'server']);
-    const portInput = ownValue(input, ['port', 'proxy_port', 'proxyPort']);
-    const usernameInput = ownValue(input, ['username', 'user', 'proxy_user', 'proxy_username', 'proxyUsername']);
-    const passwordInput = ownValue(input, ['password', 'pass', 'proxy_password', 'proxyPassword']);
-    const blankAuthPatch = usernameInput.present && passwordInput.present
-      && String(usernameInput.value) === '' && String(passwordInput.value) === ''
-      && !clearExplicitAuth;
-
     if (protocolInput.present && String(protocolInput.value).trim()) {
       protocol = String(protocolInput.value).trim().toLowerCase();
     }
     if (hostInput.present && String(hostInput.value).trim()) host = String(hostInput.value).trim();
     if (portInput.present && Number(portInput.value) > 0) port = Number(portInput.value);
-    if (!blankAuthPatch) {
-      if (usernameInput.present) username = String(usernameInput.value);
-      if (passwordInput.present) password = String(passwordInput.value);
-    }
+    // Empty/masked values are treated as a redacted UI/API round trip. Clearing
+    // credentials is intentionally available only through proxyAuthAction=clear.
+    if (usernameInput.present && !isRedactedCredential(usernameInput.value)) username = String(usernameInput.value);
+    if (passwordInput.present && !isRedactedCredential(passwordInput.value)) password = String(passwordInput.value);
   }
 
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('主机和端口必填');
@@ -436,6 +448,7 @@ class ProxyStore {
     return this._commitMutation((draft) => {
       if (draft.items.length >= 5000) throw new Error('代理数量已达上限 5000');
       const record = normalizeProxyRecord(input);
+      if (draft.items.some((item) => item.id === record.id)) throw new Error('代理 ID 已存在: ' + record.id);
       draft.items.unshift(record);
       return record;
     });
@@ -447,6 +460,13 @@ class ProxyStore {
     return this._commitMutation((draft) => {
       if (draft.items.length + list.length > 5000) throw new Error('代理数量已达上限 5000');
       const created = list.map((item) => normalizeProxyRecord(item));
+      const existingIds = new Set(draft.items.map((item) => item.id));
+      const batchIds = new Set();
+      for (const record of created) {
+        if (existingIds.has(record.id)) throw new Error('代理 ID 已存在: ' + record.id);
+        if (batchIds.has(record.id)) throw new Error('批量导入代理 ID 重复: ' + record.id);
+        batchIds.add(record.id);
+      }
       draft.items.unshift(...created);
       return created;
     });

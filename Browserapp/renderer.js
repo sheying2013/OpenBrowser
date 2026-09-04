@@ -271,12 +271,18 @@ function normalizeProfileSettings(profile) {
   const platform = value.platform && typeof value.platform === 'object' ? value.platform : {};
   const number = positiveProfileNumber(value.number);
   const rawProxy = String(value.proxy || '').trim();
-  const proxyIdValue = value.proxyId ?? value.proxy_id ?? proxyMeta.proxyId ?? proxyMeta.proxy_id;
-  const proxyId = proxyIdValue == null || String(proxyIdValue).trim() === '' ? null : String(proxyIdValue).trim();
   const legacyDemoProxy = value.networkMode == null && value.id === 'env-004' && rawProxy === '127.0.0.1:7890';
   const networkMode = value.networkMode === 'direct' || legacyDemoProxy || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy)
     ? 'direct'
     : 'proxy';
+  const profileAssociationKeys = ['proxyId', 'proxy_id', 'proxyLibraryId', 'proxy_library_id'];
+  const metaAssociationKeys = ['proxyId', 'proxy_id', 'proxyLibraryId', 'proxy_library_id'];
+  const profileAssociation = profileAssociationKeys.find((key) => Object.prototype.hasOwnProperty.call(value, key));
+  const metaAssociation = metaAssociationKeys.find((key) => Object.prototype.hasOwnProperty.call(proxyMeta, key));
+  const proxyIdValue = networkMode === 'direct'
+    ? null
+    : (profileAssociation ? value[profileAssociation] : (metaAssociation ? proxyMeta[metaAssociation] : undefined));
+  const proxyId = proxyIdValue == null || String(proxyIdValue).trim() === '' ? null : String(proxyIdValue).trim();
   return {
     ...value,
     number,
@@ -304,8 +310,8 @@ function normalizeProfileSettings(profile) {
     },
     proxyMeta: {
       proxyId,
-      ipChannel: String(proxyMeta.ipChannel || 'ip-api'),
-      refreshUrl: String(proxyMeta.refreshUrl || ''),
+      ipChannel: String(proxyMeta.ipChannel ?? proxyMeta.ip_channel ?? 'ip-api'),
+      refreshUrl: String(proxyMeta.refreshUrl ?? proxyMeta.refresh_url ?? ''),
       checkOnStart: Boolean(proxyMeta.checkOnStart),
       refreshOnStart: Boolean(proxyMeta.refreshOnStart),
       systemProxy: String(proxyMeta.systemProxy || 'global'),
@@ -1473,14 +1479,147 @@ function countryName(code) {
   try { return new Intl.DisplayNames([locale], { type: 'region' }).of(String(code || '').toUpperCase()) || code; } catch (_) { return code || ''; }
 }
 function parseEditorProxy(value) {
+  const parsed = parseProxyInputForUi(value, 'socks5');
+  if (!parsed) return { mode: 'direct', type: 'socks5', host: '', port: '', username: '', password: '', remark: '', name: '' };
+  return { mode: 'custom', ...parsed };
+}
+
+function decodeProxyPartForUi(value) {
+  const raw = String(value || '');
+  try { return decodeURIComponent(raw); } catch (_) {
+    return raw.replace(/(?:%[0-9a-f]{2})+/gi, (encoded) => {
+      try { return decodeURIComponent(encoded); } catch (_) { return encoded; }
+    });
+  }
+}
+
+function normalizeProxyProtocolForUi(value, fallback = 'socks5') {
+  const protocol = String(value || fallback).trim().replace(/:$/, '').toLowerCase();
+  if (protocol === 'socks5h' || protocol === 'socks5s') return 'socks5';
+  return ['http', 'https', 'socks4', 'socks5'].includes(protocol) ? protocol : fallback;
+}
+
+function splitProxyRemarkForUi(value) {
   const raw = String(value || '').trim();
-  if (!raw || /^(direct|offline|none)$/i.test(raw)) return { mode: 'direct', type: 'socks5', host: '', port: '', username: '', password: '' };
-  try {
-    const parsed = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? new URL(raw) : null;
-    if (parsed) return { mode: 'custom', type: parsed.protocol.replace(':', '').toLowerCase(), host: parsed.hostname, port: parsed.port, username: decodeURIComponent(parsed.username || ''), password: decodeURIComponent(parsed.password || '') };
-  } catch (_) {}
-  const parts = raw.split(':');
-  return { mode: 'custom', type: parts.length >= 4 ? 'socks5' : 'http', host: parts[0] || '', port: parts[1] || '', username: parts[2] || '', password: parts.slice(3).join(':') };
+  const index = raw.indexOf('#');
+  return index < 0
+    ? { source: raw, remark: '' }
+    : { source: raw.slice(0, index).trim(), remark: decodeProxyPartForUi(raw.slice(index + 1)).trim() };
+}
+
+function proxyHostForUi(value) {
+  const host = String(value || '').trim();
+  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+}
+
+function encodeProxyHostForUi(host) {
+  return String(host || '').includes(':') && !String(host).startsWith('[') ? `[${host}]` : String(host || '');
+}
+
+function buildProxyUiValue({ protocol, host, port, username = '', password = '', remark = '' }) {
+  const normalizedProtocol = normalizeProxyProtocolForUi(protocol);
+  const cleanHost = proxyHostForUi(host);
+  const numericPort = Number(port);
+  if (!cleanHost || !Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) {
+    throw new Error(tx('请填写有效的代理主机和端口'));
+  }
+  if (!/^[a-zA-Z0-9._:-]+$/.test(cleanHost)) throw new Error(tx('代理主机格式无效'));
+  const auth = username || password
+    ? `${encodeURIComponent(String(username || ''))}:${encodeURIComponent(String(password || ''))}@`
+    : '';
+  const suffix = String(remark || '').trim() ? `#${encodeURIComponent(String(remark).trim())}` : '';
+  return `${normalizedProtocol}://${auth}${encodeProxyHostForUi(cleanHost)}:${numericPort}${suffix}`;
+}
+
+function parseProxyInputForUi(value, selectedType = 'socks5') {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const raw = value.raw ?? value.proxy ?? value.proxy_url ?? value.proxyUrl;
+    if (raw != null && String(raw).trim()) {
+      const parsed = parseProxyInputForUi(raw, value.protocol ?? value.type ?? selectedType);
+      const redacted = parsed && [parsed.username, parsed.password].some((part) => /^\*+$/.test(String(part || '')));
+      if (parsed && !redacted) {
+        if (value.name) parsed.name = String(value.name).trim();
+        if (value.remark && !parsed.remark) parsed.remark = String(value.remark).trim();
+        return parsed;
+      }
+    }
+    const protocol = normalizeProxyProtocolForUi(value.protocol ?? value.type ?? value.proxy_type ?? selectedType);
+    const host = value.host ?? value.proxy_host ?? value.proxyHost ?? value.server;
+    const port = value.port ?? value.proxy_port ?? value.proxyPort;
+    if (host == null || port == null) return null;
+    return {
+      raw: buildProxyUiValue({
+        protocol,
+        host,
+        port,
+        username: value.username ?? value.user ?? value.proxy_user ?? value.proxy_username ?? '',
+        password: value.password ?? value.pass ?? value.proxy_password ?? '',
+        remark: value.remark ?? value.note ?? '',
+      }),
+      protocol,
+      host: proxyHostForUi(host),
+      port: String(Number(port)),
+      username: String(value.username ?? value.user ?? value.proxy_user ?? value.proxy_username ?? ''),
+      password: String(value.password ?? value.pass ?? value.proxy_password ?? ''),
+      authenticated: Boolean(value.username || value.user || value.password || value.pass),
+      remark: String(value.remark ?? value.note ?? '').trim(),
+      name: String(value.name || value.remark || `${protocol.toUpperCase()} ${host}:${port}`).trim(),
+    };
+  }
+  const rawValue = String(value || '').trim();
+  if (!rawValue || /^(direct|offline|none)$/i.test(rawValue)) return null;
+  const { source, remark } = splitProxyRemarkForUi(rawValue);
+  if (!source) return null;
+
+  let protocol = normalizeProxyProtocolForUi(selectedType);
+  let body = source;
+  const scheme = source.match(/^([a-z][a-z0-9+.-]*):\/\/([\s\S]*)$/i);
+  if (scheme) {
+    protocol = normalizeProxyProtocolForUi(scheme[1]);
+    body = scheme[2];
+  }
+
+  let host = '';
+  let port = '';
+  let username = '';
+  let password = '';
+  const legacyWithScheme = scheme && body.match(/^(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5}):([^:]*):([\s\S]*)$/);
+  const legacyWithoutScheme = !scheme && body.match(/^(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5}):([^:]*):([\s\S]*)$/);
+  if (legacyWithScheme || legacyWithoutScheme) {
+    const match = legacyWithScheme || legacyWithoutScheme;
+    host = proxyHostForUi(match[1]); port = match[2]; username = decodeProxyPartForUi(match[3]); password = decodeProxyPartForUi(match[4]);
+  } else if (scheme) {
+    // Match the endpoint from the right. This accepts vendor-style `\\@` and
+    // keeps raw @, /, and backslashes inside credentials intact.
+    const authority = body.match(/^([\s\S]*?)(?:(\\@|@))?(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5})$/);
+    if (!authority) throw new Error(tx('代理 URI 格式无效'));
+    const userinfo = authority[1];
+    const hasAuthSeparator = Boolean(authority[2]);
+    host = proxyHostForUi(authority[3]); port = authority[4];
+    if (hasAuthSeparator) {
+      const separator = userinfo.indexOf(':');
+      username = decodeProxyPartForUi(separator < 0 ? userinfo : userinfo.slice(0, separator));
+      password = decodeProxyPartForUi(separator < 0 ? '' : userinfo.slice(separator + 1));
+    } else if (userinfo) {
+      throw new Error(tx('代理 URI 凭据格式无效'));
+    }
+  } else {
+    const endpoint = body.match(/^(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5})$/);
+    if (!endpoint) throw new Error(tx('代理格式应为 IP:端口、IP:端口:用户名:密码或 protocol://用户名:密码@主机:端口'));
+    host = proxyHostForUi(endpoint[1]); port = endpoint[2];
+  }
+  const canonical = buildProxyUiValue({ protocol, host, port, username, password, remark });
+  return {
+    raw: canonical,
+    protocol: normalizeProxyProtocolForUi(protocol),
+    host,
+    port: String(Number(port)),
+    username,
+    password,
+    authenticated: Boolean(username || password),
+    remark,
+    name: remark || `${normalizeProxyProtocolForUi(protocol).toUpperCase()} ${host}:${port}`,
+  };
 }
 
 function applyProxyLibrarySelection(kind, id) {
@@ -1497,13 +1636,14 @@ function applyProxyLibrarySelection(kind, id) {
     finally { window.__proxyLibrarySelectionInProgress = false; }
   }
   const prefix = editor ? 'editor' : 'create';
-  editorSet(`#${prefix}-proxy-type`, item.protocol || 'socks5');
-  editorSet(`#${prefix}-proxy-host`, item.host || '');
-  editorSet(`#${prefix}-proxy-port`, item.port || '');
-  editorSet(`#${prefix}-proxy-user`, item.username || '');
-  editorSet(`#${prefix}-proxy-password`, item.password || '');
+  const parsed = parseProxyInputForUi(item.raw || item, item.protocol || 'socks5');
+  editorSet(`#${prefix}-proxy-type`, parsed?.protocol || item.protocol || 'socks5');
+  editorSet(`#${prefix}-proxy-host`, parsed?.host || item.host || '');
+  editorSet(`#${prefix}-proxy-port`, parsed?.port || item.port || '');
+  editorSet(`#${prefix}-proxy-user`, parsed?.username || item.username || '');
+  editorSet(`#${prefix}-proxy-password`, parsed?.password || item.password || '');
   const raw = $(`#${prefix}-proxy-input`);
-  if (raw) raw.value = item.raw || '';
+  if (raw) raw.value = parsed?.raw || item.raw || '';
   if (editor) {
     const status = $('#editor-proxy-library-status');
     if (status) status.textContent = `已关联代理库：${proxyLibraryLabel(item)}`;
@@ -1547,15 +1687,14 @@ function editorSelectedNetwork() { return document.querySelector('input[name="ed
 
 function serializeEditorProxy(strict = true) {
   if (editorSelectedNetwork() === 'direct') return 'Direct';
-  const protocol = $('#editor-proxy-type').value; const host = $('#editor-proxy-host').value.trim(); const port = Number($('#editor-proxy-port').value);
+  const protocol = normalizeProxyProtocolForUi($('#editor-proxy-type').value); const host = $('#editor-proxy-host').value.trim(); const port = Number($('#editor-proxy-port').value);
   const username = $('#editor-proxy-user').value; const password = $('#editor-proxy-password').value;
   if (!host && !$('#editor-proxy-port').value.trim() && !username && !password) return 'Direct';
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
     if (strict) throw new Error(tx('请填写有效的代理主机和端口'));
     return protocol.toUpperCase() + ' · 待完善';
   }
-  const auth = (username || password) ? encodeURIComponent(username || '') + ':' + encodeURIComponent(password || '') + '@' : '';
-  return protocol + '://' + auth + host + ':' + port;
+  return buildProxyUiValue({ protocol, host, port, username, password });
 }
 
 function editorResolution() {
@@ -1672,10 +1811,14 @@ function editorDraft(strict = true) {
     }
     privacy.latitude = latitude; privacy.longitude = longitude;
   }
+  const selectedNetwork = editorSelectedNetwork();
   const proxy = serializeEditorProxy(strict);
-  const proxyAuthAction = proxyAuthActionForUpdate(current.proxy, proxy, editorSelectedNetwork());
+  const proxyAuthAction = proxyAuthActionForUpdate(current.proxy, proxy, selectedNetwork);
+  const selectedProxyValue = String($('#editor-proxy-library')?.value || '').trim();
+  const selectedProxyId = selectedNetwork === 'direct' ? null : (proxyLibraryItem(selectedProxyValue)?.id || null);
+  const draftBase = normalizeProxyAssociationForUi(current, selectedProxyId);
   return normalizeProfileSettings({
-    ...current,
+    ...draftBase,
     ...(editorNetworkResult ? {
       exitIp: editorNetworkResult.ip,
       exitCountryCode: editorNetworkResult.countryCode,
@@ -1717,9 +1860,9 @@ function editorDraft(strict = true) {
     tag: ($('#editor-tag')?.value || '').trim(),
     groupId: $('#editor-group')?.value || UNGROUPED_ID,
     note: ($('#editor-note')?.value || '').trim(),
-    networkMode: editorSelectedNetwork() === 'direct' ? 'direct' : 'proxy',
+    networkMode: selectedNetwork === 'direct' ? 'direct' : 'proxy',
     proxy,
-    proxyId: editorSelectedNetwork() === 'direct' ? null : (String($('#editor-proxy-library')?.value || '').trim() || null),
+    proxyId: selectedProxyId,
     ...(proxyAuthAction ? { proxyAuthAction } : {}),
     width: resolution.width,
     height: resolution.height,
@@ -1731,7 +1874,7 @@ function editorDraft(strict = true) {
       totpSecret: ($('#editor-platform-2fa')?.value || '').trim(),
     },
     proxyMeta: {
-      proxyId: editorSelectedNetwork() === 'direct' ? null : (String($('#editor-proxy-library')?.value || '').trim() || null),
+      proxyId: selectedProxyId,
       ipChannel: $('#editor-ip-channel')?.value || 'ip-api',
       refreshUrl: ($('#editor-refresh-url')?.value || '').trim(),
       checkOnStart: Boolean($('#editor-proxy-check-start')?.checked),
@@ -2249,9 +2392,30 @@ function viewMetaFor(view) {
 
 let proxyLibrary = [];
 const selectedProxies = new Set();
+let editingProxyRecord = null;
 
 function profileProxyId(profile) {
-  return String(profile?.proxyId || profile?.proxy_id || profile?.proxyMeta?.proxyId || profile?.proxyMeta?.proxy_id || '').trim();
+  const source = profile && typeof profile === 'object' ? profile : {};
+  const meta = source.proxyMeta && typeof source.proxyMeta === 'object' ? source.proxyMeta : {};
+  for (const key of ['proxyId', 'proxy_id', 'proxyLibraryId', 'proxy_library_id']) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) return String(source[key] || '').trim();
+  }
+  for (const key of ['proxyId', 'proxy_id', 'proxyLibraryId', 'proxy_library_id']) {
+    if (Object.prototype.hasOwnProperty.call(meta, key)) return String(meta[key] || '').trim();
+  }
+  return '';
+}
+
+function normalizeProxyAssociationForUi(profile, proxyId) {
+  const next = { ...(profile || {}) };
+  for (const key of ['proxy_id', 'proxy_library_id', 'proxyLibraryId', 'proxyIdAlias', 'proxyLibraryIdAlias']) delete next[key];
+  const meta = { ...(next.proxyMeta || {}) };
+  for (const key of ['proxy_id', 'proxy_library_id', 'proxyLibraryId', 'proxyIdAlias', 'proxyLibraryIdAlias']) delete meta[key];
+  const id = String(proxyId || '').trim() || null;
+  next.proxyId = id;
+  meta.proxyId = id;
+  next.proxyMeta = meta;
+  return next;
 }
 
 function proxyLibraryItem(id) {
@@ -2554,17 +2718,21 @@ async function refreshProxies() {
 }
 
 function openProxyDialog(item = null) {
+  editingProxyRecord = item ? { ...item } : null;
+  window.__proxyAuthFieldsTouched = false;
   $('#proxy-edit-id').value = item?.id || '';
   $('#proxy-dialog-title').textContent = item ? tx('编辑代理') : tx('新建代理');
   $('#proxy-name').value = item?.name || '';
-  $('#proxy-protocol').value = item?.protocol || 'socks5';
+  delete $('#proxy-name').dataset.autoProxyName;
+  const parsed = item ? parseProxyInputForUi(item.raw || item, item.protocol || 'socks5') : null;
+  $('#proxy-protocol').value = parsed?.protocol || item?.protocol || 'socks5';
   $('#proxy-ip-channel').value = item?.ipChannel || 'ip-api';
-  $('#proxy-host').value = item?.host || '';
-  $('#proxy-port').value = item?.port || '';
-  $('#proxy-user').value = item?.username || '';
-  $('#proxy-password').value = item?.password || '';
-  $('#proxy-raw').value = '';
-  $('#proxy-remark').value = item?.remark || '';
+  $('#proxy-host').value = parsed?.host || item?.host || '';
+  $('#proxy-port').value = parsed?.port || item?.port || '';
+  $('#proxy-user').value = parsed?.username || item?.username || '';
+  $('#proxy-password').value = parsed?.password || item?.password || '';
+  $('#proxy-raw').value = parsed?.raw || item?.raw || '';
+  $('#proxy-remark').value = parsed?.remark || item?.remark || '';
   const result = $('#proxy-dialog-result');
   result.className = 'proxy-test-result';
   result.textContent = item?.lastIp ? tx(`上次出口：${item.lastIp}`) : tx('保存前可先检测');
@@ -2573,19 +2741,33 @@ function openProxyDialog(item = null) {
 }
 
 function readProxyForm() {
-  const raw = $('#proxy-raw').value.trim();
-  return {
+  const rawInput = $('#proxy-raw').value.trim();
+  const parsed = rawInput ? parseProxyInputForUi(rawInput, $('#proxy-protocol').value) : null;
+  const username = parsed?.username ?? $('#proxy-user').value;
+  const password = parsed?.password ?? $('#proxy-password').value;
+  const draft = {
     id: $('#proxy-edit-id').value || undefined,
-    name: $('#proxy-name').value.trim(),
-    protocol: $('#proxy-protocol').value,
-    host: $('#proxy-host').value.trim(),
-    port: Number($('#proxy-port').value),
-    username: $('#proxy-user').value,
-    password: $('#proxy-password').value,
-    raw: raw || undefined,
+    name: $('#proxy-name').value.trim() || parsed?.name || '',
+    protocol: parsed?.protocol || $('#proxy-protocol').value,
+    host: parsed?.host || $('#proxy-host').value.trim(),
+    port: Number(parsed?.port || $('#proxy-port').value),
+    username,
+    password,
+    raw: parsed?.raw || undefined,
     ipChannel: $('#proxy-ip-channel').value,
-    remark: $('#proxy-remark').value.trim(),
+    remark: $('#proxy-remark').value.trim() || parsed?.remark || '',
   };
+  // Empty credentials are normally redacted by round-tripped UI data. Only
+  // send an explicit clear operation when the user is editing an existing
+  // authenticated record and deliberately emptied both fields.
+  if (editingProxyRecord?.id && editingProxyRecord.authenticated && window.__proxyAuthFieldsTouched && !username && !password) {
+    draft.proxyAuthAction = 'clear';
+  }
+  if (editingProxyRecord?.id && editingProxyRecord.authenticated && !window.__proxyAuthFieldsTouched && !username && !password) {
+    delete draft.username;
+    delete draft.password;
+  }
+  return draft;
 }
 
 function renderGroupFilterChips() {
@@ -3292,19 +3474,11 @@ async function sendSpecifiedTextGroup(id) {
 function normalizeUrl(value) { const raw = String(value || '').trim(); if (!raw) return 'about:blank'; if (/^(https?:\/\/|about:)/i.test(raw)) return raw; return `https://${raw}`; }
 
 function normalizedProxyType(value) {
-  const protocol = String(value || '').toLowerCase();
-  return ['http', 'https', 'socks5'].includes(protocol) ? protocol : 'socks5';
+  return normalizeProxyProtocolForUi(value);
 }
 function normalizeProxy(value, selectedType = 'socks5') {
-  let raw = String(value || '').trim(); if (!raw || /^(direct|offline|none)$/i.test(raw)) return 'Direct';
-  raw = raw.replace(/^sock(?:s)?5s?:\/\//i, 'socks5://');
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw;
-  const parts = raw.split(':'); if (![2, 4].includes(parts.length) && parts.length < 4) throw new Error('\u4ee3\u7406\u683c\u5f0f\u5e94\u4e3a IP:\u7aef\u53e3 \u6216 IP:\u7aef\u53e3:\u7528\u6237\u540d:\u5bc6\u7801');
-  const host = parts[0]; const port = Number(parts[1]); if (!/^[a-zA-Z0-9._-]+$/.test(host) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('\u4ee3\u7406 IP \u6216\u7aef\u53e3\u65e0\u6548');
-  const protocol = normalizedProxyType(selectedType);
-  if (parts.length === 2) return protocol + '://' + host + ':' + port;
-  const username = parts[2]; const password = parts.slice(3).join(':'); if (!username || !password) throw new Error('\u4ee3\u7406\u7528\u6237\u540d\u548c\u5bc6\u7801\u4e0d\u80fd\u4e3a\u7a7a');
-  return protocol + '://' + encodeURIComponent(username) + ':' + encodeURIComponent(password) + '@' + host + ':' + port;
+  const parsed = parseProxyInputForUi(value, selectedType);
+  return parsed ? parsed.raw : 'Direct';
 }
 function proxyLines(textareaId, typeId) { return $(textareaId).value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).map((item) => normalizeProxy(item, $(typeId).value)); }
 async function verifyProxyAssignments(profiles, proxies) {
@@ -3388,7 +3562,7 @@ $('#batch-add-proxy-library')?.addEventListener('change', (event) => {
   const id = String(event.target.value || '').trim();
   const item = proxyLibraryItem(id);
   const textarea = $('#batch-add-proxies');
-  if (item && textarea) textarea.value = item.raw || `${item.host}:${item.port}`;
+  if (item && textarea) textarea.value = parseProxyInputForUi(item, item.protocol || 'socks5')?.raw || item.raw || `${item.host}:${item.port}`;
 });
 
 function installBatchAddNetworkMode() {
@@ -3596,8 +3770,12 @@ document.addEventListener('click', async (event) => {
   const windowButton = event.target.closest('[data-window]');
   if (windowButton) {
     const action = windowButton.dataset.window;
-    $$('[data-window]').forEach((btn) => btn.classList.toggle('active', btn === windowButton));
-    runSyncAction('窗口操作', () => window.ops.windowAction(selectedSessionIds(), action));
+    const buttons = $$('[data-window]');
+    const previous = buttons.find((button) => button.classList.contains('active')) || null;
+    buttons.forEach((button) => { button.disabled = true; });
+    const result = await runSyncAction('窗口操作', () => window.ops.windowAction(selectedSessionIds(), action));
+    buttons.forEach((button) => { button.disabled = false; });
+    buttons.forEach((button) => button.classList.toggle('active', result ? button === windowButton : button === previous));
   }
   const masterSelect = event.target.closest('[data-master-select]'); if (masterSelect && !syncState.active && selectedSessions.has(masterSelect.dataset.masterSelect)) { preferredMasterId = masterSelect.dataset.masterSelect; pushSyncSelection(); renderSessions(); }
   const showWindow = event.target.closest('[data-show-window]'); if (showWindow) runSyncAction('\u663e\u793a\u7a97\u53e3', () => window.ops.windowAction([showWindow.dataset.showWindow], 'normal'));
@@ -3611,9 +3789,54 @@ document.addEventListener('focusin', (event) => {
   closeSelectMenu();
 });
 
-window.addEventListener('resize', () => {
+let shellLayoutFrame = 0;
+let shellLayoutSignature = '';
+let shellLayoutObserver = null;
+function reconcileShellLayout() {
+  shellLayoutFrame = 0;
+  const content = document.querySelector('.content');
+  const main = content?.querySelector(':scope > main');
+  if (!content || !main) return;
+  const contentRect = content.getBoundingClientRect();
+  const mainRect = main.getBoundingClientRect();
+  const viewport = window.visualViewport;
+  const viewportWidth = Math.max(0, Math.round(viewport?.width || document.documentElement.clientWidth || window.innerWidth || 0));
+  const viewportHeight = Math.max(0, Math.round(viewport?.height || document.documentElement.clientHeight || window.innerHeight || 0));
+  const signature = [viewportWidth, viewportHeight, Math.round(contentRect.width), Math.round(mainRect.width)].join(':');
+  if (signature !== shellLayoutSignature) {
+    shellLayoutSignature = signature;
+    document.documentElement.style.setProperty('--openbrowser-viewport-width', `${viewportWidth}px`);
+    document.documentElement.style.setProperty('--openbrowser-viewport-height', `${viewportHeight}px`);
+    document.documentElement.style.setProperty('--openbrowser-content-width', `${Math.max(0, Math.round(contentRect.width))}px`);
+    // Theme styles occasionally leave a historical max-width on a view. Keep
+    // the live workspace tied to the actual grid track after native resizing.
+    content.style.maxInlineSize = 'none';
+    main.style.inlineSize = '100%';
+    main.style.maxInlineSize = 'none';
+    for (const view of main.querySelectorAll(':scope > .view')) {
+      view.style.inlineSize = '100%';
+      view.style.maxInlineSize = 'none';
+    }
+  }
   if (openSelectMenu) positionSelectMenu(openSelectMenu.menu, openSelectMenu.button);
-});
+  positionThemePopover();
+}
+
+function scheduleShellLayoutReconcile() {
+  if (shellLayoutFrame) return;
+  shellLayoutFrame = requestAnimationFrame(reconcileShellLayout);
+}
+
+window.addEventListener('resize', scheduleShellLayoutReconcile);
+window.visualViewport?.addEventListener('resize', scheduleShellLayoutReconcile);
+if (typeof ResizeObserver === 'function') {
+  shellLayoutObserver = new ResizeObserver(scheduleShellLayoutReconcile);
+  const content = document.querySelector('.content');
+  const main = content?.querySelector(':scope > main');
+  if (content) shellLayoutObserver.observe(content);
+  if (main) shellLayoutObserver.observe(main);
+}
+scheduleShellLayoutReconcile();
 // Close dropdown on outer scroll — but NOT when scrolling the menu itself
 // (long lists need overflow scroll; previous capture-scroll closed them instantly)
 window.addEventListener('scroll', (event) => {
@@ -3764,8 +3987,10 @@ $('#profile-form').addEventListener('submit', async (event) => {
   let proxy = 'Direct';
   if (networkMode === 'proxy') {
     const libraryItem = proxyLibraryItem(proxyLibraryId);
+    if (proxyLibraryId && !libraryItem) return toast(tx('所选代理库节点已失效，请重新选择'));
     const type = $('#create-proxy-type')?.value || libraryItem?.protocol || 'socks5';
-    const raw = libraryItem?.raw || String(data.get('proxy') || '').trim();
+    const libraryProxy = libraryItem ? parseProxyInputForUi(libraryItem, type) : null;
+    const raw = libraryProxy?.raw || String(data.get('proxy') || '').trim();
     if (raw) {
       try { proxy = normalizeProxy(raw, type); }
       catch (error) { return toast('代理格式错误：' + error.message); }
@@ -3907,7 +4132,13 @@ $('#profile-editor-form').addEventListener('submit', async (event) => {
     const switchedToDirect = editorSelectedNetwork() !== 'direct' && isDirectProxy(draft.proxy);
     if (draft.proxy !== previous.proxy && !editorNetworkResult) { delete draft.exitIp; delete draft.exitCountryCode; delete draft.exitTimezone; delete draft.exitLatitude; delete draft.exitLongitude; delete draft.exitCheckedAt; }
     draft.updatedAt = new Date().toISOString();
-    ui.profiles[index] = draft; save(); engineProfiles = await window.ops.syncProfiles(ui.profiles); renderProfiles();
+    ui.profiles[index] = draft;
+    save();
+    const syncPayload = ui.profiles.slice();
+    // This strict editor submission is an explicit replacement, including empty
+    // Cookie/password/TOTP fields. Keep the action marker out of UI persistence.
+    syncPayload[index] = { ...draft, credentialsAction: 'replace' };
+    engineProfiles = await window.ops.syncProfiles(syncPayload); renderProfiles();
     const running = profileEngine(draft.id).running; log('Profile', '已更新环境 ' + displayProfileNumber(draft)); editingProfileId = null; editorNetworkResult = null; switchView('profiles'); toast(switchedToDirect ? '未填写代理，已自动切换为本地直连' : (running ? '设置已保存，请重启该环境后生效' : '环境设置已保存'));
   } catch (error) { toast('保存失败：' + error.message); }
 });
@@ -3944,7 +4175,10 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
   if (networkMode === 'proxy') {
     const libraryItem = proxyLibraryItem(proxyLibraryId);
     if (proxyLibraryId && !libraryItem) return toast(tx('所选代理库节点已失效，请重新选择'));
-    try { proxies = libraryItem ? Array(count).fill(libraryItem.raw || `${libraryItem.host}:${libraryItem.port}`) : proxyLines('#batch-add-proxies', '#batch-add-proxy-type'); }
+    try {
+      const libraryProxy = libraryItem ? parseProxyInputForUi(libraryItem, libraryItem.protocol || $('#batch-add-proxy-type')?.value || 'socks5') : null;
+      proxies = libraryProxy ? Array(count).fill(libraryProxy.raw) : proxyLines('#batch-add-proxies', '#batch-add-proxy-type');
+    }
     catch (error) { return toast('代理格式错误：' + error.message); }
     if (!proxies.length) return toast(tx('代理模式请填写代理列表'));
     if (libraryItem) proxyIds.push(...Array(count).fill(libraryItem.id));
@@ -4201,6 +4435,27 @@ $('#proxy-dialog-test')?.addEventListener('click', async () => {
     output.textContent = tx('检测失败 · ') + error.message;
   }
 });
+$('#proxy-user')?.addEventListener('input', () => { window.__proxyAuthFieldsTouched = true; });
+$('#proxy-password')?.addEventListener('input', () => { window.__proxyAuthFieldsTouched = true; });
+$('#proxy-raw')?.addEventListener('input', () => {
+  const raw = $('#proxy-raw').value.trim();
+  if (!raw) return;
+  try {
+    const parsed = parseProxyInputForUi(raw, $('#proxy-protocol').value);
+    if (!parsed) return;
+    $('#proxy-protocol').value = parsed.protocol;
+    $('#proxy-host').value = parsed.host;
+    $('#proxy-port').value = parsed.port;
+    $('#proxy-user').value = parsed.username;
+    $('#proxy-password').value = parsed.password;
+    $('#proxy-remark').value = parsed.remark;
+    if (!$('#proxy-name').value.trim() || $('#proxy-name').dataset.autoProxyName === 'true') {
+      $('#proxy-name').value = parsed.name;
+      $('#proxy-name').dataset.autoProxyName = 'true';
+    }
+  } catch (_) {}
+});
+$('#proxy-name')?.addEventListener('input', () => { delete $('#proxy-name').dataset.autoProxyName; });
 $('#proxy-form')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const submitter = event.submitter;
@@ -4218,6 +4473,7 @@ $('#proxy-form')?.addEventListener('submit', async (event) => {
     toast('保存失败：' + error.message);
   }
 });
+$('#proxy-dialog')?.addEventListener('close', () => { editingProxyRecord = null; });
 document.addEventListener('click', async (event) => {
   const install = event.target.closest('[data-store-install]');
   if (!install) return;
@@ -5361,6 +5617,12 @@ async function refreshApiMcpPage() {
     if (keyEl && !apiKey) keyEl.placeholder = tx('未设置（可选环境变量 OPENBROWSER_API_KEY）');
     const mcpScript = paths?.mcpScript || '';
     const keyPlaceholder = apiKey || '<从上方 API Key 框复制>';
+    // Do not put a placeholder in OPENBROWSER_API_KEY when a key file exists:
+    // the MCP process treats any non-empty env key as authoritative and would
+    // ignore the valid file, producing a misleading 401.
+    const authEnv = apiKey
+      ? { API_KEY: apiKey, OPENBROWSER_API_KEY: apiKey }
+      : (apiKeyFile ? { OPENBROWSER_API_KEY_FILE: apiKeyFile } : {});
     if (keyNote) {
       keyNote.textContent = apiKey
         ? '配置已写入当前 API Key。如要限制 AI 权限，请在 MCP 环境变量中追加 OPENBROWSER_MCP_MODE=manage|run|read（可选黑/白名单）。'
@@ -5376,9 +5638,7 @@ async function refreshApiMcpPage() {
           env: {
             PORT: String(port),
             OPENBROWSER_API_PORT: String(port),
-            API_KEY: keyPlaceholder,
-            OPENBROWSER_API_KEY: keyPlaceholder,
-            ...(apiKeyFile ? { OPENBROWSER_API_KEY_FILE: apiKeyFile } : {}),
+            ...authEnv,
           },
         },
       },
@@ -5391,8 +5651,7 @@ async function refreshApiMcpPage() {
           args: [mcpScript],
           env: {
             OPENBROWSER_API_PORT: String(port),
-            OPENBROWSER_API_KEY: keyPlaceholder,
-            ...(apiKeyFile ? { OPENBROWSER_API_KEY_FILE: apiKeyFile } : {}),
+            ...authEnv,
           },
         },
       },
@@ -5400,9 +5659,9 @@ async function refreshApiMcpPage() {
     const tab = document.querySelector('#mcp-config-tabs button.active')?.dataset.mcpTab || 'common';
     if (mcpTa) mcpTa.textContent = JSON.stringify(tab === 'platform' ? window.__mcpConfigPlatform : window.__mcpConfigCommon, null, 2);
     if (mcpHint) {
-      const keyEnv = apiKeyFile
-        ? ' OPENBROWSER_API_KEY_FILE=' + shellQuote(apiKeyFile)
-        : ' OPENBROWSER_API_KEY=' + shellQuote(keyPlaceholder);
+      const keyEnv = apiKey
+        ? ' OPENBROWSER_API_KEY=' + shellQuote(apiKey)
+        : (apiKeyFile ? ' OPENBROWSER_API_KEY_FILE=' + shellQuote(apiKeyFile) : ' OPENBROWSER_API_KEY=' + shellQuote(keyPlaceholder));
       mcpHint.textContent = 'OPENBROWSER_API_PORT=' + shellQuote(port) + keyEnv + ' node ' + shellQuote(mcpScript);
     }
     if (curlHint) curlHint.textContent = 'curl -s -H ' + shellQuote('api-key: ' + keyPlaceholder) + ' ' + shellQuote(base + 'api/getVersion');

@@ -106,7 +106,9 @@ function parseProxyString(value) {
     // Match the endpoint from the right so raw @, / and backslashes remain
     // valid inside credentials. Some proxy vendors escape the final separator
     // as \@; only that final compatibility slash is discarded.
-    const authority = body.match(/^([\s\S]*?)(?:(\\@|@))?(\[[^\]]+\]|[a-zA-Z0-9._-]+)(?::(\d{1,5}))?$/);
+    // URL serialization adds `/` to an authority-only URL. Accept that one
+    // empty path so renderer-redacted proxies still compare as the same endpoint.
+    const authority = body.match(/^([\s\S]*?)(?:(\\@|@))?(\[[^\]]+\]|[a-zA-Z0-9._-]+)(?::(\d{1,5}))?\/?$/);
     if (!authority) {
       throw new Error('Invalid proxy format');
     } else {

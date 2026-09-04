@@ -89,14 +89,21 @@ const fullscreenInjection = String.raw`(() => {
     } catch (_) {}
     return info;
   };
-  let queued = false;
+  let queuedReport = null;
+  let reportTimer = 0;
   let lastReport = '';
   let lastReportAt = 0;
-  const report = (error) => {
-    if (queued) return;
-    queued = true;
-    queueMicrotask(() => {
-      queued = false;
+  const report = (eventType = 'change', error = '') => {
+    const next = {
+      eventType: String(eventType || 'change'),
+      error: error ? String(error.message || error) : '',
+    };
+    if (!queuedReport || next.error || !queuedReport.error) queuedReport = next;
+    if (reportTimer) return;
+    const flush = () => {
+      reportTimer = 0;
+      const pending = queuedReport || next;
+      queuedReport = null;
       const element = fullscreenElement() || legacyFullscreenVideo();
       try {
         const payload = {
@@ -108,7 +115,11 @@ const fullscreenInjection = String.raw`(() => {
           sourceUrl: String(element?.currentSrc || element?.src || element?.getAttribute?.('src') || ''),
           frameToken,
           ...frameInfo(),
-          error: error ? String(error.message || error) : '',
+          eventType: pending.eventType,
+          requestedActive: pending.eventType === 'error' || pending.eventType === 'webkit-begin'
+            ? true
+            : (pending.eventType === 'webkit-end' ? false : null),
+          error: pending.error,
         };
         const signature = JSON.stringify(payload);
         const now = Date.now();
@@ -116,15 +127,19 @@ const fullscreenInjection = String.raw`(() => {
         lastReport = signature; lastReportAt = now;
         window.openBrowserSync(JSON.stringify(payload));
       } catch (_) {}
-    });
+    };
+    // requestAnimationFrame can remain suspended indefinitely in hidden frames
+    // and OOPIFs. Fullscreen ownership changes still need to reach the host so
+    // stale markers and geometry guards are released.
+    reportTimer = setTimeout(flush, 0);
   };
   const installShadowRoot = (root) => {
     if (!root || root.__openBrowserFullscreenSyncV5) return;
     try { Object.defineProperty(root, '__openBrowserFullscreenSyncV5', { value: true }); } catch (_) {}
-    root.addEventListener('fullscreenchange', () => report(), true);
-    root.addEventListener('webkitfullscreenchange', () => report(), true);
-    root.addEventListener('fullscreenerror', () => report('Fullscreen request was rejected'), true);
-    root.addEventListener('webkitfullscreenerror', () => report('Fullscreen request was rejected'), true);
+    root.addEventListener('fullscreenchange', () => report('change'), true);
+    root.addEventListener('webkitfullscreenchange', () => report('webkit-change'), true);
+    root.addEventListener('fullscreenerror', () => report('error', 'Fullscreen request was rejected'), true);
+    root.addEventListener('webkitfullscreenerror', () => report('error', 'Fullscreen request was rejected'), true);
   };
   try {
     const attachShadow = Element.prototype.attachShadow;
@@ -154,12 +169,13 @@ const fullscreenInjection = String.raw`(() => {
     });
     observer.observe(document, { childList: true, subtree: true });
   } catch (_) {}
-  document.addEventListener('fullscreenchange', () => report(), true);
-  document.addEventListener('webkitfullscreenchange', () => report(), true);
-  document.addEventListener('fullscreenerror', () => report('Fullscreen request was rejected'), true);
-  document.addEventListener('webkitfullscreenerror', () => report('Fullscreen request was rejected'), true);
-  document.addEventListener('webkitbeginfullscreen', () => report(), true);
-  document.addEventListener('webkitendfullscreen', () => report(), true);
+  document.addEventListener('fullscreenchange', () => report('change'), true);
+  document.addEventListener('webkitfullscreenchange', () => report('webkit-change'), true);
+  document.addEventListener('fullscreenerror', () => report('error', 'Fullscreen request was rejected'), true);
+  document.addEventListener('webkitfullscreenerror', () => report('error', 'Fullscreen request was rejected'), true);
+  document.addEventListener('webkitbeginfullscreen', () => report('webkit-begin'), true);
+  document.addEventListener('webkitendfullscreen', () => report('webkit-end'), true);
+  report('initial');
 })();`;
 
 function fullscreenExpression(payload = {}, options = {}) {
@@ -184,50 +200,105 @@ function fullscreenExpression(payload = {}, options = {}) {
       }
       return element;
     };
-    const findVisual = (root) => {
-      const direct = root.querySelector?.('[data-openbrowser-sync-fullscreen="1"]');
-      if (direct) return direct;
+    const findVisuals = (root, values = []) => {
+      const direct = root.querySelectorAll?.('[data-openbrowser-sync-fullscreen="1"]') || [];
+      for (const element of direct) if (!values.includes(element)) values.push(element);
       for (const element of root.querySelectorAll?.('*') || []) {
         if (!element.shadowRoot) continue;
-        const nested = findVisual(element.shadowRoot);
-        if (nested) return nested;
+        findVisuals(element.shadowRoot, values);
       }
-      return null;
+      return values;
+    };
+    const findVisual = (root) => findVisuals(root)[0] || null;
+    const findDeep = (root, query, values = []) => {
+      for (const element of root.querySelectorAll?.(query) || []) if (!values.includes(element)) values.push(element);
+      for (const element of root.querySelectorAll?.('*') || []) {
+        if (!element.shadowRoot) continue;
+        findDeep(element.shadowRoot, query, values);
+      }
+      return values;
     };
     const legacyVideo = () => {
-      try { return [...document.querySelectorAll('video')].find((video) => video.webkitDisplayingFullscreen) || null; }
+      try { return findDeep(document, 'video').find((video) => video.webkitDisplayingFullscreen) || null; }
       catch (_) { return null; }
     };
-    const nativeElement = () => document.fullscreenElement || document.webkitFullscreenElement || legacyVideo() || null;
+    const nativeElement = () => {
+      let root = document;
+      let element = null;
+      const seen = new Set();
+      while (root && !seen.has(root)) {
+        seen.add(root);
+        element = root.fullscreenElement || root.webkitFullscreenElement || null;
+        if (!element || !element.shadowRoot) break;
+        root = element.shadowRoot;
+      }
+      return element || legacyVideo() || null;
+    };
     const state = () => {
       const native = nativeElement();
       const visual = findVisual(document);
       return { active: Boolean(native || visual), native, visual, mode: native ? 'native' : (visual ? 'visual' : 'none') };
     };
+    const waitForState = async (expected, timeoutMs = 420) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (state().active === expected) return state();
+        await new Promise((resolve) => {
+          let settled = false;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve();
+          };
+          const timer = setTimeout(finish, 25);
+          if (typeof requestAnimationFrame === 'function') {
+            try { requestAnimationFrame(finish); } catch (_) {}
+          }
+        });
+      }
+      return state();
+    };
     const restoreVisual = () => {
-      const element = findVisual(document);
-      if (!element) return false;
-      const saved = element.getAttribute('data-openbrowser-sync-style');
-      if (saved === null) element.removeAttribute('style'); else element.setAttribute('style', saved);
-      element.removeAttribute('data-openbrowser-sync-style');
-      element.removeAttribute('data-openbrowser-sync-fullscreen');
+      const elements = findVisuals(document);
+      for (const element of elements) {
+        const saved = element.getAttribute('data-openbrowser-sync-style') || '';
+        if (element.getAttribute('data-openbrowser-sync-had-style') === '1') element.setAttribute('style', saved);
+        else element.removeAttribute('style');
+        element.removeAttribute('data-openbrowser-sync-style');
+        element.removeAttribute('data-openbrowser-sync-had-style');
+        element.removeAttribute('data-openbrowser-sync-fullscreen');
+      }
       for (const root of [document.documentElement, document.body]) {
         if (!root) continue;
-        const overflow = root.getAttribute('data-openbrowser-sync-overflow');
-        if (overflow === null) root.style.removeProperty('overflow'); else root.style.overflow = overflow;
-        root.removeAttribute('data-openbrowser-sync-overflow');
+        if (!root.hasAttribute('data-openbrowser-sync-root-style-saved')) continue;
+        const saved = root.getAttribute('data-openbrowser-sync-root-style') || '';
+        if (root.getAttribute('data-openbrowser-sync-root-had-style') === '1') root.setAttribute('style', saved);
+        else root.removeAttribute('style');
+        root.removeAttribute('data-openbrowser-sync-root-style');
+        root.removeAttribute('data-openbrowser-sync-root-had-style');
+        root.removeAttribute('data-openbrowser-sync-root-style-saved');
       }
-      return true;
+      return elements.length > 0;
     };
     const enterVisual = (element, reason) => {
       if (!element) return { active: false, changed: false, error: reason || 'fullscreen-target-not-found' };
+      const existing = findVisual(document);
+      if (existing && existing !== element) restoreVisual();
       if (!element.hasAttribute('data-openbrowser-sync-fullscreen')) {
-        element.setAttribute('data-openbrowser-sync-style', element.getAttribute('style') || '');
+        const inlineStyle = element.getAttribute('style');
+        element.setAttribute('data-openbrowser-sync-style', inlineStyle || '');
+        element.setAttribute('data-openbrowser-sync-had-style', inlineStyle === null ? '0' : '1');
         element.setAttribute('data-openbrowser-sync-fullscreen', '1');
       }
       for (const root of [document.documentElement, document.body]) {
         if (!root) continue;
-        if (!root.hasAttribute('data-openbrowser-sync-overflow')) root.setAttribute('data-openbrowser-sync-overflow', root.style.overflow || '');
+        if (!root.hasAttribute('data-openbrowser-sync-root-style-saved')) {
+          const inlineStyle = root.getAttribute('style');
+          root.setAttribute('data-openbrowser-sync-root-style', inlineStyle || '');
+          root.setAttribute('data-openbrowser-sync-root-had-style', inlineStyle === null ? '0' : '1');
+          root.setAttribute('data-openbrowser-sync-root-style-saved', '1');
+        }
         root.style.setProperty('overflow', 'hidden', 'important');
       }
       const style = element.style;
@@ -238,6 +309,10 @@ function fullscreenExpression(payload = {}, options = {}) {
       style.setProperty('max-width', 'none', 'important');
       style.setProperty('max-height', 'none', 'important');
       style.setProperty('margin', '0', 'important');
+      style.setProperty('border', '0', 'important');
+      style.setProperty('display', 'block', 'important');
+      style.setProperty('box-sizing', 'border-box', 'important');
+      style.setProperty('transform', 'none', 'important');
       style.setProperty('z-index', '2147483647', 'important');
       style.setProperty('background', '#000', 'important');
       if (/^(video|canvas|img)$/i.test(String(element.tagName || ''))) style.setProperty('object-fit', 'contain', 'important');
@@ -271,7 +346,7 @@ function fullscreenExpression(payload = {}, options = {}) {
           } else exitError = 'fullscreen-exit-unsupported';
         }
         const visualChanged = restoreVisual();
-        const after = state();
+        const after = current ? await waitForState(false) : state();
         return { active: after.active, changed: Boolean(current || visualChanged), mode: after.mode, error: after.active ? exitError : '' };
       }
       const before = state();
@@ -293,7 +368,7 @@ function fullscreenExpression(payload = {}, options = {}) {
       if (request) {
         try {
           await Promise.resolve(request.call(element));
-          const after = state();
+          const after = await waitForState(true);
           if (after.active) return { active: true, changed: true, mode: after.mode };
           return enterVisual(element, 'native-fullscreen-did-not-activate');
         } catch (error) {
@@ -419,7 +494,10 @@ class LiveSyncController extends LiveSyncV4 {
     this.mappingReady = false;
     this.activeMasterTab = null; this.lastWindowSync = 0; this.lastHealthCheck = 0; this.nativeInputMirror = null; this.nativePopupActive = false;
     this.geometryPausedUntil = 0; this.geometryPending = new Map(); this.mirroredWindowStates = new Map();
+    this.windowGuardGeneration = 0;
     this.fullscreenByTab = new Map(); this.fullscreenFrameStates = new Map(); this.fullscreenSessions = new Map(); this.fullscreenActiveSessions = new Map();
+    this.fullscreenSessionInitializations = new Map();
+    this.unreachableSlaves = new Set();
     this.devToolsTargetCount = 0;
     this.browserOwnedUntil = 0; this.nativeInputStdoutBuffer = '';
     this.nativeRestartTimer = null; this.nativeRestartCount = 0; this.nativeDevToolsMode = false;
@@ -521,7 +599,7 @@ class LiveSyncController extends LiveSyncV4 {
   startNativeInputMirror() {
     const previousPopup = this.nativePopupActive;
     const previousDevTools = this.nativeDevToolsMode;
-    this.stopNativeInputMirror(false);
+    this.stopNativeInputMirror(false, false);
     this.nativePopupActive = previousPopup;
     this.nativeDevToolsMode = previousDevTools;
     if (!this.master) return;
@@ -559,14 +637,18 @@ class LiveSyncController extends LiveSyncV4 {
       for (const line of lines) {
         const match = line.match(/^DEVTOOLS_MODE=([01])$/);
         if (match) {
-          this.nativeDevToolsMode = match[1] === '1';
+          const next = match[1] === '1';
+          if (this.nativeDevToolsMode !== next) this.windowGuardGeneration += 1;
+          this.nativeDevToolsMode = next;
           if (this.nativeDevToolsMode) { this.pauseGeometrySync(1500, 'native-devtools'); this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 1500); }
           else this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 500);
           this.emit({ type: 'native-devtools', active: this.nativeDevToolsMode });
         }
         const popup = line.match(/^NATIVE_POPUP_ACTIVE=([01])$/);
         if (popup) {
-          this.nativePopupActive = popup[1] === '1';
+          const next = popup[1] === '1';
+          if (this.nativePopupActive !== next) this.windowGuardGeneration += 1;
+          this.nativePopupActive = next;
           if (this.nativePopupActive) { this.pauseGeometrySync(1500, 'native-popup'); this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 1500); }
           else this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 500);
           this.emit({ type: 'native-popup', active: this.nativePopupActive });
@@ -581,8 +663,13 @@ class LiveSyncController extends LiveSyncV4 {
         this.nativeBridgeState = 'down';
         this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 1200);
         this.nativeInputStdoutBuffer = '';
+        const wasDevTools = this.nativeDevToolsMode;
+        const wasPopup = this.nativePopupActive;
         this.nativeDevToolsMode = false;
         this.nativePopupActive = false;
+        this.windowGuardGeneration += 1;
+        if (wasDevTools) this.emit({ type: 'native-devtools', active: false });
+        if (wasPopup) this.emit({ type: 'native-popup', active: false });
         this.scheduleNativeInputRestart(error.message);
       }
       this.emit({ type: 'sync-error', action: 'native-input', message: error.message });
@@ -599,6 +686,7 @@ class LiveSyncController extends LiveSyncV4 {
       const wasPopup = this.nativePopupActive;
       this.nativeDevToolsMode = false;
       this.nativePopupActive = false;
+      this.windowGuardGeneration += 1;
       if (wasDevTools) this.emit({ type: 'native-devtools', active: false });
       if (wasPopup) this.emit({ type: 'native-popup', active: false });
       const exitMessage = code !== null ? 'exit ' + code : 'terminated';
@@ -619,17 +707,29 @@ class LiveSyncController extends LiveSyncV4 {
     this.nativeRestartTimer.unref?.();
   }
 
-  stopNativeInputMirror(resetAttempts = true) {
+  stopNativeInputMirror(resetAttempts = true, notifySurfaceReset = true) {
     if (this.nativeRestartTimer) clearTimeout(this.nativeRestartTimer); this.nativeRestartTimer = null;
     if (this.nativeBridgeReadyTimer) clearTimeout(this.nativeBridgeReadyTimer); this.nativeBridgeReadyTimer = null;
     if (resetAttempts) this.nativeRestartCount = 0;
-    const child = this.nativeInputMirror; this.nativeInputMirror = null; this.nativeDevToolsMode = false; this.nativePopupActive = false;
+    const child = this.nativeInputMirror;
+    const wasDevTools = this.nativeDevToolsMode;
+    const wasPopup = this.nativePopupActive;
+    this.nativeInputMirror = null; this.nativeDevToolsMode = false; this.nativePopupActive = false;
+    this.windowGuardGeneration += 1;
+    if (notifySurfaceReset && wasDevTools) this.emit({ type: 'native-devtools', active: false });
+    if (notifySurfaceReset && wasPopup) this.emit({ type: 'native-popup', active: false });
     this.nativeBridgeState = process.platform === 'win32' ? 'down' : 'disabled';
     if (child && !child.killed) { try { child.kill(); } catch (_) {} }
   }
 
   enqueueForward(tabId, payload, action = 'forward') {
     const type = payload?.type;
+    if (type === 'surface') {
+      const inactive = payload?.visible === false || payload?.focused === false;
+      this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + (inactive ? 1800 : 350));
+      this.pauseGeometrySync(inactive ? 1800 : 500, inactive ? 'browser-surface-blur' : 'browser-surface-focus');
+      return;
+    }
     if (action === 'forward') {
       if (!this.syncSettings.keyboard && ['key', 'input', 'beforeinput'].includes(type)) return;
       if (!this.syncSettings.click && (type === 'click' || type === 'focus' || (type === 'mouse' && payload?.phase !== 'move'))) return;
@@ -645,6 +745,11 @@ class LiveSyncController extends LiveSyncV4 {
   }
 
   async forward(tabId, payload) {
+    const generation = this.syncGeneration;
+    const session = this.syncSession;
+    const sessionIsCurrent = () => generation === this.syncGeneration
+      && (!session || this.syncSession === session);
+    if (!sessionIsCurrent()) return;
     if (payload?.type === 'fullscreen') return this.syncFullscreen(tabId, payload);
     // Protocol gate: operate flags (click+move / scroll+move / keyboard)
     const plan = this.planProtocolFanout(payload);
@@ -657,6 +762,7 @@ class LiveSyncController extends LiveSyncV4 {
       if (clickEvent && this.syncSettings.delayClick) await new Promise((resolve) => setTimeout(resolve, this.randomDelay(this.syncSettings.clickMinMs, this.syncSettings.clickMaxMs)));
       if (inputEvent && this.syncSettings.delayInput) await new Promise((resolve) => setTimeout(resolve, this.randomDelay(this.syncSettings.inputMinMs, this.syncSettings.inputMaxMs)));
     }
+    if (!sessionIsCurrent()) return;
     // Semantic selector-based forward remains in v4 (more accurate than raw x/y on multi-resolution slaves).
     // Protocol plan is retained for Local API telemetry / debugging.
     const result = await super.forward(tabId, payload);
@@ -710,7 +816,13 @@ class LiveSyncController extends LiveSyncV4 {
     this.syncSession = null;
     this.tabMap?.clear(); this.desiredUrlMap?.clear(); this.geometryPending?.clear(); this.mirroredWindowStates?.clear();
     this.fullscreenByTab?.clear(); this.fullscreenFrameStates?.clear(); this.fullscreenSessions?.clear(); this.fullscreenActiveSessions?.clear();
+    for (const initializations of this.fullscreenSessionInitializations?.values?.() || []) {
+      for (const state of initializations.values()) state.cancelled = true;
+    }
+    this.fullscreenSessionInitializations?.clear();
+    this.unreachableSlaves?.clear();
     this.mappingReady = false; this.activeMasterTab = null; this.geometryPausedUntil = 0; this.browserOwnedUntil = 0; this.devToolsTargetCount = 0;
+    this.windowGuardGeneration += 1;
     for (const value of this.extensionConnections.values()) value.connection.close();
     this.extensionConnections.clear(); this.extensionMap.clear();
     super.stop();
@@ -748,19 +860,38 @@ class LiveSyncController extends LiveSyncV4 {
     if (!sessionId || !connection) return;
     const sessions = this.fullscreenSessions.get(tabId) || new Map();
     if (sessions.has(sessionId)) return;
-    sessions.set(sessionId, {
-      targetId: String(targetInfo.targetId || ''),
-      type: String(targetInfo.type || ''),
-      url: String(targetInfo.url || ''),
-    });
-    this.fullscreenSessions.set(tabId, sessions);
+    const initializations = this.fullscreenSessionInitializations.get(tabId) || new Map();
+    const existing = initializations.get(sessionId);
+    if (existing) return existing.promise;
+    const state = { cancelled: false, promise: null };
     const command = (method, params = {}) => connection.command(method, params, { sessionId, timeout: 10000 });
-    await command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
-    await command('Runtime.addBinding', { name: 'openBrowserSync' }).catch(() => {});
-    await command('Page.addScriptToEvaluateOnNewDocument', { source: fullscreenInjection }).catch(() => {});
-    await command('Runtime.enable').catch(() => {});
-    await command('Page.enable').catch(() => {});
-    await command('Runtime.evaluate', { expression: fullscreenInjection }).catch(() => {});
+    const promise = (async () => {
+      try {
+        await command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        await command('Runtime.addBinding', { name: 'openBrowserSync' });
+        await command('Page.addScriptToEvaluateOnNewDocument', { source: fullscreenInjection });
+        await command('Runtime.enable');
+        await command('Page.enable');
+        await command('Runtime.evaluate', { expression: fullscreenInjection });
+        if (state.cancelled || !connection.socket || connection.socket.readyState !== 1) return;
+        const ready = this.fullscreenSessions.get(tabId) || new Map();
+        ready.set(sessionId, {
+          targetId: String(targetInfo.targetId || ''),
+          type: String(targetInfo.type || ''),
+          url: String(targetInfo.url || ''),
+        });
+        this.fullscreenSessions.set(tabId, ready);
+      } finally {
+        if (initializations.get(sessionId) === state) initializations.delete(sessionId);
+        if (!initializations.size && this.fullscreenSessionInitializations.get(tabId) === initializations) {
+          this.fullscreenSessionInitializations.delete(tabId);
+        }
+      }
+    })();
+    state.promise = promise;
+    initializations.set(sessionId, state);
+    this.fullscreenSessionInitializations.set(tabId, initializations);
+    return promise;
   }
 
   async handle(tabId, event) {
@@ -770,6 +901,13 @@ class LiveSyncController extends LiveSyncV4 {
     }
     if (event.method === 'Target.detachedFromTarget') {
       const sessionId = event.params?.sessionId;
+      const initializations = this.fullscreenSessionInitializations.get(tabId);
+      const pending = initializations?.get(sessionId);
+      if (pending) {
+        pending.cancelled = true;
+        initializations.delete(sessionId);
+        if (!initializations.size) this.fullscreenSessionInitializations.delete(tabId);
+      }
       const sessions = this.fullscreenSessions.get(tabId);
       sessions?.delete(sessionId);
       if (sessions && !sessions.size) this.fullscreenSessions.delete(tabId);
@@ -777,7 +915,7 @@ class LiveSyncController extends LiveSyncV4 {
     }
     if (event.method === 'Page.frameNavigated') {
       if (event.sessionId) this.clearFullscreenContext(tabId, { sessionId: event.sessionId }, 'oopif-navigated');
-      else this.clearFullscreenState(tabId, event.params?.frame?.parentId ? 'frame-navigated' : 'tab-navigated');
+      else if (!event.params?.frame?.parentId) this.clearFullscreenState(tabId, 'tab-navigated');
     }
     if (event.method === 'Runtime.executionContextDestroyed') {
       this.clearFullscreenContext(tabId, { sessionId: event.sessionId, contextId: event.params?.executionContextId }, 'context-destroyed');
@@ -789,26 +927,39 @@ class LiveSyncController extends LiveSyncV4 {
     if (event.method === 'Runtime.executionContextCreated') {
       const context = event.params?.context;
       const contextId = context?.id;
-      if (contextId && connection) connection.command('Runtime.evaluate', { expression: fullscreenInjection, contextId }, event.sessionId ? { sessionId: event.sessionId } : {}).catch(() => {});
+      if (context?.auxData?.isDefault !== false && contextId && connection) connection.command(
+        'Runtime.evaluate',
+        { expression: fullscreenInjection, contextId },
+        event.sessionId ? { sessionId: event.sessionId } : {},
+      ).catch(() => {});
     }
     if (event.method === 'Runtime.bindingCalled' && event.params?.name === 'openBrowserSync') {
       let payload;
       try { payload = JSON.parse(event.params.payload); } catch (_) { return; }
       if (payload?.type === 'fullscreen') {
+        const sessionInfo = event.sessionId ? this.fullscreenSessions.get(tabId)?.get(event.sessionId) : null;
+        if (sessionInfo?.targetId && !payload.frameTargetId) payload.frameTargetId = sessionInfo.targetId;
+        if (sessionInfo?.url && !payload.frameUrl) payload.frameUrl = sessionInfo.url;
+        const contextKey = this.fullscreenContextKey(event, payload);
         if (payload.error) {
-          const cleared = this.clearFullscreenState(tabId, 'fullscreen-error');
+          const retained = payload.active === true
+            ? this.updateFullscreenContext(tabId, contextKey, payload, event.sessionId)
+            : this.clearFullscreenContext(tabId, { contextKey }, 'fullscreen-error');
+          const active = this.fullscreenByTab.get(tabId) === true;
+          if (!active) this.releaseFullscreenGeometryPause('fullscreen-error');
           this.emit({
             type: 'live-sync-fullscreen-error',
             masterTabId: tabId,
             message: String(payload.error),
             frameUrl: String(payload.frameUrl || ''),
-            cleared,
+            active,
+            retained: Boolean(retained && active),
           });
           return;
         }
-        const contextKey = this.fullscreenContextKey(event, payload);
-        this.updateFullscreenContext(tabId, contextKey, payload, event.sessionId);
-        this.pauseGeometrySync(1800, 'fullscreen-transition');
+        const active = this.updateFullscreenContext(tabId, contextKey, payload, event.sessionId);
+        if (payload.active === true) this.pauseGeometrySync(1800, 'fullscreen-transition');
+        else if (!active) this.releaseFullscreenGeometryPause('fullscreen-exit');
       }
     }
     return super.handle(tabId, event);
@@ -816,6 +967,7 @@ class LiveSyncController extends LiveSyncV4 {
 
   pauseGeometrySync(durationMs = 1200, reason = 'interaction') {
     const duration = Math.max(0, Math.min(10000, Number(durationMs) || 0));
+    this.windowGuardGeneration += 1;
     this.geometryPausedUntil = Math.max(this.geometryPausedUntil || 0, Date.now() + duration);
     this.lastGeometryPauseReason = reason;
   }
@@ -856,9 +1008,10 @@ class LiveSyncController extends LiveSyncV4 {
     if (!states) return false;
     let cleared = false;
     for (const [key, state] of states) {
+      const keyMatches = match.contextKey === undefined || key === String(match.contextKey);
       const sessionMatches = match.sessionId === undefined || String(state.sessionId || '') === String(match.sessionId || '');
       const contextMatches = match.contextId === undefined || key.endsWith(`:${String(match.contextId)}`);
-      if (sessionMatches && contextMatches) { states.delete(key); cleared = true; }
+      if (keyMatches && sessionMatches && contextMatches) { states.delete(key); cleared = true; }
     }
     if (!states.size) {
       this.fullscreenFrameStates.delete(tabId);
@@ -905,6 +1058,10 @@ class LiveSyncController extends LiveSyncV4 {
     for (const id of [...this._slaveErrorAt.keys()]) if (!active.has(id)) this._slaveErrorAt.delete(id);
   }
 
+  isSlaveAvailable(slave) {
+    return Boolean(slave) && !this.unreachableSlaves.has(slave.id);
+  }
+
   async refreshMasterTabs(refreshGeneration = null) {
     if (!this.isRefreshGenerationCurrent(refreshGeneration) || !this.master) return;
     const tick = (this.tickCount || 0);
@@ -912,7 +1069,9 @@ class LiveSyncController extends LiveSyncV4 {
     const doHeavy = tick % 3 === 0;
     const allMasterTargets = await cdp.targets(this.master.item.port);
     if (!this.isRefreshGenerationCurrent(refreshGeneration)) return;
-    this.devToolsTargetCount = allMasterTargets.filter((target) => /^(devtools):/i.test(String(target.url || ''))).length;
+    const devToolsTargetCount = allMasterTargets.filter((target) => /^(devtools):/i.test(String(target.url || ''))).length;
+    if (devToolsTargetCount !== this.devToolsTargetCount) this.windowGuardGeneration += 1;
+    this.devToolsTargetCount = devToolsTargetCount;
     const tabs = normalTabs(allMasterTargets.filter((target) => target.type === 'page'));
     const masterExtensionPages = doHeavy ? extensionPages(allMasterTargets) : null;
     const live = new Set(tabs.map((tab) => tab.id));
@@ -943,6 +1102,7 @@ class LiveSyncController extends LiveSyncV4 {
       }
     }));
     if (!this.isRefreshGenerationCurrent(refreshGeneration)) return;
+    this.unreachableSlaves = new Set(failedSlaves.map((failure) => failure.id));
     if (failedSlaves.length) this.reportUnreachableSlaves(failedSlaves);
     for (let index = 0; index < tabs.length; index += 1) {
       if (!this.isRefreshGenerationCurrent(refreshGeneration)) return;
@@ -982,6 +1142,7 @@ class LiveSyncController extends LiveSyncV4 {
     for (const masterTarget of masterTargets) {
       const mapping = this.extensionMap.get(masterTarget.id) || new Map();
       for (const slave of this.slaves) {
+        if (!this.isSlaveAvailable(slave)) continue;
         const available = slaveLists.get(slave.id) || [];
         const current = mapping.get(slave.id);
         if (current && available.some((target) => target.id === current.id)) continue;
@@ -996,13 +1157,27 @@ class LiveSyncController extends LiveSyncV4 {
       this.extensionMap.set(masterTarget.id, mapping);
       if (!this.extensionConnections.has(masterTarget.id)) {
         this.pauseGeometrySync(1200, 'extension-surface-attached');
-        await this.attachExtensionPage(masterTarget);
+        await this.attachExtensionPage(masterTarget).catch((error) => {
+          this.emit({
+            type: 'live-sync-extension-error',
+            targetId: masterTarget.id,
+            url: masterTarget.url,
+            message: String(error?.message || error),
+          });
+        });
       }
     }
   }
 
   async attachExtensionPage(tab) {
-    const connection = new PersistentCdp(tab.webSocketDebuggerUrl, (event) => this.handleExtensionPage(tab.id, event));
+    let connection;
+    connection = new cdp.PersistentConnection(tab.webSocketDebuggerUrl, {
+      onEvent: (event) => this.handleExtensionPage(tab.id, event),
+      onDisconnect: () => {
+        const current = this.extensionConnections.get(tab.id);
+        if (current?.connection === connection) this.extensionConnections.delete(tab.id);
+      },
+    });
     await connection.open();
     const value = { tab, connection }; this.extensionConnections.set(tab.id, value);
     try {
@@ -1018,9 +1193,27 @@ class LiveSyncController extends LiveSyncV4 {
   }
 
   async handleExtensionPage(tabId, event) {
+    const connection = this.extensionConnections.get(tabId)?.connection;
+    if (!connection) return;
+    if (event.method === 'Target.attachedToTarget' && event.params?.sessionId) {
+      const sessionId = event.params.sessionId;
+      const command = (method, params = {}) => connection.command(method, params, { sessionId, timeout: 10000 });
+      (async () => {
+        await command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        await command('Runtime.addBinding', { name: 'openBrowserSync' });
+        await command('Page.addScriptToEvaluateOnNewDocument', { source: injection });
+        await command('Runtime.enable');
+        await command('Page.enable');
+        await command('Runtime.evaluate', { expression: injection });
+      })().catch(() => {});
+    }
     if (event.method === 'Runtime.executionContextCreated') {
-      const contextId = event.params?.context?.id; const connection = this.extensionConnections.get(tabId)?.connection;
-      if (contextId && connection) connection.command('Runtime.evaluate', { expression: injection, contextId }).catch(() => {});
+      const contextId = event.params?.context?.id;
+      if (contextId) connection.command(
+        'Runtime.evaluate',
+        { expression: injection, contextId },
+        event.sessionId ? { sessionId: event.sessionId } : {},
+      ).catch(() => {});
     }
     if (event.method === 'Runtime.bindingCalled' && event.params?.name === 'openBrowserSync') {
       let payload; try { payload = JSON.parse(event.params.payload); } catch (_) { return; }
@@ -1037,7 +1230,10 @@ class LiveSyncController extends LiveSyncV4 {
     const isBlank = (url) => /^(about:blank|chrome:\/\/(newtab|new-tab-page)\/?)/i.test(String(url || ''));
     const equivalent = (a, b) => this.urlsMatch(a, b) || (isStart(a) && isStart(b)) || (isBlank(a) && isBlank(b));
     await Promise.all(this.slaves.map(async (slave) => {
-      const available = initialLists?.get(slave.id) || normalTabs(await cdp.tabs(slave.port));
+      if (!this.isSlaveAvailable(slave) || (initialLists && !initialLists.has(slave.id))) return;
+      const available = initialLists?.has(slave.id)
+        ? initialLists.get(slave.id)
+        : normalTabs(await cdp.tabs(slave.port));
       const mappedId = mapping.get(slave.id);
       const alreadyMapped = mappedId && available.some((tab) => tab.id === mappedId);
       let target = alreadyMapped ? available.find((tab) => tab.id === mappedId) : null;
@@ -1075,8 +1271,11 @@ class LiveSyncController extends LiveSyncV4 {
     if (!masterTabs.length) return;
     let closed = 0;
     await Promise.all(this.slaves.map(async (slave) => {
+      if (!this.isSlaveAvailable(slave) || (knownLists && !knownLists.has(slave.id))) return;
       const allowed = new Set(masterTabs.map((tab) => this.tabMap.get(tab.id)?.get(slave.id)).filter(Boolean));
-      const current = knownLists?.get(slave.id) || normalTabs(await cdp.tabs(slave.port));
+      const current = knownLists?.has(slave.id)
+        ? knownLists.get(slave.id)
+        : normalTabs(await cdp.tabs(slave.port));
       const extras = current.filter((tab) => !allowed.has(tab.id));
       for (const tab of extras) { await cdp.closeTab(slave.port, tab.id).catch(() => {}); closed += 1; }
     }));
@@ -1087,10 +1286,15 @@ class LiveSyncController extends LiveSyncV4 {
 
   async closeMappedTabs(masterTabId) {
     const mapping = this.tabMap.get(masterTabId); if (!mapping) return;
-    await Promise.all(this.slaves.map((slave) => { const targetId = mapping.get(slave.id); return targetId ? cdp.closeTab(slave.port, targetId).catch(() => {}) : Promise.resolve(); }));
+    await Promise.all(this.slaves.map((slave) => {
+      if (!this.isSlaveAvailable(slave)) return Promise.resolve();
+      const targetId = mapping.get(slave.id);
+      return targetId ? cdp.closeTab(slave.port, targetId).catch(() => {}) : Promise.resolve();
+    }));
   }
 
   async slaveTab(slave, masterTabId) {
+    if (!this.isSlaveAvailable(slave)) return null;
     const masterTab = this.masterTabs.find((tab) => tab.id === masterTabId);
     if (!this.tabMap.has(masterTabId)) await this.ensureMapping(masterTab || { id: masterTabId, url: 'about:blank' });
     const mapping = this.tabMap.get(masterTabId); let targetId = mapping?.get(slave.id);
@@ -1115,13 +1319,31 @@ class LiveSyncController extends LiveSyncV4 {
   async eachSlave(masterTabId, action) {
     const extensionTargets = this.extensionMap.get(masterTabId);
     if (extensionTargets) {
-      await Promise.all(this.slaves.map(async (slave) => { const target = extensionTargets.get(slave.id); if (target) await action(target, slave); }));
+      await Promise.all(this.slaves.map(async (slave) => {
+        if (!this.isSlaveAvailable(slave)) return;
+        const target = extensionTargets.get(slave.id);
+        if (target) await action(target, slave);
+      }));
       return;
     }
-    await Promise.all(this.slaves.map(async (slave) => { const tab = await this.slaveTab(slave, masterTabId); if (tab) await action(tab, slave); }));
+    await Promise.all(this.slaves.map(async (slave) => {
+      if (!this.isSlaveAvailable(slave)) return;
+      const tab = await this.slaveTab(slave, masterTabId);
+      if (tab) await action(tab, slave);
+    }));
   }
 
   async activateMapped(masterTabId) {
+    const generation = this.syncGeneration;
+    const session = this.syncSession;
+    const windowGuardGeneration = this.windowGuardGeneration;
+    const guardIsCurrent = () => generation === this.syncGeneration
+      && windowGuardGeneration === this.windowGuardGeneration
+      && (!session || this.syncSession === session)
+      && this.activeMasterTab === masterTabId;
+    const deferActivation = () => {
+      this.emit({ type: 'live-sync-tab', masterTabId, targets: this.slaves.length, native: true });
+    };
     // Target.activateTarget dismisses native menus/pickers. Keep activation out of
     // the way while browser chrome, DevTools, extension popups, or a page picker
     // owns the foreground.
@@ -1130,10 +1352,26 @@ class LiveSyncController extends LiveSyncV4 {
       || Date.now() < (this.browserOwnedUntil || 0)
       || await this.hasVisibleExtensionSurface()
       || await this.hasBrowserOwnedInteraction()) {
-      this.emit({ type: 'live-sync-tab', masterTabId, targets: this.slaves.length, native: true });
+      deferActivation();
       return;
     }
-    await Promise.all(this.slaves.map(async (slave) => { const tab = await this.slaveTab(slave, masterTabId); if (tab) await cdp.activateTab(slave.port, tab.id); }));
+    if (!guardIsCurrent()) {
+      deferActivation();
+      return;
+    }
+    await Promise.all(this.slaves.map(async (slave) => {
+      if (!guardIsCurrent() || !this.isSlaveAvailable(slave)) return;
+      const tab = await this.slaveTab(slave, masterTabId);
+      if (!guardIsCurrent()) return;
+      if (this.nativePopupActive || this.nativeDevToolsMode || this.devToolsTargetCount > 0
+        || Date.now() < (this.geometryPausedUntil || 0)
+        || Date.now() < (this.browserOwnedUntil || 0)) return;
+      if (tab) await cdp.activateTab(slave.port, tab.id);
+    }));
+    if (!guardIsCurrent()) {
+      deferActivation();
+      return;
+    }
     this.emit({ type: 'live-sync-tab', masterTabId, targets: this.slaves.length });
   }
 
@@ -1154,6 +1392,7 @@ class LiveSyncController extends LiveSyncV4 {
       return x === y || (newTab(x) && newTab(y)) || (isStartPage(x) && isStartPage(y));
     };
     await Promise.all(this.slaves.map(async (slave) => {
+      if (!this.isSlaveAvailable(slave)) return;
       const mapped = await this.slaveTab(slave, masterTabId);
       const candidates = normalTabs(await cdp.tabs(slave.port));
       const targets = new Map();
@@ -1189,7 +1428,28 @@ class LiveSyncController extends LiveSyncV4 {
       || (payload?.frameDepth === undefined && Boolean(payload?.frameUrl));
     if (!frameRequested) return cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', base, 10000);
     const desired = payload?.active === true;
-    const matchesDesired = (result) => Boolean(result?.result?.value?.active) === desired;
+    const resultState = (result) => result?.result?.value;
+    const matchesDesired = (result) => typeof resultState(result)?.active === 'boolean'
+      && resultState(result).active === desired;
+    let nestedResult = null;
+    const mergeNestedFallback = (ownerResult) => {
+      const nestedState = resultState(nestedResult);
+      const ownerState = resultState(ownerResult);
+      if (!desired || nestedState?.mode !== 'visual' || !ownerState) return ownerResult;
+      return {
+        ...ownerResult,
+        result: {
+          ...(ownerResult.result || {}),
+          value: {
+            ...ownerState,
+            degraded: true,
+            mode: ownerState.mode === 'native' ? 'native+visual' : 'visual',
+            reason: nestedState.reason || ownerState.reason || 'cross-origin-frame-visual-fallback',
+            nestedMode: nestedState.mode,
+          },
+        },
+      };
+    };
 
     // Site-isolated iframe targets are not always present in Page.getFrameTree
     // on the page session. When the slave port is available, route directly to
@@ -1199,18 +1459,29 @@ class LiveSyncController extends LiveSyncV4 {
         const requestedUrl = frameUrlKey(payload.frameUrl);
         const targets = await cdp.targets(slavePort);
         const candidates = targets.filter((item) => String(item.type || '') === 'iframe');
-        const target = candidates.find((item) => requestedUrl && frameUrlKey(item.url) === requestedUrl)
+        const target = candidates.find((item) => payload.frameTargetId && String(item.id || '') === String(payload.frameTargetId))
+          || candidates.find((item) => requestedUrl && frameUrlKey(item.url) === requestedUrl)
           || candidates.find((item) => requestedUrl && frameUrlKey(item.url).split('?')[0] === requestedUrl.split('?')[0])
           || (!requestedUrl && !payload.framePath && !payload.frameName && Number(payload.frameDepth) <= 0 && candidates.length === 1 ? candidates[0] : null);
+        const matchedTarget = Boolean(target);
         if (target?.webSocketDebuggerUrl) {
           try {
             const result = await cdp.call(target.webSocketDebuggerUrl, 'Runtime.evaluate', base, 10000);
-            if (matchesDesired(result)) return result;
+            if (matchesDesired(result)) {
+              if (desired && resultState(result)?.mode !== 'visual') return result;
+              nestedResult = result;
+            }
             diagnostics.push({
               stage: 'oopif-runtime-state', severity: 'warning',
-              message: String(result?.result?.value?.error || 'OOPIF fullscreen state did not converge'),
+              message: matchesDesired(result)
+                ? (desired
+                  ? 'OOPIF visual fullscreen requires an embedding-frame fallback'
+                  : 'OOPIF fullscreen exit completed; cleaning the embedding frame')
+                : String(resultState(result)?.error || 'OOPIF fullscreen state did not converge'),
               targetId: String(target.id || ''), targetUrl: String(target.url || ''),
-              fallback: 'same-process-frame-tree',
+              fallback: matchesDesired(result)
+                ? (desired ? 'frame-owner-visual' : 'frame-owner-cleanup')
+                : 'same-process-frame-tree',
             });
           } catch (error) {
             diagnostics.push({
@@ -1223,7 +1494,7 @@ class LiveSyncController extends LiveSyncV4 {
             });
           }
         }
-        if (candidates.length) {
+        if (candidates.length && !matchedTarget) {
           diagnostics.push({
             stage: 'oopif-target-mismatch',
             severity: 'warning',
@@ -1272,10 +1543,17 @@ class LiveSyncController extends LiveSyncV4 {
       if (world?.executionContextId) {
         try {
           const result = await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', { ...base, contextId: world.executionContextId }, 10000);
-          if (matchesDesired(result)) return result;
+          if (matchesDesired(result)) {
+            if (desired && resultState(result)?.mode !== 'visual') return result;
+            nestedResult = result;
+          }
           diagnostics.push({
             stage: 'frame-runtime-state', severity: 'warning',
-            message: String(result?.result?.value?.error || 'Frame fullscreen state did not converge'),
+            message: matchesDesired(result)
+              ? (desired
+                ? 'Frame visual fullscreen requires an embedding-frame fallback'
+                : 'Frame fullscreen exit completed; cleaning the embedding frame')
+              : String(resultState(result)?.error || 'Frame fullscreen state did not converge'),
             frameId: String(frame.id || ''), fallback: 'frame-owner-visual',
           });
         } catch (error) {
@@ -1309,7 +1587,7 @@ class LiveSyncController extends LiveSyncV4 {
           message: 'Fullscreen synchronized through the embedding frame element',
           frameId: String(frame?.id || ''), fallback: 'applied',
         });
-        return result;
+        return mergeNestedFallback(result);
       }
       diagnostics.push({
         stage: 'frame-owner-state', severity: 'error',
@@ -1327,16 +1605,23 @@ class LiveSyncController extends LiveSyncV4 {
   }
 
   async syncFullscreen(masterTabId, payload) {
+    const generation = this.syncGeneration;
+    const session = this.syncSession;
+    const sessionIsCurrent = () => generation === this.syncGeneration
+      && (!session || this.syncSession === session);
     const desired = payload?.active === true;
+    if (!sessionIsCurrent()) return { active: desired, applied: 0, failed: 0 };
     const expression = fullscreenExpression(payload);
     this.pauseGeometrySync(1800, 'fullscreen-transition');
     let applied = 0;
     let failed = 0;
     let degraded = 0;
     await this.eachSlave(masterTabId, async (tab, slave) => {
+      if (!sessionIsCurrent()) return;
       const diagnostics = [];
       try {
         const result = await this.evaluateFullscreen(tab, payload, expression, slave?.port, diagnostics);
+        if (!sessionIsCurrent()) return;
         const state = result.result?.value;
         if (state && Boolean(state.active) === desired) {
           applied += 1;
@@ -1356,11 +1641,13 @@ class LiveSyncController extends LiveSyncV4 {
           });
         }
       } catch (error) {
+        if (!sessionIsCurrent()) return;
         failed += 1;
         if (!diagnostics.length) diagnostics.push({ stage: 'fullscreen-evaluate', severity: 'error', message: String(error?.message || error), fallback: 'none' });
       }
+      if (!sessionIsCurrent()) return;
       for (const diagnostic of diagnostics) this.emit({
-        type: 'live-sync-fullscreen-route-error',
+        type: diagnostic.severity === 'error' ? 'live-sync-fullscreen-route-error' : 'live-sync-fullscreen-diagnostic',
         masterTabId,
         slaveId: String(slave?.id || ''),
         tabId: String(tab?.id || ''),
@@ -1369,6 +1656,8 @@ class LiveSyncController extends LiveSyncV4 {
         ...diagnostic,
       });
     });
+    if (!sessionIsCurrent()) return { active: desired, applied, failed };
+    if (!desired) this.releaseFullscreenGeometryPause('fullscreen-exit-applied');
     this.markActivity?.();
     this.emit({ type: 'live-sync-fullscreen', masterTabId, active: desired, applied, failed, degraded });
     return { active: desired, applied, failed };
@@ -1376,9 +1665,11 @@ class LiveSyncController extends LiveSyncV4 {
 
   async syncWindowGeometry() {
     const generation = this.syncGeneration;
+    const windowGuardGeneration = this.windowGuardGeneration;
     const masterId = this.master?.id;
     const slaveIds = (this.slaves || []).map((slave) => slave.id);
     const sessionIsCurrent = () => generation === this.syncGeneration
+      && windowGuardGeneration === this.windowGuardGeneration
       && this.master?.id === masterId
       && this.slaves.length === slaveIds.length
       && this.slaves.every((slave, index) => slave.id === slaveIds[index]);
@@ -1398,9 +1689,8 @@ class LiveSyncController extends LiveSyncV4 {
       this.pauseGeometrySync(900, 'browser-owned-grace');
       return;
     }
-    const fullscreenTabId = this.activeMasterTab || this.masterTabs.find((tab) => this.fullscreenByTab.get(tab.id))?.id;
-    const activeTabFullscreen = fullscreenTabId ? this.fullscreenByTab.get(fullscreenTabId) === true : false;
-    if (this.nativePopupActive || this.nativeDevToolsMode || this.devToolsTargetCount > 0 || activeTabFullscreen) {
+    const anyDocumentFullscreen = [...this.fullscreenByTab.values()].some((active) => active === true);
+    if (this.nativePopupActive || this.nativeDevToolsMode || this.devToolsTargetCount > 0 || anyDocumentFullscreen) {
       const reason = this.nativePopupActive ? 'native-popup'
         : (this.nativeDevToolsMode || this.devToolsTargetCount > 0 ? 'devtools' : 'fullscreen-active');
       this.pauseGeometrySync(900, reason);
@@ -1417,23 +1707,53 @@ class LiveSyncController extends LiveSyncV4 {
     }
     if (!sessionIsCurrent()) return;
 
-    const source = await cdp.windowForPort(this.master.item.port);
+    const masterTargetId = this.activeMasterTab && this.masterTabs.some((tab) => tab.id === this.activeMasterTab)
+      ? this.activeMasterTab
+      : null;
+    const source = await cdp.windowForPort(this.master.item.port, masterTargetId);
     if (!sessionIsCurrent()) return;
     const bounds = source.bounds || {};
     if (bounds.windowState === 'maximized' || bounds.windowState === 'fullscreen') {
       const targetState = bounds.windowState;
       this.lastWindowSync = now;
       await Promise.all(this.slaves.map(async (slave) => {
-        if (!sessionIsCurrent()) return;
+        if (!sessionIsCurrent() || !this.isSlaveAvailable(slave)) return;
         try {
-          const current = await cdp.windowForPort(slave.port);
+          const slaveTargetId = this.tabMap.get(masterTargetId || this.activeMasterTab)?.get(slave.id) || null;
+          const current = await cdp.windowForPort(slave.port, slaveTargetId);
           if (!sessionIsCurrent()) return;
           const own = current.bounds || {};
           if (own.windowState !== targetState) {
-            await cdp.setWindowState(slave.port, targetState);
+            const transition = await cdp.setWindowState(slave.port, targetState, {
+              verify: true,
+              fallbackState: targetState === 'fullscreen' ? 'maximized' : '',
+              ...(slaveTargetId ? { targetId: slaveTargetId } : {}),
+            });
+            this.mirroredWindowStates.set(slave.id, transition.state || targetState);
+            if (transition.degraded) this.emit({
+              type: 'live-sync-fullscreen-degraded',
+              masterTabId: this.activeMasterTab || '',
+              slaveId: slave.id,
+              tabId: '',
+              reason: 'native-window-fullscreen-unavailable',
+              fallbackState: transition.state,
+              message: transition.error,
+            });
+          } else {
+            this.mirroredWindowStates.set(slave.id, targetState);
           }
-          this.mirroredWindowStates.set(slave.id, targetState);
-        } catch (_) {}
+        } catch (error) {
+          this.emit({
+            type: 'live-sync-fullscreen-route-error',
+            masterTabId: this.activeMasterTab || '',
+            slaveId: slave.id,
+            tabId: '',
+            stage: 'window-state',
+            severity: 'warning',
+            message: String(error?.message || error),
+            fallback: 'keep-current-window-state',
+          });
+        }
       }));
       return;
     }
@@ -1446,40 +1766,59 @@ class LiveSyncController extends LiveSyncV4 {
     const targetHeight = Math.round(bounds.height);
     this.lastWindowSync = now;
     await Promise.all(this.slaves.map(async (slave) => {
-      if (!sessionIsCurrent()) return;
-      const current = await cdp.windowForPort(slave.port);
-      if (!sessionIsCurrent()) return;
-      let own = current.bounds || {};
-      const mirroredState = this.mirroredWindowStates.get(slave.id);
-      if (own.windowState && own.windowState !== 'normal') {
-        if (!mirroredState || own.windowState !== mirroredState) return;
-        await cdp.setWindowState(slave.port, 'normal');
-        this.mirroredWindowStates.delete(slave.id);
+      if (!sessionIsCurrent() || !this.isSlaveAvailable(slave)) return;
+      let slaveTargetId = null;
+      try {
+        slaveTargetId = this.tabMap.get(masterTargetId || this.activeMasterTab)?.get(slave.id) || null;
+        const current = await cdp.windowForPort(slave.port, slaveTargetId);
         if (!sessionIsCurrent()) return;
-        own = (await cdp.windowForPort(slave.port)).bounds || own;
-      } else this.mirroredWindowStates.delete(slave.id);
-      if (Math.abs((own.width || 0) - targetWidth) < 8 && Math.abs((own.height || 0) - targetHeight) < 8) {
-        this.geometryPending.delete(slave.id);
-        return;
+        let own = current.bounds || {};
+        const mirroredState = this.mirroredWindowStates.get(slave.id);
+        if (own.windowState && own.windowState !== 'normal') {
+          if (!mirroredState || own.windowState !== mirroredState) return;
+          await cdp.setWindowState(slave.port, 'normal', { verify: true, ...(slaveTargetId ? { targetId: slaveTargetId } : {}) });
+          this.mirroredWindowStates.delete(slave.id);
+          if (!sessionIsCurrent()) return;
+          own = (await cdp.windowForPort(slave.port, slaveTargetId)).bounds || own;
+        } else this.mirroredWindowStates.delete(slave.id);
+        if (Math.abs((own.width || 0) - targetWidth) < 8 && Math.abs((own.height || 0) - targetHeight) < 8) {
+          this.geometryPending.delete(slave.id);
+          return;
+        }
+        const pending = this.geometryPending.get(slave.id);
+        const desired = { width: targetWidth, height: targetHeight };
+        if (pending?.width === targetWidth && pending?.height === targetHeight && (pending.attempts || 0) >= 2 && now - (pending.at || 0) < 10000) return;
+        await cdp.setWindowBounds(slave.port, {
+          left: Number.isFinite(own.left) ? own.left : 0,
+          top: Number.isFinite(own.top) ? own.top : 0,
+          ...desired,
+        }, { forceNormal: false, ...(slaveTargetId ? { targetId: slaveTargetId } : {}) });
+        if (!sessionIsCurrent()) return;
+        // Chromium builds occasionally acknowledge setWindowBounds before the
+        // native widget has applied it. Remember the desired size so the next
+        // quiet tick can retry once, fixing the large blank viewport symptom
+        // without issuing a second resize while a menu/picker is open.
+        this.geometryPending.set(slave.id, {
+          ...desired,
+          attempts: pending?.width === targetWidth && pending?.height === targetHeight ? (pending.attempts || 0) + 1 : 1,
+          at: now,
+        });
+      } catch (error) {
+        if (!sessionIsCurrent()) return;
+        const mapping = this.tabMap.get(masterTargetId || this.activeMasterTab);
+        if (mapping?.get(slave.id) === slaveTargetId) mapping.delete(slave.id);
+        this.emit({
+          type: 'live-sync-fullscreen-route-error',
+          masterTabId: this.activeMasterTab || '',
+          slaveId: slave.id,
+          tabId: '',
+          stage: 'geometry',
+          severity: 'warning',
+          message: String(error?.message || error),
+          targetId: slaveTargetId || null,
+          fallback: 'remap-on-next-refresh',
+        });
       }
-      const pending = this.geometryPending.get(slave.id);
-      const desired = { width: targetWidth, height: targetHeight };
-      if (pending?.width === targetWidth && pending?.height === targetHeight && (pending.attempts || 0) >= 2 && now - (pending.at || 0) < 10000) return;
-      await cdp.setWindowBounds(slave.port, {
-        left: Number.isFinite(own.left) ? own.left : 0,
-        top: Number.isFinite(own.top) ? own.top : 0,
-        ...desired,
-      }, { forceNormal: false });
-      if (!sessionIsCurrent()) return;
-      // Chromium builds occasionally acknowledge setWindowBounds before the
-      // native widget has applied it. Remember the desired size so the next
-      // quiet tick can retry once, fixing the large blank viewport symptom
-      // without issuing a second resize while a menu/picker is open.
-      this.geometryPending.set(slave.id, {
-        ...desired,
-        attempts: pending?.width === targetWidth && pending?.height === targetHeight ? (pending.attempts || 0) + 1 : 1,
-        at: now,
-      });
     }));
   }
 
@@ -1513,10 +1852,19 @@ class LiveSyncController extends LiveSyncV4 {
         const result = await value.connection.command('Runtime.evaluate', {
           expression: "({visible:document.visibilityState==='visible',focused:typeof document.hasFocus==='function'&&document.hasFocus()})",
           returnByValue: true,
-        });
+        }, { timeout: 1500 });
+        value.healthFailures = 0;
         const state = result.result?.value || {};
         return state.visible === true || state.focused === true;
-      } catch (_) {
+      } catch (error) {
+        value.healthFailures = (value.healthFailures || 0) + 1;
+        if (value.healthFailures >= 3) {
+          value.connection.close();
+          const current = this.extensionConnections.get(value.tab?.id);
+          if (current?.connection === value.connection) this.extensionConnections.delete(value.tab.id);
+          if (value.tab?.id) this.extensionMap.delete(value.tab.id);
+          return false;
+        }
         // A target that cannot be queried may be in the middle of opening or
         // closing. Suppress one geometry pass rather than risking a popup tear.
         return true;
@@ -1527,10 +1875,11 @@ class LiveSyncController extends LiveSyncV4 {
 
   async pollTabState(value, options = {}) {
     const heavy = options.heavy !== false;
-    const result = await value.connection.command('Runtime.evaluate', { expression: "({x:scrollX,y:scrollY,visible:document.visibilityState==='visible',url:location.href})", returnByValue: true });
+    const result = await value.connection.command('Runtime.evaluate', { expression: "({x:scrollX,y:scrollY,visible:document.visibilityState==='visible',focused:typeof document.hasFocus!=='function'||document.hasFocus(),url:location.href})", returnByValue: true });
     const state = result.result?.value; if (!state) return;
+    const foreground = state.visible === true && state.focused !== false;
     // LayoutMetrics + zoom sync only on heavy ticks (zoom rarely changes mid-session).
-    if (heavy) {
+    if (heavy && foreground) {
       try {
         const metrics = await value.connection.command('Page.getLayoutMetrics');
         const viewport = metrics.cssVisualViewport || metrics.visualViewport || {};
@@ -1543,7 +1892,7 @@ class LiveSyncController extends LiveSyncV4 {
         }
       } catch (_) {}
     }
-    if (state.visible) {
+    if (foreground) {
       // Drive navigation only when the master URL actually changed.
       const urlKey = this.urlKey(state.url);
       if (state.url && !/^(chrome|edge|devtools|chrome-extension|edge-extension):/i.test(state.url) && value.lastSyncedUrl !== urlKey) {
@@ -1552,11 +1901,15 @@ class LiveSyncController extends LiveSyncV4 {
         await this.navigateSlaves(value.tab.id, state.url);
       }
       if (this.activeMasterTab !== value.tab.id) { this.activeMasterTab = value.tab.id; await this.activateMapped(value.tab.id); }
-    }
-    if (state.x !== value.scroll.x || state.y !== value.scroll.y) {
+      if (state.x !== value.scroll.x || state.y !== value.scroll.y) {
+        value.scroll = { x: state.x, y: state.y };
+        this.markActivity?.();
+        await this.forward(value.tab.id, { type: 'scroll', x: state.x, y: state.y });
+      }
+    } else if (state.x !== value.scroll.x || state.y !== value.scroll.y) {
+      // Keep the baseline current without driving slave tabs while a native
+      // menu, DevTools, another application, or a hidden document owns focus.
       value.scroll = { x: state.x, y: state.y };
-      this.markActivity?.();
-      await this.forward(value.tab.id, { type: 'scroll', x: state.x, y: state.y });
     }
   }
 }

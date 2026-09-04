@@ -35,13 +35,16 @@ class PersistentCdp {
       socket.addEventListener('error', () => { const error = new Error('CDP connection error'); failPending(error); finishOpen(reject, error); });
     });
   }
-  command(method, params = {}) {
+  command(method, params = {}, options = {}) {
     return new Promise((resolve, reject) => {
       if (this.closed || !this.socket || this.socket.readyState !== WebSocket.OPEN) return reject(new Error('CDP is not connected'));
       const id = this.nextId++;
-      const timer = setTimeout(() => { if (this.pending.delete(id)) reject(new Error(`CDP timeout: ${method}`)); }, 7000);
+      const timeout = Math.max(1, Number(options.timeout) || 7000);
+      const timer = setTimeout(() => { if (this.pending.delete(id)) reject(new Error(`CDP timeout: ${method}`)); }, timeout);
       this.pending.set(id, { resolve, reject, timer });
-      try { this.socket.send(JSON.stringify({ id, method, params })); }
+      const message = { id, method, params };
+      if (options.sessionId) message.sessionId = options.sessionId;
+      try { this.socket.send(JSON.stringify(message)); }
       catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
     });
   }
@@ -83,6 +86,24 @@ const injection = String.raw`(() => {
   const key = (phase, event) => { const target=actual(event); const editable=Boolean(target && (target.isContentEditable || 'value' in target)); send('key', { phase, key: event.key, code: event.code, keyCode: event.keyCode, location: event.location, alt: event.altKey, ctrl: event.ctrlKey, meta: event.metaKey, shift: event.shiftKey, editable }); };
   document.addEventListener('keydown', (event) => key('down', event), true);
   document.addEventListener('keyup', (event) => key('up', event), true);
+  if (window === window.top) {
+    let surfaceTimer = 0;
+    const reportSurface = () => {
+      clearTimeout(surfaceTimer);
+      surfaceTimer = setTimeout(() => send('surface', {
+        visible: document.visibilityState === 'visible',
+        focused: typeof document.hasFocus !== 'function' || document.hasFocus(),
+      }), 0);
+    };
+    window.addEventListener('blur', reportSurface, true);
+    window.addEventListener('focus', reportSurface, true);
+    window.addEventListener('pagehide', reportSurface, true);
+    window.addEventListener('pageshow', reportSurface, true);
+    document.addEventListener('visibilitychange', reportSurface, true);
+    document.addEventListener('freeze', reportSurface, true);
+    document.addEventListener('resume', reportSurface, true);
+    reportSurface();
+  }
   let scrollTimer = 0; const reportScroll = () => { clearTimeout(scrollTimer); scrollTimer = setTimeout(() => send('scroll', { x: scrollX, y: scrollY }), 40); };
   addEventListener('scroll', reportScroll, true); document.addEventListener('scroll', reportScroll, true);
 })();`;
@@ -259,7 +280,11 @@ class LiveSyncController {
       // world. Isolated worlds receive the same DOM events but keep their own
       // window sentinel, which otherwise duplicates every forwarded action.
       if (context?.auxData?.isDefault === false) return;
-      if (contextId && connection) connection.command('Runtime.evaluate', { expression: injection, contextId }).catch(() => {});
+      if (contextId && connection) connection.command(
+        'Runtime.evaluate',
+        { expression: injection, contextId },
+        event.sessionId ? { sessionId: event.sessionId } : {},
+      ).catch(() => {});
     }
     if (event.method === 'Runtime.bindingCalled' && event.params?.name === 'openBrowserSync') {
       let payload; try { payload = JSON.parse(event.params.payload); } catch (_) { return; }

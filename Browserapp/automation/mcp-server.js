@@ -16,39 +16,12 @@
  */
 
 const http = require('http');
-const fs = require('fs');
-const path = require('path');
+const { resolveApiKey } = require('./api-key');
 
 const PORT = Number(process.env.OPENBROWSER_API_PORT || process.env.PORT || 50325);
 const HOST = process.env.OPENBROWSER_API_HOST || '127.0.0.1';
 
-function cleanApiKey(value) {
-  let key = String(value || '').trim();
-  if (key.startsWith('"') && key.endsWith('"')) key = key.slice(1, -1).trim();
-  if (key.startsWith("'") && key.endsWith("'")) key = key.slice(1, -1).trim();
-  return key;
-}
-
-function loadApiKey() {
-  const configured = cleanApiKey(process.env.OPENBROWSER_API_KEY || process.env.API_KEY);
-  if (configured) return configured;
-
-  const candidates = [
-    process.env.OPENBROWSER_API_KEY_FILE,
-    process.env.OPENBROWSER_LOCAL_API_KEY_FILE,
-    process.env.API_KEY_FILE,
-    process.env.OPENBROWSER_USER_DATA ? path.join(process.env.OPENBROWSER_USER_DATA, 'local-api-key.txt') : '',
-  ].filter(Boolean);
-  for (const filePath of candidates) {
-    try {
-      const key = cleanApiKey(fs.readFileSync(filePath, 'utf8'));
-      if (key) return key;
-    } catch (_) {}
-  }
-  return '';
-}
-
-const API_KEY = loadApiKey();
+const API_KEY = resolveApiKey().key;
 let MCP_MODE = ['admin', 'manage', 'run', 'read'].includes(String(process.env.OPENBROWSER_MCP_MODE || 'admin').toLowerCase())
   ? String(process.env.OPENBROWSER_MCP_MODE || 'admin').toLowerCase()
   : 'admin';
@@ -65,6 +38,85 @@ function parseJsonEnv(value, fallback) {
   } catch (_) {
     return fallback;
   }
+}
+
+const INPUT_ALIASES = Object.freeze({
+  tool_blacklist: 'toolBlacklist',
+  tool_whitelist: 'toolWhitelist',
+  profile_id: 'profileId',
+  profile_ids: 'profileIds',
+  user_id: 'userId',
+  user_ids: 'userIds',
+  source_profile_id: 'sourceProfileId',
+  proxy_id: 'proxyId',
+  proxy_ids: 'proxyIds',
+  proxy_library_id: 'proxyLibraryId',
+  proxy_library_ids: 'proxyLibraryIds',
+  extension_id: 'extensionId',
+  plan_id: 'planId',
+  task_id: 'taskId',
+  template_id: 'templateId',
+  process_name: 'processName',
+  plan_name: 'planName',
+  save_as: 'saveAs',
+  start_url: 'startUrl',
+  user_agent: 'userAgent',
+  window_size: 'windowSize',
+  network_mode: 'networkMode',
+  language_code: 'languageCode',
+  webgl_vendor: 'webglVendor',
+  webgl_renderer: 'webglRenderer',
+  hardware_concurrency: 'hardwareConcurrency',
+  device_memory: 'deviceMemory',
+  do_not_track: 'doNotTrack',
+  privacy_extra: 'privacyExtra',
+  user_proxy_config: 'userProxyConfig',
+  delete_data: 'deleteData',
+  refresh_url: 'refreshUrl',
+  ip_channel: 'ipChannel',
+  proxy_auth_action: 'proxyAuthAction',
+});
+
+function normalizeToolArgs(input = {}) {
+  const out = { ...input };
+  for (const [snakeCase, camelCase] of Object.entries(INPUT_ALIASES)) {
+    if (out[snakeCase] === undefined && out[camelCase] !== undefined) out[snakeCase] = out[camelCase];
+  }
+  return out;
+}
+
+function withInputAliases(schema) {
+  if (!schema || schema.type !== 'object') return schema;
+  const next = { ...schema, properties: { ...(schema.properties || {}) } };
+  for (const [snakeCase, camelCase] of Object.entries(INPUT_ALIASES)) {
+    if (next.properties[snakeCase] && !next.properties[camelCase]) {
+      next.properties[camelCase] = { ...next.properties[snakeCase], description: `camelCase alias of ${snakeCase}` };
+    }
+  }
+
+  const required = Array.isArray(next.required) ? next.required : [];
+  const directRequired = [];
+  const aliasRequirements = [];
+  for (const key of required) {
+    const alias = INPUT_ALIASES[key];
+    if (alias && next.properties[alias]) {
+      aliasRequirements.push({ anyOf: [{ required: [key] }, { required: [alias] }] });
+    } else {
+      directRequired.push(key);
+    }
+  }
+  if (directRequired.length) next.required = directRequired;
+  else delete next.required;
+  if (aliasRequirements.length) next.allOf = [...(next.allOf || []), ...aliasRequirements];
+
+  if (Array.isArray(next.anyOf)) {
+    next.anyOf = next.anyOf.flatMap((branch) => {
+      if (!Array.isArray(branch.required) || branch.required.length !== 1) return [branch];
+      const alias = INPUT_ALIASES[branch.required[0]];
+      return alias && next.properties[alias] ? [branch, { required: [alias] }] : [branch];
+    });
+  }
+  return next;
 }
 
 function request(method, path, body) {
@@ -86,10 +138,14 @@ function request(method, path, body) {
       res.setEncoding('utf8');
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
+        if (res.statusCode === 401) {
+          const challenge = String(res.headers['www-authenticate'] || '').trim();
+          const challengeHint = challenge ? ` Server challenge: ${challenge}.` : '';
+          return reject(new Error(`MCP: Local API at http://${HOST}:${PORT} rejected all supplied API credentials (401). Set OPENBROWSER_API_KEY or OPENBROWSER_API_KEY_FILE to the key shown on the OpenBrowser API & MCP page.${challengeHint}`));
+        }
         let parsed;
         try { parsed = JSON.parse(data || '{}'); }
         catch (_) { return reject(new Error(`Invalid JSON from Local API (HTTP ${res.statusCode}): ${data.slice(0, 200)}`)); }
-        if (res.statusCode === 401) return reject(new Error('MCP: Local API rejected the API key (401). Set OPENBROWSER_API_KEY or OPENBROWSER_API_KEY_FILE to the key shown on the OpenBrowser API & MCP page.'));
         if (res.statusCode >= 400) return reject(new Error(`Local API error (HTTP ${res.statusCode}): ${parsed.msg || parsed.message || res.statusCode}`));
         resolve(parsed);
       });
@@ -102,7 +158,7 @@ function request(method, path, body) {
 }
 
 function toolsMeta() {
-  return [
+  const tools = [
     // system
     ['status', 'Get OpenBrowser runtime status, profile count, active sync and RPA state', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/', null],
     ['mcp_policy', 'Get the current MCP permission policy: mode, level, blacklist, whitelist and effective tools', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/', null],
@@ -133,7 +189,7 @@ function toolsMeta() {
     ['rpa_task_result', 'Get one RPA task by id, including process_result (variables / exports / remarks) and persisted logs', { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'], additionalProperties: false }, 'read', 'GET', '/api/rpa/tasks/', null],
     ['rpa_tasks', 'List RPA tasks newest first (optionally filtered by status)', { type: 'object', properties: { status: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 500 } }, additionalProperties: false }, 'read', 'GET', '/api/rpa/tasks', null],
     ['rpa_templates_list', 'List RPA templates and categories', { type: 'object', properties: { category: { type: 'string' } }, additionalProperties: false }, 'read', 'GET', '/api/rpa/templates', null],
-    ['proxy_list', 'List proxy library entries', { type: 'object', properties: { q: { type: 'string' }, status: { type: 'string' } }, additionalProperties: false }, 'read', 'GET', '/api/proxy/list', null],
+    ['proxy_list', 'List proxy library entries with credentials and raw authenticated URLs redacted', { type: 'object', properties: { q: { type: 'string' }, status: { type: 'string' } }, additionalProperties: false }, 'read', 'GET', '/api/proxy/list', null],
     ['list_profiles', 'List browser profiles, running status and CDP debug ports', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/v1/user/list', null],
     ['list_active_browsers', 'List currently active browser profiles', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/v1/browser/active', null],
     ['window_sync_status', 'Get multi-window sync status', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/sync/status', null],
@@ -181,21 +237,26 @@ function toolsMeta() {
     ['check_profile_proxy', 'Check and persist the exit IP/country/timezone for an existing profile', { type: 'object', properties: { profile_id: { type: 'string' } }, required: ['profile_id'], additionalProperties: false }, 'run', 'POST', '/api/proxy/check-profile', null],
     // proxy library
     ['proxy_create', 'Add a proxy entry to the proxy library', { type: 'object', properties: {
-      raw: { type: 'string', description: 'proxy://user:pass@host:port' }, name: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
-      group: { type: 'string' }, note: { type: 'string' }, ip_channel: { type: 'string' },
-    }, required: ['raw'], additionalProperties: false }, 'manage', 'POST', '/api/proxy/create', null],
+      raw: { type: 'string', description: 'proxy://user:pass@host:port' }, protocol: { type: 'string' }, host: { type: 'string' }, port: { type: 'integer' },
+      username: { type: 'string' }, password: { type: 'string' }, name: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
+      group: { type: 'string' }, note: { type: 'string' }, refresh_url: { type: 'string' }, ip_channel: { type: 'string' },
+    }, additionalProperties: false }, 'manage', 'POST', '/api/proxy/create', null],
     ['proxy_create_many', 'Batch import proxy entries', { type: 'object', properties: { data: { type: 'array', items: { type: 'object' } } }, required: ['data'], additionalProperties: false }, 'manage', 'POST', '/api/proxy/create', null],
-    ['proxy_update', 'Update a proxy library entry', { type: 'object', properties: { proxy_id: { type: 'string' }, raw: { type: 'string' }, name: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, group: { type: 'string' }, note: { type: 'string' }, ip_channel: { type: 'string' } }, required: ['proxy_id'], additionalProperties: false }, 'manage', 'POST', '/api/proxy/update', null],
-    ['proxy_delete', 'Delete proxy library entries', { type: 'object', properties: { proxy_ids: { type: 'array', items: { type: 'string' } } }, required: ['proxy_ids'], additionalProperties: false }, 'manage', 'POST', '/api/proxy/delete', null],
-    ['proxy_check', 'Test a proxy raw string or library entry and return exit network details', { type: 'object', properties: { proxy: { type: 'string' }, proxy_id: { type: 'string' }, ip_channel: { type: 'string' } }, additionalProperties: false }, 'run', 'POST', '/api/proxy/check', null],
+    ['proxy_update', 'Update a proxy library entry', { type: 'object', properties: {
+      proxy_id: { type: 'string' }, proxy_library_id: { type: 'string' }, raw: { type: 'string' }, protocol: { type: 'string' }, host: { type: 'string' }, port: { type: 'integer' },
+      username: { type: 'string' }, password: { type: 'string' }, proxyAuthAction: { type: 'string', enum: ['clear'] }, proxy_auth_action: { type: 'string', enum: ['clear'] }, name: { type: 'string' },
+      tags: { type: 'array', items: { type: 'string' } }, group: { type: 'string' }, note: { type: 'string' }, refresh_url: { type: 'string' }, ip_channel: { type: 'string' },
+    }, anyOf: [{ required: ['proxy_id'] }, { required: ['proxy_library_id'] }], additionalProperties: false }, 'manage', 'POST', '/api/proxy/update', null],
+    ['proxy_delete', 'Delete proxy library entries', { type: 'object', properties: { proxy_ids: { type: 'array', items: { type: 'string' } }, proxy_library_ids: { type: 'array', items: { type: 'string' } } }, anyOf: [{ required: ['proxy_ids'] }, { required: ['proxy_library_ids'] }], additionalProperties: false }, 'manage', 'POST', '/api/proxy/delete', null],
+    ['proxy_check', 'Test a proxy raw string or library entry and return exit network details', { type: 'object', properties: { proxy: { type: 'string' }, proxy_id: { type: 'string' }, proxy_library_id: { type: 'string' }, ip_channel: { type: 'string' } }, additionalProperties: false }, 'run', 'POST', '/api/proxy/check', null],
     // extensions
     ['extension_assign', 'Assign or remove an extension for profiles', { type: 'object', properties: {
       extension_id: { type: 'string' }, profile_ids: { type: 'array', items: { type: 'string' } }, enabled: { type: 'boolean', description: 'Default true' },
     }, required: ['extension_id', 'profile_ids'], additionalProperties: false }, 'run', 'POST', '/api/extension/assign', null],
     // sync
-    ['window_sync_start', 'Start multi-window sync. First profile is master', { type: 'object', properties: {
+    ['window_sync_start', 'Start multi-window sync without changing settings. First profile is master', { type: 'object', properties: {
       profile_ids: { type: 'array', items: { type: 'string' } }, operate: { type: 'string', description: 'comma list: click,move,scroll,keyboard' },
-      tile: { type: 'boolean' }, cascade: { type: 'boolean' }, settings: { type: 'object' },
+      tile: { type: 'boolean' }, cascade: { type: 'boolean' },
     }, required: ['profile_ids'], additionalProperties: false }, 'run', 'POST', '/api/sync/start', null],
     ['window_sync_stop', 'Stop multi-window sync', { type: 'object', properties: {}, additionalProperties: false }, 'run', 'POST', '/api/sync/stop', null],
     ['window_sync_restart', 'Restart multi-window sync', { type: 'object', properties: {}, additionalProperties: false }, 'run', 'POST', '/api/sync/restart', null],
@@ -203,8 +264,8 @@ function toolsMeta() {
     ['window_sync_settings_update', 'Update multi-window sync settings', { type: 'object', properties: { settings: { type: 'object' } }, required: ['settings'], additionalProperties: false }, 'manage', 'POST', '/api/sync/settings', null],
     // RPA
     ['rpa_run_steps', 'Run RPA steps on a running profile', { type: 'object', properties: {
-      profile_id: { type: 'string' }, steps: { type: 'array', items: { type: 'object' } }, name: { type: 'string' },
-    }, required: ['profile_id', 'steps'], additionalProperties: false }, 'run', 'POST', '/api/rpa/run', null],
+      profile_id: { type: 'string' }, steps: { type: 'array', items: { type: 'object' } }, name: { type: 'string' }, process_name: { type: 'string' },
+    }, required: ['profile_id', 'steps'], additionalProperties: false }, 'manage', 'POST', '/api/rpa/run', null],
     ['rpa_run_plan', 'Run a saved RPA plan', { type: 'object', properties: { plan_id: { type: 'string' }, name: { type: 'string' } }, required: ['plan_id'], additionalProperties: false }, 'run', 'POST', '/api/rpa/run', null],
     ['rpa_stop', 'Stop RPA task(s)', { type: 'object', properties: { task_id: { type: 'string' } }, additionalProperties: false }, 'run', 'POST', '/api/rpa/stop', null],
     ['rpa_plan_save', 'Create or update an RPA plan', { type: 'object', properties: {
@@ -216,6 +277,11 @@ function toolsMeta() {
     ['rpa_template_import', 'Import RPA templates from a payload', { type: 'object', properties: { payload: { type: 'object' } }, required: ['payload'], additionalProperties: false }, 'manage', 'POST', '/api/rpa/templates', null],
     ['rpa_template_delete', 'Delete an RPA template', { type: 'object', properties: { template_id: { type: 'string' } }, required: ['template_id'], additionalProperties: false }, 'manage', 'DELETE', '/api/rpa/templates/', null],
   ];
+  return tools.map((meta) => {
+    const next = [...meta];
+    next[2] = withInputAliases(meta[2]);
+    return next;
+  });
 }
 
 function toTool(meta) {
@@ -245,6 +311,7 @@ function toolsForMode() {
 }
 
 async function callTool(name, args = {}) {
+  args = normalizeToolArgs(args);
   const meta = toolsMeta().find((item) => item[0] === name);
   if (!meta) throw new Error('Unknown tool: ' + name);
   if (LEVEL_ORDER[meta[3]] > LEVEL_ORDER[MCP_MODE]) {
@@ -284,7 +351,8 @@ async function callTool(name, args = {}) {
         current: { mode: MCP_MODE, tool_blacklist: TOOL_BLACKLIST, tool_whitelist: TOOL_WHITELIST },
       };
     case 'check_api_key':
-      return { ok: Boolean(API_KEY), key_configured: Boolean(API_KEY), mode: MCP_MODE };
+      await request('GET', '/');
+      return { ok: true, key_configured: Boolean(API_KEY), mode: MCP_MODE };
     case 'list_profiles':
       return request('GET', '/api/v1/user/list');
     case 'list_active_browsers':
@@ -315,15 +383,29 @@ async function callTool(name, args = {}) {
     case 'proxy_list':
       return request('GET', '/api/proxy/list' + queryString(args));
     case 'proxy_create':
-      return request('POST', '/api/proxy/create', args);
+      return request('POST', '/api/proxy/create', {
+        ...args,
+        ...(args.ip_channel !== undefined ? { ipChannel: args.ip_channel } : {}),
+        ...(args.refresh_url !== undefined ? { refreshUrl: args.refresh_url } : {}),
+      });
     case 'proxy_create_many':
       return request('POST', '/api/proxy/create', { data: args.data });
     case 'proxy_update':
-      return request('POST', '/api/proxy/update', { proxy_id: args.proxy_id, ...args });
+      return request('POST', '/api/proxy/update', {
+        proxy_id: args.proxy_id || args.proxy_library_id,
+        ...args,
+        ...(args.ip_channel !== undefined ? { ipChannel: args.ip_channel } : {}),
+        ...(args.refresh_url !== undefined ? { refreshUrl: args.refresh_url } : {}),
+        ...(args.proxy_auth_action !== undefined ? { proxyAuthAction: args.proxy_auth_action } : {}),
+      });
     case 'proxy_delete':
-      return request('POST', '/api/proxy/delete', { proxy_ids: args.proxy_ids });
+      return request('POST', '/api/proxy/delete', { proxy_ids: args.proxy_ids || args.proxy_library_ids });
     case 'proxy_check':
-      return request('POST', '/api/proxy/check', args);
+      return request('POST', '/api/proxy/check', {
+        ...args,
+        ...(args.proxy_library_id !== undefined ? { proxy_id: args.proxy_library_id } : {}),
+        ...(args.ip_channel !== undefined ? { ipChannel: args.ip_channel } : {}),
+      });
     case 'extension_assign':
       return request('POST', '/api/extension/assign', {
         extension_id: args.extension_id,
@@ -353,7 +435,6 @@ async function callTool(name, args = {}) {
         operate: args.operate,
         tile: args.tile,
         cascade: args.cascade,
-        settings: args.settings,
       });
     case 'window_sync_stop':
       return request('POST', '/api/sync/stop', {});
@@ -371,7 +452,8 @@ async function callTool(name, args = {}) {
       return request('POST', '/api/rpa/run', {
         profile_id: args.profile_id,
         steps: args.steps,
-        name: args.name || 'mcp-rpa',
+        process_name: args.process_name,
+        name: args.process_name || args.name || 'mcp-rpa',
       });
     case 'rpa_run_plan':
       return request('POST', '/api/rpa/run', { plan_id: args.plan_id, name: args.name });
@@ -456,6 +538,7 @@ async function handleRpc(message) {
 
 function main() {
   let buffer = '';
+  let rpcQueue = Promise.resolve();
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => {
     buffer += chunk;
@@ -466,10 +549,15 @@ function main() {
       if (!line) continue;
       let message;
       try { message = JSON.parse(line); } catch (_) { continue; }
-      handleRpc(message);
+      // Preserve transport order for mutating tools. Without serialization,
+      // back-to-back profile updates can both read the same old profile and
+      // let the later completion overwrite the earlier mutation.
+      rpcQueue = rpcQueue.then(() => handleRpc(message));
     }
   });
-  process.stdin.on('end', () => process.exit(0));
+  process.stdin.on('end', () => {
+    rpcQueue.finally(() => process.exit(0));
+  });
 }
 
 if (require.main === module) main();

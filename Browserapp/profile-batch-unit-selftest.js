@@ -38,8 +38,34 @@ async function run() {
   assert.strictEqual(retained.deleted, 1);
   assert(fs.existsSync(engine.profileRoot('env-007')), 'Browser data should be retained when deleteData is false');
   assert.strictEqual(engine.status().length, 4);
+
+  const failedId = 'env-008';
+  const failedProfile = engine.sanitizeProfile({ id: failedId, name: 'Delete failure' });
+  engine.profiles.set(failedId, failedProfile);
+  engine.assignments.set(failedId, new Set(['ext-global']));
+  engine.networkInfo.set(failedId, { ip: '203.0.113.8' });
+  await fsp.mkdir(engine.profileRoot(failedId), { recursive: true });
+  await fsp.writeFile(path.join(engine.profileRoot(failedId), 'marker.txt'), failedId);
+  const originalRm = fsp.rm;
+  fsp.rm = async (target, options) => {
+    if (path.resolve(target) === path.resolve(engine.profileRoot(failedId))) {
+      const error = new Error('synthetic profile delete failure');
+      error.code = 'EIO';
+      throw error;
+    }
+    return originalRm(target, options);
+  };
+  try {
+    await assert.rejects(engine.deleteProfiles([failedId], true), /synthetic profile delete failure/);
+  } finally {
+    fsp.rm = originalRm;
+  }
+  assert.strictEqual(engine.profiles.get(failedId), failedProfile, 'disk failure must retain profile in memory');
+  assert(engine.assignments.get(failedId).has('ext-global'), 'disk failure must retain extension assignments');
+  assert.strictEqual(engine.networkInfo.get(failedId).ip, '203.0.113.8', 'disk failure must retain network state');
+  assert(fs.existsSync(engine.profileRoot(failedId)), 'disk failure must retain browser data');
   await fsp.rm(root, { recursive: true, force: true });
-  console.log('PROFILE_BATCH_SELFTEST_OK created=3 deleted=3 stopped=1 data_delete=2 data_retain=1 extension_inheritance=3');
+  console.log('PROFILE_BATCH_SELFTEST_OK created=3 deleted=3 stopped=1 data_delete=2 data_retain=1 delete_failure_consistency=1 extension_inheritance=3');
 }
 
 run().catch((error) => { console.error(error); process.exitCode = 1; });

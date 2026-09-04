@@ -68,6 +68,37 @@ function sameProxyEndpoint(left, right) {
   return Boolean(a && b && a.protocol === b.protocol && a.host === b.host && a.port === b.port);
 }
 
+function sameProxyIdentity(left, right) {
+  const a = parsedProxy(left);
+  const b = parsedProxy(right);
+  return Boolean(a && b
+    && a.protocol === b.protocol
+    && a.host === b.host
+    && a.port === b.port
+    && String(a.username || '') === String(b.username || '')
+    && String(a.password || '') === String(b.password || ''));
+}
+
+function ownAliasValue(input, keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(input || {}, key)) {
+      return { present: true, value: input[key] };
+    }
+  }
+  return { present: false, value: undefined };
+}
+
+function profileProxyAssociation(value) {
+  const topLevel = ownAliasValue(value, ['proxyId', 'proxy_id', 'proxyLibraryId', 'proxy_library_id']);
+  if (topLevel.present) return topLevel;
+  return ownAliasValue(value?.proxyMeta, ['proxyId', 'proxy_id', 'proxyLibraryId', 'proxy_library_id']);
+}
+
+function normalizedProxyAssociationId(value) {
+  if (value == null || String(value).trim() === '') return null;
+  return String(value).trim().slice(0, 128);
+}
+
 /** Kill options that match both kernel binary and macOS env Dock shell (OpenBrowser.bin). */
 function managedBrowserKillOptions(itemOrBrowser, root, launchBinary = null) {
   const browserPath = itemOrBrowser?.browser?.path || itemOrBrowser?.path || itemOrBrowser || null;
@@ -302,6 +333,10 @@ class BrowserEngine {
     this.stopAllInProgress = false;
     this._persistQueue = Promise.resolve();
     this.networkInfo = new Map();
+    // The proxy library is loaded by the automation layer after engine.init().
+    // Keep the reference here so linked profiles always resolve their current
+    // credentials at sync/start time instead of relying on renderer storage.
+    this.proxyStore = null;
     this.extensions = new Map();
     this.assignments = new Map();
     this.listeners = new Set();
@@ -434,6 +469,68 @@ class BrowserEngine {
     if (migrateKernelPolicy || recoveredState) await this.persist();
   }
 
+  resolveStoredProxyProfile(incoming) {
+    const profile = incoming && typeof incoming === 'object' ? incoming : null;
+    if (!profile) return profile;
+    const direct = profile.networkMode === 'direct' || /^(?:direct|offline|none)$/i.test(String(profile.proxy || '').trim());
+    const association = profileProxyAssociation(profile);
+    const proxyId = direct ? null : normalizedProxyAssociationId(association.value);
+    if (!proxyId) {
+      return this.sanitizeProfile({
+        ...profile,
+        proxyId: null,
+        proxyMeta: { ...(profile.proxyMeta || {}), proxyId: null },
+      });
+    }
+    if (!this.proxyStore) {
+      return this.sanitizeProfile({
+        ...profile,
+        proxyId,
+        proxyMeta: { ...(profile.proxyMeta || {}), proxyId },
+      });
+    }
+    const item = this.proxyStore.get?.(proxyId);
+    if (!item?.raw) {
+      // A deleted library entry must not leave a ghost association that later
+      // overwrites Direct/manual proxy edits. Keep the last raw endpoint as a
+      // manual proxy and remove every accepted association alias via sanitize.
+      return this.sanitizeProfile({
+        ...profile,
+        proxyId: null,
+        proxyMeta: { ...(profile.proxyMeta || {}), proxyId: null },
+      });
+    }
+    return this.sanitizeProfile({
+      ...profile,
+      networkMode: 'proxy',
+      proxy: item.raw,
+      proxyId: item.id,
+      proxyMeta: {
+        ...(profile.proxyMeta || {}),
+        proxyId: item.id,
+        ipChannel: item.ipChannel || profile.proxyMeta?.ipChannel || 'ip-api',
+        refreshUrl: item.refreshUrl || profile.proxyMeta?.refreshUrl || '',
+      },
+    });
+  }
+
+  async setProxyStore(proxyStore) {
+    this.proxyStore = proxyStore || null;
+    if (!this.proxyStore) return false;
+    let changed = false;
+    for (const [id, profile] of this.profiles) {
+      const next = this.resolveStoredProxyProfile(profile);
+      if (!next || next.proxy === profile.proxy
+        && next.proxyId === profile.proxyId
+        && next.proxyMeta?.ipChannel === profile.proxyMeta?.ipChannel
+        && next.proxyMeta?.refreshUrl === profile.proxyMeta?.refreshUrl) continue;
+      this.profiles.set(id, next);
+      changed = true;
+    }
+    if (changed) await this.persist();
+    return changed;
+  }
+
   persist() {
     const assignments = Object.fromEntries([...this.assignments].map(([id, values]) => [id, [...values]]));
     const payload = JSON.stringify({
@@ -520,6 +617,9 @@ class BrowserEngine {
     const advancedValue = value.advanced && typeof value.advanced === 'object' ? value.advanced : {};
     const proxyMetaValue = value.proxyMeta && typeof value.proxyMeta === 'object' ? value.proxyMeta : {};
     const platformValue = value.platform && typeof value.platform === 'object' ? value.platform : {};
+    const fingerprintValue = value.fingerprint && typeof value.fingerprint === 'object'
+      ? value.fingerprint
+      : (privacyValue.fingerprint && typeof privacyValue.fingerprint === 'object' ? privacyValue.fingerprint : null);
     const allowed = (candidate, values, fallback) => values.includes(String(candidate || '')) ? String(candidate) : fallback;
     const finite = (candidate) => candidate !== '' && candidate !== null && candidate !== undefined && Number.isFinite(Number(candidate)) ? Number(candidate) : null;
     const width = Math.min(7680, Math.max(640, Number(value.width) || 1280)); const height = Math.min(4320, Math.max(480, Number(value.height) || 820));
@@ -530,20 +630,18 @@ class BrowserEngine {
       return values.includes(value) ? value : null;
     };
     const cpuCandidate = privacyValue.cores === '' || privacyValue.cores === null || privacyValue.cores === undefined
-      ? privacyValue.fingerprint?.cores
+      ? fingerprintValue?.cores
       : privacyValue.cores;
     const memoryCandidate = privacyValue.memory === '' || privacyValue.memory === null || privacyValue.memory === undefined
-      ? privacyValue.fingerprint?.memory
+      ? fingerprintValue?.memory
       : privacyValue.memory;
     const cores = parseLimitedOption(cpuCandidate, [0, 2, 4, 6, 8, 10, 12, 16]);
     const memory = parseLimitedOption(memoryCandidate, [0, 2, 4, 6, 8]);
     const rawProxy = String(value.proxy || '').trim();
     if (rawProxy.length > MAX_PROFILE_PROXY_LENGTH) throw new Error('Proxy URL is too long');
     const networkMode = value.networkMode === 'direct' || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy) ? 'direct' : 'proxy';
-    const proxyIdValue = value.proxyId ?? value.proxy_id ?? proxyMetaValue.proxyId ?? proxyMetaValue.proxy_id;
-    const proxyId = proxyIdValue == null || String(proxyIdValue).trim() === ''
-      ? null
-      : String(proxyIdValue).trim().slice(0, 128);
+    const proxyAssociation = profileProxyAssociation(value);
+    const proxyId = networkMode === 'direct' ? null : normalizedProxyAssociationId(proxyAssociation.value);
     return {
       id, number: Number.isInteger(number) && number > 0 ? number : null, name: value.name.slice(0, 100),
       title: String(value.title || value.displayName || '').slice(0, 120),
@@ -570,8 +668,8 @@ class BrowserEngine {
       },
       proxyMeta: {
         proxyId,
-        ipChannel: normalizeIpLookupChannel(proxyMetaValue.ipChannel),
-        refreshUrl: String(proxyMetaValue.refreshUrl || '').slice(0, 1000),
+        ipChannel: normalizeIpLookupChannel(proxyMetaValue.ipChannel ?? proxyMetaValue.ip_channel),
+        refreshUrl: String(proxyMetaValue.refreshUrl ?? proxyMetaValue.refresh_url ?? '').slice(0, 1000),
         checkOnStart: Boolean(proxyMetaValue.checkOnStart),
         refreshOnStart: Boolean(proxyMetaValue.refreshOnStart),
         systemProxy: allowed(proxyMetaValue.systemProxy, ['global', 'use', 'off'], 'global'),
@@ -660,19 +758,19 @@ class BrowserEngine {
         cores,
         memory,
         // Keep 0 (= real hardware). Do NOT use `cores || nested` — 0 is falsy and was wiped to "auto".
-        fingerprint: privacyValue.fingerprint && typeof privacyValue.fingerprint === 'object' ? {
-          ...privacyValue.fingerprint,
+        ...(fingerprintValue ? { fingerprint: {
+          ...fingerprintValue,
           cores: cores === null || cores === undefined
-            ? (privacyValue.fingerprint.cores === 0 || privacyValue.fingerprint.cores === '0'
+            ? (fingerprintValue.cores === 0 || fingerprintValue.cores === '0'
               ? 0
-              : (privacyValue.fingerprint.cores ?? null))
+              : (fingerprintValue.cores ?? null))
             : cores,
           memory: memory === null || memory === undefined
-            ? (privacyValue.fingerprint.memory === 0 || privacyValue.fingerprint.memory === '0'
+            ? (fingerprintValue.memory === 0 || fingerprintValue.memory === '0'
               ? 0
-              : (privacyValue.fingerprint.memory ?? null))
+              : (fingerprintValue.memory ?? null))
             : memory,
-        } : { cores, memory },
+        } } : {}),
       },
       advanced: {
         saveCookies: advancedValue.saveCookies !== false, savePasswords: Boolean(advancedValue.savePasswords), saveBookmarks: advancedValue.saveBookmarks !== false,
@@ -714,8 +812,28 @@ class BrowserEngine {
     let assignmentsChanged = false;
     const incomingIds = new Set();
     for (const value of values) {
-      const profile = this.sanitizeProfile(value);
-      const previous = this.profiles.get(profile.id);
+      const sanitized = this.sanitizeProfile(value);
+      const previous = this.profiles.get(sanitized.id);
+      let profile = sanitized;
+      if (previous && sanitized.proxyId && previous.proxyId === sanitized.proxyId) {
+        const stored = this.proxyStore?.get?.(sanitized.proxyId);
+        const matchesPrevious = sameProxyIdentity(sanitized.proxy, previous.proxy)
+          || (!proxyHasCredentials(sanitized.proxy) && sameProxyEndpoint(sanitized.proxy, previous.proxy));
+        const matchesStored = Boolean(stored?.raw) && (
+          sameProxyIdentity(sanitized.proxy, stored.raw)
+          || (!proxyHasCredentials(sanitized.proxy) && sameProxyEndpoint(sanitized.proxy, stored.raw))
+        );
+        if (!matchesPrevious && !matchesStored) {
+          // A linked profile whose endpoint/auth was manually edited becomes a
+          // manual proxy. This prevents the old library id from overwriting it.
+          profile = this.sanitizeProfile({
+            ...sanitized,
+            proxyId: null,
+            proxyMeta: { ...(sanitized.proxyMeta || {}), proxyId: null },
+          });
+        }
+      }
+      profile = this.resolveStoredProxyProfile(profile);
       const isNew = !previous;
       // UI may send redacted proxy (no auth) after localStorage reload. Prefer previous
       // authenticated form only when host:port match and incoming lacks credentials.
@@ -725,14 +843,19 @@ class BrowserEngine {
         const prevProxy = String(previous.proxy || '');
         const nextHasAuth = proxyHasCredentials(nextProxy);
         const prevHasAuth = proxyHasCredentials(prevProxy);
-        const explicitlyCleared = value?.proxyAuthAction === 'clear';
+        const explicitlyCleared = String(value?.proxyAuthAction ?? value?.proxy_auth_action ?? '').toLowerCase() === 'clear';
         if (!explicitlyCleared && !nextHasAuth && prevHasAuth && sameProxyEndpoint(prevProxy, nextProxy)) {
           merged = this.sanitizeProfile({ ...profile, proxy: prevProxy });
         }
         // Restore cookies/platform secrets only when UI clearly redacted ALL of them
         // (post-localStorage load) while engine still holds values — not when user
         // intentionally cleared a single field in the editor.
-        const uiLooksRedacted = !String(profile.cookies || '').trim()
+        const secretAction = String(value?.secretsAction ?? value?.credentialsAction ?? '').trim().toLowerCase();
+        const explicitSecretUpdate = value?.__secretsExplicit === true
+          || secretAction === 'replace'
+          || secretAction === 'clear';
+        const uiLooksRedacted = !explicitSecretUpdate
+          && !String(profile.cookies || '').trim()
           && !String(profile.platform?.password || '').trim()
           && !String(profile.platform?.totpSecret || '').trim()
           && (
@@ -1915,17 +2038,19 @@ class BrowserEngine {
 
   cleanupRunningItem(profileId, item, options = {}) {
     if (!item) return Promise.resolve({ id: profileId, running: false });
+    if (item.cleanupPromise?.lifecycleSettled) item.cleanupPromise = null;
     if (item.cleanupPromise) return item.cleanupPromise;
 
-    const expected = options.expected !== undefined ? Boolean(options.expected) : Boolean(item.stopping);
     const reason = String(options.reason || 'browser-gone');
+    const wasStopping = Boolean(item.stopping);
     const cleanup = async () => {
       // Mark first so the watcher and any late startup continuation stop touching
       // a browser whose ownership is already being torn down. Keep `running` until
       // all external resources have been released; start() waits on `stopping`.
       item.cleanupState = 'cleaning';
       item.cleanupAttempts = (item.cleanupAttempts || 0) + 1;
-      item.cleanedUp = true;
+      item.cleanedUp = false;
+      item.stopping = true;
       this.clearRunningWatch(item);
       item.workerFingerprintConnection?.close();
       item.workerFingerprintConnection = null;
@@ -1985,12 +2110,14 @@ class BrowserEngine {
       stopIpcStubForWindow(item.kernelWindowName);
       const lockReleased = await releaseProfileLock(item.root, item.profileLock).catch(() => false);
       if (!lockReleased && item.profileLock && fs.existsSync(lockPath(item.root))) {
-        item.cleanupFailed = true;
-        item.cleanupState = 'blocked';
-        const failure = new Error(`Profile lock release failed for profile ${profileId}; cleanup is fail-closed`);
-        failure.code = "PROFILE_LOCK_RELEASE_FAILED";
-        item.cleanupError = failure;
-        throw failure;
+        if (!options.ignoreForeignLock) {
+          item.cleanupFailed = true;
+          item.cleanupState = 'blocked';
+          const failure = new Error(`Profile lock release failed for profile ${profileId}; cleanup is fail-closed`);
+          failure.code = 'PROFILE_LOCK_RELEASE_FAILED';
+          item.cleanupError = failure;
+          throw failure;
+        }
       }
       // Existing behavior intentionally marks the profile clean after watchdog
       // cleanup as well, preventing Chromium's restore bubble on the next launch.
@@ -2000,6 +2127,8 @@ class BrowserEngine {
       item.cleanupFailed = false;
       item.cleanupState = 'cleaned';
       item.cleanupError = null;
+      item.cleanedUp = true;
+      item.stopping = false;
       const live = this.profiles.get(profileId) || item.profile;
       const error = options.error === undefined ? null : (options.error || null);
       const currentItem = this.running.get(profileId);
@@ -2008,7 +2137,7 @@ class BrowserEngine {
         item.statusEmitted = true;
         this.emit({ type: 'status', id: profileId, running: false, stopping: false, error, reason });
       }
-      if (mayEmitForGeneration && options.emitProfileClosed && live?.advanced?.cloudBackup && !item.stopping && !item.profileClosedEmitted) {
+      if (mayEmitForGeneration && options.emitProfileClosed && live?.advanced?.cloudBackup && !wasStopping && !item.profileClosedEmitted) {
         item.profileClosedEmitted = true;
         this.emit({
           type: 'profile-closed',
@@ -2023,15 +2152,25 @@ class BrowserEngine {
     };
 
     const cleanupPromise = cleanup();
+    cleanupPromise.lifecycleItem = item;
+    cleanupPromise.lifecycleGeneration = item.lifecycleGeneration;
+    cleanupPromise.lifecycleSettled = false;
     item.cleanupPromise = cleanupPromise;
-    cleanupPromise.catch((error) => {
-      // Keep the running item and lock visible, but allow an explicit retry after
-      // the child eventually exits instead of memoizing a rejected promise forever.
-      item.cleanupFailed = true;
-      item.cleanupState = 'blocked';
-      item.cleanupError = error;
-      if (item.cleanupPromise === cleanupPromise) item.cleanupPromise = null;
-    }).catch(() => {});
+    cleanupPromise.then(
+      () => {
+        cleanupPromise.lifecycleSettled = true;
+        if (item.cleanupPromise === cleanupPromise) item.cleanupPromise = null;
+      },
+      (error) => {
+        cleanupPromise.lifecycleSettled = true;
+        // Keep the running item and lock visible, but allow an explicit retry after
+        // the child eventually exits instead of memoizing a rejected promise forever.
+        item.cleanupFailed = true;
+        item.cleanupState = 'blocked';
+        item.cleanupError = error;
+        if (item.cleanupPromise === cleanupPromise) item.cleanupPromise = null;
+      },
+    );
     return cleanupPromise;
   }
 
@@ -2115,11 +2254,22 @@ class BrowserEngine {
   handleBrowserGone(profileId, item, reason = 'browser-gone', options = {}) {
     if (!item) return Promise.resolve({ id: profileId, running: false });
     const pending = this.stopping.get(profileId);
-    if (pending && (!pending.lifecycleItem || pending.lifecycleItem === item)) return pending;
+    if (pending?.lifecycleSettled && this.stopping.get(profileId) === pending) this.stopping.delete(profileId);
+    const activePending = this.stopping.get(profileId);
+    if (activePending && (!activePending.lifecycleItem || activePending.lifecycleItem === item)) return activePending;
+    if (item.cleanupPromise?.lifecycleSettled) item.cleanupPromise = null;
     if (item.cleanupPromise) return item.cleanupPromise;
 
     const current = this.running.get(profileId);
-    if ((current && current !== item) || (pending && pending.lifecycleItem && pending.lifecycleItem !== item)) {
+    const latestGeneration = Math.max(
+      Number(this.lifecycleGenerations?.get(profileId)) || 0,
+      Number(this.starting.get(profileId)?.lifecycleGeneration) || 0,
+      Number(current?.lifecycleGeneration) || 0,
+      Number(activePending?.lifecycleGeneration) || 0,
+    );
+    const staleGeneration = Number(item.lifecycleGeneration) > 0
+      && latestGeneration > Number(item.lifecycleGeneration);
+    if (staleGeneration || (current && current !== item) || (activePending && activePending.lifecycleItem && activePending.lifecycleItem !== item)) {
       // A late exit/error from an older generation must never replace the stop
       // barrier or status of the current browser generation.
       return this.cleanupRunningItem(profileId, item, {
@@ -2129,9 +2279,19 @@ class BrowserEngine {
         kill: options.kill !== false,
         waitForExit: options.waitForExit !== false,
         exitTimeout: options.exitTimeout,
-        markCleanExit: options.markCleanExit,
+        // A replacement generation may already be preparing the same profile.
+        // Do not rewrite its Preferences from an old process callback.
+        markCleanExit: false,
         emitStatus: false,
         emitProfileClosed: false,
+        ignoreForeignLock: Boolean(
+          current
+          && current !== item
+          && current.profileLock
+          && current.root
+          && item.root
+          && path.resolve(String(current.root || '')) === path.resolve(String(item.root || '')),
+        ),
       });
     }
 
@@ -2240,7 +2400,11 @@ class BrowserEngine {
     });
   }
 
-  restoreStoredProxyCredentials(incoming) {
+  restoreStoredProxyCredentials(incoming, source = null) {
+    if (!incoming || incoming.networkMode === 'direct' || incoming.proxyId) return incoming;
+    if (String(source?.proxyAuthAction ?? source?.proxy_auth_action ?? '').trim().toLowerCase() === 'clear') {
+      return incoming;
+    }
     const previous = this.profiles.get(incoming.id);
     if (!previous) return incoming;
     const nextProxy = String(incoming.proxy || '');
@@ -2268,8 +2432,9 @@ class BrowserEngine {
 
   clearLifecycleStopRequest(id, generation) {
     if (!this.lifecycleStopRequests) return;
+    if (generation === undefined) return;
     const requested = this.lifecycleStopRequests.get(id);
-    if (generation === undefined || requested === generation || requested === true) {
+    if (requested === generation || (generation === null && requested === true)) {
       this.lifecycleStopRequests.delete(id);
     }
   }
@@ -2318,7 +2483,7 @@ class BrowserEngine {
       lifecycleGeneration: generation,
       cleanupState: 'blocked',
       cleanupAttempts: 1,
-      cleanedUp: true,
+      cleanedUp: false,
       cleanupFailed: true,
       cleanupError: error,
       stopping: true,
@@ -2333,7 +2498,10 @@ class BrowserEngine {
   }
 
   async start(raw) {
-    const candidate = this.restoreStoredProxyCredentials(this.sanitizeProfile(raw));
+    const candidate = this.restoreStoredProxyCredentials(
+      this.resolveStoredProxyProfile(this.sanitizeProfile(raw)),
+      raw,
+    );
     const id = candidate.id;
     const pendingStart = this.starting.get(id);
     if (pendingStart) return pendingStart;
@@ -2375,7 +2543,10 @@ class BrowserEngine {
 
   async _start(raw, lifecycleGeneration = null) {
     // let: language/timezone resolution reassigns profile via applyResolvedLocale
-    let profile = this.restoreStoredProxyCredentials(this.sanitizeProfile(raw)); this.profiles.set(profile.id, profile);
+    // start() already applied redaction recovery exactly once. Repeating it here
+    // would undo an explicit proxyAuthAction=clear before launch.
+    let profile = this.resolveStoredProxyProfile(this.sanitizeProfile(raw));
+    this.profiles.set(profile.id, profile);
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     if (this.running.has(profile.id)) {
       if (!profile.advanced.multiOpen) return this.publicRunning(profile.id);
@@ -3013,26 +3184,35 @@ class BrowserEngine {
   stopRunningItem(safe, item) {
     if (!item) return Promise.resolve({ id: safe, running: false, alreadyStopped: true });
     const pending = this.stopping.get(safe);
-    if (pending && (!pending.lifecycleItem || pending.lifecycleItem === item)) return pending;
-    if (pending) {
-      return pending.catch(() => {}).then(() => {
+    if (pending?.lifecycleSettled && this.stopping.get(safe) === pending) this.stopping.delete(safe);
+    const activePending = this.stopping.get(safe);
+    if (activePending && (!activePending.lifecycleItem || activePending.lifecycleItem === item)) return activePending;
+    if (activePending) {
+      return activePending.catch(() => {}).then(() => {
         if (this.running.get(safe) !== item) return { id: safe, running: false, alreadyStopped: true };
         return this.stopRunningItem(safe, item);
       });
     }
+    if (item.cleanupPromise?.lifecycleSettled) item.cleanupPromise = null;
     if (item.cleanupPromise) {
-      item.cleanupPromise.lifecycleItem = item;
-      item.cleanupPromise.lifecycleGeneration = item.lifecycleGeneration;
-      this.stopping.set(safe, item.cleanupPromise);
-      item.cleanupPromise.finally(() => {
-        if (this.stopping.get(safe) === item.cleanupPromise) this.stopping.delete(safe);
+      const cleanupPromise = item.cleanupPromise;
+      cleanupPromise.lifecycleItem = item;
+      cleanupPromise.lifecycleGeneration = item.lifecycleGeneration;
+      this.stopping.set(safe, cleanupPromise);
+      cleanupPromise.finally(() => {
+        if (this.stopping.get(safe) === cleanupPromise) this.stopping.delete(safe);
       }).catch(() => {});
-      return item.cleanupPromise;
+      return cleanupPromise;
     }
 
     const task = this._stop(safe, item);
     task.lifecycleItem = item;
     task.lifecycleGeneration = item.lifecycleGeneration;
+    task.lifecycleSettled = false;
+    task.then(
+      () => { task.lifecycleSettled = true; },
+      () => { task.lifecycleSettled = true; },
+    );
     this.stopping.set(safe, task);
     task.finally(() => {
       if (this.stopping.get(safe) === task) this.stopping.delete(safe);
@@ -3043,7 +3223,8 @@ class BrowserEngine {
   async stop(id) {
     const safe = assertProfileId(id);
     const pendingStop = this.stopping.get(safe);
-    if (pendingStop) return pendingStop;
+    if (pendingStop?.lifecycleSettled && this.stopping.get(safe) === pendingStop) this.stopping.delete(safe);
+    if (this.stopping.has(safe)) return this.stopping.get(safe);
 
     const pendingStart = this.starting.get(safe);
     const requestedGeneration = pendingStart?.lifecycleGeneration;
@@ -3152,12 +3333,10 @@ class BrowserEngine {
     // operation cannot prevent unrelated environments and the start-page server
     // from being closed during application shutdown.
     const failed = [];
-    let previousSignature = null;
     const itemTimeout = Math.max(50, Number(this.stopAllItemTimeoutMs) || STOP_ALL_ITEM_TIMEOUT_MS);
     for (let pass = 0; pass < 8; pass += 1) {
       const ids = [...new Set([...this.running.keys(), ...this.starting.keys(), ...this.stopping.keys()])];
       if (!ids.length) break;
-      const signature = [...ids].sort().join('\0');
       const results = await Promise.allSettled(ids.map((id) => lifecycleTimeout(
         this.stop(id),
         itemTimeout,
@@ -3169,14 +3348,6 @@ class BrowserEngine {
       }
       const remaining = [...new Set([...this.running.keys(), ...this.starting.keys(), ...this.stopping.keys()])];
       if (!remaining.length) break;
-      const nextSignature = [...remaining].sort().join('\0');
-      // No lifecycle key changed after a full stop attempt. Retrying would only
-      // turn an isolated cleanup failure into an unbounded quit hang.
-      if (nextSignature === signature || nextSignature === previousSignature) {
-        failed.push(`lifecycle drain did not converge: ${remaining.join(', ')}`);
-        break;
-      }
-      previousSignature = signature;
     }
     const remaining = [...new Set([...this.running.keys(), ...this.starting.keys(), ...this.stopping.keys()])];
     if (remaining.length) failed.push(`lifecycle resources remain: ${remaining.join(', ')}`);
@@ -3201,7 +3372,6 @@ class BrowserEngine {
         await this.stop(id);
         stopped += 1;
       }
-      this.profiles.delete(id); this.assignments.delete(id); this.networkInfo.delete(id); deleted.push(id);
       if (deleteData) {
         const profileRoot = this.profileRoot(id);
         const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, profileRoot, id);
@@ -3223,8 +3393,27 @@ class BrowserEngine {
           if (lastError) throw lastError;
         }
       }
+      // Commit in-memory deletion only after the profile directory is gone.
+      // Persist each successful item so a later batch failure cannot leave the
+      // durable profile list disagreeing with already-deleted directories.
+      const previousProfile = this.profiles.get(id);
+      const previousAssignments = this.assignments.get(id);
+      const previousNetwork = this.networkInfo.get(id);
+      const hadAssignments = this.assignments.has(id);
+      const hadNetwork = this.networkInfo.has(id);
+      this.profiles.delete(id);
+      this.assignments.delete(id);
+      this.networkInfo.delete(id);
+      try {
+        await this.persist();
+      } catch (error) {
+        if (previousProfile) this.profiles.set(id, previousProfile);
+        if (hadAssignments) this.assignments.set(id, previousAssignments);
+        if (hadNetwork) this.networkInfo.set(id, previousNetwork);
+        throw error;
+      }
+      deleted.push(id);
     }
-    await this.persist();
     this.emit({ type: 'profiles', action: 'delete', ids: deleted }); this.emit({ type: 'extensions' });
     return { success: true, deleted: deleted.length, stopped, dataDeleted: Boolean(deleteData), ids: deleted };
   }
@@ -3232,7 +3421,7 @@ class BrowserEngine {
   status() { return [...this.profiles.values()].map((profile) => ({ ...profile, ...this.publicRunning(profile.id), network: this.networkInfo.get(profile.id) || null, assignedExtensions: [...(this.assignments.get(profile.id) || [])] })); }
 
   async resolveProfileProxyConfig(profile, { allowExtract = true } = {}) {
-    const working = this.sanitizeProfile(profile);
+    const working = this.resolveStoredProxyProfile(this.sanitizeProfile(profile));
     let lastError = null;
     const candidates = [];
     const pushCandidate = (value, source) => {
@@ -3352,7 +3541,10 @@ class BrowserEngine {
   }
 
   async checkProxy(raw, options = {}) {
-    const profile = this.sanitizeProfile(raw);
+    const profile = this.restoreStoredProxyCredentials(
+      this.resolveStoredProxyProfile(this.sanitizeProfile(raw)),
+      raw,
+    );
     const network = await this.testProxy(profile, options);
     const applied = this.applyNetworkToProfile(profile, network, { persist: false });
     // A successful manual check may be followed immediately by app shutdown. Do not
@@ -3366,7 +3558,10 @@ class BrowserEngine {
   }
 
   async refreshProfileProxy(raw) {
-    const profile = this.sanitizeProfile(raw);
+    const profile = this.restoreStoredProxyCredentials(
+      this.resolveStoredProxyProfile(this.sanitizeProfile(raw)),
+      raw,
+    );
     const refreshUrl = String(profile.proxyMeta?.refreshUrl || '').trim();
     const extractUrl = String(profile.proxyMeta?.apiExtractUrl || '').trim();
     // refreshUrl and apiExtractUrl stay separate: refresh rotates; extract re-reads endpoint.
@@ -3403,7 +3598,7 @@ class BrowserEngine {
   }
 
   async prepareProfileProxyForStart(profile) {
-    let working = this.sanitizeProfile(profile);
+    let working = this.resolveStoredProxyProfile(this.sanitizeProfile(profile));
     const meta = working.proxyMeta || {};
     const hasProxy = working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy));
     const extractUrl = String(meta.apiExtractUrl || '').trim();
