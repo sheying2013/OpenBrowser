@@ -33,6 +33,22 @@ const MAX_PROFILE_PROXY_LENGTH = 64 * 1024;
 // finish on slower RDP/VM hosts.
 const HELPER_CLEANUP_ATTEMPTS = process.platform === 'win32' ? 32 : 3;
 const HELPER_CLEANUP_DELAY_MS = process.platform === 'win32' ? 250 : 120;
+const HELPER_CLEANUP_TIMEOUT_MS = process.platform === 'win32' ? 14000 : 3000;
+const STOP_ALL_ITEM_TIMEOUT_MS = process.platform === 'win32' ? 22000 : 12000;
+
+function lifecycleTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(message);
+        error.code = 'LIFECYCLE_TIMEOUT';
+        reject(error);
+      }, Math.max(1, Number(timeoutMs) || 1));
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 function parsedProxy(value) {
   try {
@@ -280,6 +296,10 @@ class BrowserEngine {
     // can acquire the same profile.
     this.starting = new Map();
     this.stopping = new Map();
+    this.lifecycleGenerations = new Map();
+    this.lifecycleStopRequests = new Map();
+    this.stopAllPromise = null;
+    this.stopAllInProgress = false;
     this._persistQueue = Promise.resolve();
     this.networkInfo = new Map();
     this.extensions = new Map();
@@ -520,12 +540,17 @@ class BrowserEngine {
     const rawProxy = String(value.proxy || '').trim();
     if (rawProxy.length > MAX_PROFILE_PROXY_LENGTH) throw new Error('Proxy URL is too long');
     const networkMode = value.networkMode === 'direct' || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy) ? 'direct' : 'proxy';
+    const proxyIdValue = value.proxyId ?? value.proxy_id ?? proxyMetaValue.proxyId ?? proxyMetaValue.proxy_id;
+    const proxyId = proxyIdValue == null || String(proxyIdValue).trim() === ''
+      ? null
+      : String(proxyIdValue).trim().slice(0, 128);
     return {
       id, number: Number.isInteger(number) && number > 0 ? number : null, name: value.name.slice(0, 100),
       title: String(value.title || value.displayName || '').slice(0, 120),
       browser: 'Google Chrome', os: String(value.os || 'Windows').slice(0, 40), location: String(value.location || 'Local').slice(0, 80),
       networkMode,
       proxy: networkMode === 'direct' ? 'Direct' : rawProxy,
+      proxyId,
       tag: String(value.tag || '').slice(0, 40),
       groupId: String(value.groupId || '').slice(0, 64),
       group_name: String(value.group_name || value.groupName || '').slice(0, 40),
@@ -544,6 +569,7 @@ class BrowserEngine {
         totpSecret: String(platformValue.totpSecret || platformValue.otp || '').slice(0, 200),
       },
       proxyMeta: {
+        proxyId,
         ipChannel: normalizeIpLookupChannel(proxyMetaValue.ipChannel),
         refreshUrl: String(proxyMetaValue.refreshUrl || '').slice(0, 1000),
         checkOnStart: Boolean(proxyMetaValue.checkOnStart),
@@ -1878,6 +1904,15 @@ class BrowserEngine {
     });
   }
 
+  async drainProfileHelpers(root) {
+    if (!root) return { known: true, pids: [], attempts: 0, timedOut: false };
+    return isolation.drainProcessesUsingProfile(root, {
+      attempts: HELPER_CLEANUP_ATTEMPTS,
+      delayMs: HELPER_CLEANUP_DELAY_MS,
+      timeoutMs: HELPER_CLEANUP_TIMEOUT_MS,
+    });
+  }
+
   cleanupRunningItem(profileId, item, options = {}) {
     if (!item) return Promise.resolve({ id: profileId, running: false });
     if (item.cleanupPromise) return item.cleanupPromise;
@@ -1888,6 +1923,8 @@ class BrowserEngine {
       // Mark first so the watcher and any late startup continuation stop touching
       // a browser whose ownership is already being torn down. Keep `running` until
       // all external resources have been released; start() waits on `stopping`.
+      item.cleanupState = 'cleaning';
+      item.cleanupAttempts = (item.cleanupAttempts || 0) + 1;
       item.cleanedUp = true;
       this.clearRunningWatch(item);
       item.workerFingerprintConnection?.close();
@@ -1916,6 +1953,7 @@ class BrowserEngine {
           await item.proxyForwarder?.close().catch(() => {});
           stopIpcStubForWindow(item.kernelWindowName);
           item.cleanupFailed = true;
+          item.cleanupState = 'blocked';
           const failure = new Error(`Browser child exit was not confirmed for profile ${profileId}; cleanup is fail-closed`);
           failure.code = 'BROWSER_EXIT_UNCONFIRMED';
           item.cleanupError = failure;
@@ -1927,17 +1965,13 @@ class BrowserEngine {
       // helpers. Re-scan the exact user-data-dir and terminate only those
       // helpers before releasing the profile lock.
       if (item.child?.exitCode !== null && item.child?.exitCode !== undefined && item.root) {
-        let helpersGone = false;
-        for (let attempt = 0; attempt < HELPER_CLEANUP_ATTEMPTS; attempt += 1) {
-          const scan = isolation.terminateProcessesUsingProfile(item.root);
-          if (!scan.known) break;
-          if (!scan.pids.length) { helpersGone = true; break; }
-          await new Promise((resolve) => setTimeout(resolve, HELPER_CLEANUP_DELAY_MS));
-        }
-        if (!helpersGone) {
+        const helperDrain = await this.drainProfileHelpers(item.root);
+        if (!helperDrain.known || helperDrain.pids.length) {
           const failure = new Error(`Chromium helper exit was not confirmed for profile ${profileId}; cleanup is fail-closed`);
           failure.code = 'BROWSER_HELPERS_EXIT_UNCONFIRMED';
+          failure.pids = helperDrain.pids;
           item.cleanupFailed = true;
+          item.cleanupState = 'blocked';
           item.cleanupError = failure;
           throw failure;
         }
@@ -1952,6 +1986,7 @@ class BrowserEngine {
       const lockReleased = await releaseProfileLock(item.root, item.profileLock).catch(() => false);
       if (!lockReleased && item.profileLock && fs.existsSync(lockPath(item.root))) {
         item.cleanupFailed = true;
+        item.cleanupState = 'blocked';
         const failure = new Error(`Profile lock release failed for profile ${profileId}; cleanup is fail-closed`);
         failure.code = "PROFILE_LOCK_RELEASE_FAILED";
         item.cleanupError = failure;
@@ -1963,14 +1998,17 @@ class BrowserEngine {
 
       if (this.running.get(profileId) === item) this.running.delete(profileId);
       item.cleanupFailed = false;
+      item.cleanupState = 'cleaned';
       item.cleanupError = null;
       const live = this.profiles.get(profileId) || item.profile;
       const error = options.error === undefined ? null : (options.error || null);
-      if (options.emitStatus !== false && !item.statusEmitted) {
+      const currentItem = this.running.get(profileId);
+      const mayEmitForGeneration = !currentItem || currentItem === item;
+      if (mayEmitForGeneration && options.emitStatus !== false && !item.statusEmitted) {
         item.statusEmitted = true;
         this.emit({ type: 'status', id: profileId, running: false, stopping: false, error, reason });
       }
-      if (options.emitProfileClosed && live?.advanced?.cloudBackup && !item.stopping && !item.profileClosedEmitted) {
+      if (mayEmitForGeneration && options.emitProfileClosed && live?.advanced?.cloudBackup && !item.stopping && !item.profileClosedEmitted) {
         item.profileClosedEmitted = true;
         this.emit({
           type: 'profile-closed',
@@ -1990,6 +2028,7 @@ class BrowserEngine {
       // Keep the running item and lock visible, but allow an explicit retry after
       // the child eventually exits instead of memoizing a rejected promise forever.
       item.cleanupFailed = true;
+      item.cleanupState = 'blocked';
       item.cleanupError = error;
       if (item.cleanupPromise === cleanupPromise) item.cleanupPromise = null;
     }).catch(() => {});
@@ -2049,17 +2088,15 @@ class BrowserEngine {
         return { exited: false, lockReleased: false, cleanupBlocked: true };
       }
       if (resources.root) {
-        let helpersGone = false;
-        for (let attempt = 0; attempt < HELPER_CLEANUP_ATTEMPTS; attempt += 1) {
-          const scan = isolation.terminateProcessesUsingProfile(resources.root);
-          if (!scan.known) return { exited: false, lockReleased: false, cleanupBlocked: true };
-          if (!scan.pids.length) {
-            helpersGone = true;
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, HELPER_CLEANUP_DELAY_MS));
+        const helperDrain = await this.drainProfileHelpers(resources.root);
+        if (!helperDrain.known || helperDrain.pids.length) {
+          return {
+            exited: false,
+            lockReleased: false,
+            cleanupBlocked: true,
+            helperPids: helperDrain.pids,
+          };
         }
-        if (!helpersGone) return { exited: false, lockReleased: false, cleanupBlocked: true };
       }
       if (resources.profileLock && resources.root) {
         const released = await releaseProfileLock(resources.root, resources.profileLock).catch(() => false);
@@ -2078,8 +2115,25 @@ class BrowserEngine {
   handleBrowserGone(profileId, item, reason = 'browser-gone', options = {}) {
     if (!item) return Promise.resolve({ id: profileId, running: false });
     const pending = this.stopping.get(profileId);
-    if (pending) return pending;
+    if (pending && (!pending.lifecycleItem || pending.lifecycleItem === item)) return pending;
     if (item.cleanupPromise) return item.cleanupPromise;
+
+    const current = this.running.get(profileId);
+    if ((current && current !== item) || (pending && pending.lifecycleItem && pending.lifecycleItem !== item)) {
+      // A late exit/error from an older generation must never replace the stop
+      // barrier or status of the current browser generation.
+      return this.cleanupRunningItem(profileId, item, {
+        reason,
+        expected: true,
+        error: null,
+        kill: options.kill !== false,
+        waitForExit: options.waitForExit !== false,
+        exitTimeout: options.exitTimeout,
+        markCleanExit: options.markCleanExit,
+        emitStatus: false,
+        emitProfileClosed: false,
+      });
+    }
 
     const cleanupPromise = this.cleanupRunningItem(profileId, item, {
       reason,
@@ -2091,6 +2145,8 @@ class BrowserEngine {
       markCleanExit: options.markCleanExit,
       emitProfileClosed: options.emitProfileClosed !== false,
     });
+    cleanupPromise.lifecycleItem = item;
+    cleanupPromise.lifecycleGeneration = item.lifecycleGeneration;
     this.stopping.set(profileId, cleanupPromise);
     cleanupPromise.finally(() => {
       if (this.stopping.get(profileId) === cleanupPromise) this.stopping.delete(profileId);
@@ -2198,30 +2254,117 @@ class BrowserEngine {
     return incoming;
   }
 
+  nextLifecycleGeneration(id) {
+    if (!this.lifecycleGenerations) this.lifecycleGenerations = new Map();
+    const next = (Number(this.lifecycleGenerations.get(id)) || 0) + 1;
+    this.lifecycleGenerations.set(id, next);
+    return next;
+  }
+
+  requestLifecycleStop(id, generation) {
+    if (!this.lifecycleStopRequests) this.lifecycleStopRequests = new Map();
+    this.lifecycleStopRequests.set(id, generation == null ? true : generation);
+  }
+
+  clearLifecycleStopRequest(id, generation) {
+    if (!this.lifecycleStopRequests) return;
+    const requested = this.lifecycleStopRequests.get(id);
+    if (generation === undefined || requested === generation || requested === true) {
+      this.lifecycleStopRequests.delete(id);
+    }
+  }
+
+  isLifecycleStopRequested(id, generation) {
+    const requested = this.lifecycleStopRequests?.get(id);
+    return requested === true || requested === generation;
+  }
+
+  assertStartGenerationActive(id, generation) {
+    if (this.stopAllInProgress || this.isLifecycleStopRequested(id, generation)) {
+      const error = new Error(`Browser start was cancelled for profile ${id}`);
+      error.code = 'BROWSER_START_CANCELLED';
+      throw error;
+    }
+  }
+
+  retainBlockedStartup(profile, resources, cause, generation, cleanupResult = {}) {
+    const current = this.running.get(profile.id);
+    if (current) return current;
+    const error = new Error(`Browser startup cleanup is incomplete for profile ${profile.id}`);
+    error.code = cleanupResult.helperPids?.length
+      ? 'BROWSER_HELPERS_EXIT_UNCONFIRMED'
+      : 'BROWSER_EXIT_UNCONFIRMED';
+    error.cause = cause;
+    error.pids = cleanupResult.helperPids || [];
+    const item = {
+      child: resources.child || null,
+      cdpConnection: resources.connection || null,
+      proxyForwarder: resources.proxyForwarder || null,
+      markerProcess: resources.markerProcess || null,
+      profileLock: resources.profileLock || null,
+      pid: resources.child?.pid || null,
+      browser: resources.browser || null,
+      root: resources.root || null,
+      profile,
+      port: null,
+      launchBinary: resources.launchBinary || null,
+      kernelWindowName: resources.kernelWindowName || null,
+      childExitState: {
+        exited: resources.child?.exitCode !== null && resources.child?.exitCode !== undefined,
+        code: resources.child?.exitCode ?? null,
+        signal: resources.child?.signalCode || null,
+        error: null,
+      },
+      lifecycleGeneration: generation,
+      cleanupState: 'blocked',
+      cleanupAttempts: 1,
+      cleanedUp: true,
+      cleanupFailed: true,
+      cleanupError: error,
+      stopping: true,
+      cleanupPromise: null,
+      statusEmitted: false,
+      profileClosedEmitted: false,
+      extensions: [],
+      loadedExtensions: [],
+    };
+    this.running.set(profile.id, item);
+    return item;
+  }
+
   async start(raw) {
     const candidate = this.restoreStoredProxyCredentials(this.sanitizeProfile(raw));
     const id = candidate.id;
     const pendingStart = this.starting.get(id);
     if (pendingStart) return pendingStart;
-
-    const pendingStop = this.stopping.get(id);
-    if (pendingStop) await pendingStop.catch(() => {});
-
-    // A stop may have completed while another caller was waiting. Re-check both
-    // maps before creating a second browser for the same profile.
-    const afterStop = this.running.get(id);
-    if (afterStop && (afterStop.cleanupFailed || afterStop.cleanedUp || afterStop.stopping)) {
-      const failure = afterStop.cleanupError || Object.assign(
-        new Error(`Browser environment ${id} is still stopping; child exit has not been confirmed`),
-        { code: 'BROWSER_EXIT_UNCONFIRMED' },
-      );
-      throw failure;
+    if (this.stopAllInProgress) {
+      const error = new Error('Browser engine is stopping all environments');
+      error.code = 'ENGINE_STOPPING';
+      throw error;
     }
-    if (afterStop && !afterStop.cleanedUp && !afterStop.stopping) return this.publicRunning(id);
-    const existingStart = this.starting.get(id);
-    if (existingStart) return existingStart;
 
-    const task = this._start(candidate);
+    const generation = this.nextLifecycleGeneration(id);
+    const task = (async () => {
+      const pendingStop = this.stopping.get(id);
+      if (pendingStop) await pendingStop.catch(() => {});
+      this.assertStartGenerationActive(id, generation);
+
+      let afterStop = this.running.get(id);
+      if (afterStop && (afterStop.cleanupFailed || afterStop.cleanedUp || afterStop.stopping)) {
+        await this.stopRunningItem(id, afterStop).catch(() => {});
+        afterStop = this.running.get(id);
+      }
+      if (afterStop && (afterStop.cleanupFailed || afterStop.cleanedUp || afterStop.stopping)) {
+        throw afterStop.cleanupError || Object.assign(
+          new Error(`Browser environment ${id} is still stopping; child exit has not been confirmed`),
+          { code: 'BROWSER_EXIT_UNCONFIRMED' },
+        );
+      }
+      if (afterStop) return this.publicRunning(id);
+      this.assertStartGenerationActive(id, generation);
+      return this._start(candidate, generation);
+    })();
+    task.lifecycleGeneration = generation;
     this.starting.set(id, task);
     try {
       return await task;
@@ -2230,9 +2373,10 @@ class BrowserEngine {
     }
   }
 
-  async _start(raw) {
+  async _start(raw, lifecycleGeneration = null) {
     // let: language/timezone resolution reassigns profile via applyResolvedLocale
     let profile = this.restoreStoredProxyCredentials(this.sanitizeProfile(raw)); this.profiles.set(profile.id, profile);
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     if (this.running.has(profile.id)) {
       if (!profile.advanced.multiOpen) return this.publicRunning(profile.id);
       return this.publicRunning(profile.id);
@@ -2268,6 +2412,7 @@ class BrowserEngine {
     };
     try {
       profile = await this.prepareProfileProxyForStart(profile);
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     this.profiles.set(profile.id, profile);
     this.emitStartProgress(profile.id, 'proxy', 18, '正在检测代理与出口…');
     await this.ensureExitNetworkForLocale(profile).catch(() => {});
@@ -2283,13 +2428,20 @@ class BrowserEngine {
       // Resolve integrated seed only — never download a remote kernel at start time.
       await this.ensureKernelBootstrap();
     }
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     const browser = this.chooseBrowser(profile);
     root = this.profileRoot(profile.id);
     startupResources.root = root;
     const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, root, profile.id, { create: true });
     if (!rootCheck.ok) throw new Error('Isolation error: ' + rootCheck.message);
-    profileLock = await acquireProfileLock(root, { profileId: profile.id, browser: browser.path });
+    profileLock = await acquireProfileLock(root, {
+      profileId: profile.id,
+      browser: browser.path,
+      lifecycleGeneration,
+    });
     startupResources.profileLock = profileLock;
+    startupResources.lifecycleGeneration = lifecycleGeneration;
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     const restoreSession = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession;
     // Parallelized (independent IO overlaps; Preferences writers stay serialized). See method.
     await this.prepareProfileFilesForStart(root, profile, restoreSession);
@@ -2516,10 +2668,17 @@ class BrowserEngine {
     let port;
     try {
       this.emitStartProgress(profile.id, 'spawn', 62, '正在启动浏览器进程…');
+      this.assertStartGenerationActive(profile.id, lifecycleGeneration);
       await ensureKernelReadyForLaunch(browser);
+      this.assertStartGenerationActive(profile.id, lifecycleGeneration);
+      const headless = /^(1|true|new)$/i.test(String(process.env.OPENBROWSER_HEADLESS || '').trim());
+      if (headless && !finalArgs.some((arg) => /^--headless(?:=|$)/i.test(String(arg)))) {
+        finalArgs.push('--headless=new');
+        if (!finalArgs.some((arg) => String(arg).split('=')[0] === '--disable-gpu')) finalArgs.push('--disable-gpu');
+      }
       child = spawn(launchBinary, finalArgs, {
         detached: process.platform !== 'win32',
-        windowsHide: false,
+        windowsHide: headless,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       startupResources.child = child;
@@ -2558,6 +2717,7 @@ class BrowserEngine {
       port = await this.waitForPort(root, 30000, child);
       connection = await portConnection(port);
       startupResources.connection = connection;
+      this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     } catch (error) {
       const diagnostic = child?._startupDiagnostic || { launchBinary, profileRoot: root };
       await writeBrowserStartupDiagnostic(this.app.getPath('userData'), {
@@ -2623,6 +2783,9 @@ class BrowserEngine {
       kernelWindowName: kernelWindowName || null,
       nativeKernelFingerprint: isOpenBrowser148(browser),
       childExitState: childExitState || { exited: child.exitCode !== null, code: child.exitCode, signal: child.signalCode, error: null },
+      lifecycleGeneration,
+      cleanupState: 'active',
+      cleanupAttempts: 0,
       cleanedUp: false,
       stopping: false,
       cleanupPromise: null,
@@ -2631,6 +2794,7 @@ class BrowserEngine {
     };
     this.running.set(profile.id, item);
     liveItem = item;
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
 
     const handleChildExit = (code, signal) => {
       const expected = item.stopping === true || code === 0;
@@ -2765,6 +2929,7 @@ class BrowserEngine {
         } catch (_) {}
       }
     }
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     if (this.running.get(profile.id) !== item || item.cleanedUp || item.stopping) {
       throw new Error(item.cdpError || '浏览器在启动过程中异常退出');
     }
@@ -2778,19 +2943,23 @@ class BrowserEngine {
       // catches already release on their own failure paths (making this a safe no-op via
       // token/close idempotency); this covers the earlier steps — proxy bridge, tab reset,
       // start-page/fingerprint build — whose throws would otherwise strand the lock.
+      let cleanupResult = null;
       if (liveItem) {
         // The item is published before runtime injection and start-page setup so
         // exit events can clean it up. If either step fails, run the same guarded
         // cleanup path instead of leaving a live map entry and profile lock behind.
-        await this.handleBrowserGone(profile.id, liveItem, 'start-failed', {
+        cleanupResult = await this.handleBrowserGone(profile.id, liveItem, 'start-failed', {
           expected: false,
           error: error?.message || String(error),
           kill: true,
           waitForExit: true,
           emitProfileClosed: false,
-        }).catch(() => {});
+        }).catch(() => null);
       } else if (!this.running.has(profile.id)) {
-        await this.cleanupStartupResources(startupResources).catch(() => {});
+        cleanupResult = await this.cleanupStartupResources(startupResources).catch(() => null);
+        if (cleanupResult?.cleanupBlocked) {
+          this.retainBlockedStartup(profile, startupResources, error, lifecycleGeneration, cleanupResult);
+        }
       }
       this.emit({
         type: 'profile-start-progress',
@@ -2841,26 +3010,67 @@ class BrowserEngine {
     };
   }
 
+  stopRunningItem(safe, item) {
+    if (!item) return Promise.resolve({ id: safe, running: false, alreadyStopped: true });
+    const pending = this.stopping.get(safe);
+    if (pending && (!pending.lifecycleItem || pending.lifecycleItem === item)) return pending;
+    if (pending) {
+      return pending.catch(() => {}).then(() => {
+        if (this.running.get(safe) !== item) return { id: safe, running: false, alreadyStopped: true };
+        return this.stopRunningItem(safe, item);
+      });
+    }
+    if (item.cleanupPromise) {
+      item.cleanupPromise.lifecycleItem = item;
+      item.cleanupPromise.lifecycleGeneration = item.lifecycleGeneration;
+      this.stopping.set(safe, item.cleanupPromise);
+      item.cleanupPromise.finally(() => {
+        if (this.stopping.get(safe) === item.cleanupPromise) this.stopping.delete(safe);
+      }).catch(() => {});
+      return item.cleanupPromise;
+    }
+
+    const task = this._stop(safe, item);
+    task.lifecycleItem = item;
+    task.lifecycleGeneration = item.lifecycleGeneration;
+    this.stopping.set(safe, task);
+    task.finally(() => {
+      if (this.stopping.get(safe) === task) this.stopping.delete(safe);
+    }).catch(() => {});
+    return task;
+  }
+
   async stop(id) {
     const safe = assertProfileId(id);
     const pendingStop = this.stopping.get(safe);
     if (pendingStop) return pendingStop;
 
     const pendingStart = this.starting.get(safe);
-    if (pendingStart) await pendingStart.catch(() => {});
+    const requestedGeneration = pendingStart?.lifecycleGeneration;
+    if (pendingStart) {
+      this.requestLifecycleStop(safe, requestedGeneration);
+      await pendingStart.catch(() => {});
+    }
 
     const afterStartStop = this.stopping.get(safe);
-    if (afterStartStop) return afterStartStop;
+    if (afterStartStop) {
+      try {
+        return await afterStartStop;
+      } finally {
+        this.clearLifecycleStopRequest(safe, requestedGeneration);
+      }
+    }
     const item = this.running.get(safe);
-    if (!item) return { id: safe, running: false, alreadyStopped: true };
-    if (item.cleanupPromise) return item.cleanupPromise;
+    if (!item) {
+      this.clearLifecycleStopRequest(safe, requestedGeneration);
+      return { id: safe, running: false, alreadyStopped: true };
+    }
 
-    const task = this._stop(safe, item);
-    this.stopping.set(safe, task);
-    task.finally(() => {
-      if (this.stopping.get(safe) === task) this.stopping.delete(safe);
-    }).catch(() => {});
-    return task;
+    try {
+      return await this.stopRunningItem(safe, item);
+    } finally {
+      this.clearLifecycleStopRequest(safe, requestedGeneration);
+    }
   }
 
   async _stop(safe, item) {
@@ -2881,8 +3091,8 @@ class BrowserEngine {
         await this.persist().catch(() => {});
       }
     }
-    let graceful = item.child.exitCode !== null;
-    if (!graceful) {
+    let graceful = !item.child || item.child.exitCode !== null;
+    if (!graceful && item.child) {
       // Prefer Browser.close so window-X / empty-window auto-stop fully quits Chromium helpers
       try {
         await Promise.race([
@@ -2897,12 +3107,7 @@ class BrowserEngine {
           new Promise((resolve) => setTimeout(resolve, 1800)),
         ]);
       } catch (_) {}
-      graceful = await new Promise((resolve) => {
-        if (item.child.exitCode !== null) return resolve(true);
-        const timer = setTimeout(() => { item.child.removeListener('exit', exited); resolve(false); }, 6500);
-        const exited = () => { clearTimeout(timer); resolve(true); };
-        item.child.once('exit', exited);
-      });
+      graceful = await this.waitForChildExit(item.child, 6500);
     }
     const cleanupResult = await this.cleanupRunningItem(safe, item, {
       reason: 'stop',
@@ -2928,21 +3133,40 @@ class BrowserEngine {
   }
 
   async stopAll() {
+    if (this.stopAllPromise) return this.stopAllPromise;
+    this.stopAllInProgress = true;
+    const task = this._stopAll();
+    this.stopAllPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (this.stopAllPromise === task) this.stopAllPromise = null;
+      this.stopAllInProgress = false;
+    }
+  }
+
+  async _stopAll() {
     // Drain until the lifecycle maps reach a fixed point. A one-shot snapshot can
     // miss a restart that was queued while another environment was stopping.
-    // Keep the retry bounded so a permanently failing _stop cannot hang app quit.
+    // Each environment also has its own deadline, so a stuck startup or WMI/CDP
+    // operation cannot prevent unrelated environments and the start-page server
+    // from being closed during application shutdown.
     const failed = [];
     let previousSignature = null;
-    for (let pass = 0; pass < 32; pass += 1) {
+    const itemTimeout = Math.max(50, Number(this.stopAllItemTimeoutMs) || STOP_ALL_ITEM_TIMEOUT_MS);
+    for (let pass = 0; pass < 8; pass += 1) {
       const ids = [...new Set([...this.running.keys(), ...this.starting.keys(), ...this.stopping.keys()])];
       if (!ids.length) break;
       const signature = [...ids].sort().join('\0');
-      const results = await Promise.allSettled(ids.map((id) => this.stop(id)));
-      for (const result of results) {
-        if (result.status === 'rejected') failed.push(String(result.reason?.message || result.reason));
+      const results = await Promise.allSettled(ids.map((id) => lifecycleTimeout(
+        this.stop(id),
+        itemTimeout,
+        `Timed out stopping browser environment ${id}`,
+      )));
+      for (let index = 0; index < results.length; index += 1) {
+        const result = results[index];
+        if (result.status === 'rejected') failed.push(`${ids[index]}: ${String(result.reason?.message || result.reason)}`);
       }
-      const pending = [...this.stopping.values()];
-      if (pending.length) await Promise.allSettled(pending);
       const remaining = [...new Set([...this.running.keys(), ...this.starting.keys(), ...this.stopping.keys()])];
       if (!remaining.length) break;
       const nextSignature = [...remaining].sort().join('\0');
@@ -2958,12 +3182,13 @@ class BrowserEngine {
     if (remaining.length) failed.push(`lifecycle resources remain: ${remaining.join(', ')}`);
     if (this.startPageServer?.server) {
       try {
-        await this.startPageServer.stop();
+        await lifecycleTimeout(this.startPageServer.stop(), 4000, 'Timed out stopping start page server');
       } catch (error) {
         failed.push(`start page server: ${error.message || error}`);
       }
     }
     if (failed.length) this.emit({ type: 'sync-error', action: 'stop-all', message: `部分环境停止失败：${[...new Set(failed)].join('; ')}` });
+    return { stopped: remaining.length === 0, remaining, errors: [...new Set(failed)] };
   }
 
   async deleteProfiles(ids, deleteData = true) {

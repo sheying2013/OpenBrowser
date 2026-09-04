@@ -145,6 +145,8 @@ function toolsMeta() {
       number: { type: 'integer' },
       language: { type: 'string', description: 'Locale such as en-US or zh-CN' },
       proxy: { type: 'string', description: 'proxy://user:pass@host:port or Direct' },
+      proxy_id: { type: 'string', description: 'Proxy library entry id. When set, the library entry supplies the proxy and credentials.' },
+      proxy_library_id: { type: 'string', description: 'Alias of proxy_id' },
       start_url: { type: 'string', description: 'Page opened when the profile starts' },
       os: { type: 'string' }, platform: { type: 'string' }, browser: { type: 'string' },
       user_agent: { type: 'string' }, resolution: { type: 'string' }, window_size: { type: 'string' },
@@ -158,6 +160,8 @@ function toolsMeta() {
     ['update_profile', 'Update an existing browser environment (stops nothing; profile persists)', { type: 'object', properties: {
       profile_id: { type: 'string' }, name: { type: 'string' }, title: { type: 'string' }, number: { type: 'integer' },
       language: { type: 'string' }, proxy: { type: 'string' }, network_mode: { type: 'string' }, start_url: { type: 'string' },
+      proxy_id: { type: 'string', description: 'Proxy library entry id; send an empty string to unlink the entry without deleting the manual proxy.' },
+      proxy_library_id: { type: 'string', description: 'Alias of proxy_id' },
       os: { type: 'string' }, platform: { type: 'string' }, browser: { type: 'string' }, user_agent: { type: 'string' },
       resolution: { type: 'string' }, window_size: { type: 'string' }, timezone: { type: 'string' }, locale: { type: 'string' },
       language_code: { type: 'string' }, geolocation: { type: 'string' }, webgl_vendor: { type: 'string' },

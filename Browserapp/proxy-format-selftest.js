@@ -26,6 +26,30 @@ assert.strictEqual(encoded.username, 'user@mail');
 assert.strictEqual(encoded.password, 'p:a/ss%');
 assert.strictEqual(encoded.raw, 'socks5://user%40mail:p%3Aa%2Fss%25@proxy.test:1080');
 
+const vendorImport = normalizeProxyRecord({
+  raw: 'socks5://fa8a524c:2c1f8c80\\@192.168.1.22:31055#🇪🇸isp马德里-1',
+});
+assert.strictEqual(vendorImport.username, 'fa8a524c');
+assert.strictEqual(vendorImport.password, '2c1f8c80');
+assert.strictEqual(vendorImport.remark, '🇪🇸isp马德里-1');
+assert.strictEqual(vendorImport.name, '🇪🇸isp马德里-1');
+assert.strictEqual(vendorImport.chromeUrl, 'socks5://192.168.1.22:31055');
+assert.ok(vendorImport.raw.endsWith('#' + encodeURIComponent('🇪🇸isp马德里-1')));
+
+const specialFields = normalizeProxyRecord({
+  protocol: 'socks5',
+  host: 'special.test',
+  port: 1080,
+  username: '用@户:名/%\\',
+  password: '密@码:/100%\\尾',
+  remark: '复杂认证',
+});
+assert.strictEqual(specialFields.username, '用@户:名/%\\');
+assert.strictEqual(specialFields.password, '密@码:/100%\\尾');
+assert.strictEqual(specialFields.remark, '复杂认证');
+assert.ok(specialFields.raw.includes(encodeURIComponent(specialFields.username)));
+assert.ok(specialFields.raw.includes(encodeURIComponent(specialFields.password)));
+
 const existing = normalizeProxyRecord({
   raw: 'socks5://saved-user:saved-pass@old-proxy.test:1080',
   name: 'saved',
@@ -58,6 +82,21 @@ const echoedRawPatch = normalizeProxyRecord({
 assert.strictEqual(echoedRawPatch.username, 'next@user');
 assert.strictEqual(echoedRawPatch.password, 'next:pass');
 assert.ok(echoedRawPatch.raw.includes('next%40user:next%3Apass@'));
+
+const remarkFromRaw = normalizeProxyRecord({
+  raw: existing.raw + '#新备注',
+}, existing);
+assert.strictEqual(remarkFromRaw.username, 'saved-user');
+assert.strictEqual(remarkFromRaw.password, 'saved-pass');
+assert.strictEqual(remarkFromRaw.remark, '新备注');
+assert.ok(remarkFromRaw.raw.endsWith('#' + encodeURIComponent('新备注')));
+
+const explicitRemark = normalizeProxyRecord({
+  raw: existing.raw + '#raw备注',
+  remark: '字段备注',
+}, existing);
+assert.strictEqual(explicitRemark.remark, '字段备注');
+assert.ok(explicitRemark.raw.endsWith('#' + encodeURIComponent('字段备注')));
 
 assert.strictEqual(context.proxyAuthActionForUpdate(
   existing.raw,
@@ -105,4 +144,4 @@ const legacyFields = normalizeProxyRecord({
 });
 assert.strictEqual(legacyFields.raw, 'http://legacy-user:legacy-pass@legacy.test:3128');
 
-console.log('PROXY_FORMAT_SELFTEST_OK bare_socks5=1 bare_http=1 bare_https=1 explicit=1 alias=1 encoding=1 merge=1 redacted_restore=1 explicit_clear=1 ui_clear=1 raw_priority=1 legacy=1');
+console.log('PROXY_FORMAT_SELFTEST_OK bare_socks5=1 bare_http=1 bare_https=1 explicit=1 alias=1 encoding=1 escaped_separator=1 special_credentials=1 remark=1 merge=1 redacted_restore=1 explicit_clear=1 ui_clear=1 raw_priority=1 legacy=1');

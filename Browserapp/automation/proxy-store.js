@@ -3,7 +3,12 @@
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { parseProxy, displayProxy, normalizeIpLookupChannel } = require('../proxy-forwarder');
+const {
+  parseProxy,
+  parseProxyInput,
+  displayProxy,
+  normalizeIpLookupChannel,
+} = require('../proxy-forwarder');
 
 const MAX_PROXY_URL_LENGTH = 64 * 1024;
 const MAX_PROXY_CREDENTIAL_LENGTH = 32 * 1024;
@@ -35,6 +40,15 @@ function firstNonEmpty(input, keys) {
   return '';
 }
 
+function firstCredential(input, keys) {
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(input || {}, key) || input[key] == null) continue;
+    const value = String(input[key]);
+    if (value) return value;
+  }
+  return '';
+}
+
 function proxyKey(proxy) {
   if (!proxy) return '';
   return [proxy.protocol, proxy.host, proxy.port, proxy.username, proxy.password].join('\u0000');
@@ -49,23 +63,9 @@ function parseStoredProxy(value) {
   }
 }
 
-function canonicalProxyRaw({ protocol, host, port, username, password }) {
-  const authUser = String(username || '');
-  const authPassword = String(password || '');
-  if (authUser.length > MAX_PROXY_CREDENTIAL_LENGTH) throw new Error('代理用户名过长');
-  if (authPassword.length > MAX_PROXY_CREDENTIAL_LENGTH) throw new Error('代理密码过长');
-  const auth = authUser || authPassword
-    ? `${encodeURIComponent(authUser)}:${encodeURIComponent(authPassword)}@`
-    : '';
-  const raw = `${String(protocol || 'socks5').toLowerCase()}://${auth}${String(host || '').trim()}:${Number(port)}`;
-  if (raw.length > MAX_PROXY_URL_LENGTH) throw new Error('代理 URL 过长');
-  return raw;
-}
-
 function normalizeProxyRecord(input = {}, existing = null) {
   const isMigration = Boolean(existing && input === existing);
-  const name = String(input.name || existing?.name || '').trim().slice(0, 120);
-  const remark = String(input.remark || existing?.remark || '').slice(0, 500);
+  const requestedName = String(input.name || existing?.name || '').trim().slice(0, 120);
   const refreshUrl = String(input.refreshUrl || input.refresh_url || existing?.refreshUrl || '').slice(0, 1000);
   const ipChannel = normalizeIpLookupChannel(input.ipChannel || existing?.ipChannel);
 
@@ -105,8 +105,8 @@ function normalizeProxyRecord(input = {}, existing = null) {
   // bare `raw` address. Preserve those fields during migration/restart unless a
   // new raw URL explicitly replaces the existing proxy record.
   if (!rawIsAuthoritative) {
-    if (!username) username = firstNonEmpty(existing, ['username', 'user', 'proxy_user', 'proxy_username', 'proxyUsername']);
-    if (!password) password = firstNonEmpty(existing, ['password', 'pass', 'proxy_password', 'proxyPassword']);
+    if (!username) username = firstCredential(existing, ['username', 'user', 'proxy_user', 'proxy_username', 'proxyUsername']);
+    if (!password) password = firstCredential(existing, ['password', 'pass', 'proxy_password', 'proxyPassword']);
   }
 
   if (!rawIsAuthoritative) {
@@ -131,14 +131,34 @@ function normalizeProxyRecord(input = {}, existing = null) {
   }
 
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('主机和端口必填');
-  const raw = canonicalProxyRaw({ protocol, host, port, username, password });
-  const parsed = parseProxy(raw);
+  if (username.length > MAX_PROXY_CREDENTIAL_LENGTH) throw new Error('代理用户名过长');
+  if (password.length > MAX_PROXY_CREDENTIAL_LENGTH) throw new Error('代理密码过长');
+
+  const remarkInput = ownValue(input, ['remark', 'note']);
+  const storedRemark = firstNonEmpty(existing, ['remark', 'note']);
+  let remark = '';
+  if (isMigration) {
+    remark = firstNonEmpty(input, ['remark', 'note'])
+      || explicitParsed?.remark
+      || existingParsed?.remark
+      || '';
+  } else if (remarkInput.present) {
+    remark = String(remarkInput.value).trim();
+  } else if (explicitRaw) {
+    remark = explicitParsed?.remark || '';
+  } else {
+    remark = storedRemark || existingParsed?.remark || '';
+  }
+  remark = remark.slice(0, 500);
+
+  const parsed = parseProxyInput({ protocol, host, port, username, password, remark });
   if (!parsed) throw new Error('当前记录是直连，请填写代理地址');
+  if (parsed.raw.length > MAX_PROXY_URL_LENGTH) throw new Error('代理 URL 过长');
 
   const now = new Date().toISOString();
   return {
     id: existing?.id || String(input.id || uid()),
-    name: name || `${parsed.protocol.toUpperCase()} ${parsed.host}:${parsed.port}`,
+    name: requestedName || parsed.name,
     protocol: parsed.protocol,
     host: parsed.host,
     port: parsed.port,

@@ -1,29 +1,58 @@
 const cdp = require('./cdp');
 
 class PersistentCdp {
-  constructor(url, onEvent) { this.url = url; this.onEvent = onEvent; this.socket = null; this.nextId = 1; this.pending = new Map(); }
+  constructor(url, onEvent) { this.url = url; this.onEvent = onEvent; this.socket = null; this.nextId = 1; this.pending = new Map(); this.closed = false; }
   open() {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(this.url); this.socket = socket;
-      const timer = setTimeout(() => reject(new Error('CDP connection timeout')), 8000);
-      socket.addEventListener('open', () => { clearTimeout(timer); resolve(); });
+      let settled = false;
+      const finishOpen = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+      const failPending = (error) => {
+        for (const pending of this.pending.values()) {
+          clearTimeout(pending.timer);
+          pending.reject(error);
+        }
+        this.pending.clear();
+      };
+      const timer = setTimeout(() => {
+        const error = new Error('CDP connection timeout');
+        finishOpen(reject, error);
+        failPending(error);
+        try { socket.close(); } catch (_) {}
+      }, 8000);
+      socket.addEventListener('open', () => finishOpen(resolve));
       socket.addEventListener('message', (event) => {
         let value; try { value = JSON.parse(String(event.data)); } catch (_) { return; }
-        if (value.id && this.pending.has(value.id)) { const pending = this.pending.get(value.id); this.pending.delete(value.id); return value.error ? pending.reject(new Error(value.error.message || 'CDP error')) : pending.resolve(value.result || {}); }
+        if (value.id && this.pending.has(value.id)) { const pending = this.pending.get(value.id); this.pending.delete(value.id); clearTimeout(pending.timer); return value.error ? pending.reject(new Error(value.error.message || 'CDP error')) : pending.resolve(value.result || {}); }
         if (value.method) Promise.resolve(this.onEvent(value)).catch(() => {});
       });
-      socket.addEventListener('close', () => { for (const pending of this.pending.values()) pending.reject(new Error('CDP connection closed')); this.pending.clear(); });
-      socket.addEventListener('error', () => reject(new Error('CDP connection error')));
+      socket.addEventListener('close', () => { this.closed = true; if (this.socket === socket) this.socket = null; const error = new Error('CDP connection closed'); failPending(error); finishOpen(reject, error); });
+      socket.addEventListener('error', () => { const error = new Error('CDP connection error'); failPending(error); finishOpen(reject, error); });
     });
   }
   command(method, params = {}) {
     return new Promise((resolve, reject) => {
-      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return reject(new Error('CDP is not connected'));
-      const id = this.nextId++; this.pending.set(id, { resolve, reject }); this.socket.send(JSON.stringify({ id, method, params }));
-      setTimeout(() => { if (this.pending.delete(id)) reject(new Error(`CDP timeout: ${method}`)); }, 7000);
+      if (this.closed || !this.socket || this.socket.readyState !== WebSocket.OPEN) return reject(new Error('CDP is not connected'));
+      const id = this.nextId++;
+      const timer = setTimeout(() => { if (this.pending.delete(id)) reject(new Error(`CDP timeout: ${method}`)); }, 7000);
+      this.pending.set(id, { resolve, reject, timer });
+      try { this.socket.send(JSON.stringify({ id, method, params })); }
+      catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
     });
   }
-  close() { try { this.socket?.close(); } catch (_) {} this.socket = null; }
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error('CDP connection closed')); }
+    this.pending.clear();
+    try { this.socket?.close(); } catch (_) {}
+    this.socket = null;
+  }
 }
 
 const injection = String.raw`(() => {

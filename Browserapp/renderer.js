@@ -271,6 +271,8 @@ function normalizeProfileSettings(profile) {
   const platform = value.platform && typeof value.platform === 'object' ? value.platform : {};
   const number = positiveProfileNumber(value.number);
   const rawProxy = String(value.proxy || '').trim();
+  const proxyIdValue = value.proxyId ?? value.proxy_id ?? proxyMeta.proxyId ?? proxyMeta.proxy_id;
+  const proxyId = proxyIdValue == null || String(proxyIdValue).trim() === '' ? null : String(proxyIdValue).trim();
   const legacyDemoProxy = value.networkMode == null && value.id === 'env-004' && rawProxy === '127.0.0.1:7890';
   const networkMode = value.networkMode === 'direct' || legacyDemoProxy || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy)
     ? 'direct'
@@ -285,6 +287,7 @@ function normalizeProfileSettings(profile) {
     language: String(value.language || 'en-US'),
     networkMode,
     proxy: networkMode === 'direct' ? 'Direct' : rawProxy,
+    proxyId,
     userAgent: String(value.userAgent || ''),
     cookies: String(value.cookies || ''),
     note: String(value.note || ''),
@@ -300,6 +303,7 @@ function normalizeProfileSettings(profile) {
       totpSecret: String(platform.totpSecret || platform.otp || ''),
     },
     proxyMeta: {
+      proxyId,
       ipChannel: String(proxyMeta.ipChannel || 'ip-api'),
       refreshUrl: String(proxyMeta.refreshUrl || ''),
       checkOnStart: Boolean(proxyMeta.checkOnStart),
@@ -1479,6 +1483,33 @@ function parseEditorProxy(value) {
   return { mode: 'custom', type: parts.length >= 4 ? 'socks5' : 'http', host: parts[0] || '', port: parts[1] || '', username: parts[2] || '', password: parts.slice(3).join(':') };
 }
 
+function applyProxyLibrarySelection(kind, id) {
+  const item = proxyLibraryItem(id);
+  if (!item) return;
+  const editor = kind === 'editor';
+  const networkName = editor ? 'editor-network' : 'create-network';
+  const proxyValue = editor ? 'custom' : 'proxy';
+  const radio = document.querySelector(`input[name="${networkName}"][value="${proxyValue}"]`);
+  if (radio) {
+    radio.checked = true;
+    window.__proxyLibrarySelectionInProgress = true;
+    try { radio.dispatchEvent(new Event('change', { bubbles: true })); }
+    finally { window.__proxyLibrarySelectionInProgress = false; }
+  }
+  const prefix = editor ? 'editor' : 'create';
+  editorSet(`#${prefix}-proxy-type`, item.protocol || 'socks5');
+  editorSet(`#${prefix}-proxy-host`, item.host || '');
+  editorSet(`#${prefix}-proxy-port`, item.port || '');
+  editorSet(`#${prefix}-proxy-user`, item.username || '');
+  editorSet(`#${prefix}-proxy-password`, item.password || '');
+  const raw = $(`#${prefix}-proxy-input`);
+  if (raw) raw.value = item.raw || '';
+  if (editor) {
+    const status = $('#editor-proxy-library-status');
+    if (status) status.textContent = `已关联代理库：${proxyLibraryLabel(item)}`;
+  }
+}
+
 function proxyHasCredentials(value) {
   const parsed = parseEditorProxy(value);
   return Boolean(String(parsed.username || '') || String(parsed.password || ''));
@@ -1688,6 +1719,7 @@ function editorDraft(strict = true) {
     note: ($('#editor-note')?.value || '').trim(),
     networkMode: editorSelectedNetwork() === 'direct' ? 'direct' : 'proxy',
     proxy,
+    proxyId: editorSelectedNetwork() === 'direct' ? null : (String($('#editor-proxy-library')?.value || '').trim() || null),
     ...(proxyAuthAction ? { proxyAuthAction } : {}),
     width: resolution.width,
     height: resolution.height,
@@ -1699,6 +1731,7 @@ function editorDraft(strict = true) {
       totpSecret: ($('#editor-platform-2fa')?.value || '').trim(),
     },
     proxyMeta: {
+      proxyId: editorSelectedNetwork() === 'direct' ? null : (String($('#editor-proxy-library')?.value || '').trim() || null),
       ipChannel: $('#editor-ip-channel')?.value || 'ip-api',
       refreshUrl: ($('#editor-refresh-url')?.value || '').trim(),
       checkOnStart: Boolean($('#editor-proxy-check-start')?.checked),
@@ -1856,6 +1889,13 @@ function openProfileEditor(id) {
   editorSet('#editor-platform-pass', profile.platform?.password || '');
   editorSet('#editor-platform-2fa', profile.platform?.totpSecret || '');
   fillGroupSelect($('#editor-group'), profile.groupId || UNGROUPED_ID, { includeUngrouped: true });
+  const linkedProxyId = profileProxyId(profile);
+  renderProxyLibrarySelect($('#editor-proxy-library'), linkedProxyId);
+  const linkedProxy = proxyLibraryItem(linkedProxyId);
+  const proxyLibraryStatus = $('#editor-proxy-library-status');
+  if (proxyLibraryStatus) proxyLibraryStatus.textContent = linkedProxy
+    ? `已关联代理库：${proxyLibraryLabel(linkedProxy)}`
+    : (linkedProxyId ? `代理节点已失效：${linkedProxyId}` : '未关联代理库节点');
   const proxy = parseEditorProxy(profile.proxy);
   const mode = document.querySelector('input[name="editor-network"][value="' + proxy.mode + '"]');
   if (mode) mode.checked = true;
@@ -2210,6 +2250,43 @@ function viewMetaFor(view) {
 let proxyLibrary = [];
 const selectedProxies = new Set();
 
+function profileProxyId(profile) {
+  return String(profile?.proxyId || profile?.proxy_id || profile?.proxyMeta?.proxyId || profile?.proxyMeta?.proxy_id || '').trim();
+}
+
+function proxyLibraryItem(id) {
+  const value = String(id || '').trim();
+  return value ? proxyLibrary.find((item) => String(item.id) === value) || null : null;
+}
+
+function proxyLibraryLabel(item) {
+  const host = item?.host && item?.port ? `${item.host}:${item.port}` : (item?.raw || '');
+  return `${item?.name || host || '代理'}${host && item?.name ? ` · ${host}` : ''}`;
+}
+
+function renderProxyLibrarySelect(select, selectedId = '', { includeManual = true, includeMissing = true } = {}) {
+  if (!select) return;
+  const value = String(selectedId || '').trim();
+  select.replaceChildren();
+  if (includeManual) select.append(new Option('手动填写代理（不关联代理库）', ''));
+  for (const item of proxyLibrary) {
+    select.append(new Option(proxyLibraryLabel(item), String(item.id)));
+  }
+  if (includeMissing && value && !proxyLibraryItem(value)) {
+    const missing = new Option(`代理节点已失效 · ${value}`, value);
+    missing.dataset.missing = 'true';
+    select.append(missing);
+  }
+  select.value = value;
+  if (select.value !== value) select.value = '';
+}
+
+function renderProxyLibrarySelectors() {
+  renderProxyLibrarySelect($('#create-proxy-library'), $('#create-proxy-library')?.value || '');
+  renderProxyLibrarySelect($('#editor-proxy-library'), profileProxyId(ui.profiles.find((item) => item.id === editingProfileId)));
+  renderProxyLibrarySelect($('#batch-add-proxy-library'), $('#batch-add-proxy-library')?.value || '');
+}
+
 function switchView(view) {
   $$('.nav').forEach((button) => {
     if (button.id === 'rpa-menu-toggle') {
@@ -2471,6 +2548,7 @@ async function refreshProxies() {
     proxyLibrary = [];
     toast('加载代理库失败：' + error.message);
   }
+  renderProxyLibrarySelectors();
   renderProxies();
   afterUiRender(document.getElementById('view-proxies') || document);
 }
@@ -3294,6 +3372,25 @@ function installCreateNetworkMode() {
 }
 installCreateNetworkMode();
 
+$('#create-proxy-library')?.addEventListener('change', (event) => {
+  const id = String(event.target.value || '').trim();
+  if (id) applyProxyLibrarySelection('create', id);
+});
+$('#editor-proxy-library')?.addEventListener('change', (event) => {
+  const id = String(event.target.value || '').trim();
+  if (id) applyProxyLibrarySelection('editor', id);
+  else {
+    const status = $('#editor-proxy-library-status');
+    if (status) status.textContent = '未关联代理库节点';
+  }
+});
+$('#batch-add-proxy-library')?.addEventListener('change', (event) => {
+  const id = String(event.target.value || '').trim();
+  const item = proxyLibraryItem(id);
+  const textarea = $('#batch-add-proxies');
+  if (item && textarea) textarea.value = item.raw || `${item.host}:${item.port}`;
+});
+
 function installBatchAddNetworkMode() {
   const fields = $('#batch-add-proxy-fields');
   const sync = () => {
@@ -3586,6 +3683,8 @@ function openCreateProfileDialog() {
   if (directRadio) directRadio.checked = true;
   const proxyInput = $('#create-proxy-input');
   if (proxyInput) proxyInput.value = '';
+  renderProxyLibrarySelect($('#create-proxy-library'), '');
+  renderProxyLibrarySelect($('#batch-add-proxy-library'), '');
   const fields = $('#create-proxy-fields');
   if (fields) fields.hidden = true;
   const number = nextProfileNumber();
@@ -3661,10 +3760,12 @@ $('#profile-form').addEventListener('submit', async (event) => {
   try { startUrl = normalizeOptionalWebUrl(data.get('startUrl')); }
   catch (error) { return toast(error.message); }
   const networkMode = document.querySelector('input[name="create-network"]:checked')?.value || 'direct';
+  const proxyLibraryId = String($('#create-proxy-library')?.value || '').trim();
   let proxy = 'Direct';
   if (networkMode === 'proxy') {
-    const type = $('#create-proxy-type')?.value || 'socks5';
-    const raw = String(data.get('proxy') || '').trim();
+    const libraryItem = proxyLibraryItem(proxyLibraryId);
+    const type = $('#create-proxy-type')?.value || libraryItem?.protocol || 'socks5';
+    const raw = libraryItem?.raw || String(data.get('proxy') || '').trim();
     if (raw) {
       try { proxy = normalizeProxy(raw, type); }
       catch (error) { return toast('代理格式错误：' + error.message); }
@@ -3678,6 +3779,7 @@ $('#profile-form').addEventListener('submit', async (event) => {
     language: data.get('language') || 'en-US',
     networkMode: isDirectProxy(proxy) ? 'direct' : 'proxy',
     proxy,
+    proxyId: isDirectProxy(proxy) ? null : (proxyLibraryId || null),
     tag: String(data.get('tag') || 'Default'),
     groupId,
     os: 'Windows',
@@ -3687,6 +3789,7 @@ $('#profile-form').addEventListener('submit', async (event) => {
     // Browser UI language defaults to exit-IP country; fixed locale is optional in editor.
     // New profiles get a coherent device persona; existing ones are left as they were.
     privacy: { languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona' },
+    proxyMeta: { proxyId: isDirectProxy(proxy) ? null : (proxyLibraryId || null) },
   };
   ui.profiles.push(profile); ui.nextProfileNumber = number + 1; save();
   try {
@@ -3711,6 +3814,12 @@ $('#editor-system-defaults').addEventListener('click', useSystemEditorDefaults);
 const editorProxySelector = '#editor-proxy-type,#editor-proxy-host,#editor-proxy-port,#editor-proxy-user,#editor-proxy-password,input[name="editor-network"]';
 const onEditorFormChange = (event) => {
   if (event.target.matches(editorProxySelector)) {
+    if (!window.__proxyLibrarySelectionInProgress) {
+      const library = $('#editor-proxy-library');
+      if (library && library.value) library.value = '';
+      const status = $('#editor-proxy-library-status');
+      if (status) status.textContent = '未关联代理库节点（已改为手动代理）';
+    }
     editorNetworkResult = null;
     $('#editor-proxy-result').className = 'proxy-test-result';
     $('#editor-proxy-result').textContent = editorSelectedNetwork() === 'direct' ? tx('本地直连') : tx('设置已更改，请重新检测');
@@ -3809,6 +3918,8 @@ $('#batch-add').addEventListener('click', () => {
   fillGroupSelect($('#batch-assign-group'), UNGROUPED_ID, { includeUngrouped: true });
   const directRadio = document.querySelector('input[name="batch-add-network"][value="direct"]');
   if (directRadio) directRadio.checked = true;
+  renderProxyLibrarySelect($('#batch-add-proxy-library'), '');
+  if ($('#batch-add-proxies')) $('#batch-add-proxies').value = '';
   const fields = $('#batch-add-proxy-fields'); if (fields) fields.hidden = true;
   const template = $('#batch-add-template');
   if (template) {
@@ -3820,24 +3931,30 @@ $('#batch-add').addEventListener('click', () => {
 $('#batch-add-form').addEventListener('submit', async (event) => {
   event.preventDefault(); if (event.submitter?.value === 'cancel') return $('#batch-add-dialog').close();
   const count = Number.parseInt($('#batch-add-count').value, 10); const start = nextProfileNumber(); const previousNext = ui.nextProfileNumber;
+  if (!Number.isInteger(count) || count < 1 || count > 200) return toast(tx('新增数量必须为 1-200'));
   const language = $('#batch-add-language').value; const tag = $('#batch-add-tag').value.trim() || '批量创建';
   const groupId = $('#batch-add-group')?.value || UNGROUPED_ID;
   const templateId = $('#batch-add-template')?.value || '';
   const templateProfile = templateId ? (profileEngine(templateId)?.id ? profileEngine(templateId) : ui.profiles.find((item) => item.id === templateId)) : null;
   const templatePreferences = templateProfile ? cloneProfilePreferences(templateProfile) : null;
   const networkMode = document.querySelector('input[name="batch-add-network"]:checked')?.value || 'direct';
+  const proxyLibraryId = String($('#batch-add-proxy-library')?.value || '').trim();
   let proxies = [];
+  const proxyIds = [];
   if (networkMode === 'proxy') {
-    try { proxies = proxyLines('#batch-add-proxies', '#batch-add-proxy-type'); }
+    const libraryItem = proxyLibraryItem(proxyLibraryId);
+    if (proxyLibraryId && !libraryItem) return toast(tx('所选代理库节点已失效，请重新选择'));
+    try { proxies = libraryItem ? Array(count).fill(libraryItem.raw || `${libraryItem.host}:${libraryItem.port}`) : proxyLines('#batch-add-proxies', '#batch-add-proxy-type'); }
     catch (error) { return toast('代理格式错误：' + error.message); }
     if (!proxies.length) return toast(tx('代理模式请填写代理列表'));
+    if (libraryItem) proxyIds.push(...Array(count).fill(libraryItem.id));
   }
-  if (!Number.isInteger(count) || count < 1 || count > 200) return toast(tx('新增数量必须为 1-200'));
   if (proxies.length && proxies.length !== count) return toast(tx('代理数量必须等于新增环境数量，每个环境对应一条代理'));
   const used = new Set(ui.profiles.map((item) => item.id)); const created = [];
   while (created.length < count) {
     const number = start + created.length; const id = createInternalProfileId(number, used); used.add(id);
-    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : {}), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', tag, groupId, os: templatePreferences?.os || 'Windows', location: 'Local', cookies: '' });
+    const assignedProxyId = proxyIds[created.length] || null;
+    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : {}), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', proxyId: assignedProxyId, proxyMeta: { ...(templatePreferences?.proxyMeta || {}), proxyId: assignedProxyId }, tag, groupId, os: templatePreferences?.os || 'Windows', location: 'Local', cookies: '' });
   }
   try {
     const verified = proxies.length ? await verifyProxyAssignments(created, proxies) : [];
@@ -4046,6 +4163,9 @@ document.addEventListener('click', async (event) => {
     const item = proxyLibrary.find((p) => p.id === use.dataset.proxyUse);
     if (!item) return;
     openCreateProfileDialog();
+    renderProxyLibrarySelect($('#create-proxy-library'), item.id);
+    const librarySelect = $('#create-proxy-library');
+    if (librarySelect) librarySelect.value = item.id;
     const proxyRadio = document.querySelector('input[name="create-network"][value="proxy"]');
     if (proxyRadio) {
       proxyRadio.checked = true;
@@ -4057,7 +4177,7 @@ document.addEventListener('click', async (event) => {
     if (input) input.value = item.raw || `${item.host}:${item.port}`;
     const fields = $('#create-proxy-fields');
     if (fields) fields.hidden = false;
-    toast(tx('已切换为代理模式并填入代理'));
+    toast(tx('已切换为代理模式并关联代理库节点'));
   }
 });
 $('#proxy-dialog-test')?.addEventListener('click', async () => {

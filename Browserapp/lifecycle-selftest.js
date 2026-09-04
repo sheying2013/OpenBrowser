@@ -20,6 +20,10 @@ function makeEngine() {
   engine.running = new Map();
   engine.starting = new Map();
   engine.stopping = new Map();
+  engine.lifecycleGenerations = new Map();
+  engine.lifecycleStopRequests = new Map();
+  engine.stopAllPromise = null;
+  engine.stopAllInProgress = false;
   engine.profiles = new Map();
   engine.emit = () => {};
   engine.sanitizeProfile = (value) => ({ ...value });
@@ -301,6 +305,80 @@ async function testStopAllDrainsLateRestart() {
   assert.strictEqual(engine.stopping.size, 0);
 }
 
+async function testStopCancelsInFlightStart() {
+  const engine = makeEngine();
+  const profile = { id: 'cancel-start', name: 'Cancel start' };
+  let releasePrepare;
+  const prepareGate = new Promise((resolve) => { releasePrepare = resolve; });
+  engine._start = async (raw, generation) => {
+    await prepareGate;
+    engine.assertStartGenerationActive(raw.id, generation);
+    engine.running.set(raw.id, {
+      profile: raw,
+      lifecycleGeneration: generation,
+      cleanedUp: false,
+      stopping: false,
+    });
+    return engine.publicRunning(raw.id);
+  };
+
+  const starting = engine.start(profile);
+  await sleep(0);
+  const stopping = engine.stop(profile.id);
+  releasePrepare();
+  await assert.rejects(starting, (error) => error.code === 'BROWSER_START_CANCELLED');
+  const stopped = await stopping;
+  assert.strictEqual(stopped.running, false, 'stop during startup must converge to stopped');
+  assert.strictEqual(engine.running.size, 0);
+  assert.strictEqual(engine.starting.size, 0);
+  assert.strictEqual(engine.stopping.size, 0);
+  assert.strictEqual(engine.lifecycleStopRequests.size, 0, 'cancel request must be cleared after stop');
+}
+
+async function testLateOldGenerationExitIsolation() {
+  const engine = makeEngine();
+  const oldItem = { lifecycleGeneration: 1, cleanupPromise: null };
+  const newItem = { lifecycleGeneration: 2, cleanupPromise: null };
+  engine.running.set('generation-env', newItem);
+  const newStop = new Promise(() => {});
+  newStop.lifecycleItem = newItem;
+  newStop.lifecycleGeneration = 2;
+  engine.stopping.set('generation-env', newStop);
+  let cleanupOptions = null;
+  engine.cleanupRunningItem = async (_id, item, options) => {
+    assert.strictEqual(item, oldItem);
+    cleanupOptions = options;
+    return { id: 'generation-env', running: false };
+  };
+
+  await engine.handleBrowserGone('generation-env', oldItem, 'late-old-exit');
+  assert.strictEqual(engine.running.get('generation-env'), newItem, 'old exit must not remove the new generation');
+  assert.strictEqual(engine.stopping.get('generation-env'), newStop, 'old exit must not replace the new stop barrier');
+  assert.strictEqual(cleanupOptions.emitStatus, false, 'old generation must not emit current status');
+}
+
+async function testStopAllBoundsHungEnvironment() {
+  const engine = makeEngine();
+  engine.stopAllItemTimeoutMs = 35;
+  engine.running.set('hung-env', { cleanedUp: false, stopping: false });
+  engine.running.set('fast-env', { cleanedUp: false, stopping: false });
+  engine._stop = async (id, item) => {
+    item.stopping = true;
+    if (id === 'hung-env') return new Promise(() => {});
+    engine.running.delete(id);
+    item.cleanedUp = true;
+    return { id, running: false };
+  };
+
+  const startedAt = Date.now();
+  const result = await engine.stopAll();
+  assert.ok(Date.now() - startedAt < 500, 'one hung environment must not hang stopAll');
+  assert.strictEqual(engine.running.has('fast-env'), false, 'healthy environments must still stop');
+  assert.strictEqual(engine.running.has('hung-env'), true, 'timed-out environment remains visible for diagnostics');
+  assert.ok(result.remaining.includes('hung-env'));
+  assert.ok(result.errors.some((message) => message.includes('Timed out stopping browser environment hung-env')));
+}
+
 async function main() {
   await testStateRecovery();
   await testProfileLockRecovery();
@@ -308,6 +386,9 @@ async function main() {
   await testStartupResourceCleanup();
   await testCleanupFailsClosedWhenChildSurvives();
   await testStopAllDrainsLateRestart();
+  await testStopCancelsInFlightStart();
+  await testLateOldGenerationExitIsolation();
+  await testStopAllBoundsHungEnvironment();
   await testLockReleaseFailureRetainsRunningItem();
   await testStartupResourceCleanupUnknownScan();
   const profile = { id: 'lifecycle-env', name: 'Lifecycle environment' };
@@ -425,16 +506,15 @@ async function testStartupResourceCleanupUnknownScan() {
     profileLock,
     child: { exitCode: 0, signalCode: null },
   };
-  const isolation = require('./automation/isolation');
-  const origTerminate = isolation.terminateProcessesUsingProfile;
-  isolation.terminateProcessesUsingProfile = () => ({ known: false, pids: [] });
+  const originalDrain = engine.drainProfileHelpers;
+  engine.drainProfileHelpers = async () => ({ known: false, pids: [], attempts: 1, timedOut: false });
   try {
     const res = await engine.cleanupStartupResources(resources);
     assert.strictEqual(res.lockReleased, false, 'unknown scan must keep lock');
     assert.strictEqual(res.cleanupBlocked, true, 'unknown scan must block cleanup');
     assert.strictEqual(await fs.stat(lockPath(profileRoot)).then(() => true, () => false), true, 'lock file must be retained');
   } finally {
-    isolation.terminateProcessesUsingProfile = origTerminate;
+    engine.drainProfileHelpers = originalDrain;
     await fs.rm(root, { recursive: true, force: true }).catch(() => {});
   }
 }
