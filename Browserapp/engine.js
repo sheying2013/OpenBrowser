@@ -2527,12 +2527,16 @@ class BrowserEngine {
 
       let afterStop = this.running.get(id);
       if (afterStop && (afterStop.cleanupFailed || afterStop.cleanedUp || afterStop.stopping)) {
-        await this.stopRunningItem(id, afterStop).catch(() => {});
-        afterStop = this.running.get(id);
+        if (!afterStop.cleanupFailed) {
+          await this.stopRunningItem(id, afterStop).catch(() => {});
+          afterStop = this.running.get(id);
+        }
       }
       if (afterStop && (afterStop.cleanupFailed || afterStop.cleanedUp || afterStop.stopping)) {
         const numericPid = Number(afterStop.pid);
-        const childDead = !numericPid || !isPidAlive(numericPid);
+        const childDead = afterStop.child
+          ? (afterStop.child.exitCode !== null || (numericPid > 0 && !isPidAlive(numericPid)))
+          : (numericPid > 0 ? !isPidAlive(numericPid) : true);
         const helpersDead = !scanProcessesUsingProfile(afterStop.root || '').pids.length;
         if (childDead && helpersDead) {
           try { afterStop.cdpConnection?.close?.(); } catch (_) {}
