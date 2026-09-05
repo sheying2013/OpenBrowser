@@ -514,6 +514,17 @@ function mergeEngineExitState(values) {
       next.proxyId = remote.proxyId;
       changed = true;
     }
+    const resolvedProxyId = next.proxyId || remote.proxyId;
+    if (resolvedProxyId && !proxyHasCredentials(next.proxy)) {
+      const libItem = proxyLibraryItem(resolvedProxyId);
+      if (libItem) {
+        const fullProxy = parseProxyInputForUi(libItem, libItem.protocol || 'socks5')?.raw;
+        if (fullProxy && proxyHasCredentials(fullProxy)) {
+          next.proxy = fullProxy;
+          changed = true;
+        }
+      }
+    }
     return next;
   });
   if (changed) save();
@@ -1578,8 +1589,12 @@ function parseProxyInputForUi(value, selectedType = 'socks5') {
   }
   const rawValue = String(value || '').trim();
   if (!rawValue || /^(direct|offline|none)$/i.test(rawValue)) return null;
-  const { source, remark } = splitProxyRemarkForUi(rawValue);
+  let { source, remark } = splitProxyRemarkForUi(rawValue);
   if (!source) return null;
+
+  source = source.replace(/^[\"'`(]+|[\"'`)]+$/g, '').trim();
+  if (source.endsWith('/')) source = source.slice(0, -1).trim();
+  if (!source || /^(direct|offline|none)$/i.test(source)) return null;
 
   let protocol = normalizeProxyProtocolForUi(selectedType);
   let body = source;
@@ -1614,9 +1629,28 @@ function parseProxyInputForUi(value, selectedType = 'socks5') {
       throw new Error(tx('代理 URI 凭据格式无效'));
     }
   } else {
-    const endpoint = body.match(/^(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5})$/);
-    if (!endpoint) throw new Error(tx('代理格式应为 IP:端口、IP:端口:用户名:密码或 protocol://用户名:密码@主机:端口'));
-    host = proxyHostForUi(endpoint[1]); port = endpoint[2];
+    const userAtHost = body.match(/^([\s\S]*?)(?:(\\@|@))(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5})\/?$/);
+    const hostAtUser = !userAtHost && body.match(/^(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5})@([\s\S]*)\/?$/);
+    const endpoint = !userAtHost && !hostAtUser && body.match(/^(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5})$/);
+    if (userAtHost) {
+      protocol = 'socks5';
+      host = proxyHostForUi(userAtHost[3]); port = userAtHost[4];
+      const userinfo = userAtHost[1];
+      const separator = userinfo.indexOf(':');
+      username = decodeProxyPartForUi(separator < 0 ? userinfo : userinfo.slice(0, separator));
+      password = decodeProxyPartForUi(separator < 0 ? '' : userinfo.slice(separator + 1));
+    } else if (hostAtUser) {
+      protocol = 'socks5';
+      host = proxyHostForUi(hostAtUser[1]); port = hostAtUser[2];
+      const userinfo = hostAtUser[3];
+      const separator = userinfo.indexOf(':');
+      username = decodeProxyPartForUi(separator < 0 ? userinfo : userinfo.slice(0, separator));
+      password = decodeProxyPartForUi(separator < 0 ? '' : userinfo.slice(separator + 1));
+    } else if (endpoint) {
+      host = proxyHostForUi(endpoint[1]); port = endpoint[2];
+    } else {
+      throw new Error(tx('代理格式应为 IP:端口、IP:端口:用户名:密码或 protocol://用户名:密码@主机:端口'));
+    }
   }
   const canonical = buildProxyUiValue({ protocol, host, port, username, password, remark });
   return {
@@ -1688,8 +1722,8 @@ function proxyAuthActionForUpdate(currentValue, nextValue, networkMode = 'proxy'
     && (String(current.username || '') || String(current.password || ''))
     && !String(next.username || '')
     && !String(next.password || '')) {
-    if (window.__editorProxyAuthTouched) return 'clear';
-    return null;
+    if (typeof window !== 'undefined' && !window.__editorProxyAuthTouched) return null;
+    return 'clear';
   }
   return null;
 }
@@ -4553,9 +4587,30 @@ $('#proxy-raw')?.addEventListener('input', () => {
       $('#proxy-name').value = parsed.name;
       $('#proxy-name').dataset.autoProxyName = 'true';
     }
+    syncThemedSelects($('#proxy-dialog'));
   } catch (_) {}
 });
 $('#proxy-name')?.addEventListener('input', () => { delete $('#proxy-name').dataset.autoProxyName; });
+$('#proxy-host')?.addEventListener('input', () => {
+  const value = $('#proxy-host').value.trim();
+  if (!value || (!value.includes(':') && !value.includes('@') && !value.includes('/'))) return;
+  try {
+    const parsed = parseProxyInputForUi(value, $('#proxy-protocol').value);
+    if (!parsed) return;
+    $('#proxy-protocol').value = parsed.protocol;
+    $('#proxy-host').value = parsed.host;
+    if (parsed.port) $('#proxy-port').value = parsed.port;
+    if (parsed.username) $('#proxy-user').value = parsed.username;
+    if (parsed.password) $('#proxy-password').value = parsed.password;
+    if (parsed.remark) $('#proxy-remark').value = parsed.remark;
+    if ($('#proxy-raw')) $('#proxy-raw').value = parsed.raw;
+    if (!$('#proxy-name').value.trim() || $('#proxy-name').dataset.autoProxyName === 'true') {
+      $('#proxy-name').value = parsed.name;
+      $('#proxy-name').dataset.autoProxyName = 'true';
+    }
+    syncThemedSelects($('#proxy-dialog'));
+  } catch (_) {}
+});
 $('#proxy-form')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const submitter = event.submitter;
@@ -4644,6 +4699,26 @@ $('#create-proxy-raw')?.addEventListener('input', () => {
   } catch (_) {}
 });
 
+$('#create-proxy-host')?.addEventListener('input', () => {
+  const value = $('#create-proxy-host').value.trim();
+  if (!value || (!value.includes(':') && !value.includes('@') && !value.includes('/'))) return;
+  try {
+    const parsed = parseProxyInputForUi(value, $('#create-proxy-type')?.value || 'socks5');
+    if (!parsed) return;
+    if ($('#create-proxy-type')) $('#create-proxy-type').value = parsed.protocol;
+    $('#create-proxy-host').value = parsed.host;
+    if (parsed.port && $('#create-proxy-port')) $('#create-proxy-port').value = parsed.port;
+    if (parsed.username && $('#create-proxy-user')) $('#create-proxy-user').value = parsed.username;
+    if (parsed.password && $('#create-proxy-password')) $('#create-proxy-password').value = parsed.password;
+    if ($('#create-proxy-raw')) $('#create-proxy-raw').value = parsed.raw;
+    const input = $('#create-proxy-input') || document.querySelector('#profile-form input[name="proxy"]');
+    if (input) input.value = parsed.raw;
+    const library = $('#create-proxy-library');
+    if (library) library.value = '';
+    syncThemedSelects($('#profile-dialog'));
+  } catch (_) {}
+});
+
 $('#editor-proxy-raw')?.addEventListener('input', () => {
   const raw = $('#editor-proxy-raw').value.trim();
   if (!raw) return;
@@ -4660,6 +4735,32 @@ $('#editor-proxy-raw')?.addEventListener('input', () => {
     const status = $('#editor-proxy-library-status');
     if (status) status.textContent = '未关联代理库节点（使用快捷粘贴代理）';
     window.__editorProxyAuthTouched = true;
+    syncThemedSelects($('#editor-proxy-fields'));
+  } catch (_) {}
+});
+
+$('#editor-proxy-host')?.addEventListener('input', () => {
+  const value = $('#editor-proxy-host').value.trim();
+  if (!value || (!value.includes(':') && !value.includes('@') && !value.includes('/'))) return;
+  try {
+    const parsed = parseProxyInputForUi(value, $('#editor-proxy-type')?.value || 'socks5');
+    if (!parsed) return;
+    if ($('#editor-proxy-type')) $('#editor-proxy-type').value = parsed.protocol;
+    $('#editor-proxy-host').value = parsed.host;
+    if (parsed.port && $('#editor-proxy-port')) $('#editor-proxy-port').value = parsed.port;
+    if (parsed.username && $('#editor-proxy-user')) {
+      $('#editor-proxy-user').value = parsed.username;
+      window.__editorProxyAuthTouched = true;
+    }
+    if (parsed.password && $('#editor-proxy-password')) {
+      $('#editor-proxy-password').value = parsed.password;
+      window.__editorProxyAuthTouched = true;
+    }
+    if ($('#editor-proxy-raw')) $('#editor-proxy-raw').value = parsed.raw;
+    const library = $('#editor-proxy-library');
+    if (library) library.value = '';
+    const status = $('#editor-proxy-library-status');
+    if (status) status.textContent = '未关联代理库节点（使用快捷粘贴代理）';
     syncThemedSelects($('#editor-proxy-fields'));
   } catch (_) {}
 });
@@ -4967,6 +5068,7 @@ async function initialize() {
   syncState = await window.ops.getSyncState(); preferredMasterId = syncState.master || null; if (syncState.active) selectedSessions = new Set(syncState.selected || []);
   await applySyncSettings(syncSettings); fillSyncSettingsForm();
   ui.profiles = ui.profiles.map((item) => ({ ...item, browser: 'Google Chrome' }));
+  await refreshProxies().catch(() => {});
   // Merge secrets already loaded in main process (not stored in localStorage).
   try {
     const engineStatus = await window.ops.profileStatus();
@@ -4975,8 +5077,18 @@ async function initialize() {
       ui.profiles = ui.profiles.map((local) => {
         const remote = byId.get(local.id);
         if (!remote) return local;
+        let mergedProxy = mergeRemoteProxy(local.proxy, remote.proxy);
+        const resolvedProxyId = local.proxyId || remote.proxyId;
+        if (resolvedProxyId && !proxyHasCredentials(mergedProxy)) {
+          const libItem = proxyLibraryItem(resolvedProxyId);
+          if (libItem) {
+            const fullProxy = parseProxyInputForUi(libItem, libItem.protocol || 'socks5')?.raw;
+            if (fullProxy && proxyHasCredentials(fullProxy)) mergedProxy = fullProxy;
+          }
+        }
         return normalizeProfileSettings({
           ...local,
+          proxyId: resolvedProxyId || null,
           ...(remote.exitIp ? {
             exitIp: remote.exitIp,
             exitCountryCode: remote.exitCountryCode,
@@ -4988,7 +5100,7 @@ async function initialize() {
             exitNetworkType: remote.exitNetworkType,
           } : {}),
           cookies: local.cookies || remote.cookies || '',
-          proxy: mergeRemoteProxy(local.proxy, remote.proxy),
+          proxy: mergedProxy,
           platform: {
             ...(local.platform || {}),
             password: local.platform?.password || remote.platform?.password || '',
@@ -5005,7 +5117,6 @@ async function initialize() {
     }
   } catch (_) {}
   save();
-  await refreshProxies().catch(() => {});
   engineProfiles = await window.ops.syncProfiles(ui.profiles); await refreshExtensions(); await refreshSessions(); renderProfiles(); renderLogs();
   log('System', readyBrowserLog(info));
   switchView(document.querySelector('.view.active')?.id?.replace(/^view-/, '') || 'profiles');

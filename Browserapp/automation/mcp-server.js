@@ -22,9 +22,9 @@ const PORT = Number(process.env.OPENBROWSER_API_PORT || process.env.PORT || 5032
 const HOST = process.env.OPENBROWSER_API_HOST || '127.0.0.1';
 
 let cachedApiKey = null;
-function getApiKey(forceReload = false) {
-  if (!forceReload && cachedApiKey) return cachedApiKey;
-  const resolution = resolveApiKey();
+function getApiKey(forceReload = false, ignoreEnv = false) {
+  if (!forceReload && !ignoreEnv && cachedApiKey) return cachedApiKey;
+  const resolution = resolveApiKey({ ignoreEnv });
   cachedApiKey = resolution.key || "";
   return cachedApiKey;
 }
@@ -127,19 +127,24 @@ function withInputAliases(schema) {
 
 function request(method, path, body, options = {}) {
   const payload = body === undefined ? null : JSON.stringify(body);
-  const currentKey = getApiKey(false);
+  const currentKey = getApiKey(Boolean(options._retried), Boolean(options._retried));
   const timeoutMs = options.timeout || 60000;
   return new Promise((resolve, reject) => {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
+    };
+    if (currentKey) {
+      headers['api-key'] = currentKey;
+      headers['x-api-key'] = currentKey;
+      headers['Authorization'] = `Bearer ${currentKey}`;
+    }
     const req = http.request({
       host: HOST,
       port: PORT,
       path,
       method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(currentKey ? { 'api-key': currentKey } : {}),
-        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
-      },
+      headers,
       timeout: timeoutMs,
     }, (res) => {
       let data = '';
@@ -148,7 +153,7 @@ function request(method, path, body, options = {}) {
       res.on('end', () => {
         if (res.statusCode === 401) {
           if (!options._retried) {
-            getApiKey(true);
+            getApiKey(true, true);
             return request(method, path, body, { ...options, _retried: true }).then(resolve, reject);
           }
           const challenge = String(res.headers['www-authenticate'] || '').trim();
