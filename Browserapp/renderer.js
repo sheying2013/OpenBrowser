@@ -933,7 +933,7 @@ function redactProfileForStorage(profile) {
   return {
     ...value,
     cookies: '',
-    proxy: redactProxyForStorage(value.proxy),
+    proxy: value.proxy,
     platform: {
       ...(value.platform || {}),
       password: '',
@@ -1690,8 +1690,10 @@ function applyProxyLibrarySelection(kind, id) {
   editorSet(`#${prefix}-proxy-port`, parsed?.port || item.port || '');
   editorSet(`#${prefix}-proxy-user`, parsed?.username || item.username || '');
   editorSet(`#${prefix}-proxy-password`, parsed?.password || item.password || '');
-  const raw = $(`#${prefix}-proxy-input`);
-  if (raw) raw.value = parsed?.raw || item.raw || '';
+  const raw = $(`#${prefix}-proxy-raw`) || $(`#${prefix}-proxy-input`);
+  if (raw) raw.value = parsed?.raw || item.raw || buildProxyUiValue(item);
+  const select = $(`#${prefix}-proxy-library`);
+  if (select) select.value = String(item.id);
   if (editor) {
     const status = $('#editor-proxy-library-status');
     if (status) status.textContent = `已关联代理库：${proxyLibraryLabel(item)}`;
@@ -1871,8 +1873,36 @@ function editorDraft(strict = true) {
     && currentProxyParsed.type === nextProxyParsed.type
     && currentProxyParsed.host === nextProxyParsed.host
     && String(currentProxyParsed.port || '') === String(nextProxyParsed.port || '');
-  if (sameEndpoint && !window.__editorProxyAuthTouched && (currentProxyParsed.username || currentProxyParsed.password) && !nextProxyParsed.username && !nextProxyParsed.password) {
-    proxy = current.proxy;
+  if (!window.__editorProxyAuthTouched && !nextProxyParsed.username && !nextProxyParsed.password) {
+    if (sameEndpoint && (currentProxyParsed.username || currentProxyParsed.password)) {
+      proxy = current.proxy;
+    } else {
+      const eng = engineProfiles.find((item) => item.id === editingProfileId);
+      if (eng?.proxy) {
+        const engParsed = parseEditorProxy(eng.proxy);
+        if (engParsed.mode === 'custom' && engParsed.host === nextProxyParsed.host && String(engParsed.port) === String(nextProxyParsed.port) && (engParsed.username || engParsed.password)) {
+          proxy = buildProxyUiValue({
+            protocol: nextProxyParsed.type || engParsed.type,
+            host: nextProxyParsed.host,
+            port: nextProxyParsed.port,
+            username: engParsed.username,
+            password: engParsed.password,
+          });
+        }
+      }
+      if (!proxyHasCredentials(proxy) && selectedProxyId) {
+        const libItem = proxyLibraryItem(selectedProxyId);
+        if (libItem?.username || libItem?.password) {
+          proxy = buildProxyUiValue({
+            protocol: nextProxyParsed.type || libItem.protocol || 'socks5',
+            host: nextProxyParsed.host || libItem.host,
+            port: nextProxyParsed.port || libItem.port,
+            username: libItem.username || '',
+            password: libItem.password || '',
+          });
+        }
+      }
+    }
   }
   const proxyAuthAction = proxyAuthActionForUpdate(current.proxy, proxy, selectedNetwork);
   const selectedProxyValue = String($('#editor-proxy-library')?.value || '').trim();
@@ -2100,7 +2130,27 @@ function openProfileEditor(id) {
   if (proxyLibraryStatus) proxyLibraryStatus.textContent = linkedProxy
     ? `已关联代理库：${proxyLibraryLabel(linkedProxy)}`
     : (linkedProxyId ? `代理节点已失效：${linkedProxyId}` : '未关联代理库节点');
-  const proxy = parseEditorProxy(profile.proxy);
+  let proxy = parseEditorProxy(profile.proxy);
+  if (proxy.mode === 'custom') {
+    if ((!proxy.username || !proxy.password) && linkedProxy) {
+      const libParsed = parseEditorProxy(linkedProxy.raw || buildProxyUiValue(linkedProxy));
+      if (libParsed && (!proxy.host || (libParsed.host === proxy.host && String(libParsed.port) === String(proxy.port)))) {
+        if (!proxy.username && libParsed.username) proxy.username = libParsed.username;
+        if (!proxy.password && libParsed.password) proxy.password = libParsed.password;
+        if (!proxy.type && libParsed.type) proxy.type = libParsed.type;
+      }
+    }
+    if (!proxy.username || !proxy.password) {
+      const eng = engineProfiles.find((item) => item.id === profile.id);
+      if (eng?.proxy) {
+        const engParsed = parseEditorProxy(eng.proxy);
+        if (engParsed && engParsed.host === proxy.host && String(engParsed.port) === String(proxy.port)) {
+          if (!proxy.username && engParsed.username) proxy.username = engParsed.username;
+          if (!proxy.password && engParsed.password) proxy.password = engParsed.password;
+        }
+      }
+    }
+  }
   const mode = document.querySelector('input[name="editor-network"][value="' + proxy.mode + '"]');
   if (mode) mode.checked = true;
   editorSet('#editor-proxy-type', ['http', 'https', 'socks5'].includes(proxy.type) ? proxy.type : 'socks5');
@@ -2810,21 +2860,40 @@ function openProxyDialog(item = null) {
 }
 
 function readProxyForm() {
-  const rawInput = $('#proxy-raw').value.trim();
-  const parsed = rawInput ? parseProxyInputForUi(rawInput, $('#proxy-protocol').value) : null;
-  const username = parsed?.username ?? $('#proxy-user').value;
-  const password = parsed?.password ?? $('#proxy-password').value;
+  const rawInput = $('#proxy-raw')?.value?.trim() || '';
+  const formProtocol = $('#proxy-protocol')?.value?.trim() || '';
+  const formHost = $('#proxy-host')?.value?.trim() || '';
+  const formPort = $('#proxy-port')?.value?.trim() || '';
+  const formUser = $('#proxy-user')?.value || '';
+  const formPass = $('#proxy-password')?.value || '';
+  const formName = $('#proxy-name')?.value?.trim() || '';
+  const formRemark = $('#proxy-remark')?.value?.trim() || '';
+
+  const parsed = rawInput ? parseProxyInputForUi(rawInput, formProtocol || 'socks5') : null;
+
+  const protocol = formProtocol || parsed?.protocol || 'socks5';
+  const host = formHost || parsed?.host || '';
+  const port = Number(formPort || parsed?.port || 0);
+  const username = formUser || parsed?.username || '';
+  const password = formPass || parsed?.password || '';
+  const name = formName || parsed?.name || '';
+  const remark = formRemark || parsed?.remark || '';
+
+  const builtRaw = (host && port)
+    ? buildProxyUiValue({ protocol, host, port, username, password, remark })
+    : (parsed?.raw || undefined);
+
   const draft = {
-    id: $('#proxy-edit-id').value || undefined,
-    name: $('#proxy-name').value.trim() || parsed?.name || '',
-    protocol: parsed?.protocol || $('#proxy-protocol').value,
-    host: parsed?.host || $('#proxy-host').value.trim(),
-    port: Number(parsed?.port || $('#proxy-port').value),
+    id: $('#proxy-edit-id')?.value || undefined,
+    name,
+    protocol,
+    host,
+    port,
     username,
     password,
-    raw: parsed?.raw || undefined,
-    ipChannel: $('#proxy-ip-channel').value,
-    remark: $('#proxy-remark').value.trim() || parsed?.remark || '',
+    raw: builtRaw,
+    ipChannel: $('#proxy-ip-channel')?.value || 'direct',
+    remark,
   };
   // Empty credentials are normally redacted by round-tripped UI data. Only
   // send an explicit clear operation when the user is editing an existing
@@ -4158,7 +4227,7 @@ $('#profile-form').addEventListener('submit', async (event) => {
       try {
         const parsed = parseProxyInputForUi(proxy, $('#create-proxy-type')?.value || 'socks5');
         if (parsed?.host && parsed?.port) {
-          await window.ops.proxyCreate({
+          const createdLib = await window.ops.proxyCreate({
             name: `环境${number}代理`,
             protocol: parsed.protocol || 'socks5',
             host: parsed.host,
@@ -4168,6 +4237,11 @@ $('#profile-form').addEventListener('submit', async (event) => {
             raw: parsed.raw || proxy,
             remark: `由环境${number}创建时自动保存`,
           });
+          if (createdLib?.id) {
+            profile.proxyId = createdLib.id;
+            profile.proxyMeta = { ...(profile.proxyMeta || {}), proxyId: createdLib.id };
+            save();
+          }
           await refreshProxies();
         }
       } catch (saveErr) {
@@ -4191,10 +4265,11 @@ $('#editor-test-proxy')?.addEventListener('click', testEditorProxy);
 $('#editor-apply-proxy-fp')?.addEventListener('click', applyEditorProxyFingerprint);
 $('#editor-refresh-proxy')?.addEventListener('click', refreshEditorProxy);
 $('#editor-system-defaults').addEventListener('click', useSystemEditorDefaults);
-const editorProxySelector = '#editor-proxy-type,#editor-proxy-host,#editor-proxy-port,#editor-proxy-user,#editor-proxy-password,input[name="editor-network"]';
+const editorProxyFieldsSelector = '#editor-proxy-host,#editor-proxy-port,#editor-proxy-user,#editor-proxy-password,#editor-proxy-raw';
+const editorProxyGeneralSelector = '#editor-proxy-type,input[name="editor-network"],' + editorProxyFieldsSelector;
 const onEditorFormChange = (event) => {
-  if (event.target.matches(editorProxySelector)) {
-    if (!window.__proxyLibrarySelectionInProgress) {
+  if (event.target.matches(editorProxyGeneralSelector)) {
+    if (event.isTrusted && !window.__proxyLibrarySelectionInProgress && event.target.matches(editorProxyFieldsSelector)) {
       const library = $('#editor-proxy-library');
       if (library && library.value) library.value = '';
       const status = $('#editor-proxy-library-status');
@@ -4343,7 +4418,7 @@ $('#profile-editor-form').addEventListener('submit', async (event) => {
       try {
         const parsed = parseProxyInputForUi(draft.proxy, $('#editor-proxy-type')?.value || 'socks5');
         if (parsed?.host && parsed?.port) {
-          await window.ops.proxyCreate({
+          const createdLib = await window.ops.proxyCreate({
             name: `环境${displayProfileNumber(draft)}代理`,
             protocol: parsed.protocol || 'socks5',
             host: parsed.host,
@@ -4353,6 +4428,13 @@ $('#profile-editor-form').addEventListener('submit', async (event) => {
             raw: parsed.raw || draft.proxy,
             remark: `由环境${displayProfileNumber(draft)}编辑时自动保存`,
           });
+          if (createdLib?.id) {
+            draft.proxyId = createdLib.id;
+            draft.proxyMeta = { ...(draft.proxyMeta || {}), proxyId: createdLib.id };
+            ui.profiles[index] = draft;
+            save();
+            await window.ops.syncProfiles(ui.profiles);
+          }
           await refreshProxies();
         }
       } catch (saveErr) {

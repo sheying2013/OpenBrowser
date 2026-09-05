@@ -62,17 +62,29 @@ function proxyHasCredentials(value) {
   return Boolean(parsedProxy(value)?.authenticated);
 }
 
+function hasExplicitScheme(value) {
+  return /^[a-z][a-z0-9+.-]*:///i.test(String(value || '').trim());
+}
+
 function sameProxyEndpoint(left, right) {
   const a = parsedProxy(left);
   const b = parsedProxy(right);
-  return Boolean(a && b && a.protocol === b.protocol && a.host === b.host && a.port === b.port);
+  if (!a || !b) return false;
+  if (a.host !== b.host || a.port !== b.port) return false;
+  if (hasExplicitScheme(left) && hasExplicitScheme(right)) {
+    return a.protocol === b.protocol;
+  }
+  return true;
 }
 
 function sameProxyIdentity(left, right) {
   const a = parsedProxy(left);
   const b = parsedProxy(right);
-  return Boolean(a && b
-    && a.protocol === b.protocol
+  if (!a || !b) return false;
+  const protocolMatches = (hasExplicitScheme(left) && hasExplicitScheme(right))
+    ? a.protocol === b.protocol
+    : true;
+  return Boolean(protocolMatches
     && a.host === b.host
     && a.port === b.port
     && String(a.username || '') === String(b.username || '')
@@ -1102,6 +1114,17 @@ class BrowserEngine {
     for (const f of singletonFiles) {
       await fsp.rm(path.join(root, f), { force: true, recursive: true }).catch(() => {});
     }
+    const lockF = path.join(root, '.openbrowser-instance.lock');
+    if (fs.existsSync(lockF)) {
+      try {
+        const content = JSON.parse(await fsp.readFile(lockF, 'utf8'));
+        if (content?.pid && !isPidAlive(content.pid)) {
+          await fsp.rm(lockF, { force: true }).catch(() => {});
+        }
+      } catch (_) {
+        await fsp.rm(lockF, { force: true }).catch(() => {});
+      }
+    }
     const jobs = [
       // Shared-file chain: resetZoom then applyProfilePreferences, ordered.
       (async () => { await this.resetZoom(root); await this.applyProfilePreferences(root, profile); })(),
@@ -2101,7 +2124,38 @@ class BrowserEngine {
       // helpers. Re-scan the exact user-data-dir and terminate only those
       // helpers before releasing the profile lock.
       if (item.child?.exitCode !== null && item.child?.exitCode !== undefined && item.root) {
-        const helperDrain = await this.drainProfileHelpers(item.root);
+        let helperDrain = await this.drainProfileHelpers(item.root);
+        if (!helperDrain.known || helperDrain.pids.length) {
+          if (helperDrain.pids?.length) {
+            await isolation.terminateProcessIds?.(helperDrain.pids);
+            helperDrain = await this.drainProfileHelpers(item.root);
+          }
+        }
+        if (!helperDrain.known || helperDrain.pids.length) {
+          try {
+            const remaining = scanProcessesUsingProfile(item.root);
+            if (remaining?.pids?.length) {
+              for (const p of remaining.pids) {
+                if (p && p !== process.pid) {
+                  try {
+                    if (process.platform === 'win32') {
+                      require('child_process').execFileSync('taskkill.exe', ['/PID', String(p), '/T', '/F'], { windowsHide: true, timeout: 3000 });
+                    } else {
+                      process.kill(p, 'SIGKILL');
+                    }
+                  } catch (_) {}
+                }
+              }
+            }
+          } catch (_) {}
+          helperDrain = await this.drainProfileHelpers(item.root);
+        }
+        if (item.root) {
+          const singletonFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'DevToolsActivePort'];
+          for (const f of singletonFiles) {
+            await fsp.rm(path.join(item.root, f), { force: true, recursive: true }).catch(() => {});
+          }
+        }
         if (!helperDrain.known || helperDrain.pids.length) {
           const failure = new Error(`Chromium helper exit was not confirmed for profile ${profileId}; cleanup is fail-closed`);
           failure.code = 'BROWSER_HELPERS_EXIT_UNCONFIRMED';
@@ -2562,6 +2616,16 @@ class BrowserEngine {
               try { if (helperPid !== process.pid) process.kill(helperPid, 'SIGKILL'); } catch (_) {}
             }
           }
+        }
+        childDead = afterStop.child
+          ? (afterStop.child.exitCode !== null || (numericPid > 0 && !isPidAlive(numericPid)))
+          : (numericPid > 0 ? !isPidAlive(numericPid) : true);
+        helpers = scanProcessesUsingProfile(afterStop.root || '').pids;
+        if (!childDead) {
+          throw afterStop.cleanupError || Object.assign(
+            new Error(`Browser environment ${id} is still stopping; child exit has not been confirmed`),
+            { code: 'BROWSER_EXIT_UNCONFIRMED' },
+          );
         }
         if (afterStop.root) {
           const singletonFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'DevToolsActivePort'];
