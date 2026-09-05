@@ -3,7 +3,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const { URL } = require('url');
-const { cleanApiKey, isApiKeyPlaceholder } = require('./api-key');
+const { cleanApiKey, isApiKeyPlaceholder, resolveApiKey } = require('./api-key');
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -406,6 +406,7 @@ class LocalApiServer {
     const configuredPort = options.port === undefined ? 50325 : Number(options.port);
     this.requestedPort = Number.isFinite(configuredPort) && configuredPort >= 0 ? configuredPort : 50325;
     this.port = this.requestedPort;
+    this.userDataPath = options.userDataPath || '';
     this.apiKey = cleanApiKey(options.apiKey) || crypto.randomBytes(32).toString('base64url');
     this.allowedOrigins = new Set(options.allowedOrigins || []);
     this.engine = options.engine;
@@ -431,10 +432,23 @@ class LocalApiServer {
       url?.searchParams?.get('api_token'),
       url?.searchParams?.get('key'),
     ];
-    return candidates
+    const cleanedCandidates = candidates
       .map((candidate) => cleanApiKey(candidate))
-      .filter(Boolean)
-      .some((candidate) => timingSafeStringEqual(candidate, this.apiKey));
+      .filter(Boolean);
+    if (cleanedCandidates.some((candidate) => timingSafeStringEqual(candidate, this.apiKey))) {
+      return true;
+    }
+    try {
+      const diskKey = resolveApiKey({ userDataPath: this.userDataPath || '', ignoreEnv: true })?.key
+        || resolveApiKey({ userDataPath: this.userDataPath || '' })?.key;
+      if (diskKey && !timingSafeStringEqual(this.apiKey, diskKey)) {
+        if (cleanedCandidates.some((candidate) => timingSafeStringEqual(candidate, diskKey))) {
+          this.apiKey = diskKey;
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
   }
 
   setApiKey(newKey) {

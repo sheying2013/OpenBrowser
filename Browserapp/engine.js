@@ -1054,6 +1054,9 @@ class BrowserEngine {
     prefs.profile ||= {}; prefs.profile.default_content_setting_values ||= {};
     prefs.profile.exit_type = 'Normal'; prefs.profile.exited_cleanly = true;
     const content = prefs.profile.default_content_setting_values;
+    content.fullscreen = 1;
+    prefs.fullscreen ||= {};
+    prefs.fullscreen.allowed = true;
     if (profile.advanced.blockImages) content.images = 2; else delete content.images;
     if (profile.advanced.blockSound) content.sound = 2; else delete content.sound;
     if (profile.advanced.blockNotifications) content.notifications = 2; else delete content.notifications;
@@ -2533,24 +2536,48 @@ class BrowserEngine {
         }
       }
       if (afterStop && (afterStop.cleanupFailed || afterStop.cleanedUp || afterStop.stopping)) {
-        const numericPid = Number(afterStop.pid);
-        const childDead = afterStop.child
+        let numericPid = Number(afterStop.pid);
+        let childDead = afterStop.child
           ? (afterStop.child.exitCode !== null || (numericPid > 0 && !isPidAlive(numericPid)))
           : (numericPid > 0 ? !isPidAlive(numericPid) : true);
-        const helpersDead = !scanProcessesUsingProfile(afterStop.root || '').pids.length;
-        if (childDead && helpersDead) {
-          try { afterStop.cdpConnection?.close?.(); } catch (_) {}
-          if (afterStop.profileLock && afterStop.root) {
-            await releaseProfileLock(afterStop.root, afterStop.profileLock).catch(() => {});
+        let helpers = scanProcessesUsingProfile(afterStop.root || '').pids;
+        if (!childDead || helpers.length) {
+          if (!childDead && numericPid > 0) {
+            await killProcessTree(numericPid, managedBrowserKillOptions(afterStop, afterStop.root)).catch(() => {});
           }
-          this.running.delete(id);
-          afterStop = null;
-        } else {
-          throw afterStop.cleanupError || Object.assign(
-            new Error(`Browser environment ${id} is still stopping; child exit has not been confirmed`),
-            { code: 'BROWSER_EXIT_UNCONFIRMED' },
-          );
+          for (const helperPid of helpers) {
+            if (helperPid && helperPid !== process.pid) {
+              await killProcessTree(helperPid, { force: true }).catch(() => {});
+            }
+          }
+          childDead = afterStop.child
+            ? (afterStop.child.exitCode !== null || (numericPid > 0 && !isPidAlive(numericPid)))
+            : (numericPid > 0 ? !isPidAlive(numericPid) : true);
+          helpers = scanProcessesUsingProfile(afterStop.root || '').pids;
+          if (!childDead || helpers.length) {
+            if (numericPid > 0 && isPidAlive(numericPid)) {
+              try { process.kill(numericPid, 'SIGKILL'); } catch (_) {}
+            }
+            for (const helperPid of helpers) {
+              try { if (helperPid !== process.pid) process.kill(helperPid, 'SIGKILL'); } catch (_) {}
+            }
+          }
         }
+        if (afterStop.root) {
+          const singletonFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'DevToolsActivePort'];
+          for (const f of singletonFiles) {
+            await fsp.rm(path.join(afterStop.root, f), { force: true, recursive: true }).catch(() => {});
+          }
+        }
+        try { afterStop.cdpConnection?.close?.(); } catch (_) {}
+        if (afterStop.proxyForwarder) {
+          try { await afterStop.proxyForwarder.close?.(); } catch (_) {}
+        }
+        if (afterStop.profileLock && afterStop.root) {
+          await releaseProfileLock(afterStop.root, afterStop.profileLock).catch(() => {});
+        }
+        this.running.delete(id);
+        afterStop = null;
       }
       if (afterStop) return this.publicRunning(id);
       this.assertStartGenerationActive(id, generation);
@@ -2690,6 +2717,8 @@ class BrowserEngine {
       '--disable-session-crashed-bubble',
       '--disable-background-mode',
       '--enable-unsafe-extension-debugging',
+      '--enable-features=Fullscreen',
+      '--disable-gesture-requirement-for-presentation',
       // Random loopback port only; never bind 0.0.0.0. Restrict CDP WebSocket origins
       // (was * — any local page that learns the port could attach and steal session).
       '--remote-debugging-port=0',
