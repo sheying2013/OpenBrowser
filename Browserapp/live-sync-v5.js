@@ -1726,6 +1726,9 @@ class LiveSyncController extends LiveSyncV4 {
     if (bounds.windowState === 'maximized' || bounds.windowState === 'fullscreen') {
       const targetState = bounds.windowState;
       this.lastWindowSync = now;
+      if (targetState === 'fullscreen') {
+        this.pauseGeometrySync(1800, 'fullscreen-active');
+      }
       await Promise.all(this.slaves.map(async (slave) => {
         if (!sessionIsCurrent() || !this.isSlaveAvailable(slave)) return;
         try {
@@ -1844,9 +1847,9 @@ class LiveSyncController extends LiveSyncV4 {
       });
       const state = result.result?.value || {};
       return state.focused === false
-        || state.picker === true
-        || ((process.platform === 'win32' && this.nativePopupActive)
-          || Date.now() < (this.browserOwnedUntil || 0));
+        || (state.picker === true
+          && ((process.platform === 'win32' && this.nativePopupActive)
+            || Date.now() < (this.browserOwnedUntil || 0)));
     } catch (_) {
       // A page target that is changing focus/navigation is exactly when a
       // top-level resize is most likely to dismiss browser-owned UI.
