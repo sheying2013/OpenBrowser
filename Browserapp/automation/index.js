@@ -70,6 +70,7 @@ async function startAutomation(context = {}) {
     host: '127.0.0.1',
     port,
     apiKey: effectiveApiKey,
+    userDataPath,
     engine,
     rpaEngine,
     rpaStore,

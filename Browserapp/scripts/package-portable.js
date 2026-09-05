@@ -104,8 +104,18 @@ function copyRecursive(source, destination) {
   fs.chmodSync(destination, stats.mode & 0o777);
 }
 
-function removeIfExists(target) {
-  fs.rmSync(target, { recursive: true, force: true });
+function removeIfExists(target, retries = 5, delayMs = 150) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      if (fs.existsSync(target)) {
+        fs.rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+      return;
+    } catch (err) {
+      if (i === retries) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+    }
+  }
 }
 
 function writeText(file, content) {
