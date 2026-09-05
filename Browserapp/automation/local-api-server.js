@@ -713,13 +713,16 @@ class LocalApiServer {
       const number = (Math.max(0, ...numbers) || 0) + 1;
       const id = 'ob-' + Date.now().toString(36) + '-' + crypto.randomBytes(5).toString('hex');
       const base = this.engine.sanitizeProfile(source);
+      const requestedStartUrl = duplicateInput.startUrl !== undefined
+        ? String(duplicateInput.startUrl || '').trim()
+        : null;
       const next = this.engine.sanitizeProfile({
         ...base,
         id,
         number,
         name: String(duplicateInput.name || (base.name ? base.name + ' Copy' : 'Environment ' + number)),
         title: String(duplicateInput.name || base.title || base.name || ('Environment ' + number)),
-        startUrl: duplicateInput.startUrl !== undefined ? duplicateInput.startUrl : base.startUrl,
+        startUrl: requestedStartUrl === null ? base.startUrl : requestedStartUrl,
         profileId: id,
         cookies: '',
         username: '',
@@ -730,10 +733,15 @@ class LocalApiServer {
         exitNetwork: undefined,
         platform: {
           ...(base.platform || {}),
+          ...(requestedStartUrl === null ? {} : { startUrl: requestedStartUrl }),
           username: '',
           password: '',
           totpSecret: '',
           otp: '',
+        },
+        advanced: {
+          ...(base.advanced || {}),
+          ...(requestedStartUrl === null ? {} : { startUrls: requestedStartUrl }),
         },
         privacy: {
           ...(base.privacy || {}),

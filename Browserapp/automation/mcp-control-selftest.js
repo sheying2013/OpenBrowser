@@ -290,7 +290,9 @@ async function main() {
     && duplicateResult.body.data.profile?.platform?.username === ''
     && duplicateResult.body.data.profile?.platform?.password === ''
     && duplicateResult.body.data.profile?.platform?.totpSecret === ''
-    && duplicateResult.body.data.profile?.startUrl === 'https://example.org/duplicate');
+    && duplicateResult.body.data.profile?.startUrl === 'https://example.org/duplicate'
+    && duplicateResult.body.data.profile?.platform?.startUrl === 'https://example.org/duplicate'
+    && duplicateResult.body.data.profile?.advanced?.startUrls === 'https://example.org/duplicate');
 
   const checkResult = await request('POST', '/api/proxy/check-profile', { profile_id: 'mcp-fp' });
   record('local-api check profile proxy persists', checkResult.status === 200 && checkResult.body.code === 0 && checkResult.body.data?.country === 'Test' && engine.profiles.get('mcp-fp')?.exitNetwork?.country === 'Test');
