@@ -227,6 +227,9 @@
                 <label>代理库节点<select id="editor-proxy-library"><option value="">手动填写代理（不关联代理库）</option></select></label>
                 <div class="network-mode-hint" id="editor-proxy-library-status">未关联代理库节点</div>
                 <div id="editor-proxy-fields">
+                  <label>快捷智能粘贴（自动解析协议/主机/端口/账号密码）
+                    <input id="editor-proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080 或 host:port:user:pass" autocomplete="off">
+                  </label>
                   <div class="form-two">
                     <label>代理类型<select id="editor-proxy-type"><option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
                     <label>IP 查询通道<select id="editor-ip-channel"><option value="ip-api">IP-API</option><option value="ip2location">IP2Location</option><option value="ifconfig-me">ifconfig.me（HTTPS）</option></select></label>
@@ -474,6 +477,7 @@
           <div class="toolbar">
             <div class="toolbar-left">
               <button class="primary" id="proxy-create" type="button"><i data-lucide="plus"></i>新建代理</button>
+              <button class="outline" id="proxy-batch-import-btn" type="button"><i data-lucide="folder-input"></i>批量导入</button>
               <button class="outline" id="proxy-refresh" type="button"><i data-lucide="refresh-cw"></i>刷新</button>
               <button class="outline" id="proxy-check-selected" type="button"><i data-lucide="activity"></i>检测选中</button>
               <button class="outline" id="proxy-check-all" type="button"><i data-lucide="list-checks"></i>检测全部</button>
@@ -1065,6 +1069,7 @@
     <form method="dialog" id="proxy-form">
       <div class="dialog-head"><div><h2 id="proxy-dialog-title">新建代理</h2><p>保存到本地代理库，不上传云端</p></div><button value="cancel" type="submit">×</button></div>
       <input type="hidden" id="proxy-edit-id" value="">
+      <label>快捷智能粘贴（自动解析协议/主机/端口/账号密码/备注）<input id="proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080#备注 或 host:port:user:pass"></label>
       <label>名称<input id="proxy-name" placeholder="例如：美东住宅-01" maxlength="120"></label>
       <div class="form-two">
         <label>协议
@@ -1090,7 +1095,6 @@
         <label>账号<input id="proxy-user" autocomplete="off" placeholder="可选"></label>
         <label>密码<input id="proxy-password" type="password" autocomplete="new-password" placeholder="可选"></label>
       </div>
-      <label>整行粘贴（可选，优先解析）<input id="proxy-raw" placeholder="socks5://user:pass@host:port 或 host:port:user:pass"></label>
       <label>备注<textarea id="proxy-remark" rows="2" placeholder="用途说明"></textarea></label>
       <div class="proxy-test-result" id="proxy-dialog-result">保存前可先检测</div>
       <div class="dialog-actions">
@@ -1101,9 +1105,50 @@
     </form>
   </dialog>
 
+  <dialog id="proxy-batch-import-dialog">
+    <form method="dialog" id="proxy-batch-import-form">
+      <div class="dialog-head">
+        <div>
+          <h2>批量导入代理</h2>
+          <p>每行一个代理配置，支持协议、主机、端口、认证及备注自动解析</p>
+        </div>
+        <button value="cancel" type="submit">×</button>
+      </div>
+      <label>代理列表（每行一条）
+        <textarea id="proxy-batch-import-text" rows="8" placeholder="例如：&#10;socks5://user:pass@127.0.0.1:1080#美东01&#10;192.168.1.1:7890:admin:secret&#10;http://10.0.0.1:8080" required></textarea>
+      </label>
+      <div class="form-two">
+        <label>默认协议
+          <select id="proxy-batch-default-protocol">
+            <option value="socks5">SOCKS5</option>
+            <option value="http">HTTP</option>
+            <option value="https">HTTPS</option>
+          </select>
+        </label>
+        <label>IP 查询通道
+          <select id="proxy-batch-ip-channel">
+            <option value="ip-api">IP-API</option>
+            <option value="ip2location">IP2Location</option>
+            <option value="ifconfig-me">ifconfig.me（HTTPS）</option>
+          </select>
+        </label>
+      </div>
+      <div class="dialog-actions">
+        <button value="cancel" class="outline" type="submit">取消</button>
+        <button value="default" class="primary" id="proxy-batch-import-submit" type="submit">确认批量导入</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="profile-dialog"><form method="dialog" id="profile-form">
     <div class="dialog-head"><h2>新建浏览器环境</h2><button value="cancel">×</button></div>
     <label>环境名称（自动编号）<input name="name" required readonly value="1"></label>
+    <label>沿用偏好模板（可选）
+      <select id="profile-create-template">
+        <option value="">使用新环境默认偏好</option>
+      </select>
+      <small class="field-hint">可快速沿用现有环境的指纹参数、指定网页与偏好设置。</small>
+    </label>
     <div class="form-two">
       <label>浏览器<select name="browser"><option>Google Chrome</option></select></label>
       <label><span data-i18n="common.language">语言</span><select name="language" id="profile-create-language">
@@ -1118,7 +1163,7 @@
       </select></label>
     </div>
     <label>所属分组<select id="profile-create-group" name="groupId"></select></label>
-    <label>打开指定网页（可选）<input name="startUrl" type="text" inputmode="url" placeholder="example.com 或 https://example.com" autocomplete="off" spellcheck="false"></label>
+    <label>打开指定网页（可选）<input name="startUrl" id="profile-create-start-url" type="text" inputmode="url" placeholder="example.com 或 https://example.com" autocomplete="off" spellcheck="false"></label>
     <div class="network-mode-block">
       <span class="network-mode-label">网络模式</span>
       <div class="segmented" id="create-network-mode" role="radiogroup" aria-label="网络模式">
@@ -1128,6 +1173,9 @@
       <p class="network-mode-hint">本地直连使用本机网络，不配置代理。</p>
     </div>
     <div id="create-proxy-fields" hidden>
+      <label>快捷智能粘贴（自动解析）
+        <input id="create-proxy-raw" placeholder="socks5://user:pass@host:port 或 host:port:user:pass" autocomplete="off">
+      </label>
       <label>代理库节点<select id="create-proxy-library"><option value="">手动填写代理（不关联代理库）</option></select></label>
       <div class="form-two">
         <label>代理类型

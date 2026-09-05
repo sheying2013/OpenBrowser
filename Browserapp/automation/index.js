@@ -95,6 +95,7 @@ async function startAutomation(context = {}) {
     apiKeyFile: keyFilePath,
     async rotateApiKey() {
       const newKey = await keyStore.rotate();
+      this.apiKey = newKey;
       localApi.setApiKey(newKey);
       return newKey;
     },

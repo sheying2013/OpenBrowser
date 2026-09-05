@@ -282,7 +282,8 @@ async function acquireProfileLock(profileRoot, meta = {}) {
           existing,
         );
       }
-      if (isPidAlive(numericPid)) {
+      const isSelfOwner = numericPid === process.pid;
+      if (!isSelfOwner && isPidAlive(numericPid)) {
         throw lockOwnerError('PROFILE_LOCKED', `Profile already running (pid ${numericPid})`, existing);
       }
       // Newer owners also bind the lock to the Chromium child. The Electron
@@ -329,8 +330,8 @@ async function acquireProfileLock(profileRoot, meta = {}) {
         const age = lockAgeMs(existing);
         if (age === null || age < UNKNOWN_STARTUP_LOCK_RECOVERY_MS) {
           throw lockOwnerError(
-            'PROFILE_LOCK_UNRECOVERABLE',
-            'Profile startup lock cannot be verified yet; refusing to remove it',
+            isSelfOwner ? 'PROFILE_LOCKED' : 'PROFILE_LOCK_UNRECOVERABLE',
+            isSelfOwner ? 'Profile startup is already in progress' : 'Profile startup lock cannot be verified yet; refusing to remove it',
             existing,
           );
         }

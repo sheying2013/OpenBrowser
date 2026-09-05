@@ -1413,15 +1413,32 @@ function buildInjectionScript(fp) {
     // fingerprint screen size. CSS layout still resizes, but JS sees the stale value,
     // breaking responsive sites and leaving fixed-width content after window resize.
     // Keep screen.* spoofed while exposing the live desktop layout viewport.
+    const rawWinWidthDesc = Object.getOwnPropertyDescriptor(window, 'innerWidth') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window), 'innerWidth');
+    const rawInnerWidthGet = rawWinWidthDesc?.get ? () => rawWinWidthDesc.get.call(window) : null;
+    const rawWinHeightDesc = Object.getOwnPropertyDescriptor(window, 'innerHeight') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window), 'innerHeight');
+    const rawInnerHeightGet = rawWinHeightDesc?.get ? () => rawWinHeightDesc.get.call(window) : null;
+
     const liveViewportSize = (axis, fallback) => {
       try {
+        const isFs = Boolean(document && (document.fullscreenElement || document.webkitFullscreenElement));
+        if (isFs) {
+          const fsVal = axis === 'width' ? (Number(s.width) || Number(s.availWidth)) : (Number(s.height) || Number(s.availHeight));
+          if (Number(fsVal) > 0) return Number(fsVal);
+        }
+        if (axis === 'width' && typeof rawInnerWidthGet === 'function') {
+          const rawW = Number(rawInnerWidthGet());
+          if (Number.isFinite(rawW) && rawW > 0) return rawW;
+        }
+        if (axis === 'height' && typeof rawInnerHeightGet === 'function') {
+          const rawH = Number(rawInnerHeightGet());
+          if (Number.isFinite(rawH) && rawH > 0) return rawH;
+        }
         const root = document && document.documentElement;
-        const body = document && document.body;
         const rootVal = axis === 'width' ? root?.clientWidth : root?.clientHeight;
+        if (Number(rootVal) > 0) return Number(rootVal);
+        const body = document && document.body;
         const bodyVal = axis === 'width' ? body?.clientWidth : body?.clientHeight;
-        const winVal = axis === 'width' ? window.innerWidth : window.innerHeight;
-        const val = (Number(rootVal) > 0 ? Number(rootVal) : 0) || (Number(bodyVal) > 0 ? Number(bodyVal) : 0) || (Number(winVal) > 0 ? Number(winVal) : 0);
-        if (val > 0) return val;
+        if (Number(bodyVal) > 0) return Number(bodyVal);
       } catch (_) {}
       return fallback;
     };
@@ -1437,6 +1454,10 @@ function buildInjectionScript(fp) {
         Object.defineProperty(viewport, 'width', nativeAccessor('width', { configurable: true, get: () => liveViewportSize('width', initialVisualWidth) }));
         Object.defineProperty(viewport, 'height', nativeAccessor('height', { configurable: true, get: () => liveViewportSize('height', initialVisualHeight) }));
       }
+    } catch (_) {}
+    try {
+      Object.defineProperty(document, 'fullscreenEnabled', nativeAccessor('fullscreenEnabled', { configurable: true, get: () => true }));
+      Object.defineProperty(document, 'webkitFullscreenEnabled', nativeAccessor('webkitFullscreenEnabled', { configurable: true, get: () => true }));
     } catch (_) {}
   } catch (_) {}
 

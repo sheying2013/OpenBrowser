@@ -2161,7 +2161,9 @@ app.whenReady().then(async () => {
   });
   registerTrustedIpc('automation:api-key-rotate', async () => {
     if (!automation) throw new Error('Automation stack is not ready');
-    return { apiKey: await automation.rotateApiKey() };
+    const newKey = await automation.rotateApiKey();
+    automation.apiKey = newKey;
+    return { apiKey: newKey };
   });
   registerTrustedIpc('automation:rpa-task-delete', async (_event, ids) => {
     if (!automation) throw new Error('Automation stack is not ready');

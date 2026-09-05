@@ -28,12 +28,26 @@ function defaultUserDataPaths() {
   const home = os.homedir();
   if (process.platform === 'darwin') {
     paths.push(path.join(home, 'Library', 'Application Support', 'OpenBrowser'));
+    paths.push(path.join(home, 'Library', 'Application Support', 'openbrowser'));
+    paths.push(path.join(home, 'Library', 'Application Support', 'Electron'));
   } else if (process.platform === 'win32') {
-    if (process.env.APPDATA) paths.push(path.join(process.env.APPDATA, 'OpenBrowser'));
+    if (process.env.APPDATA) {
+      paths.push(path.join(process.env.APPDATA, 'OpenBrowser'));
+      paths.push(path.join(process.env.APPDATA, 'openbrowser'));
+      paths.push(path.join(process.env.APPDATA, 'Electron'));
+    }
     paths.push(path.join(home, 'AppData', 'Roaming', 'OpenBrowser'));
+    paths.push(path.join(home, 'AppData', 'Roaming', 'openbrowser'));
+    paths.push(path.join(home, 'AppData', 'Roaming', 'Electron'));
   } else {
-    if (process.env.XDG_CONFIG_HOME) paths.push(path.join(process.env.XDG_CONFIG_HOME, 'OpenBrowser'));
+    if (process.env.XDG_CONFIG_HOME) {
+      paths.push(path.join(process.env.XDG_CONFIG_HOME, 'OpenBrowser'));
+      paths.push(path.join(process.env.XDG_CONFIG_HOME, 'openbrowser'));
+      paths.push(path.join(process.env.XDG_CONFIG_HOME, 'Electron'));
+    }
     paths.push(path.join(home, '.config', 'OpenBrowser'));
+    paths.push(path.join(home, '.config', 'openbrowser'));
+    paths.push(path.join(home, '.config', 'Electron'));
   }
   return paths;
 }
@@ -52,6 +66,10 @@ function apiKeyFileCandidates({ env = process.env, userDataPath = '' } = {}) {
     candidates.push(path.join(base, 'mcp-key.json'));
     candidates.push(path.join(base, 'local-api-key.txt'));
   }
+  candidates.push(path.join(process.cwd(), 'mcp-key.json'));
+  candidates.push(path.join(process.cwd(), 'local-api-key.txt'));
+  candidates.push(path.join(__dirname, '..', 'mcp-key.json'));
+  candidates.push(path.join(__dirname, '..', 'local-api-key.txt'));
   return [...new Set(candidates.map((value) => String(value || '').trim()).filter(Boolean))];
 }
 

@@ -498,11 +498,21 @@ function mergeEngineExitState(values) {
   let changed = false;
   ui.profiles = ui.profiles.map((local) => {
     const remote = byId.get(local.id);
-    if (!remote?.exitIp) return local;
-    const next = { ...local };
-    for (const field of exitFields) {
-      if (remote[field] === undefined || remote[field] === null || remote[field] === '') continue;
-      if (next[field] !== remote[field]) { next[field] = remote[field]; changed = true; }
+    if (!remote) return local;
+    let next = { ...local };
+    if (remote.exitIp) {
+      for (const field of exitFields) {
+        if (remote[field] === undefined || remote[field] === null || remote[field] === '') continue;
+        if (next[field] !== remote[field]) { next[field] = remote[field]; changed = true; }
+      }
+    }
+    if (remote.proxy && proxyHasCredentials(remote.proxy) && !proxyHasCredentials(next.proxy)) {
+      next.proxy = remote.proxy;
+      changed = true;
+    }
+    if (remote.proxyId && !next.proxyId) {
+      next.proxyId = remote.proxyId;
+      changed = true;
     }
     return next;
   });
@@ -1677,7 +1687,10 @@ function proxyAuthActionForUpdate(currentValue, nextValue, networkMode = 'proxy'
   if (sameEndpoint
     && (String(current.username || '') || String(current.password || ''))
     && !String(next.username || '')
-    && !String(next.password || '')) return 'clear';
+    && !String(next.password || '')) {
+    if (window.__editorProxyAuthTouched) return 'clear';
+    return null;
+  }
   return null;
 }
 
@@ -1812,7 +1825,17 @@ function editorDraft(strict = true) {
     privacy.latitude = latitude; privacy.longitude = longitude;
   }
   const selectedNetwork = editorSelectedNetwork();
-  const proxy = serializeEditorProxy(strict);
+  let proxy = serializeEditorProxy(strict);
+  const currentProxyParsed = parseEditorProxy(current.proxy);
+  const nextProxyParsed = parseEditorProxy(proxy);
+  const sameEndpoint = currentProxyParsed.mode === 'custom'
+    && nextProxyParsed.mode === 'custom'
+    && currentProxyParsed.type === nextProxyParsed.type
+    && currentProxyParsed.host === nextProxyParsed.host
+    && String(currentProxyParsed.port || '') === String(nextProxyParsed.port || '');
+  if (sameEndpoint && !window.__editorProxyAuthTouched && (currentProxyParsed.username || currentProxyParsed.password) && !nextProxyParsed.username && !nextProxyParsed.password) {
+    proxy = current.proxy;
+  }
   const proxyAuthAction = proxyAuthActionForUpdate(current.proxy, proxy, selectedNetwork);
   const selectedProxyValue = String($('#editor-proxy-library')?.value || '').trim();
   const selectedProxyId = selectedNetwork === 'direct' ? null : (proxyLibraryItem(selectedProxyValue)?.id || null);
@@ -2047,6 +2070,13 @@ function openProfileEditor(id) {
   editorSet('#editor-proxy-port', proxy.port);
   editorSet('#editor-proxy-user', proxy.username);
   editorSet('#editor-proxy-password', proxy.password);
+  const editorRawInput = $('#editor-proxy-raw');
+  if (editorRawInput) {
+    editorRawInput.value = proxy.mode === 'custom' && proxy.host
+      ? buildProxyUiValue({ protocol: proxy.type, host: proxy.host, port: proxy.port, username: proxy.username, password: proxy.password })
+      : '';
+  }
+  window.__editorProxyAuthTouched = false;
   editorSet('#editor-ip-channel', profile.proxyMeta.ipChannel);
   editorSet('#editor-refresh-url', profile.proxyMeta.refreshUrl);
   editorSet('#editor-api-extract-url', profile.proxyMeta.apiExtractUrl || '');
@@ -2872,6 +2902,43 @@ function buildStartProgressCell(profileId, progress) {
   return wrap;
 }
 
+
+async function cloneProfile(id) {
+  const target = ui.profiles.find((item) => item.id === id);
+  if (!target) return toast(tx('未找到要克隆的环境'));
+  const number = nextProfileNumber();
+  const newId = createInternalProfileId(number);
+  const cloned = normalizeProfileSettings({
+    ...JSON.parse(JSON.stringify(target)),
+    id: newId,
+    number,
+    name: String(number),
+    title: target.title ? `${target.title} (副本)` : '',
+    cookies: '',
+    exitIp: '',
+    exitCountryCode: '',
+    exitTimezone: '',
+    exitLatitude: '',
+    exitLongitude: '',
+    exitCheckedAt: '',
+    exitLatencyMs: '',
+    exitNetworkType: '',
+  });
+  ui.profiles.push(cloned);
+  ui.nextProfileNumber = number + 1;
+  save();
+  try {
+    engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    renderProfiles();
+    toast(tx(`已克隆环境 #${displayProfileNumber(target)} 到 #${number}`));
+    log('Profile', `克隆环境 #${displayProfileNumber(target)} 到 #${number}`);
+  } catch (error) {
+    ui.profiles = ui.profiles.filter((p) => p.id !== newId);
+    save();
+    toast(tx('克隆失败：' + error.message));
+  }
+}
+
 function renderProfiles() {
   renderGroupFilterChips();
   const filter = $('#profile-search').value.trim().toLowerCase();
@@ -2949,7 +3016,8 @@ function renderProfiles() {
     }
     const sync = element('button', 'mini blue', t('action.sync')); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting; sync.title = t('profiles.syncSelect');
     const edit = element('button', 'mini edit', t('action.edit')); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
-    actions.append(toggle, sync, edit); actionCell.append(actions);
+    const clone = element('button', 'mini clone', t('action.clone') || '克隆'); clone.dataset.action = 'clone'; clone.dataset.id = profile.id; clone.title = t('action.clone') || '克隆';
+    actions.append(toggle, sync, edit, clone); actionCell.append(actions);
     row.append(selectCell, idCell, nameCell, groupCell, browserCell, proxyCell, networkCell, extensionCell, statusCell, actionCell); table.append(row);
   }
   $('#profile-empty').hidden = filtered.length !== 0;
@@ -3763,6 +3831,7 @@ document.addEventListener('click', async (event) => {
   if (action?.dataset.action === 'start') startProfile(action.dataset.id);
   if (action?.dataset.action === 'stop') stopProfile(action.dataset.id);
   if (action?.dataset.action === 'edit') openProfileEditor(action.dataset.id);
+  if (action?.dataset.action === 'clone') cloneProfile(action.dataset.id);
   if (action?.dataset.action === 'select-sync') { selectedSessions.add(action.dataset.id); pushSyncSelection(); switchView('sync'); }
 
   const assign = event.target.closest('[data-extension-assign]'); if (assign) openAssign(assign.dataset.extensionAssign);
@@ -3917,6 +3986,23 @@ function openCreateProfileDialog() {
     form.elements.name.readOnly = true;
   }
   if (form?.elements?.startUrl) form.elements.startUrl.value = '';
+  const templateSelect = $('#profile-create-template');
+  if (templateSelect) {
+    templateSelect.replaceChildren();
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = tx('使用新环境默认偏好');
+    templateSelect.appendChild(defaultOpt);
+    for (const p of ui.profiles) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${displayProfileNumber(p)} - ${p.name || '环境'}${p.startUrl ? ' (' + p.startUrl + ')' : ''}`;
+      templateSelect.appendChild(opt);
+    }
+  }
+  const createProxyRaw = $('#create-proxy-raw');
+  if (createProxyRaw) createProxyRaw.value = '';
+  syncThemedSelects($('#profile-dialog'));
   $('#profile-dialog')?.showModal();
 }
 $('#create-profile').addEventListener('click', openCreateProfileDialog); $('#quick-create').addEventListener('click', openCreateProfileDialog);
@@ -3996,25 +4082,27 @@ $('#profile-form').addEventListener('submit', async (event) => {
       catch (error) { return toast('代理格式错误：' + error.message); }
     }
   }
+  const templateId = String($('#profile-create-template')?.value || '').trim();
+  const template = templateId ? ui.profiles.find((item) => item.id === templateId) : null;
   const profile = {
     id: createInternalProfileId(number),
     number,
     name: String(number),
-    browser: data.get('browser'),
-    language: data.get('language') || 'en-US',
+    browser: data.get('browser') || template?.browser || 'Google Chrome',
+    language: data.get('language') || template?.language || 'en-US',
     networkMode: isDirectProxy(proxy) ? 'direct' : 'proxy',
     proxy,
     proxyId: isDirectProxy(proxy) ? null : (proxyLibraryId || null),
-    tag: String(data.get('tag') || 'Default'),
+    tag: String(data.get('tag') || template?.tag || 'Default'),
     groupId,
-    os: 'Windows',
+    os: template?.os || 'Windows',
+    userAgent: template?.userAgent || '',
     location: 'Local',
     startUrl,
-    platform: { type: 'other', startUrl },
-    advanced: { startUrls: startUrl },
-    // Browser UI language defaults to exit-IP country; fixed locale is optional in editor.
-    // New profiles get a coherent device persona; existing ones are left as they were.
-    privacy: { languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona' },
+    platform: { ...(template?.platform || {}), type: template?.platform?.type || 'other', startUrl },
+    advanced: { ...(template?.advanced || {}), startUrls: startUrl },
+    privacy: template?.privacy ? JSON.parse(JSON.stringify(template.privacy)) : { languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona' },
+    ...(template?.fingerprint ? { fingerprint: JSON.parse(JSON.stringify(template.fingerprint)) } : {}),
     proxyMeta: { proxyId: isDirectProxy(proxy) ? null : (proxyLibraryId || null) },
   };
   ui.profiles.push(profile); ui.nextProfileNumber = number + 1; save();
@@ -4485,6 +4573,145 @@ $('#proxy-form')?.addEventListener('submit', async (event) => {
   }
 });
 $('#proxy-dialog')?.addEventListener('close', () => { editingProxyRecord = null; });
+
+$('#profile-create-template')?.addEventListener('change', (event) => {
+  const selectedId = event.target.value;
+  if (!selectedId) return;
+  const target = ui.profiles.find((p) => p.id === selectedId);
+  if (!target) return;
+  const form = $('#profile-form');
+  if (form?.elements?.startUrl) {
+    form.elements.startUrl.value = target.startUrl || target.platform?.startUrl || target.advanced?.startUrls || '';
+  }
+  if (target.language) {
+    const langSelect = $('#profile-create-language');
+    if (langSelect) langSelect.value = target.language;
+  }
+  if (target.groupId) {
+    const groupSelect = $('#profile-create-group');
+    if (groupSelect) groupSelect.value = target.groupId;
+  }
+  if (target.networkMode === 'proxy' && target.proxy && !isDirectProxy(target.proxy)) {
+    const modeProxy = $('#create-network-proxy');
+    if (modeProxy) {
+      modeProxy.checked = true;
+      modeProxy.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const proxyFields = $('#create-proxy-fields');
+    if (proxyFields) proxyFields.hidden = false;
+    const rawInput = $('#create-proxy-raw');
+    if (rawInput) rawInput.value = target.proxy;
+    try {
+      const parsed = parseProxyInputForUi(target.proxy);
+      if (parsed) {
+        if ($('#create-proxy-type')) $('#create-proxy-type').value = parsed.protocol;
+        if ($('#create-proxy-host')) $('#create-proxy-host').value = parsed.host;
+        if ($('#create-proxy-port')) $('#create-proxy-port').value = parsed.port;
+        if ($('#create-proxy-user')) $('#create-proxy-user').value = parsed.username;
+        if ($('#create-proxy-password')) $('#create-proxy-password').value = parsed.password;
+      }
+    } catch (_) {}
+  } else {
+    const modeDirect = $('#create-network-direct');
+    if (modeDirect) {
+      modeDirect.checked = true;
+      modeDirect.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const proxyFields = $('#create-proxy-fields');
+    if (proxyFields) proxyFields.hidden = true;
+  }
+  syncThemedSelects($('#profile-dialog'));
+  toast(tx('已沿用所选环境偏好设置'));
+});
+
+$('#create-proxy-raw')?.addEventListener('input', () => {
+  const raw = $('#create-proxy-raw').value.trim();
+  if (!raw) return;
+  try {
+    const parsed = parseProxyInputForUi(raw, $('#create-proxy-type')?.value || 'socks5');
+    if (!parsed) return;
+    if ($('#create-proxy-type')) $('#create-proxy-type').value = parsed.protocol;
+    if ($('#create-proxy-host')) $('#create-proxy-host').value = parsed.host;
+    if ($('#create-proxy-port')) $('#create-proxy-port').value = parsed.port;
+    if ($('#create-proxy-user')) $('#create-proxy-user').value = parsed.username;
+    if ($('#create-proxy-password')) $('#create-proxy-password').value = parsed.password;
+    const input = $('#create-proxy-input') || document.querySelector('#profile-form input[name="proxy"]');
+    if (input) input.value = parsed.raw;
+    const library = $('#create-proxy-library');
+    if (library) library.value = '';
+    syncThemedSelects($('#profile-dialog'));
+  } catch (_) {}
+});
+
+$('#editor-proxy-raw')?.addEventListener('input', () => {
+  const raw = $('#editor-proxy-raw').value.trim();
+  if (!raw) return;
+  try {
+    const parsed = parseProxyInputForUi(raw, $('#editor-proxy-type')?.value || 'socks5');
+    if (!parsed) return;
+    if ($('#editor-proxy-type')) $('#editor-proxy-type').value = parsed.protocol;
+    if ($('#editor-proxy-host')) $('#editor-proxy-host').value = parsed.host;
+    if ($('#editor-proxy-port')) $('#editor-proxy-port').value = parsed.port;
+    if ($('#editor-proxy-user')) $('#editor-proxy-user').value = parsed.username;
+    if ($('#editor-proxy-password')) $('#editor-proxy-password').value = parsed.password;
+    const library = $('#editor-proxy-library');
+    if (library) library.value = '';
+    const status = $('#editor-proxy-library-status');
+    if (status) status.textContent = '未关联代理库节点（使用快捷粘贴代理）';
+    window.__editorProxyAuthTouched = true;
+    syncThemedSelects($('#editor-proxy-fields'));
+  } catch (_) {}
+});
+
+$('#editor-proxy-user')?.addEventListener('input', () => { window.__editorProxyAuthTouched = true; });
+$('#editor-proxy-password')?.addEventListener('input', () => { window.__editorProxyAuthTouched = true; });
+
+$('#proxy-batch-import-btn')?.addEventListener('click', () => {
+  $('#proxy-batch-import-text').value = '';
+  syncThemedSelects($('#proxy-batch-import-dialog'));
+  $('#proxy-batch-import-dialog')?.showModal();
+});
+
+$('#proxy-batch-import-form')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (event.submitter?.value === 'cancel') return $('#proxy-batch-import-dialog').close('cancel');
+  const text = $('#proxy-batch-import-text')?.value || '';
+  const lines = text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('//') && !l.startsWith('#'));
+  if (!lines.length) return toast(tx('请输入要导入的代理'));
+  const defaultProtocol = $('#proxy-batch-default-protocol')?.value || 'socks5';
+  const ipChannel = $('#proxy-batch-ip-channel')?.value || 'ip-api';
+  let successCount = 0;
+  let failCount = 0;
+  for (const line of lines) {
+    try {
+      const parsed = parseProxyInputForUi(line, defaultProtocol);
+      if (!parsed || !parsed.host || !parsed.port) {
+        failCount++;
+        continue;
+      }
+      const draft = {
+        name: parsed.name || `${parsed.protocol.toUpperCase()} ${parsed.host}:${parsed.port}`,
+        protocol: parsed.protocol,
+        ipChannel,
+        host: parsed.host,
+        port: Number(parsed.port),
+        username: parsed.username || '',
+        password: parsed.password || '',
+        raw: parsed.raw,
+        remark: parsed.remark || '',
+      };
+      await window.ops.proxyCreate(draft);
+      successCount++;
+    } catch (_) {
+      failCount++;
+    }
+  }
+  $('#proxy-batch-import-dialog').close();
+  await refreshProxies();
+  toast(tx(`批量导入完成：成功 ${successCount} 个` + (failCount ? `，失败 ${failCount} 个` : '')));
+  log('Proxy', `批量导入代理完成：${successCount} 成功，${failCount} 失败`);
+});
+
 document.addEventListener('click', async (event) => {
   const install = event.target.closest('[data-store-install]');
   if (!install) return;
@@ -4777,6 +5004,7 @@ async function initialize() {
     }
   } catch (_) {}
   save();
+  await refreshProxies().catch(() => {});
   engineProfiles = await window.ops.syncProfiles(ui.profiles); await refreshExtensions(); await refreshSessions(); renderProfiles(); renderLogs();
   log('System', readyBrowserLog(info));
   switchView(document.querySelector('.view.active')?.id?.replace(/^view-/, '') || 'profiles');
