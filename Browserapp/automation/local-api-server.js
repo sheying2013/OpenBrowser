@@ -3,7 +3,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const { URL } = require('url');
-const { cleanApiKey } = require('./api-key');
+const { cleanApiKey, isApiKeyPlaceholder } = require('./api-key');
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -73,7 +73,8 @@ registerRouteMethods(['POST'], [
   '/api/rpa/run', '/api/rpa', '/api/rpav2', '/api/stopRpa', '/api/rpa/stop',
 ]);
 registerRouteMethods(['GET', 'POST'], ['/api/sync/settings', '/api/rpa/plans', '/api/rpa/templates']);
-registerRouteMethods(['GET'], ['/api/rpa/tasks']);
+registerRouteMethods(['GET', 'DELETE'], ['/api/rpa/tasks']);
+registerRouteMethods(['POST'], ['/api/rpa/tasks/delete']);
 
 function allowedMethodsForPath(pathname) {
   const exact = ROUTE_METHODS.get(pathname);
@@ -434,6 +435,13 @@ class LocalApiServer {
       .map((candidate) => cleanApiKey(candidate))
       .filter(Boolean)
       .some((candidate) => timingSafeStringEqual(candidate, this.apiKey));
+  }
+
+  setApiKey(newKey) {
+    const key = cleanApiKey(newKey);
+    if (!key || isApiKeyPlaceholder(key)) return false;
+    this.apiKey = key;
+    return true;
   }
 
   allowedOrigin(req) {
@@ -959,15 +967,42 @@ class LocalApiServer {
       const id = decodePathId(pathname.slice('/api/rpa/tasks/'.length), 'RPA task');
       return ok(await this.rpaStore.deleteTask(id));
     }
+    if ((pathname === '/api/rpa/tasks/delete' && method === 'POST') || (pathname === '/api/rpa/tasks' && method === 'DELETE')) {
+      const rawIds = firstArray(rpaInput, ['task_ids', 'taskIds', 'ids']) || [firstDefined(rpaInput, ['task_id', 'taskId', 'id'])];
+      const ids = rawIds.map((v) => String(v || '').trim()).filter(Boolean);
+      const deleted = [];
+      for (const id of ids) {
+        const res = await this.rpaStore.deleteTask(id);
+        if (res && res.deleted) deleted.push(id);
+      }
+      return ok({ deleted });
+    }
     if (pathname === '/api/rpa/run' || pathname === '/api/rpa' || pathname === '/api/rpav2') {
-      if (rpaInput.plan_id) return ok(await this.rpaEngine.runPlan(String(rpaInput.plan_id), rpaInput));
-      if (rpaInput.task_id) return ok(await this.rpaEngine.runTask(String(rpaInput.task_id), rpaInput));
+      const wait = rpaInput.wait !== false && rpaInput.wait !== 'false';
+      if (rpaInput.plan_id) {
+        if (!wait) {
+          this.rpaEngine.runPlan(String(rpaInput.plan_id), rpaInput).catch(() => {});
+          return ok({ async: true, plan_id: String(rpaInput.plan_id) });
+        }
+        return ok(await this.rpaEngine.runPlan(String(rpaInput.plan_id), rpaInput));
+      }
+      if (rpaInput.task_id) {
+        if (!wait) {
+          this.rpaEngine.runTask(String(rpaInput.task_id), rpaInput).catch(() => {});
+          return ok({ async: true, task_id: String(rpaInput.task_id) });
+        }
+        return ok(await this.rpaEngine.runTask(String(rpaInput.task_id), rpaInput));
+      }
       if (Array.isArray(rpaInput.steps)) {
         const task = await this.rpaStore.createTask({
           profile_id: firstString(rpaInput, ['profile_id', 'user_id']),
           process_name: String(rpaInput.process_name || rpaInput.name || 'adhoc'),
           steps: rpaInput.steps,
         });
+        if (!wait) {
+          this.rpaEngine.runTask(task.id, rpaInput).catch(() => {});
+          return ok({ async: true, task_id: task.id, task });
+        }
         return ok(await this.rpaEngine.runTask(task.id, rpaInput));
       }
       return fail('plan_id, task_id or steps required');

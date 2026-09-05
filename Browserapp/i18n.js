@@ -326,6 +326,13 @@
     'rpa.store.unsupportedPrefix': '当前版本未支持：{items}',
     'rpa.cat.all': '全部',
 
+        'system.close.title': '关闭窗口行为',
+    'system.close.desc': '控制点击主窗口右上角关闭按钮时，是将程序最小化到系统托盘继续运行后台代理，还是完全退出程序。',
+    'system.close.label': '托盘常驻',
+    'system.close.ask': '每次询问',
+    'system.close.tray': '最小化到系统托盘（保持浏览器与代理运行）',
+    'system.close.exit': '退出程序（停止所有运行中的环境）',
+    'system.close.hint': '保持后台运行可保证各个浏览器环境的代理链路不中断。如需完全退出，可在系统托盘图标右键选择「彻底退出」。',
     'lang.mode.ip': '基于出口 IP 所在地',
     'lang.mode.system': '系统真实',
   };
@@ -594,6 +601,13 @@
     'rpa.store.banner': 'Template vault: built-in runnable flows. Create, import and export. “Use” creates an editable flow you can run.',
     'rpa.cat.all': 'All',
 
+        'system.close.title': 'Window Close Action',
+    'system.close.desc': 'Choose whether closing the main window minimizes to the system tray to keep background proxies running or exits completely.',
+    'system.close.label': 'Tray Residency',
+    'system.close.ask': 'Always ask',
+    'system.close.tray': 'Minimize to system tray (keep browsers and proxies running)',
+    'system.close.exit': 'Exit program (stop all running profiles)',
+    'system.close.hint': 'Running in background ensures proxy tunnels remain active. To completely exit, right click the tray icon and choose Exit.',
     'lang.mode.ip': 'Based on exit IP country',
     'lang.mode.system': 'System real',
   };

@@ -10,20 +10,7 @@ const { WindowSyncBridge } = require('./window-sync-bridge');
 const { AppCenter } = require('./app-center');
 const { ProxyStore } = require('./proxy-store');
 const { resolveApiKey } = require('./api-key');
-
-function writeApiKeyAtomically(filePath, value) {
-  const temporary = `${filePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
-  try {
-    fs.writeFileSync(temporary, `${String(value)}\n`, { encoding: 'utf8', mode: 0o600 });
-    try { fs.chmodSync(temporary, 0o600); } catch (_) {}
-    fs.renameSync(temporary, filePath);
-    try { fs.chmodSync(filePath, 0o600); } catch (_) {}
-    return true;
-  } catch (_) {
-    try { fs.unlinkSync(temporary); } catch (_) {}
-    return false;
-  }
-}
+const { ApiKeyStore, KEY_FILE, TXT_FILE } = require('./api-key-store');
 
 /**
  * Mount automation stack (Local API + RPA + window-sync + app center + proxy library).
@@ -45,31 +32,16 @@ async function startAutomation(context = {}) {
     port = Number(process.env.OPENBROWSER_API_PORT || 50325),
   } = context;
 
-  const defaultKeyFilePath = path.join(app.getPath('userData'), 'local-api-key.txt');
-  const keyResolution = resolveApiKey({
-    configured: context.apiKey,
-    userDataPath: app.getPath('userData'),
-  });
-  let effectiveApiKey = keyResolution.key;
-  const keyFilePath = keyResolution.filePath || defaultKeyFilePath;
-  if (keyResolution.filePath) {
-    try { fs.chmodSync(keyResolution.filePath, 0o600); } catch (_) {}
-  }
-  if (!effectiveApiKey) {
-    effectiveApiKey = crypto.randomBytes(32).toString("base64url");
-    if (!writeApiKeyAtomically(keyFilePath, effectiveApiKey)) {
-      const error = new Error(`Failed to persist local API key: ${keyFilePath}`);
-      error.code = 'API_KEY_PERSIST_FAILED';
-      throw error;
-    }
-  }
-  const apiKey = effectiveApiKey;
+  const userDataPath = app.getPath('userData');
+  const keyStore = new ApiKeyStore(userDataPath);
+  let effectiveApiKey = await keyStore.resolve(context.apiKey || process.env.OPENBROWSER_API_KEY);
+  const keyFilePath = keyStore.filePath;
 
-  const storePath = path.join(app.getPath('userData'), 'rpa-store.json');
+  const storePath = path.join(userDataPath, 'rpa-store.json');
   const rpaStore = new RpaStore(storePath);
   await rpaStore.load();
 
-  const proxyStore = new ProxyStore(path.join(app.getPath('userData'), 'proxy-library.json'));
+  const proxyStore = new ProxyStore(path.join(userDataPath, 'proxy-library.json'));
   await proxyStore.load();
   await engine?.setProxyStore?.(proxyStore);
 
@@ -77,7 +49,7 @@ async function startAutomation(context = {}) {
     engine,
     store: rpaStore,
     emit: (event) => emit(event),
-    userDataPath: app.getPath('userData'),
+    userDataPath,
   });
 
   const syncBridge = new WindowSyncBridge({
@@ -97,7 +69,7 @@ async function startAutomation(context = {}) {
   const localApi = new LocalApiServer({
     host: '127.0.0.1',
     port,
-    apiKey,
+    apiKey: effectiveApiKey,
     engine,
     rpaEngine,
     rpaStore,
@@ -117,9 +89,15 @@ async function startAutomation(context = {}) {
     syncBridge,
     appCenter,
     proxyStore,
+    keyStore,
     info,
-    apiKey,
+    apiKey: effectiveApiKey,
     apiKeyFile: keyFilePath,
+    async rotateApiKey() {
+      const newKey = await keyStore.rotate();
+      localApi.setApiKey(newKey);
+      return newKey;
+    },
     async stop() {
       await rpaEngine.stop();
       await localApi.stop();
@@ -138,4 +116,5 @@ module.exports = {
   WindowSyncBridge,
   AppCenter,
   ProxyStore,
+  ApiKeyStore,
 };
