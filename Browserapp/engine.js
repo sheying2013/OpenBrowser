@@ -466,7 +466,17 @@ class BrowserEngine {
     }
     if (state) {
       const saved = state.saved;
-      for (const extension of saved.extensions || []) if (fs.existsSync(extension.path)) this.extensions.set(extension.id, extension);
+      for (const extension of saved.extensions || []) {
+        if (fs.existsSync(extension.path)) {
+          try {
+            const refreshed = await this.readExtension(extension.path, Boolean(extension.builtIn));
+            refreshed.addedAt = extension.addedAt || refreshed.addedAt;
+            this.extensions.set(refreshed.id, refreshed);
+          } catch (_) {
+            this.extensions.set(extension.id, extension);
+          }
+        }
+      }
       for (const [profileId, ids] of Object.entries(saved.assignments || {})) this.assignments.set(profileId, new Set(ids));
       // Profiles (incl. cookies / proxy auth / platform secrets) live in main-process state,
       // not renderer localStorage, so XSS cannot dump them from the UI store.
@@ -1094,6 +1104,11 @@ class BrowserEngine {
     let prefs = {}; try { prefs = JSON.parse(await fsp.readFile(file, 'utf8')); } catch (_) {}
     prefs.profile ||= {}; prefs.profile.default_content_setting_values ||= {};
     prefs.profile.exit_type = 'Normal'; prefs.profile.exited_cleanly = true;
+    prefs.devtools ||= {};
+    prefs.devtools.preferences ||= {};
+    prefs.policy ||= {};
+    prefs.policy.developer_tools_availability = 1;
+    prefs.DeveloperToolsAvailability = 1;
     const content = prefs.profile.default_content_setting_values;
     content.fullscreen = 1;
     content.automatic_fullscreen = 1;
@@ -2816,6 +2831,7 @@ class BrowserEngine {
       '--disable-session-crashed-bubble',
       '--disable-background-mode',
       '--enable-unsafe-extension-debugging',
+      '--extensions-on-chrome-urls',
       '--enable-features=AutomaticFullscreenContentSetting,WindowPlacement,WindowManagement',
       '--disable-gesture-requirement-for-presentation',
       '--disable-fullscreen-low-power-mode',
@@ -3895,6 +3911,35 @@ class BrowserEngine {
     if (!Array.isArray(profileIds) || profileIds.length > 1000) throw new Error('Invalid profile list');
     for (const profileId of profileIds) { const safe = assertProfileId(profileId); const set = this.assignments.get(safe) || new Set(); if (enabled) set.add(extensionId); else set.delete(extensionId); this.assignments.set(safe, set); }
     await this.persist(); this.emit({ type: 'extensions' }); return { success: true, restartRequired: profileIds.filter((id) => this.running.has(id)) };
+  }
+  async reloadExtension(id) {
+    const existing = this.extensions.get(id);
+    if (!existing) throw new Error('Unknown extension');
+    if (!fs.existsSync(existing.path)) throw new Error('Extension path does not exist');
+    const updated = await this.readExtension(existing.path, Boolean(existing.builtIn));
+    updated.addedAt = existing.addedAt || updated.addedAt;
+    this.extensions.set(id, updated);
+    await this.persist();
+    this.emit({ type: 'extensions' });
+    return updated;
+  }
+  async reloadAllExtensions() {
+    const results = [];
+    for (const [id, ext] of this.extensions.entries()) {
+      if (fs.existsSync(ext.path)) {
+        try {
+          const updated = await this.readExtension(ext.path, Boolean(ext.builtIn));
+          updated.addedAt = ext.addedAt || updated.addedAt;
+          this.extensions.set(id, updated);
+          results.push(updated);
+        } catch (e) {
+          console.warn('[extensions] Failed to reload extension ' + id + ':', e.message);
+        }
+      }
+    }
+    await this.persist();
+    this.emit({ type: 'extensions' });
+    return results;
   }
   async removeExtension(id) { const value = this.extensions.get(id); if (!value || value.builtIn) throw new Error('Built-in extension cannot be removed'); this.extensions.delete(id); for (const set of this.assignments.values()) set.delete(id); await this.persist(); return { success: true }; }
   on(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }

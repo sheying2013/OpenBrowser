@@ -49,14 +49,22 @@ function mulberry32(a) {
 // WebGL vendor/renderer presets + optional GPUAdapterInfo
 const WEBGL_PRESETS = {
   windows: [
-    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'turing' } },
-    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'gen9' } },
-    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Series Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'gcn-4' } },
-    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ampere' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ada' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ada' } },
     { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ada' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ampere' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ampere' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ampere' } },
     { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'turing' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'turing' } },
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Arc(TM) A770 Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'alchemist' } },
     { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'gen12' } },
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 770 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'gen12' } },
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'gen9' } },
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 7900 XTX Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'rdna-3' } },
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 6800 XT Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'rdna-2' } },
     { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 6700 XT Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'rdna-2' } },
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Series Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'gcn-4' } },
   ],
   macos: [
     { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, Apple M1, OpenGL 4.1)', gpu: { vendor: 'apple', architecture: 'common-3' } },
@@ -826,6 +834,22 @@ function buildFingerprint(profile = {}) {
   const webglRenderer = (webglMetaMode === 'real')
     ? null
     : (webglMetaMode === 'blocked' ? '' : (fpIn.webglRenderer || webglPreset.renderer));
+  if (webglGpu && webglMetaMode !== 'real') {
+    const v = String(webglVendor || webglRenderer || '').toLowerCase();
+    if (v.includes('nvidia') && webglGpu.vendor !== 'nvidia') {
+      webglGpu.vendor = 'nvidia';
+      if (!webglGpu.architecture) webglGpu.architecture = 'ampere';
+    } else if (v.includes('intel') && webglGpu.vendor !== 'intel') {
+      webglGpu.vendor = 'intel';
+      if (!webglGpu.architecture) webglGpu.architecture = 'gen12';
+    } else if ((v.includes('amd') || v.includes('radeon')) && webglGpu.vendor !== 'amd') {
+      webglGpu.vendor = 'amd';
+      if (!webglGpu.architecture) webglGpu.architecture = 'rdna-2';
+    } else if (v.includes('apple') && webglGpu.vendor !== 'apple') {
+      webglGpu.vendor = 'apple';
+      if (!webglGpu.architecture) webglGpu.architecture = 'common-3';
+    }
+  }
   const webgl = {
     mode: webglMode,
     metaMode: webglMetaMode,
@@ -1679,13 +1703,34 @@ function buildInjectionScript(fp) {
           return result;
         });
       };
+      const patchGetExtension = (proto) => {
+        if (!proto || !proto.getExtension) return;
+        replaceMethod(proto, 'getExtension', (original) => function(name) {
+          if (metaMode === 'blocked' && String(name).toLowerCase() === 'webgl_debug_renderer_info') return null;
+          return original.apply(this, arguments);
+        });
+      };
+      const patchGetSupportedExtensions = (proto) => {
+        if (!proto || !proto.getSupportedExtensions) return;
+        replaceMethod(proto, 'getSupportedExtensions', (original) => function() {
+          const list = original.apply(this, arguments);
+          if (metaMode === 'blocked' && Array.isArray(list)) {
+            return list.filter((ext) => String(ext).toLowerCase() !== 'webgl_debug_renderer_info');
+          }
+          return list;
+        });
+      };
       if (globalThis.WebGLRenderingContext) {
         patchGetParameter(WebGLRenderingContext.prototype);
         patchReadPixels(WebGLRenderingContext.prototype);
+        patchGetExtension(WebGLRenderingContext.prototype);
+        patchGetSupportedExtensions(WebGLRenderingContext.prototype);
       }
       if (globalThis.WebGL2RenderingContext) {
         patchGetParameter(WebGL2RenderingContext.prototype);
         patchReadPixels(WebGL2RenderingContext.prototype);
+        patchGetExtension(WebGL2RenderingContext.prototype);
+        patchGetSupportedExtensions(WebGL2RenderingContext.prototype);
       }
       // Wrap getContext so every GL instance inherits patched getParameter even if
       // prototypes were frozen after first context creation.

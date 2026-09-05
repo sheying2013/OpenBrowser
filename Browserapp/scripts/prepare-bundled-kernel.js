@@ -8,11 +8,12 @@
  *   kernels/macos-x64
  *   kernels/windows-x64
  *   kernels/macos-arm64
- *   kernels/chrome-for-testing/chrome-linux64
+ *   kernels/chrome-stable/opt/google/chrome/chrome
  *
- * Runtime auto-download is disabled. This script does not download kernels.
+ * This script only verifies package seeds; runtime download is handled by the
+ * application when an independent kernel is missing.
  * For Windows/mac-arm seeds it also verifies companion-library CDP readiness markers.
- * Ubuntu x86_64 packages ship Chrome for Testing under its canonical layout.
+ * Ubuntu x86_64 packages ship the official Google Chrome Stable package.
  *
  * Env:
  *   OPENBROWSER_PACKAGE_ARCH = x64 | arm64 | x86_64 | aarch64
@@ -118,14 +119,14 @@ function main() {
   }
 
   if (platform === 'linux-x64') {
-    const binary = path.join(kernelsRoot, 'chrome-for-testing', 'chrome-linux64', 'chrome');
-    assertExists(binary, 'Linux x64 Chrome for Testing kernel binary');
+    const binary = path.join(kernelsRoot, 'chrome-stable', 'opt', 'google', 'chrome', 'chrome');
+    assertExists(binary, 'Linux x64 Google Chrome Stable kernel binary');
     try {
       fs.accessSync(binary, fs.constants.X_OK);
     } catch (_) {
-      throw new Error(`Linux x64 Chrome for Testing kernel is not executable: ${binary}`);
+      throw new Error(`Linux x64 Google Chrome Stable kernel is not executable: ${binary}`);
     }
-    console.log(`[kernel] ok linux-x64 Chrome for Testing at ${binary}`);
+    console.log(`[kernel] ok linux-x64 Google Chrome Stable at ${binary}`);
     return;
   }
 

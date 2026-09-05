@@ -3,8 +3,9 @@
 /**
  * Independent Chromium kernel manager.
  *
- * Runtime policy: resolve integrated seeds under Browserapp/kernels/ only.
- * Auto-download is disabled. Custom user-selected Chromium binaries remain allowed.
+ * Runtime policy: prefer integrated seeds under Browserapp/kernels/ and use the
+ * official Google Chrome Stable package when a download is requested.
+ * Custom user-selected Chromium binaries remain allowed.
  */
 
 const fs = require('fs');
@@ -21,11 +22,19 @@ const { isSystemBrowserExecutable } = require('./isolation');
 
 /** Optional remote kernel feed URL (unused when integrated seeds are present). */
 const WAYFERN_META = 'https://donutbrowser.com/wayfern.json';
-/** Fallback: Google Chrome for Testing last-known-good. */
+/** Google Chrome for Testing stable channel (legacy/package fallback). */
 const CFT_META = 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json';
+const CHROME_STABLE_PACKAGES = Object.freeze({
+  'linux:x64': { url: 'https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb', kind: 'deb' },
+  'darwin:x64': { url: 'https://dl.google.com/chrome/mac/universal/stable/GGRO/googlechrome.dmg', kind: 'dmg' },
+  'darwin:arm64': { url: 'https://dl.google.com/chrome/mac/universal/stable/GGRO/googlechrome.dmg', kind: 'dmg' },
+  'win32:x64': { url: 'https://dl.google.com/chrome/install/googlechromestandaloneenterprise64.msi', kind: 'msi' },
+  'win32:arm64': { url: 'https://dl.google.com/chrome/install/googlechromestandaloneenterprise64.msi', kind: 'msi' },
+});
 
 const SOURCE_WAYFERN = 'donut-wayfern';
 const SOURCE_CFT = 'chrome-for-testing';
+const SOURCE_CHROME_STABLE = 'chrome-stable';
 const SOURCE_CUSTOM = 'custom';
 /** Bundled / userData OpenBrowser 148 independent kernel. Default on macOS x64. */
 const SOURCE_OPENBROWSER = 'openbrowser-148';
@@ -40,6 +49,7 @@ const KERNEL_HOSTS = new Set([
   'download.wayfern.com',
   'googlechromelabs.github.io',
   'storage.googleapis.com',
+  'dl.google.com',
 ]);
 const acceptedWayfernTerms = new Set();
 
@@ -172,6 +182,18 @@ function cftPlatformKey() {
   return 'linux64';
 }
 
+function chromeStablePackage() {
+  return CHROME_STABLE_PACKAGES[`${process.platform}:${process.arch}`] || null;
+}
+
+function chromeStableBinaryRelative() {
+  if (process.platform === 'darwin') {
+    return path.join('Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome');
+  }
+  if (process.platform === 'win32') return path.join('Google', 'Chrome', 'Application', 'chrome.exe');
+  return path.join('opt', 'google', 'chrome', 'chrome');
+}
+
 function chromeForTestingBinaryRelative(platform) {
   if (platform.startsWith('mac-')) {
     return path.join(
@@ -274,6 +296,7 @@ function findOpenBrowserKernelBinary(kernelsRoot, extraRoots = []) {
 function kernelDisplayName(source) {
   if (source === SOURCE_OPENBROWSER) return 'OpenBrowser 148';
   if (source === SOURCE_WAYFERN) return 'Independent kernel';
+  if (source === SOURCE_CHROME_STABLE) return 'Google Chrome Stable';
   if (source === SOURCE_CUSTOM) return 'Custom Chromium';
   if (source === SOURCE_CFT) return 'Chrome for Testing';
   return 'Independent Chromium';
@@ -378,7 +401,7 @@ function isIntegratedKernelCdpReady(candidate = {}) {
   const binary = String(candidate.path || candidate.binary || candidate || '').trim();
   if (!binary || !fs.existsSync(binary)) return false;
   const source = String(candidate.source || '').toLowerCase();
-  if (source === SOURCE_OPENBROWSER || source === SOURCE_CUSTOM || source === SOURCE_CFT) return true;
+  if (source === SOURCE_OPENBROWSER || source === SOURCE_CUSTOM || source === SOURCE_CFT || source === SOURCE_CHROME_STABLE) return true;
   if (isOpenBrowser148SupportedHost() && /openbrowser_148|kernels[/\\](macos-x64|openbrowser)[/\\]/i.test(binary)) {
     return true;
   }
@@ -656,6 +679,26 @@ async function extractZip(zipPath, destDir) {
   await assertSafeExtractedTree(destDir);
 }
 
+async function extractDeb(debPath, destDir) {
+  if (process.platform !== 'linux') throw new Error('DEB 仅支持 Linux');
+  await execFileAsync('dpkg-deb', ['-x', debPath, destDir]);
+  // Keep only /opt/google/chrome. The Debian package also contains system-wide
+  // launchers/cron hooks with absolute symlinks that are irrelevant here.
+  for (const systemPath of ['usr', 'etc']) {
+    await fsp.rm(path.join(destDir, systemPath), { recursive: true, force: true });
+  }
+  await assertSafeExtractedTree(destDir);
+}
+
+async function extractMsi(msiPath, destDir) {
+  if (process.platform !== 'win32') throw new Error('MSI 仅支持 Windows');
+  await execFileAsync('msiexec.exe', ['/a', msiPath, `/qn`, '/norestart', `TARGETDIR=${destDir}`], {
+    windowsHide: true,
+    timeout: 120000,
+  });
+  await assertSafeExtractedTree(destDir);
+}
+
 async function extractTarXz(archivePath, destDir) {
   await preflightArchiveMembers(archivePath, 'tar.xz');
   await execFileAsync('tar', ['-xJf', archivePath, '-C', destDir]);
@@ -896,6 +939,27 @@ function findBundledChromeForTesting(resourceRoots = []) {
   return null;
 }
 
+/** Locate a standard Google Chrome Stable package installed beside the app. */
+function findBundledChromeStable(resourceRoots = []) {
+  const roots = [];
+  const addRoot = (root) => {
+    if (!root) return;
+    const value = path.resolve(String(root));
+    if (!roots.includes(value)) roots.push(value);
+  };
+  for (const root of resourceRoots || []) {
+    addRoot(path.join(root, 'kernels', 'chrome-stable'));
+    addRoot(path.join(root, 'app', 'kernels', 'chrome-stable'));
+    addRoot(path.join(root, 'chrome-stable'));
+  }
+  const relative = chromeStableBinaryRelative();
+  for (const root of roots) {
+    const binary = safeInstalledBinary(path.join(root, relative), root);
+    if (binary) return { binary, root };
+  }
+  return null;
+}
+
 function bundledKernelVersion(root) {
   const tryFiles = [];
   if (root) {
@@ -915,6 +979,8 @@ function bundledKernelVersion(root) {
 
 function archiveKindFromUrl(url) {
   const u = String(url || '').toLowerCase();
+  if (u.endsWith('.deb')) return 'deb';
+  if (u.endsWith('.msi')) return 'msi';
   if (u.endsWith('.dmg')) return 'dmg';
   if (u.endsWith('.tar.xz') || u.endsWith('.txz')) return 'tar.xz';
   if (u.endsWith('.tar.gz') || u.endsWith('.tgz')) return 'tar.gz';
@@ -969,6 +1035,21 @@ class BrowserKernelManager {
   }
 
   resolveInstalled() {
+    // A user-requested Stable download overrides legacy kernels bundled by an
+    // older package. Otherwise the old CFT resource would win forever.
+    if (this.meta.source === SOURCE_CHROME_STABLE && this.meta.binary) {
+      const stable = safeInstalledBinary(this.meta.binary, this.kernelsRoot);
+      if (stable) {
+        return {
+          name: kernelDisplayName(SOURCE_CHROME_STABLE),
+          path: stable,
+          version: this.meta.version || 'stable',
+          independent: true,
+          source: SOURCE_CHROME_STABLE,
+        };
+      }
+    }
+
     // macOS x64 default only: OpenBrowser 148 under kernels/macos-x64/ (wrapper binary).
     // Other hosts must never auto-select this kernel even if a stray tree exists.
     if (isOpenBrowser148SupportedHost()) {
@@ -1003,6 +1084,17 @@ class BrowserKernelManager {
       }
     }
 
+    const bundledStable = findBundledChromeStable(this.resourceRoots);
+    if (bundledStable) {
+      return {
+        name: kernelDisplayName(SOURCE_CHROME_STABLE),
+        path: bundledStable.binary,
+        version: this.meta.version || bundledKernelVersion(bundledStable.root),
+        independent: true,
+        source: SOURCE_CHROME_STABLE,
+      };
+    }
+
     // Chrome for Testing is the integrated Ubuntu x86_64 kernel. Search
     // resource roots so a portable package works without copying a kernel to
     // userData first.
@@ -1029,7 +1121,7 @@ class BrowserKernelManager {
         if (trusted) {
           // Skip userData / meta binaries that fail CDP readiness when a better seed exists.
           const ready = isIntegratedKernelCdpReady({ path: trusted, source: src });
-          if (ready || src === SOURCE_CUSTOM || src === SOURCE_CFT || src === SOURCE_OPENBROWSER) {
+          if (ready || src === SOURCE_CUSTOM || src === SOURCE_CFT || src === SOURCE_CHROME_STABLE || src === SOURCE_OPENBROWSER) {
             return {
               name: kernelDisplayName(src),
               path: trusted,
@@ -1085,6 +1177,17 @@ class BrowserKernelManager {
       }
     } catch (_) {}
 
+    const localStable = findBundledChromeStable([this.userData, this.kernelsRoot]);
+    if (localStable) {
+      return {
+        name: kernelDisplayName(SOURCE_CHROME_STABLE),
+        path: localStable.binary,
+        version: this.meta.version || bundledKernelVersion(localStable.root),
+        independent: true,
+        source: SOURCE_CHROME_STABLE,
+      };
+    }
+
     // User-data Chrome for Testing path (legacy and explicit local installs).
     const localCft = findBundledChromeForTesting([this.userData, this.kernelsRoot]);
     if (localCft) {
@@ -1125,11 +1228,13 @@ class BrowserKernelManager {
 
   status() {
     const installed = this.resolveInstalled();
-    // Channel label only claims openbrowser-148 default on the supported host.
+    // Channel label only claims openbrowser-148 default when that kernel is present.
     const openBrowserDefault = isOpenBrowser148SupportedHost()
-      && (!installed || installed.source === SOURCE_OPENBROWSER);
+      && Boolean(installed && installed.source === SOURCE_OPENBROWSER);
     const wayfernIntegrated = !openBrowserDefault
       && Boolean(installed && installed.source === SOURCE_WAYFERN);
+    const stableIntegrated = !openBrowserDefault
+      && Boolean(installed && installed.source === SOURCE_CHROME_STABLE);
     const cftIntegrated = !openBrowserDefault
       && Boolean(installed && installed.source === SOURCE_CFT);
     return {
@@ -1139,7 +1244,7 @@ class BrowserKernelManager {
       installed: Boolean(installed),
       kernel: installed,
       meta: this.meta,
-      autoDownload: false,
+      autoDownload: true,
       channel: openBrowserDefault
         ? {
           name: 'OpenBrowser 148（macOS x86 内置）',
@@ -1147,19 +1252,37 @@ class BrowserKernelManager {
           site: null,
           engineSite: null,
         }
-        : {
-          name: '独立内核（安装包内置）',
-          metaUrl: null,
-          site: null,
-          engineSite: null,
-        },
-      note: openBrowserDefault
-        ? 'macOS x86 使用安装包/源码内置的 OpenBrowser 148（kernels/macos-x64/）。运行时不再自动下载内核。'
         : wayfernIntegrated
-          ? 'Windows x64 / macOS arm64 使用安装包内置 Wayfern（kernels/windows-x64 或 kernels/macos-arm64）。运行时不再自动下载内核。'
+          ? {
+            name: 'Wayfern（安装包内置）',
+            metaUrl: WAYFERN_META,
+            site: 'https://donutbrowser.com',
+            engineSite: 'https://wayfern.com',
+          }
+        : stableIntegrated
+          ? {
+            name: 'Google Chrome Stable',
+            metaUrl: chromeStablePackage()?.url || null,
+            site: 'https://www.google.com/chrome/',
+            engineSite: 'https://www.google.com/chrome/',
+          }
+          : {
+            name: cftIntegrated ? 'Google Chrome for Testing（旧包）' : !installed ? 'Google Chrome Stable' : '独立内核（安装包内置）',
+            metaUrl: cftIntegrated ? CFT_META : chromeStablePackage()?.url || null,
+            site: cftIntegrated ? 'https://googlechromelabs.github.io/chrome-for-testing/' : 'https://www.google.com/chrome/',
+            engineSite: 'https://www.google.com/chrome/',
+          },
+      note: openBrowserDefault
+        ? 'macOS x86 优先使用安装包/源码内置的 OpenBrowser 148（kernels/macos-x64/）；点击下载可切换到 Google Chrome Stable 正式包。'
+        : wayfernIntegrated
+          ? 'Windows x64 / macOS arm64 优先使用安装包内置 Wayfern；点击下载可切换到 Google Chrome Stable 正式包。'
           : cftIntegrated
-            ? 'Ubuntu x86_64 使用安装包内置 Chrome for Testing（kernels/chrome-for-testing/chrome-linux64）。运行时不再自动下载内核。'
-            : '未发现内置独立内核。请确认安装包包含对应平台内核（Linux 为 kernels/chrome-for-testing/chrome-linux64），或在本地设置中选择自定义 Chromium。运行时不会自动下载内核。',
+            ? '当前仍在使用旧的 Chrome for Testing 包；点击下载会切换到 Google Chrome Stable 正式包。'
+            : stableIntegrated
+              ? '使用 Google Chrome Stable 正式包，已解压到 OpenBrowser 独立内核目录。'
+            : installed?.source === SOURCE_CUSTOM
+              ? '正在使用自定义 Chromium。点击下载可切换到 Google Chrome Stable 正式包。'
+              : '未发现内置独立内核。点击下载将获取 Google Chrome Stable 正式包。',
     };
   }
 
@@ -1207,15 +1330,51 @@ class BrowserKernelManager {
     };
   }
 
-  /**
-   * Resolve integrated / already-local independent kernel only.
-   * Never downloads remote kernels or Chrome for Testing at runtime.
-   * `force` is accepted for API compatibility but does not re-download.
-   */
+  /** Fetch the stable Chrome for Testing archive for the current platform. */
+  async fetchChromeForTestingRelease() {
+    this.onProgress({ phase: 'meta', message: '查询 Google Chrome for Testing 稳定版…' });
+    let data;
+    try {
+      data = await fetchJson(CFT_META);
+    } catch (error) {
+      throw new Error('无法访问 Chrome for Testing 官方源：' + (error.message || error));
+    }
+    const stable = data.channels?.Stable;
+    const version = String(stable?.version || '').trim();
+    const platform = cftPlatformKey();
+    const entry = (stable?.downloads?.chrome || []).find((item) => item.platform === platform);
+    if (!version || !entry?.url) {
+      throw new Error(`当前平台无可用 Chrome for Testing 内核：${platform}`);
+    }
+    return { version, url: entry.url, platform, source: SOURCE_CFT, raw: stable };
+  }
+
+  /** Resolve the official, non-CfT Google Chrome Stable package. */
+  async fetchChromeStableRelease() {
+    const packageInfo = chromeStablePackage();
+    if (!packageInfo) throw new Error(`当前平台没有可用的 Google Chrome Stable 包：${process.platform}/${process.arch}`);
+    this.onProgress({ phase: 'meta', message: '准备 Google Chrome Stable 正式包…' });
+    return {
+      version: 'stable',
+      url: packageInfo.url,
+      kind: packageInfo.kind,
+      platform: donutPlatformKey(),
+      source: SOURCE_CHROME_STABLE,
+    };
+  }
+
+  /** Resolve an integrated kernel, or download the official Chrome Stable package. */
   async ensureIntegrated(force = false) {
+    if (!this.installPromise) {
+      this.installPromise = this.ensureIntegratedInternal(force).finally(() => { this.installPromise = null; });
+    }
+    return this.installPromise;
+  }
+
+  async ensureIntegratedInternal(force = false) {
     await this.loadMeta();
     const existing = this.resolveInstalled();
-    if (existing) {
+    if (existing && !force && existing.source !== SOURCE_CFT) {
       this.meta.binary = existing.path;
       this.meta.version = existing.version || this.meta.version || null;
       this.meta.source = existing.source || this.meta.source || SOURCE_WAYFERN;
@@ -1232,44 +1391,9 @@ class BrowserKernelManager {
       return existing;
     }
 
-    // macOS x86: seed openbrowser-148 from resource/source tree when present.
-    if (isOpenBrowser148SupportedHost()) {
-      const seed = findOpenBrowserKernelBinary(this.kernelsRoot, this.resourceRoots);
-      if (seed) {
-        const trusted = this.safeCustomBinary(seed);
-        if (trusted) {
-          this.meta.binary = trusted;
-          this.meta.version = OPENBROWSER_KERNEL_VERSION;
-          this.meta.source = SOURCE_OPENBROWSER;
-          this.meta.platform = donutPlatformKey();
-          this.meta.downloadUrl = null;
-          this.meta.updatedAt = new Date().toISOString();
-          await this.saveMeta();
-          this.onProgress({
-            phase: 'done',
-            message: `使用内置 OpenBrowser 148 内核 ${OPENBROWSER_KERNEL_VERSION}`,
-            version: OPENBROWSER_KERNEL_VERSION,
-            binary: trusted,
-          });
-          return {
-            name: kernelDisplayName(SOURCE_OPENBROWSER),
-            path: trusted,
-            version: OPENBROWSER_KERNEL_VERSION,
-            independent: true,
-            source: SOURCE_OPENBROWSER,
-          };
-        }
-      }
-      throw new Error(
-        'macOS x86 内置内核 OpenBrowser 148 未找到。请确认安装包/源码包含 kernels/macos-x64，'
-        + '或设置 OPENBROWSER_KERNEL_ROOT，或在本地设置中选择自定义内核。'
-        + (force ? '（运行时已禁用自动下载，force 无效）' : '')
-      );
-    }
-
     // Windows/macOS integrated Wayfern seed.
     const bundled = findBundledWayfernKernel(this.resourceRoots);
-    if (bundled) {
+    if (!force && bundled) {
       const trusted = safeInstalledBinary(bundled.binary, bundled.root);
       if (trusted) {
         const version = bundledKernelVersion(bundled.root);
@@ -1297,14 +1421,19 @@ class BrowserKernelManager {
       }
     }
 
-    throw new Error(
-      '未找到内置独立内核（Windows: kernels/windows-x64；macOS: kernels/macos-arm64；Linux: kernels/chrome-for-testing/chrome-linux64）。本版本不再自动下载内核；'
-      + '请使用包含对应平台内核种子的安装包，或在本地设置中选择自定义 Chromium。'
-      + (force ? '（force 不会触发下载）' : '')
-    );
+    const release = await this.fetchChromeStableRelease();
+    try {
+      return await this.installChromeStable(release);
+    } catch (error) {
+      if (!force && existing?.source === SOURCE_CFT) {
+        this.onProgress({ phase: 'done', message: '正式 Chrome Stable 包不可用，继续使用已安装的 Chrome for Testing', version: existing.version, binary: existing.path });
+        return existing;
+      }
+      throw error;
+    }
   }
 
-  /** @deprecated Use ensureIntegrated — runtime download path removed. */
+  /** @deprecated Use ensureIntegrated. */
   async ensureLatest(force = false) {
     return this.ensureIntegrated(force);
   }
@@ -1368,6 +1497,63 @@ class BrowserKernelManager {
     await fsp.rm(archivePath, { force: true }).catch(() => {});
 
     this.onProgress({ phase: 'done', message: '独立内核就绪', version, binary: trustedBinary });
+    return this.resolveInstalled();
+  }
+
+  async installChromeStable(release) {
+    const { url, kind = archiveKindFromUrl(url) } = release;
+    const work = path.join(this.kernelsRoot, 'chrome-stable');
+    await fsp.mkdir(this.kernelsRoot, { recursive: true });
+    const archivePath = path.join(this.kernelsRoot, `google-chrome-stable-${donutPlatformKey()}.${kind}`);
+
+    this.onProgress({ phase: 'download', message: '下载 Google Chrome Stable 正式包…', version: 'stable', url });
+    await downloadFile(url, archivePath, (p) => this.onProgress({ phase: 'download', ...p, version: 'stable' }));
+
+    this.onProgress({ phase: 'extract', message: '解压 Google Chrome Stable…', version: 'stable' });
+    await fsp.rm(work, { recursive: true, force: true });
+    await fsp.mkdir(work, { recursive: true });
+    try {
+      if (kind === 'deb') await extractDeb(archivePath, work);
+      else if (kind === 'msi') await extractMsi(archivePath, work);
+      else if (kind === 'dmg') await extractDmg(archivePath, work);
+      else throw new Error(`不支持的 Chrome Stable 包格式：${kind}`);
+    } catch (error) {
+      throw new Error('解压 Google Chrome Stable 失败：' + (error.message || error));
+    }
+
+    let binary = path.join(work, chromeStableBinaryRelative());
+    if (!fs.existsSync(binary)) {
+      binary = await findExecutable(work, process.platform === 'win32' ? ['chrome.exe'] : ['Google Chrome', 'chrome']);
+    }
+    binary = this.safeCustomBinary(binary) || safeInstalledBinary(binary, work);
+    if (!binary) throw new Error('解压后未找到 Google Chrome Stable 可执行文件');
+
+    if (process.platform !== 'win32') {
+      try { await fsp.chmod(binary, 0o755); } catch (_) {}
+    }
+
+    this.onProgress({ phase: 'validate', message: '验证 Google Chrome Stable 兼容性…', version: 'stable', binary });
+    const probe = await this.probeBrowserBinary(binary);
+    const version = probe.version || 'stable';
+    await fsp.writeFile(path.join(work, 'kernel.json'), JSON.stringify({
+      version,
+      source: SOURCE_CHROME_STABLE,
+      platform: donutPlatformKey(),
+      downloadUrl: url,
+    }, null, 2) + '\n', 'utf8');
+
+    this.meta.binary = binary;
+    this.meta.version = version;
+    this.meta.platform = donutPlatformKey();
+    this.meta.updatedAt = new Date().toISOString();
+    this.meta.source = SOURCE_CHROME_STABLE;
+    this.meta.downloadUrl = url;
+    this.meta.remoteVersion = version;
+    await this.saveMeta();
+    await fsp.rm(archivePath, { force: true }).catch(() => {});
+    await fsp.rm(path.join(this.kernelsRoot, 'chrome-for-testing'), { recursive: true, force: true }).catch(() => {});
+
+    this.onProgress({ phase: 'done', message: 'Google Chrome Stable 已就绪', version, binary });
     return this.resolveInstalled();
   }
 
@@ -1492,35 +1678,32 @@ class BrowserKernelManager {
     return { ...this.resolveInstalled(), validation: probe };
   }
 
-  /**
-   * Kernel update check — integrated builds do not poll remote feeds.
-   * Returns local integrated status only (needsUpdate always false).
-   */
+  /** Check the Google Chrome Stable package without downloading it. */
   async checkUpdate() {
     await this.loadMeta();
     const installed = this.resolveInstalled();
-    if (!installed) {
+    if (installed && installed.source !== SOURCE_CFT && installed.source !== SOURCE_CHROME_STABLE) {
       return {
-        installed: null,
+        installed,
         remote: null,
         needsUpdate: false,
-        upToDate: false,
-        autoDownload: false,
-        error: '未找到内置独立内核；本版本不从网络自动下载内核。',
+        upToDate: true,
+        autoDownload: true,
       };
     }
-    return {
-      installed,
-      remote: {
-        version: installed.version || null,
-        source: installed.source || null,
-        url: null,
-        platform: donutPlatformKey(),
-      },
-      needsUpdate: false,
-      upToDate: true,
-      autoDownload: false,
-    };
+    try {
+      const release = await this.fetchChromeStableRelease();
+      const needsUpdate = !installed || installed.source !== SOURCE_CHROME_STABLE;
+      return {
+        installed,
+        remote: { version: release.version, source: release.source, url: release.url, platform: release.platform },
+        needsUpdate,
+        upToDate: Boolean(installed) && !needsUpdate,
+        autoDownload: true,
+      };
+    } catch (error) {
+      return { installed, remote: null, needsUpdate: false, upToDate: Boolean(installed), autoDownload: true, error: error.message };
+    }
   }
 }
 
@@ -1536,8 +1719,10 @@ module.exports = {
   isOpenBrowser148SupportedHost,
   WAYFERN_META,
   CFT_META,
+  CHROME_STABLE_PACKAGES,
   SOURCE_WAYFERN,
   SOURCE_CFT,
+  SOURCE_CHROME_STABLE,
   SOURCE_CUSTOM,
   SOURCE_OPENBROWSER,
   OPENBROWSER_KERNEL_VERSION,
@@ -1553,10 +1738,13 @@ module.exports = {
   findWayfernKernelBinary,
   findBundledWayfernKernel,
   findBundledChromeForTesting,
+  findBundledChromeStable,
   wayfernSeedDirNames,
   bundledKernelVersion,
   downloadFile,
   extractZip,
+  extractDeb,
+  extractMsi,
   extractDmg,
   extractTarXz,
   extractTarGz,

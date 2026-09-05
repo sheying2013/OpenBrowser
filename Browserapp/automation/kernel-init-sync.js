@@ -316,7 +316,7 @@ function applySafetyFields(init) {
   // Local managed profiles keep CDP / automation flags enabled in init.json.
   init.can_webdriver = true;
   init.allow_remote_debugging = true;
-  init.is_debug = Number(init.is_debug) === 1 ? 1 : 0;
+  init.is_debug = 1;
   return init;
 }
 

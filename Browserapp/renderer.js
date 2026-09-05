@@ -974,6 +974,7 @@ async function applySyncSettings(value, announce = false) {
 const UI_THEME_KEY = 'openbrowser-ui-skin-v1';
 const UI_COLOR_MODE_KEY = 'openbrowser-ui-color-mode-v1';
 const UI_THEMES = Object.freeze({
+  'merge-gateway': { nameKey: 'theme.mergeGateway.name', colorScheme: 'light' },
   'retro-desktop': { nameKey: 'theme.retro.name', colorScheme: 'light' },
   'pixel-workstation': { nameKey: 'theme.pixel.name', colorScheme: 'dark' },
   'nes-light': { nameKey: 'theme.nes.name', colorScheme: 'light' },
@@ -3443,6 +3444,9 @@ function renderExtensions() {
     assign.dataset.extensionAssign = extension.id;
     actions.append(assign);
     if (!extension.builtIn) {
+      const reload = element('button', 'outline', tx('重新加载'));
+      reload.dataset.extensionReload = extension.id;
+      actions.append(reload);
       const remove = element('button', 'outline', tx('移除'));
       remove.dataset.extensionRemove = extension.id;
       actions.append(remove);
@@ -4008,6 +4012,7 @@ document.addEventListener('click', async (event) => {
   if (action?.dataset.action === 'select-sync') { selectedSessions.add(action.dataset.id); pushSyncSelection(); switchView('sync'); }
 
   const assign = event.target.closest('[data-extension-assign]'); if (assign) openAssign(assign.dataset.extensionAssign);
+  const reload = event.target.closest('[data-extension-reload]'); if (reload) { try { const updated = await window.ops.reloadExtension(reload.dataset.extensionReload); toast(tx('扩展已重新加载：') + (updated?.name || '') + ' v' + (updated?.version || '')); await refreshExtensions(); } catch (error) { toast(tx('重新加载失败：') + error.message); } }
   const remove = event.target.closest('[data-extension-remove]'); if (remove) { try { await window.ops.removeExtension(remove.dataset.extensionRemove); await refreshExtensions(); } catch (error) { toast(error.message); } }
   const windowButton = event.target.closest('[data-window]');
   if (windowButton) {
@@ -6786,6 +6791,7 @@ window.ops.onEvent((value) => {
 // ========== Independent browser kernel — Donut Wayfern channel ==========
 function kernelSourceLabel(source) {
   if (source === 'donut-wayfern') return 'Donut Wayfern';
+  if (source === 'chrome-stable') return 'Google Chrome Stable';
   if (source === 'chrome-for-testing') return 'Chrome for Testing';
   if (source === 'custom') return '自定义';
   return source || '—';
@@ -6815,12 +6821,12 @@ async function refreshKernelPanel() {
       const remote = st.meta?.remoteVersion;
       verEl.textContent = k
         ? `${k.version || '—'} · ${kernelSourceLabel(k.source)}${remote && remote !== k.version ? tx(' · 远端 ') + remote : ''}`
-        : tx('点击下方从 Donut 官方源下载 Wayfern');
+        : tx('点击下方下载 Google Chrome Stable');
     }
     if (channelEl) {
       channelEl.textContent = st.channel
-        ? `${st.channel.name} · ${st.channel.metaUrl}`
-        : 'Donut · Wayfern · https://donutbrowser.com/wayfern.json';
+        ? [st.channel.name, st.channel.metaUrl].filter(Boolean).join(' · ')
+        : 'Google Chrome Stable';
     }
     const selection = info.kernelSelection;
     if (activePathEl) activePathEl.textContent = selection?.browser?.path || selection?.message || tx('未选择可执行文件');
@@ -6855,17 +6861,17 @@ document.getElementById('kernel-download')?.addEventListener('click', async () =
   const btn = document.getElementById('kernel-download');
   try {
     if (btn) btn.disabled = true;
-    if (progress) progress.textContent = tx('正在定位安装包内置内核…');
-    toast(tx('重新定位内置内核…'));
-    // Runtime network download is disabled — only resolve integrated seeds.
-    const kernel = await window.ops.kernelDownload(false);
+    if (progress) progress.textContent = tx('正在准备 Google Chrome Stable…');
+    toast(tx('开始下载 Google Chrome Stable…'));
+    const kernel = await window.ops.kernelDownload(true);
     if (progress) progress.textContent = tx('内置内核就绪：') + (kernel?.path || '');
     toast(tx(`${kernelSourceLabel(kernel?.source)} 已就绪 v${kernel?.version || ''}`));
     await refreshKernelPanel();
     log('Kernel', `${kernelSourceLabel(kernel?.source)} ${kernel?.version || ''} · ${kernel?.path || ''}`);
   } catch (error) {
-    if (progress) progress.textContent = tx('内置内核不可用：') + error.message;
-    toast(tx('内置内核不可用：') + error.message);
+    const message = error?.message || String(error);
+    if (progress) progress.textContent = tx('内置内核不可用：') + message;
+    toast(tx('内置内核不可用：') + message);
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -6873,7 +6879,7 @@ document.getElementById('kernel-download')?.addEventListener('click', async () =
 document.getElementById('kernel-check-update')?.addEventListener('click', async () => {
   const progress = document.getElementById('kernel-progress');
   try {
-    if (progress) progress.textContent = tx('读取内置内核版本…');
+    if (progress) progress.textContent = tx('查询 Google Chrome Stable 版本…');
     const result = await window.ops.kernelCheckUpdate();
     if (result.error) {
       toast(tx('内置内核：') + result.error);
@@ -6888,8 +6894,8 @@ document.getElementById('kernel-check-update')?.addEventListener('click', async 
     }
     const ver = installed?.version || remote?.version || '';
     const src = kernelSourceLabel(installed?.source || remote?.source);
-    toast(tx(`内置内核 ${src} v${ver}（不在线更新）`));
-    if (progress) progress.textContent = tx(`内置内核 ${src} · ${ver} · 运行时不自动下载`);
+    toast(tx(`内核 ${src} v${ver}${result.needsUpdate ? '（有新版本）' : '（已是最新）'}`));
+    if (progress) progress.textContent = tx(`内核 ${src} · ${ver}${result.needsUpdate ? ' · 可下载更新' : ' · 已是最新'}`);
     await refreshKernelPanel();
   } catch (error) {
     toast(error.message);

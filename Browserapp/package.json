@@ -1,7 +1,7 @@
 {
   "name": "openbrowser",
   "productName": "OpenBrowser",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "OpenBrowser：本地浏览器环境、扩展与窗口同步管理器",
   "main": "main.js",
   "private": true,
@@ -27,7 +27,7 @@
     "log:fingerprint": "node scripts/read-fp-log.js",
     "log:rpa": "node scripts/read-rpa-log.js",
     "prepare:bundled-kernel": "node scripts/prepare-bundled-kernel.js",
-    "prepare:linux-kernel": "node scripts/install-linux-cft.js",
+    "prepare:linux-kernel": "node scripts/install-linux-stable.js",
     "build:native": "node scripts/build-native.js",
     "package:portable": "node scripts/package-portable.js",
     "selftest:theme": "node theme-nes-light-selftest.js",

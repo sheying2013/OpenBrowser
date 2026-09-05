@@ -24,6 +24,7 @@ const {
   SOURCE_OPENBROWSER,
   SOURCE_WAYFERN,
   SOURCE_CFT,
+  SOURCE_CHROME_STABLE,
 } = require('./browser-kernel');
 const { BrowserEngine, systemBrowserCandidatesForPlatform } = require('../engine');
 
@@ -82,6 +83,55 @@ async function main() {
     assert.strictEqual(packagedManager.status().kernel.source, SOURCE_CFT);
     assert.strictEqual(path.resolve(packagedManager.status().kernel.path), path.resolve(packagedCft));
     console.log('  PASS  bundled Chrome for Testing discovered from packaged resource root');
+
+    const stableOverrideUserData = path.join(root, 'stable-override-user-data');
+    const stableOverrideBinary = path.join(stableOverrideUserData, 'kernels', 'chrome-stable', 'opt', 'google', 'chrome', 'chrome');
+    await fsp.mkdir(path.dirname(stableOverrideBinary), { recursive: true });
+    await fsp.writeFile(stableOverrideBinary, '', 'utf8');
+    await fsp.writeFile(path.join(stableOverrideUserData, 'kernels', 'kernel-meta.json'), JSON.stringify({
+      binary: stableOverrideBinary,
+      source: SOURCE_CHROME_STABLE,
+      version: '151.0.0.0',
+    }), 'utf8');
+    const stableOverrideManager = new BrowserKernelManager(stableOverrideUserData, { resourceRoot: cftResourceRoot });
+    await stableOverrideManager.loadMeta();
+    assert.strictEqual(stableOverrideManager.status().kernel.source, SOURCE_CHROME_STABLE);
+    assert.strictEqual(path.resolve(stableOverrideManager.status().kernel.path), path.resolve(stableOverrideBinary));
+    console.log('  PASS  user-downloaded Chrome Stable overrides a legacy bundled CFT kernel');
+
+    const downloadManager = new BrowserKernelManager(path.join(root, 'download-user-data'));
+    let requestedRelease = null;
+    downloadManager.fetchChromeStableRelease = async () => ({
+      version: 'stable',
+      url: 'https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb',
+      kind: 'deb',
+      platform: 'linux-x64',
+      source: SOURCE_CHROME_STABLE,
+    });
+    downloadManager.installChromeStable = async (release) => {
+      requestedRelease = release;
+      return { name: 'Google Chrome Stable', path: 'downloaded-chrome', version: '152.0.0.0', source: SOURCE_CHROME_STABLE, independent: true };
+    };
+    const downloaded = await downloadManager.ensureIntegrated();
+    assert.strictEqual(requestedRelease.source, SOURCE_CHROME_STABLE);
+    assert.strictEqual(downloaded.version, '152.0.0.0');
+    console.log('  PASS  missing kernel dispatches to the Google Chrome Stable downloader');
+
+    let forcedStableDownload = false;
+    manager.fetchChromeStableRelease = async () => ({
+      version: 'stable',
+      url: 'https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb',
+      kind: 'deb',
+      platform: 'linux-x64',
+      source: SOURCE_CHROME_STABLE,
+    });
+    manager.installChromeStable = async () => {
+      forcedStableDownload = true;
+      return { name: 'Google Chrome Stable', path: 'stable-chrome', version: '152.0.0.0', source: SOURCE_CHROME_STABLE, independent: true };
+    };
+    await manager.ensureIntegrated(true);
+    assert.strictEqual(forcedStableDownload, true);
+    console.log('  PASS  forced kernel download replaces the legacy Chrome for Testing package');
 
     assert.throws(() => validateArchiveMemberName('../outside/chrome'));
     assert.throws(() => validateArchiveMemberName('/tmp/chrome'));
