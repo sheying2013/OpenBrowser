@@ -2721,9 +2721,10 @@ function renderProxies() {
     const actions = element('div', 'actions');
     const edit = element('button', 'mini edit', t('action.edit')); edit.dataset.proxyEdit = item.id;
     const test = element('button', 'mini blue', t('action.check')); test.dataset.proxyTest = item.id;
+    const apply = element('button', 'mini', tx('应用')); apply.dataset.proxyApply = item.id;
     const use = element('button', 'mini', t('action.use')); use.dataset.proxyUse = item.id;
     const del = element('button', 'mini', t('action.delete')); del.dataset.proxyDelete = item.id;
-    actions.append(edit, test, use, del);
+    actions.append(edit, test, apply, use, del);
     const actionCell = document.createElement('td'); actionCell.append(actions);
     const proto = String(item.protocol || 'proxy').toUpperCase();
     const protoLabel = proto === 'SOCKS5' ? 'S5' : proto === 'HTTPS' ? 'HS' : proto === 'HTTP' ? 'HT' : proto.slice(0, 2);
@@ -4036,6 +4037,11 @@ function openCreateProfileDialog() {
   }
   const createProxyRaw = $('#create-proxy-raw');
   if (createProxyRaw) createProxyRaw.value = '';
+  const createPlatform = $('#profile-create-platform');
+  if (createPlatform) createPlatform.value = 'other';
+  document.querySelectorAll('#profile-create-platform-chips .mini-chip').forEach((c) => c.classList.remove('active'));
+  const createSaveToLib = $('#create-proxy-save-to-library');
+  if (createSaveToLib) createSaveToLib.checked = false;
   syncThemedSelects($('#profile-dialog'));
   $('#profile-dialog')?.showModal();
 }
@@ -4140,9 +4146,30 @@ $('#profile-form').addEventListener('submit', async (event) => {
     ...(template?.fingerprint ? { fingerprint: JSON.parse(JSON.stringify(template.fingerprint)) } : {}),
     proxyMeta: { proxyId: isDirectProxy(proxy) ? null : (proxyLibraryId || null) },
   };
+  const shouldSaveToLib = Boolean($('#create-proxy-save-to-library')?.checked);
   ui.profiles.push(profile); ui.nextProfileNumber = number + 1; save();
   try {
     await window.ops.syncProfiles(ui.profiles); $('#profile-dialog').close(); form.reset();
+    if (shouldSaveToLib && !isDirectProxy(proxy)) {
+      try {
+        const parsed = parseProxyInputForUi(proxy, $('#create-proxy-type')?.value || 'socks5');
+        if (parsed?.host && parsed?.port) {
+          await window.ops.proxyCreate({
+            name: `环境${number}代理`,
+            protocol: parsed.protocol || 'socks5',
+            host: parsed.host,
+            port: Number(parsed.port),
+            username: parsed.username || '',
+            password: parsed.password || '',
+            raw: parsed.raw || proxy,
+            remark: `由环境${number}创建时自动保存`,
+          });
+          await refreshProxies();
+        }
+      } catch (saveErr) {
+        console.warn('自动保存代理到代理库失败', saveErr);
+      }
+    }
     const directRadio = document.querySelector('input[name="create-network"][value="direct"]');
     if (directRadio) directRadio.checked = true;
     const fields = $('#create-proxy-fields'); if (fields) fields.hidden = true;
@@ -4206,6 +4233,50 @@ document.getElementById('editor-platform-type')?.addEventListener('change', () =
   renderEditorSummary?.();
 });
 
+function setupPlatformPresets(selectId, chipsId, inputId) {
+  const select = document.getElementById(selectId);
+  const chips = document.getElementById(chipsId);
+  const input = document.getElementById(inputId);
+  if (!select || !input) return;
+
+  const updateActiveChip = (platform) => {
+    if (!chips) return;
+    chips.querySelectorAll('.mini-chip').forEach((chip) => {
+      chip.classList.toggle('active', chip.dataset.platform === platform);
+    });
+  };
+
+  select.addEventListener('change', () => {
+    const opt = select.selectedOptions?.[0];
+    const url = opt?.getAttribute('data-url') ?? '';
+    const platform = select.value;
+    if (platform === 'blank') {
+      input.value = '';
+      input.placeholder = tx('空白页 (about:blank)');
+    } else if (url) {
+      input.value = url;
+    }
+    updateActiveChip(platform);
+  });
+
+  chips?.addEventListener('click', (e) => {
+    const chip = e.target.closest('.mini-chip');
+    if (!chip) return;
+    const url = chip.dataset.url ?? '';
+    const platform = chip.dataset.platform || 'other';
+    select.value = platform;
+    if (platform === 'blank') {
+      input.value = '';
+      input.placeholder = tx('空白页 (about:blank)');
+    } else if (url) {
+      input.value = url;
+    }
+    updateActiveChip(platform);
+  });
+}
+setupPlatformPresets('profile-create-platform', 'profile-create-platform-chips', 'profile-create-start-url');
+setupPlatformPresets('batch-add-platform', 'batch-add-platform-chips', 'batch-add-start-url');
+
 // Cookie tools (export/import/clear)
 document.getElementById('editor-cookie-export')?.addEventListener('click', () => {
   try {
@@ -4251,6 +4322,7 @@ document.getElementById('editor-clear-cache-cookie')?.addEventListener('click', 
 });
 $('#profile-editor-form').addEventListener('submit', async (event) => {
   event.preventDefault(); const index = ui.profiles.findIndex((item) => item.id === editingProfileId); if (index < 0) return toast(tx('环境不存在'));
+  const shouldSaveEditorProxyToLib = Boolean($('#editor-proxy-save-to-library')?.checked);
   try {
     const previous = ui.profiles[index]; const draft = editorDraft(true); if (!draft.name) throw new Error(tx('环境名称不能为空'));
     const switchedToDirect = editorSelectedNetwork() !== 'direct' && isDirectProxy(draft.proxy);
@@ -4263,6 +4335,26 @@ $('#profile-editor-form').addEventListener('submit', async (event) => {
     // Cookie/password/TOTP fields. Keep the action marker out of UI persistence.
     syncPayload[index] = { ...draft, credentialsAction: 'replace' };
     engineProfiles = await window.ops.syncProfiles(syncPayload); renderProfiles();
+    if (shouldSaveEditorProxyToLib && !isDirectProxy(draft.proxy)) {
+      try {
+        const parsed = parseProxyInputForUi(draft.proxy, $('#editor-proxy-type')?.value || 'socks5');
+        if (parsed?.host && parsed?.port) {
+          await window.ops.proxyCreate({
+            name: `环境${displayProfileNumber(draft)}代理`,
+            protocol: parsed.protocol || 'socks5',
+            host: parsed.host,
+            port: Number(parsed.port),
+            username: parsed.username || '',
+            password: parsed.password || '',
+            raw: parsed.raw || draft.proxy,
+            remark: `由环境${displayProfileNumber(draft)}编辑时自动保存`,
+          });
+          await refreshProxies();
+        }
+      } catch (saveErr) {
+        console.warn('编辑时自动保存代理到代理库失败', saveErr);
+      }
+    }
     const running = profileEngine(draft.id).running; log('Profile', '已更新环境 ' + displayProfileNumber(draft)); editingProfileId = null; editorNetworkResult = null; switchView('profiles'); toast(switchedToDirect ? '未填写代理，已自动切换为本地直连' : (running ? '设置已保存，请重启该环境后生效' : '环境设置已保存'));
   } catch (error) { toast('保存失败：' + error.message); }
 });
@@ -4276,6 +4368,14 @@ $('#batch-add').addEventListener('click', () => {
   renderProxyLibrarySelect($('#batch-add-proxy-library'), '');
   if ($('#batch-add-proxies')) $('#batch-add-proxies').value = '';
   if ($('#batch-add-start-url')) $('#batch-add-start-url').value = '';
+  if ($('#batch-add-platform')) $('#batch-add-platform').value = 'other';
+  document.querySelectorAll('#batch-add-platform-chips .mini-chip').forEach((c) => c.classList.remove('active'));
+  if ($('#batch-add-os')) $('#batch-add-os').value = 'Windows';
+  if ($('#batch-add-resolution')) $('#batch-add-resolution').value = '1280x820';
+  if ($('#batch-add-block-images')) $('#batch-add-block-images').checked = false;
+  if ($('#batch-add-block-sound')) $('#batch-add-block-sound').checked = false;
+  if ($('#batch-add-clear-cache')) $('#batch-add-clear-cache').checked = false;
+  if ($('#batch-add-multi-open')) $('#batch-add-multi-open').checked = false;
   const fields = $('#batch-add-proxy-fields'); if (fields) fields.hidden = true;
   const template = $('#batch-add-template');
   if (template) {
@@ -4317,12 +4417,51 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
     if (libraryItem) proxyIds.push(...Array(count).fill(libraryItem.id));
   }
   if (proxies.length && proxies.length !== count) return toast(tx('代理数量必须等于新增环境数量，每个环境对应一条代理'));
+  const batchOs = $('#batch-add-os')?.value || templatePreferences?.os || 'Windows';
+  const batchResolution = $('#batch-add-resolution')?.value || '1280x820';
+  let [bWidth, bHeight] = batchResolution.split('x').map(Number);
+  bWidth = bWidth >= 640 ? bWidth : (templatePreferences?.width || 1280);
+  bHeight = bHeight >= 480 ? bHeight : (templatePreferences?.height || 820);
+  const blockImages = Boolean($('#batch-add-block-images')?.checked);
+  const blockSound = Boolean($('#batch-add-block-sound')?.checked);
+  const clearCache = Boolean($('#batch-add-clear-cache')?.checked);
+  const multiOpen = Boolean($('#batch-add-multi-open')?.checked);
+
   const used = new Set(ui.profiles.map((item) => item.id)); const created = [];
   while (created.length < count) {
     const number = start + created.length; const id = createInternalProfileId(number, used); used.add(id);
     const assignedProxyId = proxyIds[created.length] || null;
     const effectiveStartUrl = batchStartUrl || templatePreferences?.startUrl || '';
-    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : {}), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', proxyId: assignedProxyId, proxyMeta: { ...(templatePreferences?.proxyMeta || {}), proxyId: assignedProxyId }, tag, groupId, startUrl: effectiveStartUrl, platform: { type: 'other', startUrl: effectiveStartUrl }, advanced: { startUrls: effectiveStartUrl }, os: templatePreferences?.os || 'Windows', location: 'Local', cookies: '' });
+    created.push({
+      ...(templatePreferences ? structuredClone(templatePreferences) : {}),
+      id,
+      number,
+      name: String(number),
+      title: '',
+      browser: 'Google Chrome',
+      language,
+      networkMode: proxies.length ? 'proxy' : 'direct',
+      proxy: proxies.length ? proxies[created.length] : 'Direct',
+      proxyId: assignedProxyId,
+      proxyMeta: { ...(templatePreferences?.proxyMeta || {}), proxyId: assignedProxyId },
+      tag,
+      groupId,
+      startUrl: effectiveStartUrl,
+      platform: { type: 'other', startUrl: effectiveStartUrl },
+      advanced: {
+        ...(templatePreferences?.advanced || {}),
+        startUrls: effectiveStartUrl,
+        blockImages,
+        blockSound,
+        clearCacheOnStart: clearCache,
+        multiOpen,
+      },
+      os: batchOs,
+      width: bWidth,
+      height: bHeight,
+      location: 'Local',
+      cookies: '',
+    });
   }
   try {
     const verified = proxies.length ? await verifyProxyAssignments(created, proxies) : [];
@@ -4526,6 +4665,12 @@ document.addEventListener('click', async (event) => {
     } catch (error) { toast('检测失败：' + error.message); }
     return;
   }
+  const applyBtn = event.target.closest('[data-proxy-apply]');
+  if (applyBtn) {
+    const item = proxyLibrary.find((p) => p.id === applyBtn.dataset.proxyApply);
+    if (item) openProxyApplyDialog(item);
+    return;
+  }
   const use = event.target.closest('[data-proxy-use]');
   if (use) {
     const item = proxyLibrary.find((p) => p.id === use.dataset.proxyUse);
@@ -4548,6 +4693,97 @@ document.addEventListener('click', async (event) => {
     toast(tx('已切换为代理模式并关联代理库节点'));
   }
 });
+function openProxyApplyDialog(item) {
+  const dialog = $('#proxy-apply-dialog');
+  if (!dialog) return;
+  $('#proxy-apply-id').value = item.id;
+  $('#proxy-apply-title').textContent = `${tx('应用代理到环境')} · ${item.name || `${item.host}:${item.port}`}`;
+  $('#proxy-apply-summary').textContent = `${String(item.protocol || 'socks5').toUpperCase()}://${item.host}:${item.port}${item.remark ? ' (' + item.remark + ')' : ''}`;
+  
+  const listEl = $('#proxy-apply-list');
+  listEl.replaceChildren();
+  
+  const updateCount = () => {
+    const checkedBoxes = listEl.querySelectorAll('input[type="checkbox"]:checked');
+    const countEl = $('#proxy-apply-count');
+    if (countEl) countEl.textContent = `已选择 ${checkedBoxes.length} 个环境`;
+    const selectAll = $('#proxy-apply-select-all');
+    if (selectAll) {
+      const allBoxes = listEl.querySelectorAll('input[type="checkbox"]');
+      selectAll.checked = allBoxes.length > 0 && checkedBoxes.length === allBoxes.length;
+      selectAll.indeterminate = checkedBoxes.length > 0 && checkedBoxes.length < allBoxes.length;
+    }
+  };
+
+  for (const p of ui.profiles) {
+    const isBound = p.proxyId === item.id;
+    const label = document.createElement('label');
+    label.className = 'assign-item';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = p.id;
+    checkbox.checked = isBound;
+    checkbox.addEventListener('change', updateCount);
+    const span = document.createElement('span');
+    span.textContent = `${displayProfileNumber(p)} - ${p.name || '环境'} (${p.networkMode === 'direct' ? '直连' : (p.proxy || '代理')})`;
+    if (isBound) {
+      const tag = document.createElement('small');
+      tag.className = 'field-hint';
+      tag.style.marginLeft = 'auto';
+      tag.textContent = tx('当前绑定');
+      label.append(checkbox, span, tag);
+    } else {
+      label.append(checkbox, span);
+    }
+    listEl.append(label);
+  }
+  updateCount();
+  dialog.showModal();
+}
+
+$('#proxy-apply-select-all')?.addEventListener('change', (e) => {
+  const checked = e.target.checked;
+  const boxes = document.querySelectorAll('#proxy-apply-list input[type="checkbox"]');
+  boxes.forEach((b) => { b.checked = checked; });
+  const countEl = $('#proxy-apply-count');
+  if (countEl) countEl.textContent = `已选择 ${checked ? boxes.length : 0} 个环境`;
+});
+
+$('#proxy-apply-form')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (event.submitter?.value === 'cancel') return $('#proxy-apply-dialog').close();
+  const proxyId = $('#proxy-apply-id')?.value;
+  const item = proxyLibraryItem(proxyId);
+  if (!item) return $('#proxy-apply-dialog').close();
+  const checkedIds = Array.from(document.querySelectorAll('#proxy-apply-list input[type="checkbox"]:checked')).map((el) => el.value);
+  if (!checkedIds.length) {
+    toast(tx('未选择任何环境'));
+    return $('#proxy-apply-dialog').close();
+  }
+  const proxyVal = item.raw || `${item.protocol || 'socks5'}://${item.username ? encodeURIComponent(item.username) + ':' + encodeURIComponent(item.password || '') + '@' : ''}${item.host}:${item.port}`;
+  let modified = 0;
+  for (const pid of checkedIds) {
+    const idx = ui.profiles.findIndex((p) => p.id === pid);
+    if (idx >= 0) {
+      ui.profiles[idx].networkMode = 'proxy';
+      ui.profiles[idx].proxy = proxyVal;
+      ui.profiles[idx].proxyId = item.id;
+      ui.profiles[idx].proxyMeta = { ...(ui.profiles[idx].proxyMeta || {}), proxyId: item.id };
+      modified++;
+    }
+  }
+  save();
+  try {
+    engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    renderProfiles();
+    $('#proxy-apply-dialog').close();
+    toast(`已成功应用代理到 ${modified} 个环境`);
+    log('Proxy', `应用代理 ${item.name || item.host} 到 ${modified} 个环境`);
+  } catch (err) {
+    toast('应用失败：' + err.message);
+  }
+});
+
 $('#proxy-dialog-test')?.addEventListener('click', async () => {
   const output = $('#proxy-dialog-result');
   try {
@@ -4573,7 +4809,11 @@ $('#proxy-user')?.addEventListener('input', () => { window.__proxyAuthFieldsTouc
 $('#proxy-password')?.addEventListener('input', () => { window.__proxyAuthFieldsTouched = true; });
 $('#proxy-raw')?.addEventListener('input', () => {
   const raw = $('#proxy-raw').value.trim();
-  if (!raw) return;
+  const statusEl = $('#proxy-raw-status');
+  if (!raw) {
+    if (statusEl) statusEl.textContent = tx('粘贴整行代理（如 socks5://user:pass@host:port#备注）会自动拆分填入下方各字段');
+    return;
+  }
   try {
     const parsed = parseProxyInputForUi(raw, $('#proxy-protocol').value);
     if (!parsed) return;
@@ -4586,6 +4826,9 @@ $('#proxy-raw')?.addEventListener('input', () => {
     if (!$('#proxy-name').value.trim() || $('#proxy-name').dataset.autoProxyName === 'true') {
       $('#proxy-name').value = parsed.name;
       $('#proxy-name').dataset.autoProxyName = 'true';
+    }
+    if (statusEl) {
+      statusEl.textContent = `已自动解析：${parsed.protocol.toUpperCase()}://${parsed.host}:${parsed.port}${parsed.username ? ' (含认证)' : ''}${parsed.remark ? ' #' + parsed.remark : ''}`;
     }
     syncThemedSelects($('#proxy-dialog'));
   } catch (_) {}
