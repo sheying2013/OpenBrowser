@@ -451,8 +451,7 @@ async function setWindowBounds(port, bounds, options = {}) {
   try {
     const current = await call(value.socket, 'Browser.getWindowBounds', { windowId: value.windowId });
     const actual = current?.bounds || {};
-    if (Math.abs((actual.width || 0) - next.width) > 24 || Math.abs((actual.height || 0) - next.height) > 24
-      || Math.abs((actual.left || 0) - next.left) > 24 || Math.abs((actual.top || 0) - next.top) > 24) {
+    if (actual.windowState === 'maximized' || actual.windowState === 'fullscreen') {
       await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: next });
     }
   } catch (_) {}

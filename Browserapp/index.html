@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="pixel-workstation.css?v=20260720-headerfix">
   <link rel="stylesheet" href="nes-light.css?v=20260720-kraft-desat33">
   <link rel="stylesheet" href="element-admin.css?v=20260720-start-progress">
+  <link rel="stylesheet" href="xai-console.css?v=20260824-interaction-perf">
 </head>
 <body>
   <div class="app-shell">
@@ -48,7 +49,7 @@
         </a>
         <span class="app-version-wrap" id="app-version-wrap" role="status" title="正在检查版本…">
           <span class="version-traffic-light" id="version-traffic-light" data-state="checking" aria-hidden="true"></span>
-          <span class="app-version" id="app-version">v1.0.4</span>
+          <span class="app-version" id="app-version">v1.0.5</span>
         </span>
       </div>
     </aside>
@@ -66,6 +67,7 @@
             <div class="theme-popover" id="theme-popover" hidden>
               <div class="theme-popover-head"><strong data-i18n="theme.title">界面皮肤</strong><span id="theme-current" data-i18n="theme.pixel.name">像素工作站</span></div>
               <div class="theme-grid" id="theme-options">
+                <button class="theme-option" type="button" data-ui-theme-option="merge-gateway" aria-pressed="false"><i></i><span><strong data-i18n="theme.mergeGateway">Merge Gateway</strong><small data-i18n="theme.mergeGateway.desc">xAI Console</small></span></button>
                 <button class="theme-option active" type="button" data-ui-theme-option="pixel-workstation" aria-pressed="true"><i></i><span><strong data-i18n="theme.pixel">像素工作站</strong><small data-i18n="theme.pixel.desc">深色像素界面</small></span></button>
                 <button class="theme-option" type="button" data-ui-theme-option="nes-light" aria-pressed="false"><i></i><span><strong data-i18n="theme.nes">浅色像素风</strong><small data-i18n="theme.nes.desc">浅色像素界面</small></span></button>
                 <button class="theme-option" type="button" data-ui-theme-option="retro-desktop" aria-pressed="false"><i></i><span><strong data-i18n="theme.retro">复古桌面</strong><small data-i18n="theme.retro.desc">经典系统界面</small></span></button>
@@ -1045,22 +1047,22 @@
   <p class="storage-warning" id="cloud-sync-status">尚未同步。单环境是否同步请在「编辑环境 → 偏好设置 → 云备份」中开关，主列表不放同步开关。</p>
 </article>
 <article class="storage-settings-card" id="kernel-settings-card">
-  <div class="storage-settings-head"><div><h3>独立浏览器内核</h3><p>安装包<strong>直接内置</strong>独立内核，<strong>运行时不再自动下载</strong>。平台目录：<code>kernels/macos-x64</code> · <code>kernels/windows-x64</code> · <code>kernels/macos-arm64</code> · <code>kernels/chrome-for-testing/chrome-linux64</code>。</p></div><span id="kernel-status-badge">检测中</span></div>
+  <div class="storage-settings-head"><div><h3>独立浏览器内核</h3><p>优先使用安装包内置内核；点击下载时使用 <strong>Google Chrome Stable</strong> 正式包。平台目录：<code>kernels/macos-x64</code> · <code>kernels/windows-x64</code> · <code>kernels/macos-arm64</code> · <code>kernels/chrome-stable</code>。</p></div><span id="kernel-status-badge">检测中</span></div>
   <div class="storage-path-box"><small>内核路径</small><code id="kernel-path">—</code></div>
   <div class="storage-path-box" style="margin-top:8px"><small>版本 / 来源</small><code id="kernel-version">—</code></div>
   <div class="storage-path-box" style="margin-top:8px"><small>下次启动实际使用</small><code id="kernel-active-path">—</code></div>
   <div class="storage-path-box" style="margin-top:8px"><small>启动策略</small><code id="kernel-launch-mode">—</code></div>
-  <div class="storage-path-box" style="margin-top:8px"><small>内核通道</small><code id="kernel-channel">安装包内置 · 无在线下载</code></div>
+  <div class="storage-path-box" style="margin-top:8px"><small>内核通道</small><code id="kernel-channel">Google Chrome Stable</code></div>
   <div class="storage-actions" style="margin-top:12px">
-    <button class="primary" id="kernel-download" type="button">重新定位内置内核</button>
-    <button class="outline" id="kernel-check-update" type="button">查看内置版本</button>
+    <button class="primary" id="kernel-download" type="button">下载 Chrome Stable</button>
+    <button class="outline" id="kernel-check-update" type="button">检查 Stable 版本</button>
     <button class="outline" id="kernel-choose" type="button">选择自定义内核</button>
     <button class="outline" id="kernel-refresh" type="button">刷新状态</button>
   </div>
   <label class="check-row" style="margin-top:12px;display:flex;gap:8px;align-items:center"><input id="kernel-prefer-independent" type="checkbox" checked> 优先使用独立内核（推荐）</label>
   <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center"><input id="kernel-allow-system" type="checkbox"> 允许手动回退到本机浏览器（默认关闭）</label>
   <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center">手动选择回退浏览器（Windows 可选 Chrome 或 Edge）<select id="kernel-system-browser"><option value="">未选择</option></select></label>
-  <p class="storage-warning" id="kernel-progress">本版本不再从网络自动下载内核。安装包按平台内置独立内核（kernels/macos-x64 · windows-x64 · macos-arm64；Ubuntu 为 kernels/chrome-for-testing/chrome-linux64）。默认不会自动回退到本机浏览器；只有手动选择并开启后才会使用本机浏览器。</p>
+  <p class="storage-warning" id="kernel-progress">点击下载会获取 Google Chrome Stable 正式包并校验，不使用 Chrome for Testing 包。默认不会自动回退到本机浏览器。</p>
 </article>
 <article><h3>运行时</h3><dl id="runtime-info"></dl></article><article><h3>能力状态</h3><dl><div><dt>真实浏览器进程</dt><dd class="ok">已启用</dd></div><div><dt>独立用户目录</dt><dd class="ok">已启用</dd></div><div><dt>扩展批量加载</dt><dd class="ok">已启用</dd></div><div><dt>Chrome DevTools Protocol</dt><dd class="ok">已启用</dd></div><div><dt>运行模式</dt><dd class="ok">纯本地</dd></div><div><dt>本机接口</dt><dd class="ok">127.0.0.1:50325</dd></div></dl></article>
 <article class="storage-settings-card" id="close-action-card"><div class="storage-settings-head"><div><h3 data-i18n="system.close.title">关闭窗口行为</h3><p data-i18n="system.close.desc">控制点击主窗口右上角关闭按钮时，是将程序最小化到系统托盘继续运行后台代理，还是完全退出程序。</p></div><span data-i18n="system.close.label">托盘常驻</span></div><div class="form-row" style="margin-top:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="ask"> <span data-i18n="system.close.ask">每次询问</span></label><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="tray" checked> <span data-i18n="system.close.tray">最小化到系统托盘（保持浏览器与代理运行）</span></label><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="exit"> <span data-i18n="system.close.exit">退出程序（停止所有运行中的环境）</span></label></div><p class="storage-warning" style="margin-top:10px;" data-i18n="system.close.hint">保持后台运行可保证各个浏览器环境的代理链路不中断。如需完全退出，可在系统托盘图标右键选择「彻底退出」。</p></article>

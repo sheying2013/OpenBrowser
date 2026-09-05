@@ -8,6 +8,28 @@ const { planFanoutFromPayload } = require('./automation/protocol/sync-fanout');
 const { settingsToOperateList } = require('./automation/protocol/event-map');
 const { syncCapabilities } = require('./automation/protocol/cross-platform');
 
+let electronScreen = null;
+try { electronScreen = require('electron').screen; } catch (_) {}
+
+function clampWindowBounds(bounds) {
+  try {
+    if (!electronScreen) return bounds;
+    const point = { x: Number(bounds.left) || 0, y: Number(bounds.top) || 0 };
+    const display = electronScreen.getDisplayNearestPoint ? electronScreen.getDisplayNearestPoint(point) : electronScreen.getPrimaryDisplay?.();
+    const work = display?.workArea;
+    if (!work) return bounds;
+    const width = Math.max(320, Math.min(Math.round(Number(bounds.width) || 800), work.width));
+    const height = Math.max(240, Math.min(Math.round(Number(bounds.height) || 600), work.height));
+    const maxX = work.x + Math.max(0, work.width - width);
+    const maxY = work.y + Math.max(0, work.height - height);
+    const left = Math.max(work.x, Math.min(maxX, Math.round(Number(bounds.left) || work.x)));
+    const top = Math.max(work.y, Math.min(maxY, Math.round(Number(bounds.top) || work.y)));
+    return { left, top, width, height };
+  } catch (_) {
+    return bounds;
+  }
+}
+
 const masterMarker = String.raw`(() => {
   const install = () => { if (!document.documentElement) return requestAnimationFrame(install); if (document.getElementById('openbrowser-master-marker')) return; const marker = document.createElement('div'); marker.id='openbrowser-master-marker'; marker.textContent='\u4e3b\u63a7\u7a97\u53e3'; marker.style.cssText='position:fixed;left:12px;top:12px;z-index:2147483647;background:#123a8c;color:white;padding:8px 14px;border-radius:8px;font:700 14px Segoe UI,sans-serif;box-shadow:0 4px 18px #0005;pointer-events:none'; document.documentElement.appendChild(marker); document.documentElement.style.boxShadow='inset 0 0 0 5px #123a8c'; };
   install();
@@ -450,7 +472,17 @@ function chooseFullscreenFrame(frameTree, payload = {}) {
 function environmentMarker(id, master) { const text = (master ? '\u4e3b\u63a7 | ' : '') + '\u73af\u5883\u7f16\u53f7: ' + id; const color = master ? '#123a8c' : '#334155'; return `(() => { const install=()=>{if(!document.documentElement)return requestAnimationFrame(install);let e=document.getElementById('openbrowser-environment-marker');if(!e){e=document.createElement('div');e.id='openbrowser-environment-marker';document.documentElement.appendChild(e);}e.textContent=${JSON.stringify(text)};e.style.cssText='position:fixed;right:12px;top:12px;z-index:2147483646;background:${color};color:white;padding:7px 12px;border-radius:8px;font:700 13px Segoe UI,sans-serif;box-shadow:0 4px 16px #0004;pointer-events:none';};install();})()`; }
 
 function managedTabs(values) { return values.filter((tab) => !/^(devtools|chrome-extension|edge-extension):/i.test(tab.url)); }
-function normalTabs(values) { return values.filter((tab) => !/^(devtools|chrome-extension|edge-extension):/i.test(tab.url) && (!/^(chrome|edge):/i.test(tab.url) || /^chrome:\/\/(newtab|new-tab-page)/i.test(tab.url))); }
+const ALLOWED_INTERNAL_PAGES = new RegExp("^" + "(chrome|edge)://(newtab|new-tab-page|extensions|settings|downloads|history|flags|version|bookmarks|about)", "i");
+function normalTabs(values) {
+  return values.filter((tab) => {
+    if (!tab || !tab.url) return false;
+    if (/^(devtools|chrome-extension|edge-extension):/i.test(tab.url)) return false;
+    if (/^(chrome|edge):/i.test(tab.url)) {
+const ALLOWED_INTERNAL_PAGES = new RegExp("^" + "(chrome|edge)://(newtab|new-tab-page|extensions|settings|downloads|history|flags|version|bookmarks|about)", "i");
+    }
+    return true;
+  });
+}
 function extensionPages(values) { return values.filter((tab) => ['page', 'iframe', 'other', 'background_page'].includes(String(tab.type || 'page')) && /^(chrome|edge)-extension:\/\//i.test(String(tab.url || ''))); }
 function extensionPageKey(tab) {
   try { const value = new URL(String(tab.url || '')); return (value.protocol + '//' + value.hostname + value.pathname).toLowerCase(); }
@@ -833,30 +865,40 @@ class LiveSyncController extends LiveSyncV4 {
   }
 
   async attach(tab) {
+    if (!tab?.webSocketDebuggerUrl) return;
     const connection = new cdp.PersistentConnection(tab.webSocketDebuggerUrl, {
       onEvent: (event) => this.handle(tab.id, event),
     });
-    await connection.open();
+    try {
+      await connection.open();
+    } catch (openErr) {
+      console.warn('[live-sync] Could not open connection to tab ' + tab.id + ' (' + tab.url + '):', openErr.message);
+      return;
+    }
     const value = { tab, connection, scroll: { x: 0, y: 0 } };
     this.connections.set(tab.id, value);
     try {
       await connection.command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
-      await connection.command('Runtime.addBinding', { name: 'openBrowserSync' });
-      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: injection });
-      await connection.command('Runtime.enable');
-      await connection.command('Runtime.evaluate', { expression: injection });
-      await connection.command('Page.enable');
-      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: masterMarker });
-      await connection.command('Runtime.evaluate', { expression: masterMarker });
+      await connection.command('Runtime.addBinding', { name: 'openBrowserSync' }).catch((err) => {
+        console.warn('[live-sync] addBinding skipped on ' + tab.url + ':', err.message);
+      });
+      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: injection }).catch(() => {});
+      await connection.command('Runtime.enable').catch(() => {});
+      await connection.command('Runtime.evaluate', { expression: injection }).catch(() => {});
+      await connection.command('Page.enable').catch(() => {});
+      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: masterMarker }).catch(() => {});
+      await connection.command('Runtime.evaluate', { expression: masterMarker }).catch(() => {});
       const environment = environmentMarker(environmentNumber(this.engine, this.master.id), true);
-      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: environment });
-      await connection.command('Runtime.evaluate', { expression: environment });
-      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: fullscreenInjection });
-      await connection.command('Runtime.evaluate', { expression: fullscreenInjection });
+      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: environment }).catch(() => {});
+      await connection.command('Runtime.evaluate', { expression: environment }).catch(() => {});
+      await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: fullscreenInjection }).catch(() => {});
+      await connection.command('Runtime.evaluate', { expression: fullscreenInjection }).catch(() => {});
       const position = await connection.command('Runtime.evaluate', { expression: '({x:scrollX,y:scrollY})', returnByValue: true }).catch(() => null);
       value.scroll = position?.result?.value || { x: 0, y: 0 };
     } catch (error) {
-      connection.close(); this.connections.delete(tab.id); throw error;
+      console.warn('[live-sync] attach non-critical failure on ' + tab.url + ':', error.message);
+      connection.close();
+      this.connections.delete(tab.id);
     }
   }
 
@@ -1801,11 +1843,14 @@ class LiveSyncController extends LiveSyncV4 {
         const pending = this.geometryPending.get(slave.id);
         const desired = { width: targetWidth, height: targetHeight };
         if (pending?.width === targetWidth && pending?.height === targetHeight && (pending.attempts || 0) >= 2 && now - (pending.at || 0) < 10000) return;
-        await cdp.setWindowBounds(slave.port, {
-          left: Number.isFinite(own.left) ? own.left : 0,
-          top: Number.isFinite(own.top) ? own.top : 0,
+        const slaveLeft = Number.isFinite(own.left) ? own.left : 0;
+        const slaveTop = Number.isFinite(own.top) ? own.top : 0;
+        const bounded = clampWindowBounds({
+          left: slaveLeft,
+          top: slaveTop,
           ...desired,
-        }, { forceNormal: false, ...(slaveTargetId ? { targetId: slaveTargetId } : {}) });
+        });
+        await cdp.setWindowBounds(slave.port, bounded, { forceNormal: false, ...(slaveTargetId ? { targetId: slaveTargetId } : {}) });
         if (!sessionIsCurrent()) return;
         // Chromium builds occasionally acknowledge setWindowBounds before the
         // native widget has applied it. Remember the desired size so the next

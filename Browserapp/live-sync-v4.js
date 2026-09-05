@@ -109,7 +109,17 @@ const injection = String.raw`(() => {
   addEventListener('scroll', reportScroll, true); document.addEventListener('scroll', reportScroll, true);
 })();`;
 
-function normalTabs(values) { return values.filter((tab) => !/^(chrome|edge|devtools|chrome-extension|edge-extension):/i.test(tab.url)); }
+const ALLOWED_INTERNAL_PAGES = new RegExp("^" + "(chrome|edge)://(newtab|new-tab-page|extensions|settings|downloads|history|flags|version|bookmarks|about)", "i");
+function normalTabs(values) {
+  return values.filter((tab) => {
+    if (!tab || !tab.url) return false;
+    if (/^(devtools|chrome-extension|edge-extension):/i.test(tab.url)) return false;
+    if (/^(chrome|edge):/i.test(tab.url)) {
+const ALLOWED_INTERNAL_PAGES = new RegExp("^" + "(chrome|edge)://(newtab|new-tab-page|extensions|settings|downloads|history|flags|version|bookmarks|about)", "i");
+    }
+    return true;
+  });
+}
 
 class LiveSyncController {
   constructor(engine, emit) {

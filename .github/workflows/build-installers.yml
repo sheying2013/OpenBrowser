@@ -47,7 +47,7 @@ env:
     - More native feel: system-native theme follows light/dark, macOS vibrancy / Windows 11 Mica, and the environment number is drawn directly on the Dock icon.
     - Cross-platform preflight: early warnings for Windows long paths, Apple Silicon Rosetta, and more.
     - Various startup / IPC edge-case fixes and stability improvements.
-    - Ubuntu x86_64 portable packages bundle Chrome for Testing and never download a browser kernel at runtime.
+    - Ubuntu x86_64 portable packages bundle the official Google Chrome Stable package and never download a browser kernel at runtime.
 
     ### 中文
 
@@ -56,7 +56,7 @@ env:
     - 更像原生应用：系统原生主题跟随明暗、macOS 毛玻璃 / Windows 11 Mica、Dock 图标直接显示环境编号
     - 多平台预检：Windows 长路径、Apple Silicon Rosetta 等风险提前提示
     - 若干启动 / IPC 边角问题修复与稳定性提升
-    - Ubuntu x86_64 便携包内置 Chrome for Testing，运行时不会下载浏览器内核
+    - Ubuntu x86_64 便携包内置 Google Chrome Stable 正式包，运行时不会下载浏览器内核
 
     ### 下载 / Downloads
 
@@ -185,7 +185,7 @@ jobs:
           bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" "${assets[@]}"
 
   linux-x86_64:
-    name: Ubuntu x86_64 (with Chrome for Testing)
+    name: Ubuntu x86_64 (with Google Chrome Stable)
     needs: ensure-release
     if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'linux-x86_64' }}
     runs-on: ubuntu-22.04
@@ -222,7 +222,7 @@ jobs:
           cache: npm
           cache-dependency-path: Browserapp/package-lock.json
       - run: npm ci --include=dev
-      - name: Prepare and verify Chrome for Testing seed
+      - name: Prepare and verify Google Chrome Stable seed
         run: |
           set -euo pipefail
           npm run prepare:linux-kernel
@@ -241,24 +241,24 @@ jobs:
           STEM="OpenBrowser-Linux-x86_64-with-kernel"
           PACKAGE="dist/${STEM}"
           APP="$PACKAGE/runtime/resources/app"
-          KERNEL="$APP/kernels/chrome-for-testing/chrome-linux64/chrome"
+          KERNEL="$APP/kernels/chrome-stable/opt/google/chrome/chrome"
           test -x "$PACKAGE/OpenBrowser"
           test -x "$KERNEL"
           test -f "dist/${STEM}.tar.gz"
           test ! -e "$APP/kernels/windows-x64"
           test ! -e "$APP/kernels/macos-x64"
           test ! -e "$APP/kernels/macos-arm64"
-          TEST_DATA="$RUNNER_TEMP/openbrowser-cft-smoke"
-          "$KERNEL" --headless=new --no-sandbox --disable-gpu --remote-debugging-port=0 --user-data-dir="$TEST_DATA" about:blank >"$RUNNER_TEMP/openbrowser-cft.log" 2>&1 &
-          cft_pid=$!
-          trap 'kill "$cft_pid" 2>/dev/null || true' EXIT
+          TEST_DATA="$RUNNER_TEMP/openbrowser-stable-smoke"
+          "$KERNEL" --headless=new --no-sandbox --disable-gpu --remote-debugging-port=0 --user-data-dir="$TEST_DATA" about:blank >"$RUNNER_TEMP/openbrowser-stable.log" 2>&1 &
+          stable_pid=$!
+          trap 'kill "$stable_pid" 2>/dev/null || true' EXIT
           for _ in $(seq 1 40); do
             test -f "$TEST_DATA/DevToolsActivePort" && break
             sleep 0.25
           done
           test -f "$TEST_DATA/DevToolsActivePort"
-          kill "$cft_pid"
-          wait "$cft_pid" || true
+          kill "$stable_pid"
+          wait "$stable_pid" || true
           trap - EXIT
       - name: Upload to release
         run: |

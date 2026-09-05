@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('ops', Object.freeze({
   addExtensionStore: (url, profileIds, restart) => ipcRenderer.invoke('extensions:add-store', { url, profileIds, restart }),
   assignExtension: (extensionId, profileIds, enabled) => ipcRenderer.invoke('extensions:assign', { extensionId, profileIds, enabled }),
   toggleExtensionAll: (extensionId, enabled) => ipcRenderer.invoke('extensions:toggle-all', { extensionId, enabled }),
+  reloadExtension: (id) => ipcRenderer.invoke('extensions:reload', id),
   removeExtension: (id) => ipcRenderer.invoke('extensions:remove', id),
   syncSessions: () => ipcRenderer.invoke('sync:sessions'),
   setSyncSelection: (ids) => ipcRenderer.invoke('sync:selection', ids),

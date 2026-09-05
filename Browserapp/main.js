@@ -1008,14 +1008,18 @@ async function tile(ids, cascade = false) {
     const count = entries.length;
     const cols = count === 2 ? 2 : Math.ceil(Math.sqrt(count));
     const rows = Math.ceil(count / cols);
-    const width = Math.floor(work.width / cols);
-    const height = Math.floor(work.height / rows);
+    const baseWidth = Math.floor(work.width / cols);
+    const baseHeight = Math.floor(work.height / rows);
     await Promise.all(entries.map(({ item }, index) => {
       const col = index % cols;
       const row = Math.floor(index / cols);
+      const isLastCol = col === cols - 1;
+      const isLastRow = row === rows - 1;
+      const width = isLastCol ? Math.max(320, work.width - col * baseWidth) : baseWidth;
+      const height = isLastRow ? Math.max(240, work.height - row * baseHeight) : baseHeight;
       return cdp.setWindowBounds(item.port, clampBoundsToWorkArea({
-        left: work.x + col * width,
-        top: work.y + row * height,
+        left: work.x + col * baseWidth,
+        top: work.y + row * baseHeight,
         width,
         height,
       }, work));
@@ -1425,6 +1429,7 @@ async function fetchChromeStoreIcon(storeId) {
 
 /** Theme chrome colors for fused title bar (shipping-app look). */
 const THEME_CHROME = {
+  'merge-gateway': { bg: '#ffffff', overlay: '#ffffff', symbol: '#080808' },
   'pixel-workstation': { bg: '#0c0f13', overlay: '#161c20', symbol: '#d1e5d4' },
   'nes-light': { bg: '#c2b59c', overlay: '#d0c4aa', symbol: '#27231b' },
   'element-admin': { bg: '#e8e8ed', overlay: '#f5f5f7', symbol: '#1d1d1f' },
@@ -1843,6 +1848,10 @@ app.whenReady().then(async () => {
     for (const id of running) await engine.stop(id);
     for (const id of running) { const profile = engine.profiles.get(id); if (profile) await engine.start(profile); }
     return { success: true, enabled, affected: ids.length, restarted: running.length };
+  });
+  registerTrustedIpc('extensions:reload', async (_event, id) => {
+    if (!id || id === 'all') return await engine.reloadAllExtensions();
+    return await engine.reloadExtension(String(id));
   });
   registerTrustedIpc('extensions:remove', (_event, id) => engine.removeExtension(String(id)));
 

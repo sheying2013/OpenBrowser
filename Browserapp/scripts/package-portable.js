@@ -13,7 +13,7 @@ const {
 const { ensureHostRuntime } = require('./ensure-host-runtime');
 const {
   findBundledWayfernKernel,
-  findBundledChromeForTesting,
+  findBundledChromeStable,
   isIntegratedKernelCdpReady,
   companionLibraryForKernelBinary,
 } = require('../automation/browser-kernel');
@@ -169,8 +169,8 @@ function shouldShipIntegratedWayfern(platform = process.platform, arch = package
   return supportedPlatform && bundleKernelVariantEnabled();
 }
 
-/** Ubuntu x86_64 packages use the official Chrome for Testing archive. */
-function shouldShipChromeForTesting(platform = process.platform, arch = packageArch) {
+/** Ubuntu x86_64 packages use the official Google Chrome Stable package. */
+function shouldShipChromeStable(platform = process.platform, arch = packageArch) {
   const p = String(platform || '').toLowerCase();
   const a = String(arch || '').toLowerCase();
   return p === 'linux' && ['x86_64', 'x64', 'amd64'].includes(a) && bundleKernelVariantEnabled();
@@ -188,7 +188,7 @@ function shouldShipBundledWayfern(platform = process.platform, arch = packageArc
  *   - macos-x64/    OpenBrowser 148 (macOS Intel)
  *   - windows-x64/  Windows independent kernel
  *   - macos-arm64/  macOS arm64 independent kernel
- *   - chrome-for-testing/chrome-linux64/ Ubuntu x86_64 Chrome for Testing
+ *   - chrome-stable/opt/google/chrome/ Ubuntu x86_64 Google Chrome Stable
  *
  * Always copy kernels/, then prune foreign platform seeds after copy.
  * Legacy bundled-kernels/ is never shipped.
@@ -202,7 +202,7 @@ function pruneForeignKernelSeeds(resourceApp, platform = process.platform, arch 
   if (!fs.existsSync(kernelsDir)) return;
   const shipOpenBrowser = shouldShipOpenBrowser148Kernel(platform, arch);
   const shipWayfern = shouldShipIntegratedWayfern(platform, arch);
-  const shipCft = shouldShipChromeForTesting(platform, arch);
+  const shipStable = shouldShipChromeStable(platform, arch);
   const a = String(arch || '').toLowerCase();
   const isWin = String(platform || '').toLowerCase() === 'win32';
   const isDarwin = String(platform || '').toLowerCase() === 'darwin';
@@ -220,7 +220,7 @@ function pruneForeignKernelSeeds(resourceApp, platform = process.platform, arch 
     if (isDarwin && isArm64) keep.add('macos-arm64');
     keep.add('wayfern'); // legacy compat path; pruned below if empty
   }
-  if (shipCft) keep.add('chrome-for-testing');
+  if (shipStable) keep.add('chrome-stable');
 
   for (const entry of fs.readdirSync(kernelsDir)) {
     if (keep.has(entry)) continue;
@@ -256,13 +256,14 @@ function pruneForeignKernelSeeds(resourceApp, platform = process.platform, arch 
       if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true });
     }
   }
-  const cftDir = path.join(kernelsDir, 'chrome-for-testing');
-  if (!shipCft) {
-    if (fs.existsSync(cftDir)) fs.rmSync(cftDir, { recursive: true, force: true });
-  } else if (isLinux && fs.existsSync(cftDir)) {
-    const cftKeep = new Set(['chrome-linux64', 'kernel.json']);
-    for (const entry of fs.readdirSync(cftDir)) {
-      if (!cftKeep.has(entry)) fs.rmSync(path.join(cftDir, entry), { recursive: true, force: true });
+  const stableDir = path.join(kernelsDir, 'chrome-stable');
+  if (!shipStable) {
+    if (fs.existsSync(stableDir)) fs.rmSync(stableDir, { recursive: true, force: true });
+  } else if (isLinux && fs.existsSync(stableDir)) {
+    const stableKeep = new Set(['opt', 'kernel.json']);
+    for (const entry of fs.readdirSync(stableDir)) {
+      if (stableKeep.has(entry)) continue;
+      fs.rmSync(path.join(stableDir, entry), { recursive: true, force: true });
     }
   }
 
@@ -300,13 +301,13 @@ const OPENBROWSER_148_LEGACY_REL = path.join(
 function assertKernelPackagePolicy(resourceApp) {
   const shipOpenBrowser = shouldShipOpenBrowser148Kernel();
   const shipWayfern = shouldShipIntegratedWayfern();
-  const shipCft = shouldShipChromeForTesting();
+  const shipStable = shouldShipChromeStable();
   const kernelsDir = path.join(resourceApp, 'kernels');
   const openBrowserBin = fs.existsSync(path.join(resourceApp, OPENBROWSER_148_REL))
     ? path.join(resourceApp, OPENBROWSER_148_REL)
     : path.join(resourceApp, OPENBROWSER_148_LEGACY_REL);
   const integrated = findBundledWayfernKernel([resourceApp, path.join(resourceApp, 'kernels')]);
-  const cft = findBundledChromeForTesting([resourceApp, path.join(resourceApp, 'kernels')]);
+  const stable = findBundledChromeStable([resourceApp, path.join(resourceApp, 'kernels')]);
   if (fs.existsSync(path.join(resourceApp, 'bundled-kernels'))) {
     throw new Error('[package] FATAL: legacy bundled-kernels/ must not ship (use kernels/{platform} seeds)');
   }
@@ -355,17 +356,17 @@ function assertKernelPackagePolicy(resourceApp) {
       }
     }
   }
-  if (shipCft) {
-    if (!cft) {
-      throw new Error('[package] FATAL: Linux package missing Chrome for Testing under kernels/chrome-for-testing/chrome-linux64');
+  if (shipStable) {
+    if (!stable) {
+      throw new Error(`[package] FATAL: Linux package missing Google Chrome Stable seed in ${kernelsDir}/chrome-stable`);
     }
     try {
-      fs.accessSync(cft.binary, fs.constants.X_OK);
+      fs.accessSync(stable.binary, fs.constants.X_OK);
     } catch (_) {
-      throw new Error(`[package] FATAL: Linux Chrome for Testing is not executable: ${cft.binary}`);
+      throw new Error(`[package] FATAL: Linux Google Chrome Stable is not executable: ${stable.binary}`);
     }
-  } else if (fs.existsSync(path.join(kernelsDir, 'chrome-for-testing'))) {
-    throw new Error('[package] FATAL: Chrome for Testing present on a package without the Linux kernel variant');
+  } else if (fs.existsSync(path.join(kernelsDir, 'chrome-stable'))) {
+    throw new Error('[package] FATAL: Google Chrome Stable present on a package without the Linux kernel variant');
   }
 }
 
@@ -398,8 +399,8 @@ function copyAppResources(resourceApp) {
 
   console.log('[package] kernel policy: openbrowser-148=' + shouldShipOpenBrowser148Kernel()
     + ' integrated-kernel=' + shouldShipIntegratedWayfern()
-    + ' chrome-for-testing=' + shouldShipChromeForTesting()
-    + ' auto-download=false'
+    + ' chrome-stable=' + shouldShipChromeStable()
+    + ' auto-download=chrome-stable'
     + ' arch=' + packageArch + ' platform=' + process.platform);
   assertKernelPackagePolicy(resourceApp);
 }
@@ -534,8 +535,8 @@ function packageWindows() {
     '2. 双击 START.cmd 启动。',
     '3. 本目录 runtime 内含 OpenBrowser 桌面主机与 Chromium 组件。',
     bundleKernelVariantEnabled()
-      ? '4. 本 Windows x64 包已内置独立内核（kernels/windows-x64）；运行时不再自动下载内核。默认不会回退本机浏览器，如需回退请在“本地设置”手动选择并开启。'
-      : '4. 本 Windows x64 包未启用内核变体；请使用包含内置内核的正式安装包，或在“本地设置”选择自定义 Chromium。运行时不会自动下载内核。',
+      ? '4. 本 Windows x64 包已内置独立内核（kernels/windows-x64）；内核缺失时可下载 Google Chrome Stable 正式包。默认不会回退本机浏览器，如需回退请在“本地设置”手动选择并开启。'
+      : '4. 本 Windows x64 包未启用内核变体；内核缺失时会下载 Google Chrome Stable 正式包，也可在“本地设置”选择自定义 Chromium。',
     '5. 环境数据默认保存在当前 Windows 用户的 AppData\\Roaming\\openbrowser 中；也可在“本地设置”修改。',
     '6. 请勿把 Cookies、代理密码或浏览器 Profile 上传到 GitHub。',
     '',
@@ -597,7 +598,7 @@ function packageLinux() {
     throw new Error(`Linux packaging currently supports x86_64 only (requested ${packageArch})`);
   }
   if (bundleKernelVariantEnabled()) {
-    const kernel = path.join(appRoot, 'kernels', 'chrome-for-testing', 'chrome-linux64', 'chrome');
+    const kernel = path.join(appRoot, 'kernels', 'chrome-stable', 'opt', 'google', 'chrome', 'chrome');
     if (!fs.existsSync(kernel)) {
       throw new Error('Linux kernel seed missing. Run npm run prepare:linux-kernel before npm run package:portable.');
     }
@@ -641,7 +642,7 @@ function packageLinux() {
     '',
     '1. Extract the complete tar.gz archive and run ./OpenBrowser as a normal desktop user.',
     '2. Do not run as root or via sudo: profile data belongs to the desktop user.',
-    '3. This package includes Chrome for Testing under kernels/chrome-for-testing/chrome-linux64; it never downloads a browser kernel at runtime.',
+    '3. This package includes the official Google Chrome Stable package under kernels/chrome-stable; it never downloads a browser kernel at runtime.',
     '4. Ubuntu desktop dependencies (install when missing):',
     '   sudo apt-get install libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcups2 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2',
     '5. If audio support is missing, install libasound2 (Ubuntu 22.04) or libasound2t64 (Ubuntu 24.04+).',
@@ -740,10 +741,10 @@ function packageMac() {
   signMacAppBundle(appBundle);
 
   const kernelNote = packageArch === 'x86_64'
-    ? '3. 本包（macOS x86_64 / Intel）已内置 OpenBrowser 148 独立内核（kernels/macos-x64）；运行时不再自动下载内核。'
+    ? '3. 本包（macOS x86_64 / Intel）已内置 OpenBrowser 148 独立内核（kernels/macos-x64）；内核缺失时可下载 Google Chrome Stable。'
     : bundleKernelVariantEnabled()
-      ? '3. 本包（macOS arm64）已内置独立内核（kernels/macos-arm64）；运行时不再自动下载内核。'
-      : '3. 本包（macOS arm64）未启用内核变体；请使用包含内置内核的正式安装包，或在“本地设置”选择自定义 Chromium。运行时不会自动下载内核。';
+      ? '3. 本包（macOS arm64）已内置独立内核（kernels/macos-arm64）；内核缺失时可下载 Google Chrome Stable。'
+      : '3. 本包（macOS arm64）未启用内核变体；内核缺失时会从 Google Chrome Stable 官方包下载，也可在“本地设置”选择自定义 Chromium。';
   writeText(path.join(packageRoot, '运行说明.txt'), [
     'OpenBrowser macOS 版（' + packageArch + '）',
     '',
