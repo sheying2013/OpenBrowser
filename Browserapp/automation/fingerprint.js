@@ -1520,6 +1520,18 @@ function buildInjectionScript(fp) {
           }
         } catch (_) {}
       };
+      try {
+        if (typeof document.querySelectorAll === 'function') {
+          document.querySelectorAll('iframe').forEach(ensureIframeFullscreen);
+        }
+      } catch (_) {}
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+          try {
+            document.querySelectorAll('iframe').forEach(ensureIframeFullscreen);
+          } catch (_) {}
+        }, { once: true });
+      }
       if (typeof MutationObserver === 'function' && document.documentElement) {
         const observer = new MutationObserver((mutations) => {
           for (const m of mutations) {

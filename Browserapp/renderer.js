@@ -1696,39 +1696,43 @@ function parseProxyInputForUi(value, selectedType = 'socks5') {
 }
 
 function applyProxyLibrarySelection(kind, id) {
-  const item = proxyLibraryItem(id);
+  const item = typeof id === 'object' && id ? id : proxyLibraryItem(id);
   if (!item) return;
-  const editor = kind === 'editor';
-  const networkName = editor ? 'editor-network' : 'create-network';
-  const proxyValue = editor ? 'custom' : 'proxy';
-  const radio = document.querySelector(`input[name="${networkName}"][value="${proxyValue}"]`);
-  if (radio) {
-    radio.checked = true;
-    window.__proxyLibrarySelectionInProgress = true;
-    try { radio.dispatchEvent(new Event('change', { bubbles: true })); }
-    finally { window.__proxyLibrarySelectionInProgress = false; }
-  }
-  const prefix = editor ? 'editor' : 'create';
-  const parsed = parseProxyInputForUi(item.raw || item, item.protocol || 'socks5');
-  editorSet(`#${prefix}-proxy-type`, parsed?.protocol || item.protocol || 'socks5');
-  editorSet(`#${prefix}-proxy-host`, parsed?.host || item.host || '');
-  editorSet(`#${prefix}-proxy-port`, parsed?.port || item.port || '');
-  editorSet(`#${prefix}-proxy-user`, parsed?.username || item.username || '');
-  editorSet(`#${prefix}-proxy-password`, parsed?.password || item.password || '');
-  const rawVal = parsed?.raw || item.raw || buildProxyUiValue(item);
-  const rawEl = $(`#${prefix}-proxy-raw`);
-  if (rawEl) rawEl.value = rawVal;
-  const inputEl = $(`#${prefix}-proxy-input`);
-  if (inputEl) inputEl.value = rawVal;
-  const select = $(`#${prefix}-proxy-library`);
-  if (select) {
-    select.value = String(item.id);
-    syncThemedSelect(select);
-  }
-  syncThemedSelects(`#${prefix}-proxy-library, #${prefix}-proxy-type`);
-  if (editor) {
-    const status = $('#editor-proxy-library-status');
-    if (status) status.textContent = `已关联代理库：${proxyLibraryLabel(item)}`;
+  window.__proxyLibrarySelectionInProgress = true;
+  try {
+    const editor = kind === 'editor';
+    const networkName = editor ? 'editor-network' : 'create-network';
+    const proxyValue = editor ? 'custom' : 'proxy';
+    const radio = document.querySelector(`input[name="${networkName}"][value="${proxyValue}"]`);
+    if (radio) {
+      radio.checked = true;
+      try { radio.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    }
+    const prefix = editor ? 'editor' : 'create';
+    const parsed = parseProxyInputForUi(item.raw || item, item.protocol || 'socks5');
+    editorSet(`#${prefix}-proxy-type`, parsed?.protocol || item.protocol || 'socks5');
+    editorSet(`#${prefix}-proxy-host`, parsed?.host || item.host || '');
+    editorSet(`#${prefix}-proxy-port`, parsed?.port || item.port || '');
+    editorSet(`#${prefix}-proxy-user`, parsed?.username || item.username || '');
+    editorSet(`#${prefix}-proxy-password`, parsed?.password || item.password || '');
+    const rawVal = parsed?.raw || item.raw || buildProxyUiValue(item);
+    const rawEl = $(`#${prefix}-proxy-raw`);
+    if (rawEl) rawEl.value = rawVal;
+    const inputEl = $(`#${prefix}-proxy-input`);
+    if (inputEl) inputEl.value = rawVal;
+    const select = $(`#${prefix}-proxy-library`);
+    if (select) {
+      select.value = String(item.id);
+      syncThemedSelect(select);
+    }
+    syncThemedSelects(`#${prefix}-proxy-library, #${prefix}-proxy-type`);
+    if (editor) {
+      const status = $('#editor-proxy-library-status');
+      if (status) status.textContent = `已关联代理库：${proxyLibraryLabel(item)}`;
+      window.__editorProxyAuthTouched = false;
+    }
+  } finally {
+    window.__proxyLibrarySelectionInProgress = false;
   }
 }
 
@@ -1936,6 +1940,19 @@ function editorDraft(strict = true) {
           });
         }
       }
+    }
+  }
+  if (!proxyHasCredentials(proxy) && selectedProxyId) {
+    const libItem = proxyLibraryItem(selectedProxyId);
+    if (libItem && (libItem.username || libItem.password)) {
+      const curParsed = parseEditorProxy(proxy);
+      proxy = buildProxyUiValue({
+        protocol: curParsed.type || libItem.protocol || 'socks5',
+        host: curParsed.host || libItem.host,
+        port: curParsed.port || libItem.port,
+        username: libItem.username || '',
+        password: libItem.password || '',
+      });
     }
   }
   const proxyAuthAction = proxyAuthActionForUpdate(current.proxy, proxy, selectedNetwork);
@@ -2163,8 +2180,16 @@ function openProfileEditor(id) {
     ? `已关联代理库：${proxyLibraryLabel(linkedProxy)}`
     : (linkedProxyId ? `代理节点已失效：${linkedProxyId}` : '未关联代理库节点');
   let proxy = parseEditorProxy(profile.proxy);
-  if (proxy.mode === 'custom') {
-    if ((!proxy.username || !proxy.password) && linkedProxy) {
+  if (linkedProxy) {
+    if (proxy.mode !== 'custom' || !proxy.host) {
+      const libParsed = parseEditorProxy(linkedProxy.raw || buildProxyUiValue(linkedProxy));
+      proxy.mode = 'custom';
+      proxy.type = libParsed.type || linkedProxy.protocol || 'socks5';
+      proxy.host = libParsed.host || linkedProxy.host || '';
+      proxy.port = libParsed.port || linkedProxy.port || '';
+      proxy.username = libParsed.username || linkedProxy.username || '';
+      proxy.password = libParsed.password || linkedProxy.password || '';
+    } else if (!proxy.username || !proxy.password) {
       const libParsed = parseEditorProxy(linkedProxy.raw || buildProxyUiValue(linkedProxy));
       if (libParsed && (!proxy.host || (libParsed.host === proxy.host && String(libParsed.port) === String(proxy.port)))) {
         if (!proxy.username && libParsed.username) proxy.username = libParsed.username;
@@ -2172,6 +2197,8 @@ function openProfileEditor(id) {
         if (!proxy.type && libParsed.type) proxy.type = libParsed.type;
       }
     }
+  }
+  if (proxy.mode === 'custom') {
     if (!proxy.username || !proxy.password) {
       const eng = engineProfiles.find((item) => item.id === profile.id);
       if (eng?.proxy) {
@@ -2902,10 +2929,15 @@ function readProxyForm() {
   const formName = $('#proxy-name')?.value?.trim() || '';
   const formRemark = $('#proxy-remark')?.value?.trim() || '';
 
-  const parsed = rawInput ? parseProxyInputForUi(rawInput, formProtocol || 'socks5') : null;
+  let parsed = rawInput ? parseProxyInputForUi(rawInput, formProtocol || 'socks5') : null;
+  if (!parsed && (formHost.includes(':') || formHost.includes('@') || formHost.includes('/'))) {
+    try { parsed = parseProxyInputForUi(formHost, formProtocol || 'socks5'); } catch (_) {}
+  }
 
   const protocol = formProtocol || parsed?.protocol || 'socks5';
-  const host = formHost || parsed?.host || '';
+  const host = (formHost && !formHost.includes(':') && !formHost.includes('@') && !formHost.includes('/'))
+    ? formHost
+    : (parsed?.host || formHost);
   const port = Number(formPort || parsed?.port || 0);
   const username = formUser || parsed?.username || '';
   const password = formPass || parsed?.password || '';
@@ -4304,7 +4336,10 @@ const onEditorFormChange = (event) => {
   if (event.target.matches(editorProxyGeneralSelector)) {
     if (event.isTrusted && !window.__proxyLibrarySelectionInProgress && event.target.matches(editorProxyFieldsSelector)) {
       const library = $('#editor-proxy-library');
-      if (library && library.value) library.value = '';
+      if (library && library.value) {
+        library.value = '';
+        syncThemedSelect(library);
+      }
       const status = $('#editor-proxy-library-status');
       if (status) status.textContent = '未关联代理库节点（已改为手动代理）';
     }
@@ -4946,23 +4981,23 @@ $('#proxy-dialog-test')?.addEventListener('click', async () => {
 });
 $('#proxy-user')?.addEventListener('input', () => { window.__proxyAuthFieldsTouched = true; });
 $('#proxy-password')?.addEventListener('input', () => { window.__proxyAuthFieldsTouched = true; });
-$('#proxy-raw')?.addEventListener('input', () => {
-  const raw = $('#proxy-raw').value.trim();
+const handleProxyRawChange = () => {
+  const raw = ($('#proxy-raw')?.value || '').trim();
   const statusEl = $('#proxy-raw-status');
   if (!raw) {
     if (statusEl) statusEl.textContent = tx('粘贴整行代理（如 socks5://user:pass@host:port#备注）会自动拆分填入下方各字段');
     return;
   }
   try {
-    const parsed = parseProxyInputForUi(raw, $('#proxy-protocol').value);
+    const parsed = parseProxyInputForUi(raw, $('#proxy-protocol')?.value || 'socks5');
     if (!parsed) return;
-    $('#proxy-protocol').value = parsed.protocol;
-    $('#proxy-host').value = parsed.host;
-    $('#proxy-port').value = parsed.port;
-    $('#proxy-user').value = parsed.username;
-    $('#proxy-password').value = parsed.password;
-    $('#proxy-remark').value = parsed.remark;
-    if (!$('#proxy-name').value.trim() || $('#proxy-name').dataset.autoProxyName === 'true') {
+    if ($('#proxy-protocol')) $('#proxy-protocol').value = parsed.protocol;
+    if ($('#proxy-host')) $('#proxy-host').value = parsed.host;
+    if ($('#proxy-port')) $('#proxy-port').value = parsed.port;
+    if ($('#proxy-user')) $('#proxy-user').value = parsed.username;
+    if ($('#proxy-password')) $('#proxy-password').value = parsed.password;
+    if ($('#proxy-remark')) $('#proxy-remark').value = parsed.remark;
+    if (!$('#proxy-name')?.value.trim() || $('#proxy-name').dataset.autoProxyName === 'true') {
       $('#proxy-name').value = parsed.name;
       $('#proxy-name').dataset.autoProxyName = 'true';
     }
@@ -4971,27 +5006,43 @@ $('#proxy-raw')?.addEventListener('input', () => {
     }
     syncThemedSelects($('#proxy-dialog'));
   } catch (_) {}
+};
+
+['input', 'change'].forEach((evt) => {
+  $('#proxy-raw')?.addEventListener(evt, handleProxyRawChange);
 });
+$('#proxy-raw')?.addEventListener('paste', () => {
+  setTimeout(handleProxyRawChange, 0);
+});
+
 $('#proxy-name')?.addEventListener('input', () => { delete $('#proxy-name').dataset.autoProxyName; });
-$('#proxy-host')?.addEventListener('input', () => {
-  const value = $('#proxy-host').value.trim();
+
+const handleProxyHostChange = () => {
+  const value = ($('#proxy-host')?.value || '').trim();
   if (!value || (!value.includes(':') && !value.includes('@') && !value.includes('/'))) return;
   try {
-    const parsed = parseProxyInputForUi(value, $('#proxy-protocol').value);
+    const parsed = parseProxyInputForUi(value, $('#proxy-protocol')?.value || 'socks5');
     if (!parsed) return;
-    $('#proxy-protocol').value = parsed.protocol;
+    if ($('#proxy-protocol')) $('#proxy-protocol').value = parsed.protocol;
     $('#proxy-host').value = parsed.host;
-    if (parsed.port) $('#proxy-port').value = parsed.port;
-    if (parsed.username) $('#proxy-user').value = parsed.username;
-    if (parsed.password) $('#proxy-password').value = parsed.password;
-    if (parsed.remark) $('#proxy-remark').value = parsed.remark;
+    if (parsed.port && $('#proxy-port')) $('#proxy-port').value = parsed.port;
+    if (parsed.username && $('#proxy-user')) $('#proxy-user').value = parsed.username;
+    if (parsed.password && $('#proxy-password')) $('#proxy-password').value = parsed.password;
+    if (parsed.remark && $('#proxy-remark')) $('#proxy-remark').value = parsed.remark;
     if ($('#proxy-raw')) $('#proxy-raw').value = parsed.raw;
-    if (!$('#proxy-name').value.trim() || $('#proxy-name').dataset.autoProxyName === 'true') {
+    if (!$('#proxy-name')?.value.trim() || $('#proxy-name').dataset.autoProxyName === 'true') {
       $('#proxy-name').value = parsed.name;
       $('#proxy-name').dataset.autoProxyName = 'true';
     }
     syncThemedSelects($('#proxy-dialog'));
   } catch (_) {}
+};
+
+['input', 'change'].forEach((evt) => {
+  $('#proxy-host')?.addEventListener(evt, handleProxyHostChange);
+});
+$('#proxy-host')?.addEventListener('paste', () => {
+  setTimeout(handleProxyHostChange, 0);
 });
 $('#proxy-form')?.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -5263,6 +5314,55 @@ async function handleQuickPasteToInput(targetInputSelector) {
 $('#proxy-raw-paste-btn')?.addEventListener('click', () => handleQuickPasteToInput('#proxy-raw'));
 $('#create-proxy-raw-paste-btn')?.addEventListener('click', () => handleQuickPasteToInput('#create-proxy-raw'));
 $('#editor-proxy-raw-paste-btn')?.addEventListener('click', () => handleQuickPasteToInput('#editor-proxy-raw'));
+$('#editor-proxy-import-and-bind-btn')?.addEventListener('click', async () => {
+  const rawInput = ($('#editor-proxy-raw')?.value || '').trim();
+  const formProtocol = $('#editor-proxy-type')?.value || 'socks5';
+  const formHost = ($('#editor-proxy-host')?.value || '').trim();
+  const formPort = ($('#editor-proxy-port')?.value || '').trim();
+  const formUser = $('#editor-proxy-user')?.value || '';
+  const formPass = $('#editor-proxy-password')?.value || '';
+
+  const fallbackRaw = formHost && formPort
+    ? buildProxyUiValue({ protocol: formProtocol, host: formHost, port: formPort, username: formUser, password: formPass })
+    : '';
+  const targetRaw = rawInput || fallbackRaw;
+  if (!targetRaw) return toast(tx('请先输入或快捷粘贴代理信息'));
+
+  const parsed = parseProxyInputForUi(targetRaw, formProtocol);
+  if (!parsed || !parsed.host || !parsed.port) return toast(tx('代理格式不正确，缺少主机或端口'));
+
+  try {
+    const current = ui.profiles.find((p) => p.id === editingProfileId) || {};
+    const profNumber = displayProfileNumber(current) || '';
+    const name = parsed.name || (profNumber ? `环境${profNumber}-代理` : `代理-${parsed.host}:${parsed.port}`);
+    const created = await window.ops.proxyCreate({
+      name,
+      protocol: parsed.protocol || 'socks5',
+      host: parsed.host,
+      port: Number(parsed.port),
+      username: parsed.username || '',
+      password: parsed.password || '',
+      raw: parsed.raw || targetRaw,
+      remark: parsed.remark || (profNumber ? `由环境${profNumber}入库并绑定` : '快捷入库'),
+      ipChannel: $('#editor-ip-channel')?.value || 'ip-api',
+    });
+
+    await refreshProxies();
+    if (created?.id) {
+      applyProxyLibrarySelection('editor', created.id);
+      if (editingProfileId) {
+        const idx = ui.profiles.findIndex((p) => p.id === editingProfileId);
+        if (idx >= 0) {
+          ui.profiles[idx] = normalizeProxyAssociationForUi(ui.profiles[idx], created.id);
+          save();
+        }
+      }
+      toast(tx('代理已存入代理库并绑定当前环境'));
+    }
+  } catch (error) {
+    toast(tx('入库并绑定失败：') + error.message);
+  }
+});
 
 $('#create-proxy-input')?.addEventListener('input', () => {
   const val = $('#create-proxy-input').value.trim();

@@ -36,6 +36,35 @@ const HELPER_CLEANUP_DELAY_MS = process.platform === 'win32' ? 250 : 120;
 const HELPER_CLEANUP_TIMEOUT_MS = process.platform === 'win32' ? 14000 : 3000;
 const STOP_ALL_ITEM_TIMEOUT_MS = process.platform === 'win32' ? 22000 : 12000;
 
+function isChildExited(child) {
+  if (!child) return true;
+  if (child.exitCode !== null && child.exitCode !== undefined) return true;
+  if (child.signalCode !== null && child.signalCode !== undefined) return true;
+  if (child.pid && !isPidAlive(child.pid)) return true;
+  return false;
+}
+
+const SINGLETON_FILES = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'DevToolsActivePort'];
+
+async function removeSingletonFiles(root, options = {}) {
+  if (!root) return;
+  const attempts = Math.max(1, Number(options.attempts) || 6);
+  const initialDelay = Math.max(10, Number(options.delayMs) || 40);
+  for (const f of SINGLETON_FILES) {
+    const target = path.join(root, f);
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        await fsp.rm(target, { force: true, recursive: true });
+        break;
+      } catch (error) {
+        if (!error || !['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(error.code)) break;
+        if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, initialDelay * (attempt + 1)));
+      }
+    }
+  }
+}
+
+
 function lifecycleTimeout(promise, timeoutMs, message) {
   let timer = null;
   return Promise.race([
@@ -70,7 +99,7 @@ function sameProxyEndpoint(left, right) {
   const a = parsedProxy(left);
   const b = parsedProxy(right);
   if (!a || !b) return false;
-  if (a.host !== b.host || a.port !== b.port) return false;
+  if (a.host !== b.host || Number(a.port) !== Number(b.port)) return false;
   if (hasExplicitScheme(left) && hasExplicitScheme(right)) {
     return a.protocol === b.protocol;
   }
@@ -86,7 +115,7 @@ function sameProxyIdentity(left, right) {
     : true;
   return Boolean(protocolMatches
     && a.host === b.host
-    && a.port === b.port
+    && Number(a.port) === Number(b.port)
     && String(a.username || '') === String(b.username || '')
     && String(a.password || '') === String(b.password || ''));
 }
@@ -1072,6 +1101,14 @@ class BrowserEngine {
     content.window_management = 1;
     prefs.fullscreen ||= {};
     prefs.fullscreen.allowed = true;
+    prefs.profile.content_settings ||= {};
+    prefs.profile.content_settings.exceptions ||= {};
+    const exceptions = prefs.profile.content_settings.exceptions;
+    for (const key of ['fullscreen', 'automatic_fullscreen', 'window_placement', 'window_management']) {
+      exceptions[key] ||= {};
+      exceptions[key]['*,*'] = { setting: 1 };
+      exceptions[key]['[*.]*,*'] = { setting: 1 };
+    }
     if (profile.advanced.blockImages) content.images = 2; else delete content.images;
     if (profile.advanced.blockSound) content.sound = 2; else delete content.sound;
     if (profile.advanced.blockNotifications) content.notifications = 2; else delete content.notifications;
@@ -1113,10 +1150,7 @@ class BrowserEngine {
    * shortening the launch critical path (scales with disk latency and profile size).
    */
   async prepareProfileFilesForStart(root, profile, restoreSession) {
-    const singletonFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'DevToolsActivePort'];
-    for (const f of singletonFiles) {
-      await fsp.rm(path.join(root, f), { force: true, recursive: true }).catch(() => {});
-    }
+    await removeSingletonFiles(root, { attempts: 6, delayMs: 40 });
     const lockF = path.join(root, '.openbrowser-instance.lock');
     if (fs.existsSync(lockF)) {
       try {
@@ -2048,7 +2082,7 @@ class BrowserEngine {
   }
 
   waitForChildExit(child, timeout = 3000) {
-    if (!child || child.exitCode !== null) return Promise.resolve(true);
+    if (isChildExited(child)) return Promise.resolve(true);
     return new Promise((resolve) => {
       let settled = false;
       const finish = (value) => {
@@ -2056,11 +2090,13 @@ class BrowserEngine {
         settled = true;
         clearTimeout(timer);
         child.removeListener?.('exit', onExit);
+        child.removeListener?.('close', onExit);
         resolve(value);
       };
       const onExit = () => finish(true);
-      const timer = setTimeout(() => finish(false), timeout);
+      const timer = setTimeout(() => finish(isChildExited(child)), timeout);
       child.once?.('exit', onExit);
+      child.once?.('close', onExit);
     });
   }
 
@@ -2092,14 +2128,14 @@ class BrowserEngine {
       item.workerFingerprintConnection?.close();
       item.workerFingerprintConnection = null;
 
-      if (options.kill && item.child?.exitCode === null && item.pid) {
+      if (options.kill && !isChildExited(item.child) && item.pid) {
         await killProcessTree(item.pid, managedBrowserKillOptions(item, item.root)).catch(() => {});
       }
       if (options.waitForExit) {
         let exited = await this.waitForChildExit(item.child, Number(options.exitTimeout) || 6500);
         // A failed first kill must not release the profile lock while Chromium
         // still owns the profile. Retry the bounded kill/wait sequence once.
-        if (!exited && item.child?.exitCode === null && item.pid) {
+        if (!exited && !isChildExited(item.child) && item.pid) {
           await killProcessTree(item.pid, managedBrowserKillOptions(item, item.root)).catch(() => {});
           exited = await this.waitForChildExit(item.child, 2500);
         }
@@ -2126,7 +2162,7 @@ class BrowserEngine {
       // The tracked browser process can exit before Chromium's renderer/GPU
       // helpers. Re-scan the exact user-data-dir and terminate only those
       // helpers before releasing the profile lock.
-      if (item.child?.exitCode !== null && item.child?.exitCode !== undefined && item.root) {
+      if (item.root && isChildExited(item.child)) {
         let helperDrain = await this.drainProfileHelpers(item.root);
         if (!helperDrain.known || helperDrain.pids.length) {
           if (helperDrain.pids?.length) {
@@ -2154,15 +2190,13 @@ class BrowserEngine {
           helperDrain = await this.drainProfileHelpers(item.root);
         }
         if (item.root) {
-          const singletonFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'DevToolsActivePort'];
-          for (const f of singletonFiles) {
-            await fsp.rm(path.join(item.root, f), { force: true, recursive: true }).catch(() => {});
-          }
+          await removeSingletonFiles(item.root, { attempts: 6, delayMs: 40 });
         }
-        if (!helperDrain.known || helperDrain.pids.length) {
+        const activeHelperPids = (helperDrain.pids || []).filter(isPidAlive);
+        if (activeHelperPids.length > 0) {
           const failure = new Error(`Chromium helper exit was not confirmed for profile ${profileId}; cleanup is fail-closed`);
           failure.code = 'BROWSER_HELPERS_EXIT_UNCONFIRMED';
-          failure.pids = helperDrain.pids;
+          failure.pids = activeHelperPids;
           item.cleanupFailed = true;
           item.cleanupState = 'blocked';
           item.cleanupError = failure;
@@ -2253,7 +2287,7 @@ class BrowserEngine {
     const cleanup = async () => {
       const child = resources.child;
       const connection = resources.connection;
-      let exited = Boolean(child && child.exitCode !== null && child.exitCode !== undefined);
+      let exited = isChildExited(child);
 
       if (connection && !exited) {
         try {
@@ -2273,7 +2307,7 @@ class BrowserEngine {
 
       if (child) {
         exited = exited || await this.waitForChildExit(child, 2500);
-        if (!exited && child.exitCode === null && child.pid) {
+        if (!exited && !isChildExited(child) && child.pid) {
           await killProcessTree(child.pid, managedBrowserKillOptions(
             resources.browser,
             resources.root,
@@ -2295,6 +2329,7 @@ class BrowserEngine {
         return { exited: false, lockReleased: false, cleanupBlocked: true };
       }
       if (resources.root) {
+        await removeSingletonFiles(resources.root, { attempts: 6, delayMs: 40 });
         const helperDrain = await this.drainProfileHelpers(resources.root);
         if (!helperDrain.known || helperDrain.pids.length) {
           return {
@@ -2390,7 +2425,7 @@ class BrowserEngine {
       if (child?._startupDiagnostic?.spawnError) {
         throw new Error(`Browser process could not start: ${child._startupDiagnostic.spawnError}`);
       }
-      if (child && child.exitCode !== null && child.exitCode !== undefined) {
+      if (child && isChildExited(child)) {
         throw new Error(formatBrowserStartupError(
           `Browser exited before CDP was ready (code ${child.exitCode}${child.signalCode ? ', signal ' + child.signalCode : ''})`,
           child,
@@ -2543,7 +2578,7 @@ class BrowserEngine {
       launchBinary: resources.launchBinary || null,
       kernelWindowName: resources.kernelWindowName || null,
       childExitState: {
-        exited: resources.child?.exitCode !== null && resources.child?.exitCode !== undefined,
+        exited: isChildExited(resources.child),
         code: resources.child?.exitCode ?? null,
         signal: resources.child?.signalCode || null,
         error: null,
@@ -2595,7 +2630,7 @@ class BrowserEngine {
       if (afterStop && (afterStop.cleanupFailed || afterStop.cleanedUp || afterStop.stopping)) {
         let numericPid = Number(afterStop.pid);
         let childDead = afterStop.child
-          ? (afterStop.child.exitCode !== null || (numericPid > 0 && !isPidAlive(numericPid)))
+          ? isChildExited(afterStop.child)
           : (numericPid > 0 ? !isPidAlive(numericPid) : true);
         let helpers = scanProcessesUsingProfile(afterStop.root || '').pids;
         if (!childDead || helpers.length) {
@@ -2608,7 +2643,7 @@ class BrowserEngine {
             }
           }
           childDead = afterStop.child
-            ? (afterStop.child.exitCode !== null || (numericPid > 0 && !isPidAlive(numericPid)))
+            ? isChildExited(afterStop.child)
             : (numericPid > 0 ? !isPidAlive(numericPid) : true);
           helpers = scanProcessesUsingProfile(afterStop.root || '').pids;
           if (!childDead || helpers.length) {
@@ -2621,7 +2656,7 @@ class BrowserEngine {
           }
         }
         childDead = afterStop.child
-          ? (afterStop.child.exitCode !== null || (numericPid > 0 && !isPidAlive(numericPid)))
+          ? isChildExited(afterStop.child)
           : (numericPid > 0 ? !isPidAlive(numericPid) : true);
         helpers = scanProcessesUsingProfile(afterStop.root || '').pids;
         if (!childDead) {
@@ -2631,10 +2666,7 @@ class BrowserEngine {
           );
         }
         if (afterStop.root) {
-          const singletonFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'DevToolsActivePort'];
-          for (const f of singletonFiles) {
-            await fsp.rm(path.join(afterStop.root, f), { force: true, recursive: true }).catch(() => {});
-          }
+          await removeSingletonFiles(afterStop.root, { attempts: 8, delayMs: 40 });
         }
         try { afterStop.cdpConnection?.close?.(); } catch (_) {}
         if (afterStop.proxyForwarder) {
@@ -2734,7 +2766,7 @@ class BrowserEngine {
     const restoreSession = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession;
     // Parallelized (independent IO overlaps; Preferences writers stay serialized). See method.
     await this.prepareProfileFilesForStart(root, profile, restoreSession);
-    await fsp.rm(path.join(root, 'DevToolsActivePort'), { force: true }).catch(() => {});
+    await removeSingletonFiles(root, { attempts: 6, delayMs: 40 });
     const pageNetwork = this.networkInfo.get(profile.id) || {};
     const customStartUrls = this.resolveStartupUrls(profile);
     const infoStartUrl = profile.advanced.showInfoPage !== false
@@ -2784,8 +2816,9 @@ class BrowserEngine {
       '--disable-session-crashed-bubble',
       '--disable-background-mode',
       '--enable-unsafe-extension-debugging',
-      '--enable-features=Fullscreen',
+      '--enable-features=AutomaticFullscreenContentSetting,WindowPlacement,WindowManagement',
       '--disable-gesture-requirement-for-presentation',
+      '--disable-fullscreen-low-power-mode',
       // Random loopback port only; never bind 0.0.0.0. Restrict CDP WebSocket origins
       // (was * — any local page that learns the port could attach and steal session).
       '--remote-debugging-port=0',
@@ -3077,7 +3110,7 @@ class BrowserEngine {
       fingerprint,
       kernelWindowName: kernelWindowName || null,
       nativeKernelFingerprint: isOpenBrowser148(browser),
-      childExitState: childExitState || { exited: child.exitCode !== null, code: child.exitCode, signal: child.signalCode, error: null },
+      childExitState: childExitState || { exited: isChildExited(child), code: child.exitCode, signal: child.signalCode, error: null },
       lifecycleGeneration,
       cleanupState: 'active',
       cleanupAttempts: 0,
@@ -3396,7 +3429,7 @@ class BrowserEngine {
         await this.persist().catch(() => {});
       }
     }
-    let graceful = !item.child || item.child.exitCode !== null;
+    let graceful = !item.child || isChildExited(item.child);
     if (!graceful && item.child) {
       // Prefer Browser.close so window-X / empty-window auto-stop fully quits Chromium helpers
       try {

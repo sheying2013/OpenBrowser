@@ -216,11 +216,12 @@ async function drainProcessesUsingProfile(profileRoot, options = {}) {
   // Verify once after the final kill attempt. Returning the pre-kill PID list
   // would falsely keep the profile lock even when taskkill completed normally.
   last = await scanProcessesUsingProfileAsync(profileRoot);
+  const remainingPids = (last.pids || []).filter(isPidAlive);
   return {
     known: last.known,
-    pids: last.pids || [],
+    pids: remainingPids,
     attempts,
-    timedOut: Boolean(last.known && last.pids?.length),
+    timedOut: Boolean(last.known && remainingPids.length),
   };
 }
 
@@ -312,21 +313,22 @@ async function acquireProfileLock(profileRoot, meta = {}) {
       // exact --user-data-dir argument before deciding that a pending lock is
       // stale. This keeps an app restart from stealing a live Chromium profile.
       const processScan = scanProcessesUsingProfile(profileRoot);
-      if (!processScan.known) {
+      const activeScanPids = (processScan.pids || []).filter(isPidAlive);
+      if (activeScanPids.length) {
+        throw lockOwnerError(
+          'PROFILE_LOCKED',
+          `Profile browser is still running (pid ${activeScanPids[0]})`,
+          { ...existing, browserPids: activeScanPids },
+        );
+      }
+      if (!isSelfOwner && !processScan.known) {
         throw lockOwnerError(
           'PROFILE_LOCK_UNRECOVERABLE',
           'Profile process scan is unconfirmed; refusing to remove profile lock',
           existing,
         );
       }
-      if (processScan.pids.length) {
-        throw lockOwnerError(
-          'PROFILE_LOCKED',
-          `Profile browser is still running (pid ${processScan.pids[0]})`,
-          { ...existing, browserPids: processScan.pids },
-        );
-      }
-      if (hasLockField(existing, 'browserPid') && existing.browserPid === null) {
+      if (hasLockField(existing, 'browserPid') && existing.browserPid === null && !meta.forceRecover) {
         const age = lockAgeMs(existing);
         if (age === null || age < UNKNOWN_STARTUP_LOCK_RECOVERY_MS) {
           throw lockOwnerError(
