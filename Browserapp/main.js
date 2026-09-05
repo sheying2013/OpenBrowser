@@ -2221,7 +2221,22 @@ async function stopAllForQuit() {
     if (Array.isArray(result?.errors)) errors.push(...result.errors);
   }
   if (remaining.length) {
-    console.warn('OpenBrowser quit left browser environments running:', remaining.join(', '));
+    console.warn('OpenBrowser quit left browser environments running, force-terminating:', remaining.join(', '));
+    for (const id of remaining) {
+      const item = engine.running?.get(id) || engine.starting?.get(id) || engine.stopping?.get(id);
+      if (item?.pid) {
+        try {
+          if (process.platform === 'win32') {
+            require('child_process').execFileSync('taskkill.exe', ['/PID', String(item.pid), '/T', '/F'], { windowsHide: true, timeout: 3000 });
+          } else {
+            process.kill(item.pid, 'SIGKILL');
+          }
+        } catch (_) {}
+      }
+      if (item?.root) {
+        isolation.terminateProcessesUsingProfile?.(item.root, { force: true }).catch(() => {});
+      }
+    }
   }
   return { ...(result || {}), stopped: remaining.length === 0, remaining, errors: [...new Set(errors)] };
 }
@@ -2233,6 +2248,8 @@ function beginQuitCleanup() {
   const cloud = localSettingsCache?.cloud || {};
   let stopResult = { stopped: true, remaining: [], errors: [] };
   quitCleanupPromise = Promise.resolve()
+    .then(async () => { stopResult = await stopAllForQuit(); })
+    .then(() => engine?.flushPersistence?.())
     .then(() => {
       try { liveSync?.stop?.(); } catch (error) {
         console.warn('OpenBrowser quit live-sync cleanup failed:', error?.message || error);
@@ -2243,8 +2260,6 @@ function beginQuitCleanup() {
         console.warn('OpenBrowser quit automation cleanup failed:', error?.message || error);
       }
     })
-    .then(async () => { stopResult = await stopAllForQuit(); })
-    .then(() => engine?.flushPersistence?.())
     .then(async () => {
       // Stop browsers and flush close-time state before packaging browser data.
       // Otherwise the backup can capture stale cookies or locked SQLite/LevelDB files.

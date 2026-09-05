@@ -3,6 +3,7 @@
 const path = require('path');
 const crypto = require('crypto');
 const fsp = require('fs').promises;
+const { cleanApiKey, isApiKeyPlaceholder } = require('./api-key');
 
 const KEY_FILE = 'mcp-key.json';
 const TXT_FILE = 'local-api-key.txt';
@@ -29,31 +30,35 @@ class ApiKeyStore {
   }
 
   async resolve(explicitKey) {
-    if (explicitKey) {
-      this.apiKey = String(explicitKey);
+    const cleanedExplicit = cleanApiKey(explicitKey);
+    if (cleanedExplicit && !isApiKeyPlaceholder(cleanedExplicit)) {
+      this.apiKey = cleanedExplicit;
       return this.apiKey;
     }
+    // 1. Try reading JSON key file
     try {
       const saved = JSON.parse(await fsp.readFile(this.filePath, 'utf8'));
-      if (typeof saved.apiKey === 'string' && saved.apiKey) {
-        this.apiKey = saved.apiKey;
-        // Keep txt in sync if missing
+      const cleanSaved = cleanApiKey(saved?.apiKey);
+      if (cleanSaved && !isApiKeyPlaceholder(cleanSaved)) {
+        this.apiKey = cleanSaved;
         try {
           await fsp.writeFile(this.txtPath, `${this.apiKey}\n`, { encoding: 'utf8', mode: 0o600 });
         } catch (_) {}
         return this.apiKey;
       }
-    } catch (_) {
-      // Try local-api-key.txt fallback before minting new key
-      try {
-        const txtKey = (await fsp.readFile(this.txtPath, 'utf8')).trim();
-        if (txtKey && /^[A-Za-z0-9_-]{16,128}$/.test(txtKey)) {
-          this.apiKey = txtKey;
-          await this.save();
-          return this.apiKey;
-        }
-      } catch (_) {}
-    }
+    } catch (_) {}
+
+    // 2. Try local-api-key.txt fallback before minting new key
+    try {
+      const txtKey = cleanApiKey(await fsp.readFile(this.txtPath, 'utf8'));
+      if (txtKey && !isApiKeyPlaceholder(txtKey) && /^[A-Za-z0-9_-]{16,128}$/.test(txtKey)) {
+        this.apiKey = txtKey;
+        await this.save();
+        return this.apiKey;
+      }
+    } catch (_) {}
+
+    // 3. Mint new key and persist
     this.apiKey = generateKey();
     try {
       await this.save();

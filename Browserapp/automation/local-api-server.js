@@ -407,7 +407,17 @@ class LocalApiServer {
     this.requestedPort = Number.isFinite(configuredPort) && configuredPort >= 0 ? configuredPort : 50325;
     this.port = this.requestedPort;
     this.userDataPath = options.userDataPath || '';
-    this.apiKey = cleanApiKey(options.apiKey) || crypto.randomBytes(32).toString('base64url');
+    const cleanedKey = cleanApiKey(options.apiKey);
+    this.apiKey = (cleanedKey && !isApiKeyPlaceholder(cleanedKey)) ? cleanedKey : '';
+    if (!this.apiKey && this.userDataPath) {
+      try {
+        const diskKey = resolveApiKey({ userDataPath: this.userDataPath, ignoreEnv: true })?.key;
+        if (diskKey && !isApiKeyPlaceholder(diskKey)) this.apiKey = diskKey;
+      } catch (_) {}
+    }
+    if (!this.apiKey) {
+      this.apiKey = crypto.randomBytes(32).toString('base64url');
+    }
     this.allowedOrigins = new Set(options.allowedOrigins || []);
     this.engine = options.engine;
     this.rpaEngine = options.rpaEngine;
@@ -434,7 +444,7 @@ class LocalApiServer {
     ];
     const cleanedCandidates = candidates
       .map((candidate) => cleanApiKey(candidate))
-      .filter(Boolean);
+      .filter((k) => k && !isApiKeyPlaceholder(k));
     if (cleanedCandidates.some((candidate) => timingSafeStringEqual(candidate, this.apiKey))) {
       return true;
     }
@@ -830,6 +840,81 @@ class LocalApiServer {
         profile_directory: item.profileDirectory || null,
       }));
       return ok({ list: active });
+    }
+
+    if (pathname === '/api/v1/user/detail' || pathname === '/api/v2/browser-profile/detail' || pathname === '/api/profiles/get' || pathname === '/api/profile') {
+      if (!this.engine) return fail('profile engine unavailable');
+      const id = firstString(input, ['profile_id', 'profileId', 'user_id', 'userId', 'id']);
+      if (!id) return fail('profile id required');
+      const profile = this.engine.profiles?.get(id);
+      if (!profile) return fail('profile not found', 404);
+      const running = this.engine.running?.get(id);
+      return ok({
+        profile_id: id,
+        user_id: id,
+        name: profile.name,
+        title: profile.title,
+        status: running ? 'Active' : 'Inactive',
+        debug_port: running?.port || null,
+        ws: running?.port ? { puppeteer: 'http://127.0.0.1:' + running.port, selenium: '127.0.0.1:' + running.port } : null,
+        profile,
+        ...proxySummary(profile, this.proxyStore),
+      });
+    }
+
+    if (pathname === '/api/v1/browser/open-url' || pathname === '/api/browser/open-url') {
+      if (!this.engine) return fail('browser engine unavailable');
+      const id = firstString(input, ['profile_id', 'profileId', 'user_id', 'userId', 'id']);
+      const rawUrl = firstString(input, ['url', 'target_url', 'targetUrl', 'start_url', 'startUrl']);
+      if (!id) return fail('profile id required');
+      if (!rawUrl) return fail('url required');
+      let targetUrl = rawUrl.trim();
+      if (!/^https?:\/\//i.test(targetUrl) && !/^about:/i.test(targetUrl)) {
+        targetUrl = 'https://' + targetUrl;
+      }
+      const runningItem = this.engine.running?.get(id);
+      const cdp = require('../cdp');
+      if (runningItem?.port) {
+        try {
+          await cdp.navigate(runningItem.port, targetUrl);
+          return ok({ profile_id: id, url: targetUrl, navigated: true });
+        } catch (error) {
+          return fail('navigate failed: ' + error.message, 500);
+        }
+      }
+      const profile = this.engine.profiles?.get(id);
+      if (!profile) return fail('profile not found', 404);
+      const started = await this.engine.start({ ...profile, startUrl: targetUrl });
+      return ok({
+        profile_id: id,
+        url: targetUrl,
+        started: true,
+        debug_port: started?.port || null,
+        ws: started?.port ? { puppeteer: 'http://127.0.0.1:' + started.port } : null,
+      });
+    }
+
+    if (pathname === '/api/v1/browser/screenshot' || pathname === '/api/browser/screenshot') {
+      if (!this.engine) return fail('browser engine unavailable');
+      const id = firstString(input, ['profile_id', 'profileId', 'user_id', 'userId', 'id']);
+      if (!id) return fail('profile id required');
+      const runningItem = this.engine.running?.get(id);
+      if (!runningItem?.port) return fail('profile is not running', 400);
+      const cdp = require('../cdp');
+      try {
+        const tab = await cdp.firstTab(runningItem.port);
+        if (!tab) return fail('no active tab in profile', 404);
+        const format = String(input.format || 'png').toLowerCase();
+        const shot = await cdp.call(tab.webSocketDebuggerUrl, 'Page.captureScreenshot', { format: format === 'jpeg' ? 'jpeg' : 'png' }, 15000);
+        if (!shot?.data) return fail('failed to capture screenshot', 500);
+        return ok({
+          profile_id: id,
+          format: format === 'jpeg' ? 'jpeg' : 'png',
+          data: shot.data,
+        });
+      } catch (error) {
+        return fail('screenshot failed: ' + error.message, 500);
+      }
     }
 
     // ---- proxy library ----

@@ -2112,7 +2112,7 @@ class BrowserEngine {
           if (item.markerProcess && !item.markerProcess.killed) {
             try { item.markerProcess.kill(); } catch (_) {}
           }
-          await item.proxyForwarder?.close().catch(() => {});
+          // Do not close proxyForwarder while child has not exited to avoid network leak to host
           stopIpcStubForWindow(item.kernelWindowName);
           item.cleanupFailed = true;
           item.cleanupState = 'blocked';
@@ -2847,6 +2847,9 @@ class BrowserEngine {
       args.push(`--proxy-server=${proxy}`);
       // HTTP/SOCKS proxies are IPv4; disable IPv6 so Chrome cannot skip the proxy.
       if (!args.includes('--disable-ipv6')) args.push('--disable-ipv6');
+      if (!args.some((a) => a.startsWith('--force-webrtc-ip-handling-policy='))) {
+        args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
+      }
       // 本机启动页必须直连，不走代理；可叠加用户直连白名单
       let bypass = '<-loopback>;127.0.0.1;localhost';
       if (profile.proxyMeta?.directBypass && profile.proxyMeta.bypassList) {
