@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const { LocalApiServer } = require('./local-api-server');
@@ -380,7 +381,7 @@ async function main() {
   record('local-api stop all', stopAll.status === 200 && stopAll.body.data.stopped === true);
 
   const spawnMcp = (env, extraCalls = []) => new Promise((resolve) => {
-    const child = spawn(process.execPath, ['automation/mcp-server.js'], {
+    const child = spawn(process.execPath, [path.join(__dirname, 'mcp-server.js')], {
       cwd: process.cwd(),
       env: { ...process.env, OPENBROWSER_API_PORT: String(apiPort), OPENBROWSER_API_KEY: 'mcp-selftest-key', ...env },
       stdio: ['pipe', 'pipe', 'inherit'],

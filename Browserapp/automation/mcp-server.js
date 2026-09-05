@@ -16,12 +16,18 @@
  */
 
 const http = require('http');
-const { resolveApiKey } = require('./api-key');
+const { resolveApiKey, apiKeyFileCandidates } = require('./api-key');
 
 const PORT = Number(process.env.OPENBROWSER_API_PORT || process.env.PORT || 50325);
 const HOST = process.env.OPENBROWSER_API_HOST || '127.0.0.1';
 
-const API_KEY = resolveApiKey().key;
+let cachedApiKey = null;
+function getApiKey(forceReload = false) {
+  if (!forceReload && cachedApiKey) return cachedApiKey;
+  const resolution = resolveApiKey();
+  cachedApiKey = resolution.key || "";
+  return cachedApiKey;
+}
 let MCP_MODE = ['admin', 'manage', 'run', 'read'].includes(String(process.env.OPENBROWSER_MCP_MODE || 'admin').toLowerCase())
   ? String(process.env.OPENBROWSER_MCP_MODE || 'admin').toLowerCase()
   : 'admin';
@@ -119,8 +125,10 @@ function withInputAliases(schema) {
   return next;
 }
 
-function request(method, path, body) {
+function request(method, path, body, options = {}) {
   const payload = body === undefined ? null : JSON.stringify(body);
+  const currentKey = getApiKey(false);
+  const timeoutMs = options.timeout || 60000;
   return new Promise((resolve, reject) => {
     const req = http.request({
       host: HOST,
@@ -129,19 +137,25 @@ function request(method, path, body) {
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...(API_KEY ? { 'api-key': API_KEY } : {}),
+        ...(currentKey ? { 'api-key': currentKey } : {}),
         ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
       },
-      timeout: 60000,
+      timeout: timeoutMs,
     }, (res) => {
       let data = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         if (res.statusCode === 401) {
+          if (!options._retried) {
+            getApiKey(true);
+            return request(method, path, body, { ...options, _retried: true }).then(resolve, reject);
+          }
           const challenge = String(res.headers['www-authenticate'] || '').trim();
           const challengeHint = challenge ? ` Server challenge: ${challenge}.` : '';
-          return reject(new Error(`MCP: Local API at http://${HOST}:${PORT} rejected all supplied API credentials (401). Set OPENBROWSER_API_KEY or OPENBROWSER_API_KEY_FILE to the key shown on the OpenBrowser API & MCP page.${challengeHint}`));
+          const candidates = apiKeyFileCandidates();
+          const candidateHint = candidates.length ? ` Checked locations: ${candidates.join(', ')}.` : '';
+          return reject(new Error(`MCP: Local API at http://${HOST}:${PORT} rejected all supplied API credentials (401). Set OPENBROWSER_API_KEY or OPENBROWSER_API_KEY_FILE to the key shown on the OpenBrowser API & MCP page.${challengeHint}${candidateHint}`));
         }
         let parsed;
         try { parsed = JSON.parse(data || '{}'); }
@@ -167,6 +181,7 @@ function toolsMeta() {
     ['list_extensions', 'List installed browser extensions and their assigned profiles', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/extension/list', null],
     ['list_applications', 'List Application Center apps', { type: 'object', properties: { tab: { type: 'string', enum: ['team', 'recommended', 'local', 'all'] }, q: { type: 'string' } }, additionalProperties: false }, 'read', 'GET', '/api/v1/application/list', null],
     ['get_fingerprint', 'Get the deterministic fingerprint configuration for a profile', { type: 'object', properties: { profile_id: { type: 'string' } }, required: ['profile_id'], additionalProperties: false }, 'read', 'GET', '/api/fingerprint', null],
+    ['fingerprint_get', 'Alias of get_fingerprint', { type: 'object', properties: { profile_id: { type: 'string' } }, required: ['profile_id'], additionalProperties: false }, 'read', 'GET', '/api/fingerprint', null],
     ['fingerprint_set', 'Set fingerprint overrides for a profile. Values are persisted and applied on the next launch', { type: 'object', properties: {
       profile_id: { type: 'string' },
       fingerprint: { type: 'object', description: 'Direct privacy.fingerprint overrides: canvasId, audioId, clientRectsId, webglVendor, webglRenderer, hardwareConcurrency, deviceMemory, clientHints, etc.' },
@@ -186,15 +201,35 @@ function toolsMeta() {
     ['window_sync_settings_get', 'Get current multi-window sync settings', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/sync/settings', null],
     ['rpa_plans_list', 'List saved RPA plans', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/rpa/plans', null],
     ['rpa_tasks_list', 'List RPA tasks', { type: 'object', properties: { status: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 500 } }, additionalProperties: false }, 'read', 'GET', '/api/rpa/tasks', null],
+    ['rpa_task_delete', 'Delete one or more RPA tasks by task_id or task_ids', { type: 'object', properties: { task_id: { type: 'string' }, task_ids: { type: 'array', items: { type: 'string' } } }, additionalProperties: false }, 'manage', 'POST', '/api/rpa/tasks/delete', null],
     ['rpa_task_result', 'Get one RPA task by id, including process_result (variables / exports / remarks) and persisted logs', { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'], additionalProperties: false }, 'read', 'GET', '/api/rpa/tasks/', null],
     ['rpa_tasks', 'List RPA tasks newest first (optionally filtered by status)', { type: 'object', properties: { status: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 500 } }, additionalProperties: false }, 'read', 'GET', '/api/rpa/tasks', null],
     ['rpa_templates_list', 'List RPA templates and categories', { type: 'object', properties: { category: { type: 'string' } }, additionalProperties: false }, 'read', 'GET', '/api/rpa/templates', null],
     ['proxy_list', 'List proxy library entries with credentials and raw authenticated URLs redacted', { type: 'object', properties: { q: { type: 'string' }, status: { type: 'string' } }, additionalProperties: false }, 'read', 'GET', '/api/proxy/list', null],
     ['list_profiles', 'List browser profiles, running status and CDP debug ports', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/v1/user/list', null],
+    ['profiles_list', 'Alias of list_profiles', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/v1/user/list', null],
     ['list_active_browsers', 'List currently active browser profiles', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/v1/browser/active', null],
     ['window_sync_status', 'Get multi-window sync status', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/sync/status', null],
     ['rpa_status', 'Get RPA engine status and running tasks', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/rpa/status', null],
     // profiles
+    ['profile_create', 'Alias of create_profile', { type: 'object', properties: {
+      profile_id: { type: 'string', description: 'Optional explicit id. Generated when omitted.' },
+      name: { type: 'string', description: 'Environment display name' },
+      number: { type: 'integer' },
+      language: { type: 'string', description: 'Locale such as en-US or zh-CN' },
+      proxy: { type: 'string', description: 'proxy://user:pass@host:port or Direct' },
+      proxy_id: { type: 'string', description: 'Proxy library entry id. When set, the library entry supplies the proxy and credentials.' },
+      proxy_library_id: { type: 'string', description: 'Alias of proxy_id' },
+      start_url: { type: 'string', description: 'Page opened when the profile starts' },
+      os: { type: 'string' }, platform: { type: 'string' }, browser: { type: 'string' },
+      user_agent: { type: 'string' }, resolution: { type: 'string' }, window_size: { type: 'string' },
+      timezone: { type: 'string' }, locale: { type: 'string' }, language_code: { type: 'string' },
+      geolocation: { type: 'string' }, webgl_vendor: { type: 'string' }, webgl_renderer: { type: 'string' },
+      hardware_concurrency: { type: 'integer' }, device_memory: { type: 'integer' },
+      do_not_track: { type: 'boolean' }, privacy_extra: { type: 'object' }, notes: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
+      user_proxy_config: { type: 'object', description: 'Structured proxy config' },
+      fingerprint: { type: 'object', description: 'Override fingerprint values (generated deterministically when omitted)' },
+    }, additionalProperties: false }, 'manage', 'POST', '/api/v1/user/create', null],
     ['create_profile', 'Create a browser environment with OS/UA/window/fingerprint/privacy/start URL settings', { type: 'object', properties: {
       profile_id: { type: 'string', description: 'Optional explicit id. Generated when omitted.' },
       name: { type: 'string', description: 'Environment display name' },
@@ -213,6 +248,18 @@ function toolsMeta() {
       user_proxy_config: { type: 'object', description: 'Structured proxy config' },
       fingerprint: { type: 'object', description: 'Override fingerprint values (generated deterministically when omitted)' },
     }, additionalProperties: false }, 'manage', 'POST', '/api/v1/user/create', null],
+    ['profile_update', 'Alias of update_profile', { type: 'object', properties: {
+      profile_id: { type: 'string' }, name: { type: 'string' }, title: { type: 'string' }, number: { type: 'integer' },
+      language: { type: 'string' }, proxy: { type: 'string' }, network_mode: { type: 'string' }, start_url: { type: 'string' },
+      proxy_id: { type: 'string', description: 'Proxy library entry id; send an empty string to unlink the entry without deleting the manual proxy.' },
+      proxy_library_id: { type: 'string', description: 'Alias of proxy_id' },
+      os: { type: 'string' }, platform: { type: 'string' }, browser: { type: 'string' }, user_agent: { type: 'string' },
+      resolution: { type: 'string' }, window_size: { type: 'string' }, timezone: { type: 'string' }, locale: { type: 'string' },
+      language_code: { type: 'string' }, geolocation: { type: 'string' }, webgl_vendor: { type: 'string' },
+      webgl_renderer: { type: 'string' }, hardware_concurrency: { type: 'integer' }, device_memory: { type: 'integer' },
+      do_not_track: { type: 'boolean' }, privacy_extra: { type: 'object' }, notes: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
+      fingerprint: { type: 'object' }, user_proxy_config: { type: 'object' },
+    }, required: ['profile_id'], additionalProperties: false }, 'manage', 'POST', '/api/v2/browser-profile/update', null],
     ['update_profile', 'Update an existing browser environment (stops nothing; profile persists)', { type: 'object', properties: {
       profile_id: { type: 'string' }, name: { type: 'string' }, title: { type: 'string' }, number: { type: 'integer' },
       language: { type: 'string' }, proxy: { type: 'string' }, network_mode: { type: 'string' }, start_url: { type: 'string' },
@@ -225,13 +272,22 @@ function toolsMeta() {
       do_not_track: { type: 'boolean' }, privacy_extra: { type: 'object' }, notes: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
       fingerprint: { type: 'object' }, user_proxy_config: { type: 'object' },
     }, required: ['profile_id'], additionalProperties: false }, 'manage', 'POST', '/api/v2/browser-profile/update', null],
+    ['profile_delete', 'Alias of delete_profiles. Accepts profile_id or profile_ids', { type: 'object', properties: {
+      profile_id: { type: 'string' }, profile_ids: { type: 'array', items: { type: 'string' } }, delete_data: { type: 'boolean', description: 'Default true' },
+    }, additionalProperties: false }, 'manage', 'POST', '/api/v1/user/delete', null],
     ['delete_profiles', 'Delete one or more browser environments and optionally their data directories', { type: 'object', properties: {
       profile_ids: { type: 'array', items: { type: 'string' } }, delete_data: { type: 'boolean', description: 'Default true' },
     }, required: ['profile_ids'], additionalProperties: false }, 'manage', 'POST', '/api/v1/user/delete', null],
+    ['profile_duplicate', 'Alias of duplicate_profile', { type: 'object', properties: {
+      source_profile_id: { type: 'string' }, name: { type: 'string' }, start_url: { type: 'string' },
+    }, required: ['source_profile_id'], additionalProperties: false }, 'manage', 'POST', '/api/v2/browser-profile/duplicate', null],
     ['duplicate_profile', 'Clone an existing browser environment. Cookies, credentials and exit detection results are not copied', { type: 'object', properties: {
       source_profile_id: { type: 'string' }, name: { type: 'string' }, start_url: { type: 'string' },
     }, required: ['source_profile_id'], additionalProperties: false }, 'manage', 'POST', '/api/v2/browser-profile/duplicate', null],
+    ['profile_start', 'Alias of start_profile', { type: 'object', properties: { profile_id: { type: 'string' } }, required: ['profile_id'], additionalProperties: false }, 'run', 'POST', '/api/v1/browser/start', null],
     ['start_profile', 'Start a browser profile by id', { type: 'object', properties: { profile_id: { type: 'string' } }, required: ['profile_id'], additionalProperties: false }, 'run', 'POST', '/api/v1/browser/start', null],
+    ['profile_stop', 'Alias of stop_profile', { type: 'object', properties: { profile_id: { type: 'string' } }, required: ['profile_id'], additionalProperties: false }, 'run', 'POST', '/api/v1/browser/stop', null],
+    ['profile_stop_all', 'Alias of stop_all_profiles', { type: 'object', properties: {}, additionalProperties: false }, 'run', 'POST', '/api/v1/browser/stop-all', null],
     ['stop_profile', 'Stop a browser profile by id', { type: 'object', properties: { profile_id: { type: 'string' } }, required: ['profile_id'], additionalProperties: false }, 'run', 'POST', '/api/v1/browser/stop', null],
     ['stop_all_profiles', 'Stop every running browser profile', { type: 'object', properties: {}, additionalProperties: false }, 'run', 'POST', '/api/v1/browser/stop-all', null],
     ['check_profile_proxy', 'Check and persist the exit IP/country/timezone for an existing profile', { type: 'object', properties: { profile_id: { type: 'string' } }, required: ['profile_id'], additionalProperties: false }, 'run', 'POST', '/api/proxy/check-profile', null],
@@ -263,10 +319,8 @@ function toolsMeta() {
     ['window_sync_arrange', 'Arrange windows in tile or cascade mode', { type: 'object', properties: { profile_ids: { type: 'array', items: { type: 'string' } }, mode: { type: 'string', enum: ['tile', 'cascade'] } }, additionalProperties: false }, 'run', 'POST', '/api/sync/arrange', null],
     ['window_sync_settings_update', 'Update multi-window sync settings', { type: 'object', properties: { settings: { type: 'object' } }, required: ['settings'], additionalProperties: false }, 'manage', 'POST', '/api/sync/settings', null],
     // RPA
-    ['rpa_run_steps', 'Run RPA steps on a running profile', { type: 'object', properties: {
-      profile_id: { type: 'string' }, steps: { type: 'array', items: { type: 'object' } }, name: { type: 'string' }, process_name: { type: 'string' },
-    }, required: ['profile_id', 'steps'], additionalProperties: false }, 'manage', 'POST', '/api/rpa/run', null],
-    ['rpa_run_plan', 'Run a saved RPA plan', { type: 'object', properties: { plan_id: { type: 'string' }, name: { type: 'string' } }, required: ['plan_id'], additionalProperties: false }, 'run', 'POST', '/api/rpa/run', null],
+    ['rpa_run_steps', 'Run RPA steps on a running profile. Set wait:false to get a task_id immediately and poll rpa_task_result', { type: 'object', properties: { profile_id: { type: 'string' }, steps: { type: 'array', items: { type: 'object' } }, name: { type: 'string' }, process_name: { type: 'string' }, wait: { type: 'boolean', description: 'default true (blocks up to 10 min); false returns task_id immediately' } }, required: ['profile_id', 'steps'], additionalProperties: false }, 'manage', 'POST', '/api/rpa/run', null],
+    ['rpa_run_plan', 'Run a saved RPA plan. Set wait:false to start it and poll rpa_task_result / rpa_tasks', { type: 'object', properties: { plan_id: { type: 'string' }, name: { type: 'string' }, wait: { type: 'boolean', description: 'default true (blocks up to 10 min); false returns task_id immediately' } }, required: ['plan_id'], additionalProperties: false }, 'run', 'POST', '/api/rpa/run', null],
     ['rpa_stop', 'Stop RPA task(s)', { type: 'object', properties: { task_id: { type: 'string' } }, additionalProperties: false }, 'run', 'POST', '/api/rpa/stop', null],
     ['rpa_plan_save', 'Create or update an RPA plan', { type: 'object', properties: {
       plan_name: { type: 'string' }, profile_ids: { type: 'array', items: { type: 'string' } }, steps: { type: 'array', items: { type: 'object' } }, plan_id: { type: 'string' },
@@ -334,7 +388,7 @@ async function callTool(name, args = {}) {
         tool_whitelist: TOOL_WHITELIST,
         effective_tools: toolsForMode().map((item) => item[0]),
         server: 'openbrowser-mcp',
-        api_key_configured: Boolean(API_KEY),
+        api_key_configured: Boolean(getApiKey()),
       };
     case 'mcp_update_policy':
       if (MCP_MODE !== 'admin') throw new Error('mcp_update_policy requires admin MCP mode');
@@ -352,8 +406,9 @@ async function callTool(name, args = {}) {
       };
     case 'check_api_key':
       await request('GET', '/');
-      return { ok: true, key_configured: Boolean(API_KEY), mode: MCP_MODE };
+      return { ok: true, key_configured: Boolean(getApiKey()), mode: MCP_MODE };
     case 'list_profiles':
+    case 'profiles_list':
       return request('GET', '/api/v1/user/list');
     case 'list_active_browsers':
       return request('GET', '/api/v1/browser/active');
@@ -364,6 +419,7 @@ async function callTool(name, args = {}) {
         profile: args.profile_id ? { ...args, id: args.profile_id, user_id: args.profile_id } : { ...args },
       });
     case 'update_profile':
+    case 'profile_update':
       return request('POST', '/api/v2/browser-profile/update', args);
     case 'delete_profiles':
       return request('POST', '/api/v1/user/delete', {
@@ -417,6 +473,7 @@ async function callTool(name, args = {}) {
     case 'list_applications':
       return request('GET', '/api/v1/application/list' + queryString(args));
     case 'get_fingerprint':
+    case 'fingerprint_get':
       return request('GET', '/api/fingerprint?profile_id=' + encodeURIComponent(args.profile_id));
     case 'fingerprint_set':
       return request('POST', '/api/v2/browser-profile/update', args);
@@ -448,15 +505,31 @@ async function callTool(name, args = {}) {
       return request('GET', '/api/sync/settings');
     case 'window_sync_settings_update':
       return request('POST', '/api/sync/settings', args.settings);
-    case 'rpa_run_steps':
+    case 'rpa_run_steps': {
+      const wait = args.wait !== false && args.wait !== 'false';
       return request('POST', '/api/rpa/run', {
         profile_id: args.profile_id,
         steps: args.steps,
         process_name: args.process_name,
         name: args.process_name || args.name || 'mcp-rpa',
-      });
-    case 'rpa_run_plan':
-      return request('POST', '/api/rpa/run', { plan_id: args.plan_id, name: args.name });
+        wait,
+      }, { timeout: wait ? 600000 : 30000 });
+    }
+    case 'rpa_run_plan': {
+      const wait = args.wait !== false && args.wait !== 'false';
+      return request('POST', '/api/rpa/run', {
+        plan_id: args.plan_id,
+        name: args.name,
+        wait,
+      }, { timeout: wait ? 600000 : 30000 });
+    }
+    case 'rpa_task_delete': {
+      const taskIds = args.task_ids || (args.task_id ? [args.task_id] : []);
+      if (taskIds.length === 1 && !args.task_ids) {
+        return request('DELETE', '/api/rpa/tasks/' + encodeURIComponent(taskIds[0]));
+      }
+      return request('POST', '/api/rpa/tasks/delete', { task_ids: taskIds });
+    }
     case 'rpa_status':
       return request('GET', '/api/rpa/status');
     case 'rpa_stop':

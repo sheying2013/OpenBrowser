@@ -53,6 +53,10 @@ const WEBGL_PRESETS = {
     { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'gen9' } },
     { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Series Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'gcn-4' } },
     { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ampere' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ada' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'turing' } },
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'gen12' } },
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 6700 XT Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'rdna-2' } },
   ],
   macos: [
     { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, Apple M1, OpenGL 4.1)', gpu: { vendor: 'apple', architecture: 'common-3' } },
@@ -720,10 +724,10 @@ function buildFingerprint(profile = {}) {
       gpu: devicePersona.webgl.gpu || webglPreset.gpu,
     };
   }
-  const webglGpu = (fpIn.webgpu && typeof fpIn.webgpu === 'object')
+  const webglGpu = ((fpIn.webgpu && typeof fpIn.webgpu === 'object') || fpIn.gpuVendor || fpIn.gpuArchitecture)
     ? {
-      vendor: String(fpIn.webgpu.vendor || fpIn.gpuVendor || webglPreset.gpu?.vendor || ''),
-      architecture: String(fpIn.webgpu.architecture || fpIn.gpuArchitecture || webglPreset.gpu?.architecture || ''),
+      vendor: String(fpIn.webgpu?.vendor || fpIn.gpuVendor || webglPreset.gpu?.vendor || ''),
+      architecture: String(fpIn.webgpu?.architecture || fpIn.gpuArchitecture || webglPreset.gpu?.architecture || ''),
     }
     : (webglPreset.gpu || null);
 
@@ -1412,8 +1416,12 @@ function buildInjectionScript(fp) {
     const liveViewportSize = (axis, fallback) => {
       try {
         const root = document && document.documentElement;
-        const value = axis === 'width' ? root?.clientWidth : root?.clientHeight;
-        if (Number(value) > 0) return Number(value);
+        const body = document && document.body;
+        const rootVal = axis === 'width' ? root?.clientWidth : root?.clientHeight;
+        const bodyVal = axis === 'width' ? body?.clientWidth : body?.clientHeight;
+        const winVal = axis === 'width' ? window.innerWidth : window.innerHeight;
+        const val = (Number(rootVal) > 0 ? Number(rootVal) : 0) || (Number(bodyVal) > 0 ? Number(bodyVal) : 0) || (Number(winVal) > 0 ? Number(winVal) : 0);
+        if (val > 0) return val;
       } catch (_) {}
       return fallback;
     };
@@ -2146,7 +2154,11 @@ function chromeArgsForFingerprint(fp, profile = {}) {
       '--enforce-webrtc-ip-permission-check'
     );
   }
-  if (fp.webgl?.mode === 'blocked') args.push('--disable-webgl', '--disable-webgl2', '--disable-3d-apis');
+  if (fp.webgl?.mode === 'blocked') {
+    args.push('--disable-webgl', '--disable-webgl2', '--disable-3d-apis');
+  } else {
+    args.push('--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-gpu-compositing');
+  }
   if (fp.audio?.mode === 'muted' || profile.privacy?.audio === 'muted') args.push('--mute-audio');
   if (fp.doNotTrack === '1' || profile.privacy?.dnt || profile.privacy?.dntMode === 'on') args.push('--do-not-track');
   // Use full BCP47 when present (ja-JP / zh-CN); Chrome accepts --lang=ja-JP

@@ -4009,6 +4009,7 @@ $('#profile-form').addEventListener('submit', async (event) => {
     groupId,
     os: 'Windows',
     location: 'Local',
+    startUrl,
     platform: { type: 'other', startUrl },
     advanced: { startUrls: startUrl },
     // Browser UI language defaults to exit-IP country; fixed locale is optional in editor.
@@ -4151,6 +4152,7 @@ $('#batch-add').addEventListener('click', () => {
   if (directRadio) directRadio.checked = true;
   renderProxyLibrarySelect($('#batch-add-proxy-library'), '');
   if ($('#batch-add-proxies')) $('#batch-add-proxies').value = '';
+  if ($('#batch-add-start-url')) $('#batch-add-start-url').value = '';
   const fields = $('#batch-add-proxy-fields'); if (fields) fields.hidden = true;
   const template = $('#batch-add-template');
   if (template) {
@@ -4168,6 +4170,14 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
   const templateId = $('#batch-add-template')?.value || '';
   const templateProfile = templateId ? (profileEngine(templateId)?.id ? profileEngine(templateId) : ui.profiles.find((item) => item.id === templateId)) : null;
   const templatePreferences = templateProfile ? cloneProfilePreferences(templateProfile) : null;
+  let batchStartUrl = '';
+  const inputBatchStartUrl = $('#batch-add-start-url')?.value?.trim();
+  if (inputBatchStartUrl) {
+    try { batchStartUrl = normalizeOptionalWebUrl(inputBatchStartUrl); }
+    catch (e) { return toast(e.message); }
+  } else if (templatePreferences?.startUrl) {
+    batchStartUrl = templatePreferences.startUrl;
+  }
   const networkMode = document.querySelector('input[name="batch-add-network"]:checked')?.value || 'direct';
   const proxyLibraryId = String($('#batch-add-proxy-library')?.value || '').trim();
   let proxies = [];
@@ -4188,7 +4198,8 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
   while (created.length < count) {
     const number = start + created.length; const id = createInternalProfileId(number, used); used.add(id);
     const assignedProxyId = proxyIds[created.length] || null;
-    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : {}), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', proxyId: assignedProxyId, proxyMeta: { ...(templatePreferences?.proxyMeta || {}), proxyId: assignedProxyId }, tag, groupId, os: templatePreferences?.os || 'Windows', location: 'Local', cookies: '' });
+    const effectiveStartUrl = batchStartUrl || templatePreferences?.startUrl || '';
+    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : {}), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', proxyId: assignedProxyId, proxyMeta: { ...(templatePreferences?.proxyMeta || {}), proxyId: assignedProxyId }, tag, groupId, startUrl: effectiveStartUrl, platform: { type: 'other', startUrl: effectiveStartUrl }, advanced: { startUrls: effectiveStartUrl }, os: templatePreferences?.os || 'Windows', location: 'Local', cookies: '' });
   }
   try {
     const verified = proxies.length ? await verifyProxyAssignments(created, proxies) : [];
@@ -4709,6 +4720,22 @@ async function initialize() {
   // Backend also pushes app-update-status after startup delay; this primes the light immediately.
   updateEngineBadge(info);
   renderRuntimeInfo(info);
+  const closeActionCard = document.getElementById('close-action-card');
+  if (closeActionCard) {
+    const currentAction = info?.closeAction || 'tray';
+    const radio = closeActionCard.querySelector(`input[name="close-action-radio"][value="${currentAction}"]`);
+    if (radio) radio.checked = true;
+    closeActionCard.querySelectorAll('input[name="close-action-radio"]').forEach((input) => {
+      input.addEventListener('change', async () => {
+        try {
+          await window.ops.setCloseAction(input.value);
+          toast(tx('关闭窗口设置已更新'));
+        } catch (e) {
+          toast('设置失败：' + e.message);
+        }
+      });
+    });
+  }
   syncState = await window.ops.getSyncState(); preferredMasterId = syncState.master || null; if (syncState.active) selectedSessions = new Set(syncState.selected || []);
   await applySyncSettings(syncSettings); fillSyncSettingsForm();
   ui.profiles = ui.profiles.map((item) => ({ ...item, browser: 'Google Chrome' }));
@@ -5050,15 +5077,36 @@ async function refreshRpaStatusBadge() {
 async function refreshRpaTasks() {
   const table = document.getElementById('rpa-task-table');
   const empty = document.getElementById('rpa-task-empty');
+  const selectAll = document.getElementById('rpa-task-select-all');
+  const deleteCheckedBtn = document.getElementById('rpa-task-delete-checked');
   if (!table) return;
   let tasks = [];
   try { tasks = await window.ops.rpaTasks({}); } catch (_) { tasks = []; }
   const q = (document.getElementById('rpa-task-search')?.value || '').trim().toLowerCase();
   table.replaceChildren();
+  if (selectAll) selectAll.checked = false;
+  if (deleteCheckedBtn) deleteCheckedBtn.style.display = 'none';
+
+  const updateDeleteCheckedBtnVisibility = () => {
+    const anyChecked = table.querySelectorAll('.rpa-task-checkbox:checked').length > 0;
+    if (deleteCheckedBtn) deleteCheckedBtn.style.display = anyChecked ? 'inline-flex' : 'none';
+  };
+
   const list = (tasks || []).filter((t) => !q || String(t.process_name || t.id).toLowerCase().includes(q));
   for (const t of list) {
     const row = document.createElement('tr');
-    const cb = document.createElement('input'); cb.type = 'checkbox';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'rpa-task-checkbox';
+    cb.dataset.taskId = t.id;
+    cb.onchange = () => {
+      updateDeleteCheckedBtnVisibility();
+      if (selectAll) {
+        const total = table.querySelectorAll('.rpa-task-checkbox').length;
+        const checked = table.querySelectorAll('.rpa-task-checkbox:checked').length;
+        selectAll.checked = total > 0 && total === checked;
+      }
+    };
     const td0 = document.createElement('td'); td0.append(cb);
     const runBtn = element('button', 'outline', tx('详情'));
     runBtn.onclick = () => {
@@ -5066,7 +5114,22 @@ async function refreshRpaTasks() {
       showRpaPanel('runs');
       toast(tx('见运行记录/日志'));
     };
-    const tdOp = document.createElement('td'); tdOp.append(runBtn);
+    const delBtn = element('button', 'danger outline', tx('删除'));
+    delBtn.style.marginLeft = '6px';
+    delBtn.onclick = async () => {
+      if (!confirm(`确定要删除任务「${t.process_name || t.id}」吗？`)) return;
+      try {
+        await window.ops.rpaTaskDelete([t.id]);
+        toast(tx('任务已删除'));
+        await refreshRpaTasks();
+        await refreshRpaRuns();
+      } catch (err) {
+        toast('删除失败：' + err.message);
+      }
+    };
+    const tdOp = document.createElement('td');
+    tdOp.style.whiteSpace = 'nowrap';
+    tdOp.append(runBtn, delBtn);
     row.append(
       td0,
       element('td', '', t.process_name || t.id),
@@ -5374,6 +5437,30 @@ document.getElementById('rpa-new-plan-2')?.addEventListener('click', () => creat
 document.getElementById('rpa-create-task')?.addEventListener('click', () => createRpaPlan('任务流程 ' + new Date().toLocaleString()).catch((e) => toast(e.message)));
 document.getElementById('rpa-refresh')?.addEventListener('click', refreshRpaPage);
 document.getElementById('rpa-task-refresh')?.addEventListener('click', refreshRpaTasks);
+document.getElementById('rpa-task-select-all')?.addEventListener('change', (event) => {
+  const checked = event.target.checked;
+  const table = document.getElementById('rpa-task-table');
+  if (!table) return;
+  table.querySelectorAll('.rpa-task-checkbox').forEach((cb) => { cb.checked = checked; });
+  const deleteCheckedBtn = document.getElementById('rpa-task-delete-checked');
+  if (deleteCheckedBtn) deleteCheckedBtn.style.display = checked && table.querySelectorAll('.rpa-task-checkbox').length > 0 ? 'inline-flex' : 'none';
+});
+document.getElementById('rpa-task-delete-checked')?.addEventListener('click', async () => {
+  const table = document.getElementById('rpa-task-table');
+  if (!table) return;
+  const checkedBoxes = [...table.querySelectorAll('.rpa-task-checkbox:checked')];
+  const ids = checkedBoxes.map((cb) => cb.dataset.taskId).filter(Boolean);
+  if (!ids.length) return toast(tx('请先勾选要删除的任务'));
+  if (!confirm(`确定要删除选中的 ${ids.length} 个任务吗？`)) return;
+  try {
+    const res = await window.ops.rpaTaskDelete(ids);
+    toast(`已删除 ${res?.deleted?.length || ids.length} 个任务`);
+    await refreshRpaTasks();
+    await refreshRpaRuns();
+  } catch (err) {
+    toast('删除失败：' + err.message);
+  }
+});
 document.getElementById('rpa-run-refresh')?.addEventListener('click', refreshRpaRuns);
 document.getElementById('rpa-flow-search')?.addEventListener('input', renderRpaPlans);
 document.getElementById('rpa-task-search')?.addEventListener('input', refreshRpaTasks);
@@ -5707,6 +5794,20 @@ document.getElementById('mcp-copy-config')?.addEventListener('click', async () =
 document.getElementById('mcp-copy-cmd')?.addEventListener('click', async () => {
   const text = document.getElementById('mcp-cmd-hint')?.textContent || '';
   try { await navigator.clipboard.writeText(text); toast(tx('已复制命令')); } catch (_) {}
+});
+document.getElementById('api-key-rotate')?.addEventListener('click', async () => {
+  if (!confirm(tx('重新生成 API Key？本地 mcp-key.json 会立即更新，使用此 Key 的 MCP 客户端需要同步更新。'))) return;
+  try {
+    const res = await window.ops.rotateApiKey();
+    if (res?.apiKey) {
+      const keyInput = document.getElementById('api-key-display');
+      if (keyInput) keyInput.value = res.apiKey;
+      toast(tx('已重新生成，请把新 Key 同步到 MCP 客户端配置'));
+      if (typeof refreshMcpPanel === 'function') await refreshMcpPanel();
+    }
+  } catch (err) {
+    toast(tx('重新生成失败：') + err.message);
+  }
 });
 document.getElementById('mcp-config-tabs')?.addEventListener('click', (event) => {
   const btn = event.target.closest('button[data-mcp-tab]');

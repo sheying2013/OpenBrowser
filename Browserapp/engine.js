@@ -640,11 +640,13 @@ class BrowserEngine {
     const rawProxy = String(value.proxy || '').trim();
     if (rawProxy.length > MAX_PROFILE_PROXY_LENGTH) throw new Error('Proxy URL is too long');
     const networkMode = value.networkMode === 'direct' || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy) ? 'direct' : 'proxy';
+    const effectiveStartUrl = String(value.startUrl || platformValue.startUrl || advancedValue.startUrls || '').trim().slice(0, 2000);
     const proxyAssociation = profileProxyAssociation(value);
     const proxyId = networkMode === 'direct' ? null : normalizedProxyAssociationId(proxyAssociation.value);
     return {
       id, number: Number.isInteger(number) && number > 0 ? number : null, name: value.name.slice(0, 100),
       title: String(value.title || value.displayName || '').slice(0, 120),
+      startUrl: effectiveStartUrl,
       browser: 'Google Chrome', os: String(value.os || 'Windows').slice(0, 40), location: String(value.location || 'Local').slice(0, 80),
       networkMode,
       proxy: networkMode === 'direct' ? 'Direct' : rawProxy,
@@ -661,7 +663,7 @@ class BrowserEngine {
       exitNetworkType: String(value.exitNetworkType || '').slice(0, 40),
       platform: {
         type: String(platformValue.type || 'other').slice(0, 40),
-        startUrl: String(platformValue.startUrl || value.startUrl || '').slice(0, 2000),
+        startUrl: effectiveStartUrl,
         username: String(platformValue.username || '').slice(0, 200),
         password: String(platformValue.password || '').slice(0, 500),
         totpSecret: String(platformValue.totpSecret || platformValue.otp || '').slice(0, 200),
@@ -788,7 +790,7 @@ class BrowserEngine {
         syncExtensionData: Boolean(advancedValue.syncExtensionData),
         multiOpen: Boolean(advancedValue.multiOpen),
         tabMode: allowed(advancedValue.tabMode, ['fixed', 'restore'], advancedValue.restoreSession ? 'restore' : 'fixed'),
-        startUrls: String(advancedValue.startUrls || '').slice(0, 8000),
+        startUrls: String(advancedValue.startUrls || effectiveStartUrl || '').slice(0, 8000),
         blockUrls: String(advancedValue.blockUrls || '').slice(0, 8000),
         blockSound: Boolean(advancedValue.blockSound),
         blockPasswordPrompt: Boolean(advancedValue.blockPasswordPrompt),
@@ -1107,8 +1109,10 @@ class BrowserEngine {
     const urls = [];
     // blank page: no platform URL
     if (String(profile.platform?.type || '') !== 'blank') {
+      const rootStartUrl = String(profile.startUrl || '').trim();
+      if (rootStartUrl) urls.push(rootStartUrl);
       const platformUrl = String(profile.platform?.startUrl || '').trim();
-      if (platformUrl) urls.push(platformUrl);
+      if (platformUrl && !urls.includes(platformUrl)) urls.push(platformUrl);
     }
     const lines = String(profile.advanced?.startUrls || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     for (const line of lines) if (!urls.includes(line)) urls.push(line);

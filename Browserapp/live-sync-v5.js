@@ -1344,6 +1344,12 @@ class LiveSyncController extends LiveSyncV4 {
     const deferActivation = () => {
       this.emit({ type: 'live-sync-tab', masterTabId, targets: this.slaves.length, native: true });
     };
+    // 250ms debounce prevents stealing focus while user opens external/context menu
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (!guardIsCurrent()) {
+      deferActivation();
+      return;
+    }
     // Target.activateTarget dismisses native menus/pickers. Keep activation out of
     // the way while browser chrome, DevTools, extension popups, or a page picker
     // owns the foreground.
