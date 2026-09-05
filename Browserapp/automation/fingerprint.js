@@ -1397,50 +1397,78 @@ function buildInjectionScript(fp) {
   // --- screen ---
   try {
     const s = CFG.screen || {};
-    for (const [key, value] of Object.entries({
-      width: s.width, height: s.height, availWidth: s.availWidth, availHeight: s.availHeight,
-      availLeft: s.availLeft, availTop: s.availTop,
-      colorDepth: s.colorDepth, pixelDepth: s.pixelDepth,
-    })) {
-      if (value == null) continue;
-      try { Object.defineProperty(Screen.prototype, key, nativeAccessor(key, { configurable: true, get: () => value })); } catch (_) {}
-    }
-    try { Object.defineProperty(window, 'devicePixelRatio', nativeAccessor('devicePixelRatio', { configurable: true, get: () => s.devicePixelRatio || 1 })); } catch (_) {}
-    for (const [key, value] of Object.entries({ screenX: s.screenX, screenY: s.screenY, screenLeft: s.screenX, screenTop: s.screenY })) {
-      try { Object.defineProperty(window, key, nativeAccessor(key, { configurable: true, get: () => value || 0 })); } catch (_) {}
-    }
-    // Some native anti-detect kernels pin Window/VisualViewport dimensions to the
-    // fingerprint screen size. CSS layout still resizes, but JS sees the stale value,
-    // breaking responsive sites and leaving fixed-width content after window resize.
-    // Keep screen.* spoofed while exposing the live desktop layout viewport.
+    const baseScreenWidth = Number(s.width) || 0;
+    const baseScreenHeight = Number(s.height) || 0;
+    const baseAvailWidth = Number(s.availWidth) || baseScreenWidth;
+    const baseAvailHeight = Number(s.availHeight) || (baseScreenHeight ? Math.max(0, baseScreenHeight - 40) : 0);
+
     const rawWinWidthDesc = Object.getOwnPropertyDescriptor(window, 'innerWidth') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window), 'innerWidth');
     const rawInnerWidthGet = rawWinWidthDesc?.get ? () => rawWinWidthDesc.get.call(window) : null;
     const rawWinHeightDesc = Object.getOwnPropertyDescriptor(window, 'innerHeight') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window), 'innerHeight');
     const rawInnerHeightGet = rawWinHeightDesc?.get ? () => rawWinHeightDesc.get.call(window) : null;
 
+    const rawVisualViewport = window.visualViewport;
+    const rawVisualWidthDesc = rawVisualViewport ? (Object.getOwnPropertyDescriptor(rawVisualViewport, 'width') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(rawVisualViewport), 'width')) : null;
+    const rawVisualWidthGet = rawVisualWidthDesc?.get ? () => rawVisualWidthDesc.get.call(rawVisualViewport) : null;
+    const rawVisualHeightDesc = rawVisualViewport ? (Object.getOwnPropertyDescriptor(rawVisualViewport, 'height') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(rawVisualViewport), 'height')) : null;
+    const rawVisualHeightGet = rawVisualHeightDesc?.get ? () => rawVisualHeightDesc.get.call(rawVisualViewport) : null;
+
     const liveViewportSize = (axis, fallback) => {
       try {
+        if (axis === 'width') {
+          if (typeof rawVisualWidthGet === 'function') {
+            const vw = Number(rawVisualWidthGet());
+            if (Number.isFinite(vw) && vw > 0) return Math.round(vw);
+          }
+          if (typeof rawInnerWidthGet === 'function') {
+            const rawW = Number(rawInnerWidthGet());
+            if (Number.isFinite(rawW) && rawW > 0) return Math.round(rawW);
+          }
+        } else {
+          if (typeof rawVisualHeightGet === 'function') {
+            const vh = Number(rawVisualHeightGet());
+            if (Number.isFinite(vh) && vh > 0) return Math.round(vh);
+          }
+          if (typeof rawInnerHeightGet === 'function') {
+            const rawH = Number(rawInnerHeightGet());
+            if (Number.isFinite(rawH) && rawH > 0) return Math.round(rawH);
+          }
+        }
         const root = document && document.documentElement;
         const rootVal = axis === 'width' ? Number(root?.clientWidth) : Number(root?.clientHeight);
         if (Number.isFinite(rootVal) && rootVal > 0) return Math.round(rootVal);
         const body = document && document.body;
         const bodyVal = axis === 'width' ? Number(body?.clientWidth) : Number(body?.clientHeight);
         if (Number.isFinite(bodyVal) && bodyVal > 0) return Math.round(bodyVal);
-        if (axis === 'width' && typeof rawInnerWidthGet === 'function') {
-          const rawW = Number(rawInnerWidthGet());
-          if (Number.isFinite(rawW) && rawW > 0) return rawW;
-        }
-        if (axis === 'height' && typeof rawInnerHeightGet === 'function') {
-          const rawH = Number(rawInnerHeightGet());
-          if (Number.isFinite(rawH) && rawH > 0) return rawH;
-        }
       } catch (_) {}
       return fallback;
     };
+
+    const dynamicScreen = {
+      width: () => (baseScreenWidth ? Math.max(baseScreenWidth, liveViewportSize('width', baseScreenWidth)) : liveViewportSize('width', 1920)),
+      height: () => (baseScreenHeight ? Math.max(baseScreenHeight, liveViewportSize('height', baseScreenHeight)) : liveViewportSize('height', 1080)),
+      availWidth: () => (baseAvailWidth ? Math.max(baseAvailWidth, liveViewportSize('width', baseAvailWidth)) : liveViewportSize('width', 1920)),
+      availHeight: () => (baseAvailHeight ? Math.max(baseAvailHeight, liveViewportSize('height', baseAvailHeight)) : liveViewportSize('height', 1040)),
+      availLeft: () => s.availLeft ?? 0,
+      availTop: () => s.availTop ?? 0,
+      colorDepth: () => s.colorDepth ?? 24,
+      pixelDepth: () => s.pixelDepth ?? 24,
+    };
+
+    for (const [key, getter] of Object.entries(dynamicScreen)) {
+      try { Object.defineProperty(Screen.prototype, key, nativeAccessor(key, { configurable: true, get: getter })); } catch (_) {}
+    }
+    try { Object.defineProperty(window, 'devicePixelRatio', nativeAccessor('devicePixelRatio', { configurable: true, get: () => s.devicePixelRatio || 1 })); } catch (_) {}
+    for (const [key, value] of Object.entries({ screenX: s.screenX, screenY: s.screenY, screenLeft: s.screenX, screenTop: s.screenY })) {
+      try { Object.defineProperty(window, key, nativeAccessor(key, { configurable: true, get: () => value || 0 })); } catch (_) {}
+    }
+
     const initialInnerWidth = Number(window.innerWidth) || Number(s.availWidth) || Number(s.width) || 1;
     const initialInnerHeight = Number(window.innerHeight) || Number(s.availHeight) || Number(s.height) || 1;
     try { Object.defineProperty(window, 'innerWidth', nativeAccessor('innerWidth', { configurable: true, get: () => liveViewportSize('width', initialInnerWidth) })); } catch (_) {}
     try { Object.defineProperty(window, 'innerHeight', nativeAccessor('innerHeight', { configurable: true, get: () => liveViewportSize('height', initialInnerHeight) })); } catch (_) {}
+    try { Object.defineProperty(window, 'outerWidth', nativeAccessor('outerWidth', { configurable: true, get: () => liveViewportSize('width', initialInnerWidth) })); } catch (_) {}
+    try { Object.defineProperty(window, 'outerHeight', nativeAccessor('outerHeight', { configurable: true, get: () => liveViewportSize('height', initialInnerHeight) })); } catch (_) {}
     try {
       const viewport = window.visualViewport;
       if (viewport) {

@@ -451,7 +451,7 @@ function environmentMarker(id, master) { const text = (master ? '\u4e3b\u63a7 | 
 
 function managedTabs(values) { return values.filter((tab) => !/^(devtools|chrome-extension|edge-extension):/i.test(tab.url)); }
 function normalTabs(values) { return values.filter((tab) => !/^(devtools|chrome-extension|edge-extension):/i.test(tab.url) && (!/^(chrome|edge):/i.test(tab.url) || /^chrome:\/\/(newtab|new-tab-page)/i.test(tab.url))); }
-function extensionPages(values) { return values.filter((tab) => ['page', 'iframe'].includes(String(tab.type || 'page')) && /^(chrome|edge)-extension:\/\//i.test(String(tab.url || ''))); }
+function extensionPages(values) { return values.filter((tab) => ['page', 'iframe', 'other', 'background_page'].includes(String(tab.type || 'page')) && /^(chrome|edge)-extension:\/\//i.test(String(tab.url || ''))); }
 function extensionPageKey(tab) {
   try { const value = new URL(String(tab.url || '')); return (value.protocol + '//' + value.hostname + value.pathname).toLowerCase(); }
   catch (_) { return String(tab.url || '').split(/[?#]/)[0].toLowerCase(); }
@@ -729,6 +729,10 @@ class LiveSyncController extends LiveSyncV4 {
       this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + (inactive ? 1800 : 350));
       this.pauseGeometrySync(inactive ? 1800 : 500, inactive ? 'browser-surface-blur' : 'browser-surface-focus');
       return;
+    }
+    if (type === 'contextmenu' || (type === 'mouse' && (payload?.button === 2 || (payload?.phase === 'down' && payload?.button === 2)))) {
+      this.pauseGeometrySync(5000, 'contextmenu');
+      this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 5000);
     }
     if (action === 'forward') {
       if (!this.syncSettings.keyboard && ['key', 'input', 'beforeinput'].includes(type)) return;
@@ -1344,8 +1348,8 @@ class LiveSyncController extends LiveSyncV4 {
     const deferActivation = () => {
       this.emit({ type: 'live-sync-tab', masterTabId, targets: this.slaves.length, native: true });
     };
-    // 250ms debounce prevents stealing focus while user opens external/context menu
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    // 450ms debounce prevents stealing focus while user opens external/context menu
+    await new Promise((resolve) => setTimeout(resolve, 450));
     if (!guardIsCurrent()) {
       deferActivation();
       return;
@@ -1840,9 +1844,9 @@ class LiveSyncController extends LiveSyncV4 {
       });
       const state = result.result?.value || {};
       return state.focused === false
-        || (state.picker === true
-          && ((process.platform === 'win32' && this.nativePopupActive)
-            || Date.now() < (this.browserOwnedUntil || 0)));
+        || state.picker === true
+        || ((process.platform === 'win32' && this.nativePopupActive)
+          || Date.now() < (this.browserOwnedUntil || 0));
     } catch (_) {
       // A page target that is changing focus/navigation is exactly when a
       // top-level resize is most likely to dismiss browser-owned UI.

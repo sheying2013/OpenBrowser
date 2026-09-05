@@ -74,6 +74,7 @@ const injection = String.raw`(() => {
   document.addEventListener('mouseup', (event) => mouse('up', event), true);
   let moveFrame = 0; document.addEventListener('mousemove', (event) => { if (!event.buttons || moveFrame) return; moveFrame = requestAnimationFrame(() => { moveFrame = 0; mouse('move', event); }); }, true);
   document.addEventListener('click', (event) => { if (!event.isTrusted) send('click', { ...pointState(actual(event),event.clientX,event.clientY), button: event.button }); }, true);
+  document.addEventListener('contextmenu', (event) => { send('contextmenu', { ...pointState(actual(event), event.clientX, event.clientY), button: 2 }); }, true);
   document.addEventListener('wheel', (event) => send('wheel', { ...pointState(actual(event),event.clientX,event.clientY), deltaX: event.deltaX, deltaY: event.deltaY, alt: event.altKey, ctrl: event.ctrlKey, meta: event.metaKey, shift: event.shiftKey }), { capture: true, passive: true });
   const focusState = (target) => {
     let x = 0, y = 0; try { const rect = target.getBoundingClientRect(); x = rect.left + rect.width / 2; y = rect.top + rect.height / 2; let current = window; while (current !== current.top) { const frame = current.frameElement; if (!frame) break; const frameRect = frame.getBoundingClientRect(); x += frameRect.left; y += frameRect.top; current = current.parent; } } catch (_) {}

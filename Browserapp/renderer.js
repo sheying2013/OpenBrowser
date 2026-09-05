@@ -5017,9 +5017,36 @@ $('#profile-create-template')?.addEventListener('change', (event) => {
   if (!selectedId) return;
   const target = ui.profiles.find((p) => p.id === selectedId);
   if (!target) return;
+  const targetStartUrl = target.startUrl || target.platform?.startUrl || target.advanced?.startUrls || '';
   const form = $('#profile-form');
   if (form?.elements?.startUrl) {
-    form.elements.startUrl.value = target.startUrl || target.platform?.startUrl || target.advanced?.startUrls || '';
+    form.elements.startUrl.value = targetStartUrl;
+  }
+  const startUrlInput = $('#profile-create-start-url');
+  if (startUrlInput) {
+    startUrlInput.value = targetStartUrl;
+  }
+  if (targetStartUrl) {
+    const platformSelect = $('#profile-create-platform');
+    if (platformSelect) {
+      let matched = false;
+      for (const opt of platformSelect.options) {
+        if (opt.dataset.url && targetStartUrl.includes(opt.dataset.url.replace(/^https?:\/\/(www\.)?/, ''))) {
+          platformSelect.value = opt.value;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) platformSelect.value = 'other';
+    }
+    document.querySelectorAll('#profile-create-platform-chips .mini-chip').forEach((c) => {
+      const chipUrl = c.dataset.url;
+      if (chipUrl && targetStartUrl.includes(chipUrl.replace(/^https?:\/\/(www\.)?/, ''))) {
+        c.classList.add('active');
+      } else {
+        c.classList.remove('active');
+      }
+    });
   }
   if (target.language) {
     const langSelect = $('#profile-create-language');
@@ -5030,7 +5057,7 @@ $('#profile-create-template')?.addEventListener('change', (event) => {
     if (groupSelect) groupSelect.value = target.groupId;
   }
   if (target.networkMode === 'proxy' && target.proxy && !isDirectProxy(target.proxy)) {
-    const modeProxy = $('#create-network-proxy');
+    const modeProxy = document.querySelector('input[name="create-network"][value="proxy"]') || $('#create-network-proxy');
     if (modeProxy) {
       modeProxy.checked = true;
       modeProxy.dispatchEvent(new Event('change', { bubbles: true }));
@@ -5039,6 +5066,8 @@ $('#profile-create-template')?.addEventListener('change', (event) => {
     if (proxyFields) proxyFields.hidden = false;
     const rawInput = $('#create-proxy-raw');
     if (rawInput) rawInput.value = target.proxy;
+    const proxyInput = $('#create-proxy-input');
+    if (proxyInput) proxyInput.value = target.proxy;
     try {
       const parsed = parseProxyInputForUi(target.proxy);
       if (parsed) {
@@ -5047,10 +5076,11 @@ $('#profile-create-template')?.addEventListener('change', (event) => {
         if ($('#create-proxy-port')) $('#create-proxy-port').value = parsed.port;
         if ($('#create-proxy-user')) $('#create-proxy-user').value = parsed.username;
         if ($('#create-proxy-password')) $('#create-proxy-password').value = parsed.password;
+        if (proxyInput) proxyInput.value = `${parsed.host}:${parsed.port}`;
       }
     } catch (_) {}
   } else {
-    const modeDirect = $('#create-network-direct');
+    const modeDirect = document.querySelector('input[name="create-network"][value="direct"]') || $('#create-network-direct');
     if (modeDirect) {
       modeDirect.checked = true;
       modeDirect.dispatchEvent(new Event('change', { bubbles: true }));
@@ -5059,6 +5089,61 @@ $('#profile-create-template')?.addEventListener('change', (event) => {
     if (proxyFields) proxyFields.hidden = true;
   }
   syncThemedSelects($('#profile-dialog'));
+  toast(tx('已沿用所选环境偏好设置'));
+});
+
+$('#batch-add-template')?.addEventListener('change', (event) => {
+  const selectedId = event.target.value;
+  if (!selectedId) return;
+  const target = ui.profiles.find((p) => p.id === selectedId);
+  if (!target) return;
+  const targetStartUrl = target.startUrl || target.platform?.startUrl || target.advanced?.startUrls || '';
+  if ($('#batch-add-start-url')) $('#batch-add-start-url').value = targetStartUrl;
+  if (target.os && $('#batch-add-os')) $('#batch-add-os').value = target.os;
+  const targetRes = (target.width && target.height) ? `${target.width}x${target.height}` : '';
+  if (targetRes && $('#batch-add-resolution')) {
+    let matched = false;
+    for (const opt of $('#batch-add-resolution').options) {
+      if (opt.value === targetRes) {
+        $('#batch-add-resolution').value = targetRes;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      const newOpt = new Option(`${target.width} × ${target.height}`, targetRes, true, true);
+      $('#batch-add-resolution').add(newOpt);
+    }
+  }
+  if (target.language && $('#batch-add-language')) $('#batch-add-language').value = target.language;
+  if (target.groupId && $('#batch-add-group')) $('#batch-add-group').value = target.groupId;
+  if ($('#batch-add-block-images')) $('#batch-add-block-images').checked = Boolean(target.advanced?.blockImages);
+  if ($('#batch-add-block-sound')) $('#batch-add-block-sound').checked = Boolean(target.advanced?.blockAudio);
+  if ($('#batch-add-clear-cache')) $('#batch-add-clear-cache').checked = Boolean(target.advanced?.clearCacheOnStart);
+  if ($('#batch-add-multi-open')) $('#batch-add-multi-open').checked = Boolean(target.advanced?.allowMultiOpen);
+  if (targetStartUrl) {
+    const platformSelect = $('#batch-add-platform');
+    if (platformSelect) {
+      let matched = false;
+      for (const opt of platformSelect.options) {
+        if (opt.dataset.url && targetStartUrl.includes(opt.dataset.url.replace(/^https?:\/\/(www\.)?/, ''))) {
+          platformSelect.value = opt.value;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) platformSelect.value = 'other';
+    }
+    document.querySelectorAll('#batch-add-platform-chips .mini-chip').forEach((c) => {
+      const chipUrl = c.dataset.url;
+      if (chipUrl && targetStartUrl.includes(chipUrl.replace(/^https?:\/\/(www\.)?/, ''))) {
+        c.classList.add('active');
+      } else {
+        c.classList.remove('active');
+      }
+    });
+  }
+  syncThemedSelects($('#batch-add-dialog'));
   toast(tx('已沿用所选环境偏好设置'));
 });
 

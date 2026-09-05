@@ -78,6 +78,9 @@ const INPUT_ALIASES = Object.freeze({
   privacy_extra: 'privacyExtra',
   user_proxy_config: 'userProxyConfig',
   delete_data: 'deleteData',
+  target_url: 'targetUrl',
+  url: 'url',
+  format: 'format',
   refresh_url: 'refreshUrl',
   ip_channel: 'ipChannel',
   proxy_auth_action: 'proxyAuthAction',
@@ -213,6 +216,14 @@ function toolsMeta() {
     ['proxy_list', 'List proxy library entries with credentials and raw authenticated URLs redacted', { type: 'object', properties: { q: { type: 'string' }, status: { type: 'string' } }, additionalProperties: false }, 'read', 'GET', '/api/proxy/list', null],
     ['list_profiles', 'List browser profiles, running status and CDP debug ports', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/v1/user/list', null],
     ['profiles_list', 'Alias of list_profiles', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/v1/user/list', null],
+    ['profile_list', 'Alias of list_profiles', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/v1/user/list', null],
+    ['profile_get', 'Get detailed profile information, debug port, status and proxy settings', { type: 'object', properties: { profile_id: { type: 'string' } }, required: ['profile_id'], additionalProperties: false }, 'read', 'POST', '/api/v1/user/detail', null],
+    ['get_profile', 'Alias of profile_get', { type: 'object', properties: { profile_id: { type: 'string' } }, required: ['profile_id'], additionalProperties: false }, 'read', 'POST', '/api/v1/user/detail', null],
+    ['profile_open_url', 'Open or navigate a browser profile to a specific URL. Launches profile if not running.', { type: 'object', properties: { profile_id: { type: 'string' }, url: { type: 'string', description: 'URL to navigate to or launch with' } }, required: ['profile_id', 'url'], additionalProperties: false }, 'run', 'POST', '/api/v1/browser/open-url', null],
+    ['profile_screenshot', 'Capture a screenshot of the active tab in a running profile', { type: 'object', properties: { profile_id: { type: 'string' }, format: { type: 'string', enum: ['png', 'jpeg'], description: 'Image format (png/jpeg)' } }, required: ['profile_id'], additionalProperties: false }, 'read', 'POST', '/api/v1/browser/screenshot', null],
+    ['delete_profile', 'Alias of delete_profiles. Accepts profile_id or profile_ids', { type: 'object', properties: { profile_id: { type: 'string' }, profile_ids: { type: 'array', items: { type: 'string' } }, delete_data: { type: 'boolean', description: 'Default true' } }, additionalProperties: false }, 'manage', 'POST', '/api/v1/user/delete', null],
+    ['profile_check_proxy', 'Alias of check_profile_proxy', { type: 'object', properties: { profile_id: { type: 'string' } }, required: ['profile_id'], additionalProperties: false }, 'run', 'POST', '/api/proxy/check-profile', null],
+    ['proxy_batch_import', 'Batch import proxy entries into the proxy library', { type: 'object', properties: { data: { type: 'array', items: { type: 'object' } }, proxies: { type: 'array', items: { type: 'object' } } }, additionalProperties: false }, 'manage', 'POST', '/api/proxy/create', null],
     ['list_active_browsers', 'List currently active browser profiles', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/v1/browser/active', null],
     ['window_sync_status', 'Get multi-window sync status', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/sync/status', null],
     ['rpa_status', 'Get RPA engine status and running tasks', { type: 'object', properties: {}, additionalProperties: false }, 'read', 'GET', '/api/rpa/status', null],
@@ -412,12 +423,17 @@ async function callTool(name, args = {}) {
     case 'check_api_key':
       await request('GET', '/');
       return { ok: true, key_configured: Boolean(getApiKey()), mode: MCP_MODE };
+    case 'profile_get':
+    case 'get_profile':
+      return request('POST', '/api/v1/user/detail', { profile_id: args.profile_id });
+    case 'profile_list':
     case 'list_profiles':
     case 'profiles_list':
       return request('GET', '/api/v1/user/list');
     case 'list_active_browsers':
       return request('GET', '/api/v1/browser/active');
     case 'create_profile':
+    case 'profile_create':
       return request('POST', '/api/v1/user/create', {
         ...args,
         user_id: args.profile_id,
@@ -426,21 +442,40 @@ async function callTool(name, args = {}) {
     case 'update_profile':
     case 'profile_update':
       return request('POST', '/api/v2/browser-profile/update', args);
-    case 'delete_profiles':
+    case 'delete_profile':
+    case 'profile_delete':
+    case 'delete_profiles': {
+      const ids = args.profile_ids || (args.profile_id ? [args.profile_id] : []);
       return request('POST', '/api/v1/user/delete', {
-        profile_ids: args.profile_ids,
+        profile_ids: ids,
         delete_data: args.delete_data,
       });
+    }
     case 'duplicate_profile':
+    case 'profile_duplicate':
       return request('POST', '/api/v2/browser-profile/duplicate', args);
     case 'start_profile':
+    case 'profile_start':
       return request('POST', '/api/v1/browser/start', { user_id: args.profile_id });
     case 'stop_profile':
+    case 'profile_stop':
       return request('POST', '/api/v1/browser/stop', { user_id: args.profile_id });
     case 'stop_all_profiles':
+    case 'profile_stop_all':
       return request('POST', '/api/v1/browser/stop-all', {});
     case 'check_profile_proxy':
+    case 'profile_check_proxy':
       return request('POST', '/api/proxy/check-profile', args);
+    case 'profile_open_url':
+      return request('POST', '/api/v1/browser/open-url', {
+        profile_id: args.profile_id,
+        url: args.url || args.target_url || args.start_url,
+      });
+    case 'profile_screenshot':
+      return request('POST', '/api/v1/browser/screenshot', {
+        profile_id: args.profile_id,
+        format: args.format,
+      });
     case 'proxy_list':
       return request('GET', '/api/proxy/list' + queryString(args));
     case 'proxy_create':
@@ -449,8 +484,9 @@ async function callTool(name, args = {}) {
         ...(args.ip_channel !== undefined ? { ipChannel: args.ip_channel } : {}),
         ...(args.refresh_url !== undefined ? { refreshUrl: args.refresh_url } : {}),
       });
+    case 'proxy_batch_import':
     case 'proxy_create_many':
-      return request('POST', '/api/proxy/create', { data: args.data });
+      return request('POST', '/api/proxy/create', { data: args.data || args.proxies });
     case 'proxy_update':
       return request('POST', '/api/proxy/update', {
         proxy_id: args.proxy_id || args.proxy_library_id,
