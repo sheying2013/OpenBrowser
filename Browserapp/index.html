@@ -228,7 +228,10 @@
                 <div class="network-mode-hint" id="editor-proxy-library-status">未关联代理库节点</div>
                 <div id="editor-proxy-fields">
                   <label>快捷智能粘贴（自动解析协议/主机/端口/账号密码）
-                    <input id="editor-proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080 或 host:port:user:pass" autocomplete="off">
+                    <div style="display:flex;gap:6px;align-items:center;">
+                      <input id="editor-proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080 或 host:port:user:pass" autocomplete="off" style="flex:1;">
+                      <button type="button" class="outline mini-btn" id="editor-proxy-raw-paste-btn">粘贴解析</button>
+                    </div>
                   </label>
                   <label class="check-row" style="margin-top:-4px;margin-bottom:8px;"><input id="editor-proxy-save-to-library" type="checkbox"> 同时保存到代理库（方便其他环境复用）</label>
                   <div class="form-two">
@@ -1070,7 +1073,12 @@
     <form method="dialog" id="proxy-form">
       <div class="dialog-head"><div><h2 id="proxy-dialog-title">新建代理</h2><p>保存到本地代理库，不上传云端</p></div><button value="cancel" type="submit">×</button></div>
       <input type="hidden" id="proxy-edit-id" value="">
-      <label>快捷智能粘贴（自动解析协议/主机/端口/账号密码/备注）<input id="proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080#备注 或 host:port:user:pass"></label>
+      <label>快捷智能粘贴（自动解析协议/主机/端口/账号密码/备注）
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input id="proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080#备注 或 host:port:user:pass" style="flex:1;">
+          <button type="button" class="outline mini-btn" id="proxy-raw-paste-btn">粘贴解析</button>
+        </div>
+      </label>
       <small class="field-hint" id="proxy-raw-status" style="margin-top:-4px;margin-bottom:8px;display:block;">粘贴整行代理（如 socks5://user:pass@host:port#备注）会自动拆分填入下方各字段</small>
       <label>名称<input id="proxy-name" placeholder="例如：美东住宅-01" maxlength="120"></label>
       <div class="form-two">
@@ -1231,7 +1239,10 @@
     </div>
     <div id="create-proxy-fields" hidden>
       <label>快捷智能粘贴（自动解析）
-        <input id="create-proxy-raw" placeholder="socks5://user:pass@host:port 或 host:port:user:pass" autocomplete="off">
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input id="create-proxy-raw" placeholder="socks5://user:pass@host:port 或 host:port:user:pass" autocomplete="off" style="flex:1;">
+          <button type="button" class="outline mini-btn" id="create-proxy-raw-paste-btn">粘贴解析</button>
+        </div>
       </label>
       <label class="check-row" style="margin-top:-4px;margin-bottom:8px;"><input id="create-proxy-save-to-library" type="checkbox"> 同时保存到代理库（方便后续环境复用）</label>
       <label>代理库节点<select id="create-proxy-library"><option value="">手动填写代理（不关联代理库）</option></select></label>

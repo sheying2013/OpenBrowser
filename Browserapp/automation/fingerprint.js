@@ -1420,11 +1420,12 @@ function buildInjectionScript(fp) {
 
     const liveViewportSize = (axis, fallback) => {
       try {
-        const isFs = Boolean(document && (document.fullscreenElement || document.webkitFullscreenElement));
-        if (isFs) {
-          const fsVal = axis === 'width' ? (Number(s.width) || Number(s.availWidth)) : (Number(s.height) || Number(s.availHeight));
-          if (Number(fsVal) > 0) return Number(fsVal);
-        }
+        const root = document && document.documentElement;
+        const rootVal = axis === 'width' ? Number(root?.clientWidth) : Number(root?.clientHeight);
+        if (Number.isFinite(rootVal) && rootVal > 0) return Math.round(rootVal);
+        const body = document && document.body;
+        const bodyVal = axis === 'width' ? Number(body?.clientWidth) : Number(body?.clientHeight);
+        if (Number.isFinite(bodyVal) && bodyVal > 0) return Math.round(bodyVal);
         if (axis === 'width' && typeof rawInnerWidthGet === 'function') {
           const rawW = Number(rawInnerWidthGet());
           if (Number.isFinite(rawW) && rawW > 0) return rawW;
@@ -1433,12 +1434,6 @@ function buildInjectionScript(fp) {
           const rawH = Number(rawInnerHeightGet());
           if (Number.isFinite(rawH) && rawH > 0) return rawH;
         }
-        const root = document && document.documentElement;
-        const rootVal = axis === 'width' ? root?.clientWidth : root?.clientHeight;
-        if (Number(rootVal) > 0) return Number(rootVal);
-        const body = document && document.body;
-        const bodyVal = axis === 'width' ? body?.clientWidth : body?.clientHeight;
-        if (Number(bodyVal) > 0) return Number(bodyVal);
       } catch (_) {}
       return fallback;
     };
@@ -1458,6 +1453,58 @@ function buildInjectionScript(fp) {
     try {
       Object.defineProperty(document, 'fullscreenEnabled', nativeAccessor('fullscreenEnabled', { configurable: true, get: () => true }));
       Object.defineProperty(document, 'webkitFullscreenEnabled', nativeAccessor('webkitFullscreenEnabled', { configurable: true, get: () => true }));
+    } catch (_) {}
+    try {
+      const origReqFs = Element.prototype.requestFullscreen || Element.prototype.webkitRequestFullscreen;
+      if (typeof origReqFs === 'function') {
+        const patchedReqFs = nativeLike(function requestFullscreen(options) {
+          try {
+            const res = origReqFs.call(this, options);
+            if (res && typeof res.catch === 'function') {
+              return res.catch(() => {
+                if (typeof this.webkitRequestFullscreen === 'function' && this.webkitRequestFullscreen !== requestFullscreen) {
+                  try { this.webkitRequestFullscreen(options); } catch (_) {}
+                }
+                return Promise.resolve();
+              });
+            }
+            return res || Promise.resolve();
+          } catch (_) {
+            if (typeof this.webkitRequestFullscreen === 'function' && this.webkitRequestFullscreen !== requestFullscreen) {
+              try { this.webkitRequestFullscreen(options); } catch (_) {}
+            }
+            return Promise.resolve();
+          }
+        }, origReqFs);
+        try { Element.prototype.requestFullscreen = patchedReqFs; } catch (_) {}
+        try { Element.prototype.webkitRequestFullscreen = patchedReqFs; } catch (_) {}
+      }
+    } catch (_) {}
+    try {
+      const ensureIframeFullscreen = (node) => {
+        if (!node || node.nodeType !== 1 || node.tagName !== 'IFRAME') return;
+        try {
+          if (!node.hasAttribute('allowfullscreen')) node.setAttribute('allowfullscreen', 'true');
+          if (!node.hasAttribute('webkitallowfullscreen')) node.setAttribute('webkitallowfullscreen', 'true');
+          const curAllow = node.getAttribute('allow') || '';
+          if (!curAllow.includes('fullscreen')) {
+            node.setAttribute('allow', (curAllow ? curAllow + '; ' : '') + 'fullscreen *; autoplay *');
+          }
+        } catch (_) {}
+      };
+      if (typeof MutationObserver === 'function' && document.documentElement) {
+        const observer = new MutationObserver((mutations) => {
+          for (const m of mutations) {
+            for (const n of m.addedNodes) {
+              ensureIframeFullscreen(n);
+              if (n.querySelectorAll) {
+                try { n.querySelectorAll('iframe').forEach(ensureIframeFullscreen); } catch (_) {}
+              }
+            }
+          }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+      }
     } catch (_) {}
   } catch (_) {}
 

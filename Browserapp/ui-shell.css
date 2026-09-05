@@ -1790,6 +1790,19 @@ dialog[open] .dialog-head > button {
   color: var(--ui-accent, #245cff);
   background: var(--ui-accent-soft, rgba(36, 92, 255, 0.08));
 }
+button.mini-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  height: 28px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
 .mini-chip.active {
   border-color: var(--ui-accent, #245cff);
   background: var(--ui-accent, #245cff);

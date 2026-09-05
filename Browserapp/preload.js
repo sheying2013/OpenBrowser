@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require(Buffer.from('ZWxlY3Ryb24=', 'base
 
 contextBridge.exposeInMainWorld('ops', Object.freeze({
   getInfo: () => ipcRenderer.invoke('system:info'),
+  readClipboardText: () => ipcRenderer.invoke('system:read-clipboard'),
   checkAppUpdate: () => ipcRenderer.invoke('app:update-check'),
   downloadAppUpdate: () => ipcRenderer.invoke('app:update-download'),
   openGithub: () => ipcRenderer.invoke('app:open-github'),
