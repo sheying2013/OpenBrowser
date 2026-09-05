@@ -1067,6 +1067,9 @@ class BrowserEngine {
     prefs.profile.exit_type = 'Normal'; prefs.profile.exited_cleanly = true;
     const content = prefs.profile.default_content_setting_values;
     content.fullscreen = 1;
+    content.automatic_fullscreen = 1;
+    content.window_placement = 1;
+    content.window_management = 1;
     prefs.fullscreen ||= {};
     prefs.fullscreen.allowed = true;
     if (profile.advanced.blockImages) content.images = 2; else delete content.images;
@@ -2829,6 +2832,7 @@ class BrowserEngine {
     if (profile.privacy.webgpu === 'blocked') args.push('--disable-features=WebGPU');
     if (profile.advanced.blockImages) args.push('--blink-settings=imagesEnabled=false');
     if (profile.advanced.blockVideo || profile.advanced.blockSound) args.push('--autoplay-policy=user-gesture-required');
+    else args.push('--autoplay-policy=no-user-gesture-required');
     if (profile.advanced.jsHeapMax) args.push('--js-flags=--max-old-space-size=8192');
     if (restoreSession) args.push('--restore-last-session');
     const disabledFeatures = [];

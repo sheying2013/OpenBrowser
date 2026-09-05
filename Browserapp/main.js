@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, globalShortcut, ipcMain, nativeImage, screen, session, shell, Tray } = require('./host-bridge');
+const { app, BrowserWindow, Menu, clipboard, dialog, globalShortcut, ipcMain, nativeImage, screen, session, shell, Tray } = require('./host-bridge');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -1665,6 +1665,9 @@ app.whenReady().then(async () => {
     platform: process.platform,
     closeAction: normalizeCloseAction(localSettingsCache.closeAction),
   }));
+  registerTrustedIpc('system:read-clipboard', () => {
+    try { return clipboard.readText(); } catch (_) { return ''; }
+  });
   registerTrustedIpc('system:set-close-action', async (_event, mode) => {
     const value = normalizeCloseAction(mode);
     localSettingsCache.closeAction = value;

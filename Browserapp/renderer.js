@@ -1653,7 +1653,32 @@ function parseProxyInputForUi(value, selectedType = 'socks5') {
     } else if (endpoint) {
       host = proxyHostForUi(endpoint[1]); port = endpoint[2];
     } else {
-      throw new Error(tx('代理格式应为 IP:端口、IP:端口:用户名:密码或 protocol://用户名:密码@主机:端口'));
+      let tokens = null;
+      if (body.includes(',')) {
+        tokens = body.split(',').map((t) => t.trim());
+      } else if (body.includes('|')) {
+        tokens = body.split('|').map((t) => t.trim());
+      } else if (/\s+/.test(body)) {
+        tokens = body.split(/\s+/).map((t) => t.trim());
+      } else if (/^([a-zA-Z0-9._-]+)-(\d{1,5})(?:-(.*?)(?:-([\s\S]*))?)?$/.test(body)) {
+        const hm = body.match(/^([a-zA-Z0-9._-]+)-(\d{1,5})(?:-(.*?)(?:-([\s\S]*))?)?$/);
+        if (hm) tokens = [hm[1], hm[2], hm[3] || '', hm[4] || ''].filter((x, idx) => idx < 2 || x);
+      }
+      if (tokens && tokens.length >= 2) {
+        if (/^(socks5|socks4|http|https)$/i.test(tokens[0])) {
+          protocol = normalizeProxyProtocolForUi(tokens[0]);
+          tokens = tokens.slice(1);
+        }
+        if (tokens.length >= 2 && /^\d{1,5}$/.test(tokens[1])) {
+          host = proxyHostForUi(tokens[0]);
+          port = tokens[1];
+          username = tokens[2] ? decodeProxyPartForUi(tokens[2]) : '';
+          password = tokens[3] ? decodeProxyPartForUi(tokens.slice(3).join(':')) : '';
+        }
+      }
+      if (!host || !port) {
+        throw new Error(tx('代理格式应为 IP:端口、IP:端口:用户名:密码或 protocol://用户名:密码@主机:端口'));
+      }
     }
   }
   const canonical = buildProxyUiValue({ protocol, host, port, username, password, remark });
@@ -1690,10 +1715,17 @@ function applyProxyLibrarySelection(kind, id) {
   editorSet(`#${prefix}-proxy-port`, parsed?.port || item.port || '');
   editorSet(`#${prefix}-proxy-user`, parsed?.username || item.username || '');
   editorSet(`#${prefix}-proxy-password`, parsed?.password || item.password || '');
-  const raw = $(`#${prefix}-proxy-raw`) || $(`#${prefix}-proxy-input`);
-  if (raw) raw.value = parsed?.raw || item.raw || buildProxyUiValue(item);
+  const rawVal = parsed?.raw || item.raw || buildProxyUiValue(item);
+  const rawEl = $(`#${prefix}-proxy-raw`);
+  if (rawEl) rawEl.value = rawVal;
+  const inputEl = $(`#${prefix}-proxy-input`);
+  if (inputEl) inputEl.value = rawVal;
   const select = $(`#${prefix}-proxy-library`);
-  if (select) select.value = String(item.id);
+  if (select) {
+    select.value = String(item.id);
+    syncThemedSelect(select);
+  }
+  syncThemedSelects(`#${prefix}-proxy-library, #${prefix}-proxy-type`);
   if (editor) {
     const status = $('#editor-proxy-library-status');
     if (status) status.textContent = `已关联代理库：${proxyLibraryLabel(item)}`;
@@ -1865,6 +1897,8 @@ function editorDraft(strict = true) {
     privacy.latitude = latitude; privacy.longitude = longitude;
   }
   const selectedNetwork = editorSelectedNetwork();
+  const selectedProxyValue = String($('#editor-proxy-library')?.value || '').trim();
+  const selectedProxyId = selectedNetwork === 'direct' ? null : (proxyLibraryItem(selectedProxyValue)?.id || null);
   let proxy = serializeEditorProxy(strict);
   const currentProxyParsed = parseEditorProxy(current.proxy);
   const nextProxyParsed = parseEditorProxy(proxy);
@@ -1905,8 +1939,6 @@ function editorDraft(strict = true) {
     }
   }
   const proxyAuthAction = proxyAuthActionForUpdate(current.proxy, proxy, selectedNetwork);
-  const selectedProxyValue = String($('#editor-proxy-library')?.value || '').trim();
-  const selectedProxyId = selectedNetwork === 'direct' ? null : (proxyLibraryItem(selectedProxyValue)?.id || null);
   const draftBase = normalizeProxyAssociationForUi(current, selectedProxyId);
   return normalizeProfileSettings({
     ...draftBase,
@@ -2561,6 +2593,7 @@ function renderProxyLibrarySelect(select, selectedId = '', { includeManual = tru
   }
   select.value = value;
   if (select.value !== value) select.value = '';
+  syncThemedSelect(select);
 }
 
 function renderProxyLibrarySelectors() {
@@ -5116,6 +5149,51 @@ $('#editor-proxy-host')?.addEventListener('input', () => {
 
 $('#editor-proxy-user')?.addEventListener('input', () => { window.__editorProxyAuthTouched = true; });
 $('#editor-proxy-password')?.addEventListener('input', () => { window.__editorProxyAuthTouched = true; });
+
+async function handleQuickPasteToInput(targetInputSelector) {
+  try {
+    let text = '';
+    if (window.ops?.readClipboardText) {
+      try { text = await window.ops.readClipboardText(); } catch (_) {}
+    }
+    if (!text && navigator.clipboard?.readText) {
+      try { text = await navigator.clipboard.readText(); } catch (_) {}
+    }
+    text = String(text || '').trim();
+    if (!text) {
+      toast(tx('剪贴板为空'));
+      return;
+    }
+    const input = $(targetInputSelector);
+    if (input) {
+      input.value = text;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      toast(tx('已粘贴并解析代理'));
+    }
+  } catch (err) {
+    toast(tx('读取剪贴板失败：') + err.message);
+  }
+}
+
+$('#proxy-raw-paste-btn')?.addEventListener('click', () => handleQuickPasteToInput('#proxy-raw'));
+$('#create-proxy-raw-paste-btn')?.addEventListener('click', () => handleQuickPasteToInput('#create-proxy-raw'));
+$('#editor-proxy-raw-paste-btn')?.addEventListener('click', () => handleQuickPasteToInput('#editor-proxy-raw'));
+
+$('#create-proxy-input')?.addEventListener('input', () => {
+  const val = $('#create-proxy-input').value.trim();
+  if (!val) return;
+  try {
+    const parsed = parseProxyInputForUi(val, $('#create-proxy-type')?.value || 'socks5');
+    if (!parsed) return;
+    if ($('#create-proxy-type')) $('#create-proxy-type').value = parsed.protocol;
+    if ($('#create-proxy-host')) $('#create-proxy-host').value = parsed.host;
+    if ($('#create-proxy-port')) $('#create-proxy-port').value = parsed.port;
+    if ($('#create-proxy-user')) $('#create-proxy-user').value = parsed.username;
+    if ($('#create-proxy-password')) $('#create-proxy-password').value = parsed.password;
+    if ($('#create-proxy-raw')) $('#create-proxy-raw').value = parsed.raw;
+    syncThemedSelects($('#profile-dialog'));
+  } catch (_) {}
+});
 
 $('#proxy-batch-import-btn')?.addEventListener('click', () => {
   $('#proxy-batch-import-text').value = '';
