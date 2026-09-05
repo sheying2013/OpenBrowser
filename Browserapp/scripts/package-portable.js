@@ -104,17 +104,47 @@ function copyRecursive(source, destination) {
   fs.chmodSync(destination, stats.mode & 0o777);
 }
 
-function removeIfExists(target, retries = 5, delayMs = 150) {
-  for (let i = 0; i <= retries; i++) {
+function removeIfExists(target) {
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+    return;
+  } catch (err) {
+    if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(err.code)) throw err;
+  }
+  // Windows: an external process can hold a file open without FILE_SHARE_DELETE,
+  // which blocks rmSync on the whole tree. Delete what we can and keep going;
+  // the copy phase overwrites survivors, so only byte-stale strays would linger.
+  console.warn(`[package] removeIfExists fallback (locked tree): ${target}`);
+  removeTreeBestEffort(target);
+}
+
+function removeTreeBestEffort(target) {
+  let entries;
+  try {
+    entries = fs.readdirSync(target, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === 'ENOENT') return;
+    throw err;
+  }
+  for (const entry of entries) {
+    const child = path.join(target, entry.name);
     try {
-      if (fs.existsSync(target)) {
-        fs.rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      if (entry.isDirectory()) {
+        if (!entry.isSymbolicLink()) {
+          removeTreeBestEffort(child);
+          fs.rmdirSync(child);
+          continue;
+        }
       }
-      return;
+      fs.rmSync(child, { force: true });
     } catch (err) {
-      if (i === retries) throw err;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+      console.warn(`[package] keep locked file: ${child} (${err.code || err.message})`);
     }
+  }
+  try {
+    fs.rmdirSync(target);
+  } catch (err) {
+    console.warn(`[package] keep non-empty dir: ${target} (${err.code || err.message})`);
   }
 }
 

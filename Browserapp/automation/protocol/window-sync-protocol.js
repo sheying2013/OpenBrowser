@@ -217,13 +217,15 @@ function computeCascadeBounds(handles, options = {}) {
   const top = Number(options.top) || 0;
   const left = Number(options.left) || 0;
   const vs = Number(options.vs) || 40;
+  const vsY = Number(options.vsY) || (Math.round(vs * 0.8) || 32);
+  const maxShiftX = Number(options.maxShiftX) || (options.workWidth ? Math.max(vs, options.workWidth - width) : 400);
+  const maxShiftY = Number(options.maxShiftY) || (options.workHeight ? Math.max(vsY, options.workHeight - height) : 300);
   return ids.map((id, indexFromStart) => {
-    const h = ids.length - 1 - indexFromStart; // reverse index from length-1 down to 0
-    const leftPos = left + vs * Math.abs(h - (ids.length - 1));
-    // When iterating reverse, abs(h-(len-1)) = indexFromStart
+    const offsetX = maxShiftX > vs ? (indexFromStart * vs) % maxShiftX : (indexFromStart * vs);
+    const offsetY = maxShiftY > vsY ? (indexFromStart * vsY) % maxShiftY : (indexFromStart * vsY);
     return {
       handle: id,
-      bounds: { width, height, top, left: left + vs * indexFromStart },
+      bounds: { width, height, top: top + offsetY, left: left + offsetX },
     };
   });
 }
