@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.4'
+        default: 'v1.0.5'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -40,23 +40,23 @@ env:
   RELEASE_NOTES: |
     ## OpenBrowser ${{ inputs.release_tag }}
 
-    ### English
-
-    - Stronger anti-detection: font/hardware probes are answered from a coherent real-device persona; speech-voice and font tables stay consistent with the claimed OS; spoofing accessors present native characteristics.
-    - Faster launch & smoother UI: cached icon artifacts and coalesced event rendering.
-    - More native feel: system-native theme follows light/dark, macOS vibrancy / Windows 11 Mica, and the environment number is drawn directly on the Dock icon.
-    - Cross-platform preflight: early warnings for Windows long paths, Apple Silicon Rosetta, and more.
-    - Various startup / IPC edge-case fixes and stability improvements.
-    - Ubuntu x86_64 portable packages bundle the official Google Chrome Stable package and never download a browser kernel at runtime.
-
     ### 中文
 
-    - 抗指纹增强：按真实机型画像作答字体/硬件探测，语音与字体表随声称系统保持一致，伪装接口呈现原生特征
-    - 启动更快、界面更顺：图标产物缓存复用、事件渲染合流
-    - 更像原生应用：系统原生主题跟随明暗、macOS 毛玻璃 / Windows 11 Mica、Dock 图标直接显示环境编号
-    - 多平台预检：Windows 长路径、Apple Silicon Rosetta 等风险提前提示
-    - 若干启动 / IPC 边角问题修复与稳定性提升
-    - Ubuntu x86_64 便携包内置 Google Chrome Stable 正式包，运行时不会下载浏览器内核
+    - **内核与主题**：合并 PR #11，Linux 支持官方 Google Chrome Stable 独立解压运行，新增 Merge Gateway 主题与自适应界面。
+    - **开发者工具**：修复 macOS x86 内核开发者工具（DevTools）禁用问题（#9），强制注入 DeveloperToolsAvailability 策略。
+    - **扩展程序**：修复本地安装扩展版本更新后不生效问题（#6），启动自动同步 manifest.json，新增扩展卡片「重新加载」按钮。
+    - **窗口与同步**：修复 Windows 1.25x/1.5x 高 DPI 缩放下平铺跳跃与窗口越界（#19），放行常用 `chrome://` 内部管理页实时同步。
+    - **WebGL 防指纹**：扩充现代独立显卡预设（RTX 40/30 系列等），全面对齐 Vendor、Renderer 与 WebGPU Adapter 深度伪装。
+    - **API 与安全**：解决 MCP Server 与本地 API 的 401 鉴权问题，完善回环控制与安全防护。
+
+    ### English
+
+    - **Kernel & Themes**: Merged PR #11, standalone Linux Google Chrome Stable support, and new Merge Gateway theme.
+    - **DevTools**: Fixed macOS x86 DevTools availability and launch failure (#9).
+    - **Extensions**: Added local extension hot-reload and real-time version sync from manifest.json (#6).
+    - **Window Tiling & Sync**: Fixed 1.25x high-DPI tiling jump and screen boundary overflow (#19), enabled `chrome://` internal page sync.
+    - **Fingerprinting**: Expanded modern GPU WebGL presets (RTX 40/30 series, Intel Arc, RX 7900) with coherent WebGL/WebGPU adapter spoofing.
+    - **API & MCP**: Fixed MCP 401 auth issues and added granular permission control.
 
     ### 下载 / Downloads
 
