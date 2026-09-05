@@ -16,6 +16,7 @@ const {
   findOpenBrowserKernelBinary,
   findBundledWayfernKernel,
   findBundledChromeForTesting,
+  findBundledChromeStable,
   isOpenBrowser148SupportedHost,
   isMacX64Host,
   isWayfernKernel,
@@ -254,11 +255,16 @@ async function main() {
       assert.notStrictEqual(chosen.source, SOURCE_OPENBROWSER);
       const appRoot = path.join(__dirname, '..');
       const integrated = findBundledWayfernKernel([appRoot, path.join(appRoot, 'kernels')]);
+      const integratedStable = findBundledChromeStable([appRoot, path.join(appRoot, 'kernels')]);
       const integratedCft = findBundledChromeForTesting([appRoot, path.join(appRoot, 'kernels')]);
       if (integrated && integrated.binary && isIntegratedKernelCdpReady({ path: integrated.binary, source: SOURCE_WAYFERN })) {
         assert.strictEqual(path.resolve(chosen.path), path.resolve(integrated.binary));
         assert.strictEqual(chosen.source, SOURCE_WAYFERN);
         console.log('  PASS  engine prefers integrated independent kernel over temporary CfT');
+      } else if (integratedStable && integratedStable.binary) {
+        assert.strictEqual(path.resolve(chosen.path), path.resolve(integratedStable.binary));
+        assert.strictEqual(chosen.source, SOURCE_CHROME_STABLE);
+        console.log('  PASS  engine prefers integrated Chrome Stable over temporary CfT');
       } else if (integratedCft && integratedCft.binary) {
         assert.strictEqual(path.resolve(chosen.path), path.resolve(integratedCft.binary));
         assert.strictEqual(chosen.source, SOURCE_CFT);
