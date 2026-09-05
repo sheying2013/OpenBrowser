@@ -15,7 +15,7 @@ const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-plat
 const { platformPreflight } = require('./automation/platform-preflight');
 const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
 const isolation = require('./automation/isolation');
-const { lockPath, acquireProfileLock, updateProfileLock, releaseProfileLock, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = isolation;
+const { lockPath, acquireProfileLock, updateProfileLock, releaseProfileLock, scanProcessesUsingProfile, isPidAlive, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = isolation;
 const { BrowserKernelManager, ensureKernelReadyForLaunch } = require('./automation/browser-kernel');
 const { ensureStartPageServer, getStartPageServer } = require('./automation/start-page-server');
 const {
@@ -1095,6 +1095,10 @@ class BrowserEngine {
    * shortening the launch critical path (scales with disk latency and profile size).
    */
   async prepareProfileFilesForStart(root, profile, restoreSession) {
+    const singletonFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'DevToolsActivePort'];
+    for (const f of singletonFiles) {
+      await fsp.rm(path.join(root, f), { force: true, recursive: true }).catch(() => {});
+    }
     const jobs = [
       // Shared-file chain: resetZoom then applyProfilePreferences, ordered.
       (async () => { await this.resetZoom(root); await this.applyProfilePreferences(root, profile); })(),
@@ -2527,10 +2531,22 @@ class BrowserEngine {
         afterStop = this.running.get(id);
       }
       if (afterStop && (afterStop.cleanupFailed || afterStop.cleanedUp || afterStop.stopping)) {
-        throw afterStop.cleanupError || Object.assign(
-          new Error(`Browser environment ${id} is still stopping; child exit has not been confirmed`),
-          { code: 'BROWSER_EXIT_UNCONFIRMED' },
-        );
+        const numericPid = Number(afterStop.pid);
+        const childDead = !numericPid || !isPidAlive(numericPid);
+        const helpersDead = !scanProcessesUsingProfile(afterStop.root || '').pids.length;
+        if (childDead && helpersDead) {
+          try { afterStop.cdpConnection?.close?.(); } catch (_) {}
+          if (afterStop.profileLock && afterStop.root) {
+            await releaseProfileLock(afterStop.root, afterStop.profileLock).catch(() => {});
+          }
+          this.running.delete(id);
+          afterStop = null;
+        } else {
+          throw afterStop.cleanupError || Object.assign(
+            new Error(`Browser environment ${id} is still stopping; child exit has not been confirmed`),
+            { code: 'BROWSER_EXIT_UNCONFIRMED' },
+          );
+        }
       }
       if (afterStop) return this.publicRunning(id);
       this.assertStartGenerationActive(id, generation);
