@@ -80,7 +80,11 @@ function buildProxyConfig(input = {}) {
 }
 
 function parseProxyString(value) {
-  const { source, remark } = splitProxyRemark(value);
+  let { source, remark } = splitProxyRemark(value);
+  if (!source || /^(direct|offline|none)$/i.test(source)) return null;
+
+  source = source.replace(/^["'`(]+|["'`)]+$/g, '').trim();
+  if (source.endsWith('/')) source = source.slice(0, -1).trim();
   if (!source || /^(direct|offline|none)$/i.test(source)) return null;
 
   let protocol = 'http';
@@ -125,16 +129,38 @@ function parseProxyString(value) {
       }
     }
   } else {
-    const legacy = body.match(/^(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5})(?::([\s\S]*))?$/);
-    if (!legacy) throw new Error('Invalid proxy format; use host:port or protocol://username:password@host:port');
-    host = normalizeProxyHost(legacy[1]);
-    port = Number(legacy[2]);
-    if (legacy[3] != null) {
-      const separator = legacy[3].indexOf(':');
-      if (separator < 0) throw new Error('Invalid proxy format; use host:port:user:password');
+    const userAtHost = body.match(/^([\s\S]*?)(?:(\\@|@))(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5})\/?$/);
+    const hostAtUser = !userAtHost && body.match(/^(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5})@([\s\S]*)\/?$/);
+    const legacy = !userAtHost && !hostAtUser && body.match(/^(\[[^\]]+\]|[a-zA-Z0-9._-]+):(\d{1,5})(?::([\s\S]*))?$/);
+
+    if (userAtHost) {
       protocol = 'socks5';
-      username = decode(legacy[3].slice(0, separator));
-      password = decode(legacy[3].slice(separator + 1));
+      host = normalizeProxyHost(userAtHost[3]);
+      port = Number(userAtHost[4]);
+      const userinfo = userAtHost[1];
+      const separator = userinfo.indexOf(':');
+      username = decode(separator < 0 ? userinfo : userinfo.slice(0, separator));
+      password = decode(separator < 0 ? '' : userinfo.slice(separator + 1));
+    } else if (hostAtUser) {
+      protocol = 'socks5';
+      host = normalizeProxyHost(hostAtUser[1]);
+      port = Number(hostAtUser[2]);
+      const userinfo = hostAtUser[3];
+      const separator = userinfo.indexOf(':');
+      username = decode(separator < 0 ? userinfo : userinfo.slice(0, separator));
+      password = decode(separator < 0 ? '' : userinfo.slice(separator + 1));
+    } else if (legacy) {
+      host = normalizeProxyHost(legacy[1]);
+      port = Number(legacy[2]);
+      if (legacy[3] != null) {
+        const separator = legacy[3].indexOf(':');
+        if (separator < 0) throw new Error('Invalid proxy format; use host:port:user:password');
+        protocol = 'socks5';
+        username = decode(legacy[3].slice(0, separator));
+        password = decode(legacy[3].slice(separator + 1));
+      }
+    } else {
+      throw new Error('Invalid proxy format; use host:port or protocol://username:password@host:port');
     }
   }
 
