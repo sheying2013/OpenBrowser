@@ -992,6 +992,7 @@ async function tile(ids, cascade = false) {
     const height = Math.max(560, work.height - 180);
     const layout = computeCascadeBounds(entries.map((e) => e.id), {
       left: work.x, top: work.y, width, height, vs: 38,
+      workWidth: work.width, workHeight: work.height,
     });
     await Promise.all(entries.map(({ item }, index) => {
       const raw = layout[index]?.bounds || {

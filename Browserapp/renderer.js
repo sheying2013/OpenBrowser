@@ -598,7 +598,7 @@ function migrateProfileNumbers(profiles, savedNextNumber) {
     return normalizeProfileSettings({ ...profile, number, name: String(number) });
   });
   const maximum = used.size ? Math.max(...used) : 0;
-  return { profiles: migrated, nextProfileNumber: Math.max(positiveProfileNumber(savedNextNumber), maximum + 1, 1) };
+  return { profiles: migrated, nextProfileNumber: profiles.length ? Math.max(positiveProfileNumber(savedNextNumber), maximum + 1, 1) : 1 };
 }
 
 const loadedUi = loadUi();
@@ -818,6 +818,10 @@ function buildEnvBrowserCell(profile) {
 }
 
 function nextProfileNumber() {
+  if (!ui.profiles || ui.profiles.length === 0) {
+    ui.nextProfileNumber = 1;
+    return 1;
+  }
   const maximum = ui.profiles.reduce((value, profile) => Math.max(value, positiveProfileNumber(profile.number)), 0);
   return Math.max(positiveProfileNumber(ui.nextProfileNumber), maximum + 1, 1);
 }
@@ -4493,6 +4497,7 @@ $('#batch-delete-form').addEventListener('submit', async (event) => {
   try {
     const result = await window.ops.deleteProfiles(ids, $('#batch-delete-data').checked);
     ui.profiles = ui.profiles.filter((item) => !ids.includes(item.id)); for (const id of ids) { selectedProfiles.delete(id); selectedSessions.delete(id); }
+    if (!ui.profiles.length) ui.nextProfileNumber = 1;
     pendingDeleteProfiles = []; save(); $('#select-all-profiles').checked = false; $('#batch-delete-dialog').close();
     await refreshStatus(); await refreshSessions(); await refreshExtensions(); renderProfiles(); log('Batch', '批量删除 ' + result.deleted + ' 个环境'); toast('已删除 ' + result.deleted + ' 个环境');
   } catch (error) { toast('批量删除失败：' + error.message); } finally { if (submitter) submitter.disabled = false; }
@@ -4539,6 +4544,25 @@ $('#copy-selected')?.addEventListener('click', async () => {
     await window.ops.deleteProfiles(created.map((item) => item.id), false).catch(() => {});
     ui.profiles = ui.profiles.filter((item) => !created.some((createdItem) => createdItem.id === item.id));
     ui.nextProfileNumber = previousNext; save(); toast('复制环境失败：' + error.message);
+  }
+});
+$('#renumber-profiles')?.addEventListener('click', async () => {
+  if (!ui.profiles || !ui.profiles.length) return toast(tx('当前暂无环境'));
+  if (!confirm(tx('是否将所有环境按列表顺序重新编号为 1 到 N？'))) return;
+  try {
+    ui.profiles.forEach((profile, index) => {
+      const num = index + 1;
+      profile.number = num;
+      profile.name = String(num);
+    });
+    ui.nextProfileNumber = ui.profiles.length + 1;
+    save();
+    engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    renderProfiles();
+    log('Profile', `已将 ${ui.profiles.length} 个环境重新编号为 1..${ui.profiles.length}`);
+    toast(tx(`已将 ${ui.profiles.length} 个环境重排为 1..${ui.profiles.length}`));
+  } catch (error) {
+    toast(tx('重排编号失败：') + error.message);
   }
 });
 $('#add-extension').addEventListener('click', () => $('#add-app-dialog').showModal());
@@ -6386,7 +6410,7 @@ document.getElementById('api-key-rotate')?.addEventListener('click', async () =>
       const keyInput = document.getElementById('api-key-display');
       if (keyInput) keyInput.value = res.apiKey;
       toast(tx('已重新生成，请把新 Key 同步到 MCP 客户端配置'));
-      if (typeof refreshMcpPanel === 'function') await refreshMcpPanel();
+      if (typeof refreshApiMcpPage === 'function') await refreshApiMcpPage();
     }
   } catch (err) {
     toast(tx('重新生成失败：') + err.message);

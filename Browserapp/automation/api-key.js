@@ -6,12 +6,18 @@ const os = require('os');
 
 function cleanApiKey(value) {
   let key = String(value ?? '').trim();
+  if (key.toLowerCase().startsWith('bearer ')) {
+    key = key.slice(7).trim();
+  }
   for (let index = 0; index < 2; index += 1) {
     if (key.length >= 2 && ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'")))) {
       key = key.slice(1, -1).trim();
     } else {
       break;
     }
+  }
+  if (key.toLowerCase().startsWith('bearer ')) {
+    key = key.slice(7).trim();
   }
   return key;
 }
@@ -96,6 +102,14 @@ function resolveApiKey({ configured = '', env = process.env, userDataPath = '', 
       if (key && !isApiKeyPlaceholder(key)) return { key, filePath, source: 'file' };
     } catch (_) {}
   }
+
+  if (ignoreEnv) {
+    for (const value of [configured, env.OPENBROWSER_API_KEY, env.API_KEY]) {
+      const direct = cleanApiKey(value);
+      if (direct && !isApiKeyPlaceholder(direct)) return { key: direct, filePath: null, source: 'environment' };
+    }
+  }
+
   return { key: '', filePath: null, source: 'none' };
 }
 
