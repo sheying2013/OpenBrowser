@@ -230,6 +230,7 @@
                   <label>快捷智能粘贴（自动解析协议/主机/端口/账号密码）
                     <input id="editor-proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080 或 host:port:user:pass" autocomplete="off">
                   </label>
+                  <label class="check-row" style="margin-top:-4px;margin-bottom:8px;"><input id="editor-proxy-save-to-library" type="checkbox"> 同时保存到代理库（方便其他环境复用）</label>
                   <div class="form-two">
                     <label>代理类型<select id="editor-proxy-type"><option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
                     <label>IP 查询通道<select id="editor-ip-channel"><option value="ip-api">IP-API</option><option value="ip2location">IP2Location</option><option value="ifconfig-me">ifconfig.me（HTTPS）</option></select></label>
@@ -1070,6 +1071,7 @@
       <div class="dialog-head"><div><h2 id="proxy-dialog-title">新建代理</h2><p>保存到本地代理库，不上传云端</p></div><button value="cancel" type="submit">×</button></div>
       <input type="hidden" id="proxy-edit-id" value="">
       <label>快捷智能粘贴（自动解析协议/主机/端口/账号密码/备注）<input id="proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080#备注 或 host:port:user:pass"></label>
+      <small class="field-hint" id="proxy-raw-status" style="margin-top:-4px;margin-bottom:8px;display:block;">粘贴整行代理（如 socks5://user:pass@host:port#备注）会自动拆分填入下方各字段</small>
       <label>名称<input id="proxy-name" placeholder="例如：美东住宅-01" maxlength="120"></label>
       <div class="form-two">
         <label>协议
@@ -1088,8 +1090,8 @@
         </label>
       </div>
       <div class="proxy-host-row">
-        <label>主机<input id="proxy-host" placeholder="127.0.0.1" required></label>
-        <label>端口<input id="proxy-port" type="number" min="1" max="65535" placeholder="1080" required></label>
+        <label>主机<input id="proxy-host" placeholder="127.0.0.1"></label>
+        <label>端口<input id="proxy-port" type="number" min="1" max="65535" placeholder="1080"></label>
       </div>
       <div class="form-two">
         <label>账号<input id="proxy-user" autocomplete="off" placeholder="可选"></label>
@@ -1140,6 +1142,28 @@
     </form>
   </dialog>
 
+  <dialog id="proxy-apply-dialog">
+    <form method="dialog" id="proxy-apply-form">
+      <div class="dialog-head">
+        <div>
+          <h2 id="proxy-apply-title">应用代理到环境</h2>
+          <p id="proxy-apply-summary">将该代理节点一键绑定到指定环境</p>
+        </div>
+        <button value="cancel" type="submit">×</button>
+      </div>
+      <input type="hidden" id="proxy-apply-id" value="">
+      <div style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+        <label class="assign-item" style="margin:0;"><input id="proxy-apply-select-all" type="checkbox"> 全选当前环境</label>
+        <span id="proxy-apply-count" class="field-hint">已选择 0 个环境</span>
+      </div>
+      <div class="assign-list" id="proxy-apply-list" style="max-height: 240px; overflow-y: auto; border: 1px solid var(--ui-border, #e2e8f0); border-radius: 6px; padding: 8px;"></div>
+      <div class="dialog-actions">
+        <button value="cancel" class="outline" type="submit">取消</button>
+        <button value="default" class="primary" id="proxy-apply-submit" type="submit">立即应用并绑定</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="profile-dialog"><form method="dialog" id="profile-form">
     <div class="dialog-head"><h2>新建浏览器环境</h2><button value="cancel">×</button></div>
     <label>环境名称（自动编号）<input name="name" required readonly value="1"></label>
@@ -1163,6 +1187,39 @@
       </select></label>
     </div>
     <label>所属分组<select id="profile-create-group" name="groupId"></select></label>
+    <div class="platform-preset-group">
+      <label>快速选择平台 / 打开指定网页
+        <select id="profile-create-platform">
+          <option value="other" data-url="" selected>自定义网址</option>
+          <option value="blank" data-url="">空白页 (about:blank)</option>
+          <option value="google" data-url="https://www.google.com">Google (google.com)</option>
+          <option value="youtube" data-url="https://www.youtube.com">YouTube (youtube.com)</option>
+          <option value="twitter" data-url="https://x.com">X / Twitter (x.com)</option>
+          <option value="facebook" data-url="https://www.facebook.com">Facebook (facebook.com)</option>
+          <option value="amazon" data-url="https://www.amazon.com">Amazon (amazon.com)</option>
+          <option value="tiktok" data-url="https://www.tiktok.com">TikTok (tiktok.com)</option>
+          <option value="discord" data-url="https://discord.com">Discord (discord.com)</option>
+          <option value="gmail" data-url="https://mail.google.com">Gmail (mail.google.com)</option>
+          <option value="outlook" data-url="https://outlook.live.com">Outlook (outlook.com)</option>
+          <option value="paypal" data-url="https://www.paypal.com">PayPal (paypal.com)</option>
+          <option value="ebay" data-url="https://www.ebay.com">eBay (ebay.com)</option>
+          <option value="aliexpress" data-url="https://www.aliexpress.com">AliExpress (aliexpress.com)</option>
+          <option value="shopify" data-url="https://www.shopify.com">Shopify (shopify.com)</option>
+          <option value="stripe" data-url="https://dashboard.stripe.com">Stripe (stripe.com)</option>
+          <option value="whatsapp" data-url="https://web.whatsapp.com">WhatsApp (web.whatsapp.com)</option>
+          <option value="linkedin" data-url="https://www.linkedin.com">LinkedIn (linkedin.com)</option>
+        </select>
+      </label>
+      <div class="platform-chips" id="profile-create-platform-chips">
+        <button type="button" class="mini-chip" data-platform="google" data-url="https://www.google.com">Google</button>
+        <button type="button" class="mini-chip" data-platform="youtube" data-url="https://www.youtube.com">YouTube</button>
+        <button type="button" class="mini-chip" data-platform="twitter" data-url="https://x.com">X/Twitter</button>
+        <button type="button" class="mini-chip" data-platform="amazon" data-url="https://www.amazon.com">Amazon</button>
+        <button type="button" class="mini-chip" data-platform="facebook" data-url="https://www.facebook.com">Facebook</button>
+        <button type="button" class="mini-chip" data-platform="tiktok" data-url="https://www.tiktok.com">TikTok</button>
+        <button type="button" class="mini-chip" data-platform="blank" data-url="">空白页</button>
+      </div>
+    </div>
     <label>打开指定网页（可选）<input name="startUrl" id="profile-create-start-url" type="text" inputmode="url" placeholder="example.com 或 https://example.com" autocomplete="off" spellcheck="false"></label>
     <div class="network-mode-block">
       <span class="network-mode-label">网络模式</span>
@@ -1176,6 +1233,7 @@
       <label>快捷智能粘贴（自动解析）
         <input id="create-proxy-raw" placeholder="socks5://user:pass@host:port 或 host:port:user:pass" autocomplete="off">
       </label>
+      <label class="check-row" style="margin-top:-4px;margin-bottom:8px;"><input id="create-proxy-save-to-library" type="checkbox"> 同时保存到代理库（方便后续环境复用）</label>
       <label>代理库节点<select id="create-proxy-library"><option value="">手动填写代理（不关联代理库）</option></select></label>
       <div class="form-two">
         <label>代理类型
@@ -1209,7 +1267,60 @@
       <option value="id-ID">Bahasa Indonesia</option>
     </select></label><label>标签<input id="batch-add-tag" value="批量创建" maxlength="40"></label></div>
     <label>所属分组<select id="batch-add-group"></select></label>
+    <div class="platform-preset-group">
+      <label>快速选择平台 / 打开指定网页
+        <select id="batch-add-platform">
+          <option value="other" data-url="" selected>自定义网址</option>
+          <option value="blank" data-url="">空白页 (about:blank)</option>
+          <option value="google" data-url="https://www.google.com">Google (google.com)</option>
+          <option value="youtube" data-url="https://www.youtube.com">YouTube (youtube.com)</option>
+          <option value="twitter" data-url="https://x.com">X / Twitter (x.com)</option>
+          <option value="facebook" data-url="https://www.facebook.com">Facebook (facebook.com)</option>
+          <option value="amazon" data-url="https://www.amazon.com">Amazon (amazon.com)</option>
+          <option value="tiktok" data-url="https://www.tiktok.com">TikTok (tiktok.com)</option>
+        </select>
+      </label>
+      <div class="platform-chips" id="batch-add-platform-chips">
+        <button type="button" class="mini-chip" data-platform="google" data-url="https://www.google.com">Google</button>
+        <button type="button" class="mini-chip" data-platform="youtube" data-url="https://www.youtube.com">YouTube</button>
+        <button type="button" class="mini-chip" data-platform="twitter" data-url="https://x.com">X/Twitter</button>
+        <button type="button" class="mini-chip" data-platform="amazon" data-url="https://www.amazon.com">Amazon</button>
+        <button type="button" class="mini-chip" data-platform="facebook" data-url="https://www.facebook.com">Facebook</button>
+        <button type="button" class="mini-chip" data-platform="tiktok" data-url="https://www.tiktok.com">TikTok</button>
+        <button type="button" class="mini-chip" data-platform="blank" data-url="">空白页</button>
+      </div>
+    </div>
     <label>打开指定网页（可选）<input id="batch-add-start-url" type="text" inputmode="url" placeholder="example.com 或 https://example.com（留空则沿用偏好设置）" autocomplete="off" spellcheck="false"></label>
+    <details class="batch-add-preferences-accordion" style="margin: 8px 0 12px; border: 1px solid var(--ui-border, #e2e8f0); border-radius: 6px; padding: 8px 12px;">
+      <summary style="cursor: pointer; font-weight: 600; color: var(--ui-text, #1e293b); font-size: 12px;">常用偏好设置（批量应用，无需建后逐个修改）</summary>
+      <div style="margin-top: 8px;">
+        <div class="form-two">
+          <label>操作系统画像
+            <select id="batch-add-os">
+              <option value="Windows" selected>Windows</option>
+              <option value="macOS">macOS</option>
+              <option value="Linux">Linux</option>
+            </select>
+          </label>
+          <label>窗口分辨率
+            <select id="batch-add-resolution">
+              <option value="1280x820" selected>1280 × 820（标准）</option>
+              <option value="1440x900">1440 × 900（宽屏）</option>
+              <option value="1600x1000">1600 × 1000</option>
+              <option value="1920x1080">1920 × 1080（全高清）</option>
+            </select>
+          </label>
+        </div>
+        <div class="form-two">
+          <label class="check-row"><input id="batch-add-block-images" type="checkbox"> 拦截图片（节省流量）</label>
+          <label class="check-row"><input id="batch-add-block-sound" type="checkbox"> 拦截声音（静音浏览）</label>
+        </div>
+        <div class="form-two">
+          <label class="check-row"><input id="batch-add-clear-cache" type="checkbox"> 启动时清空缓存</label>
+          <label class="check-row"><input id="batch-add-multi-open" type="checkbox"> 允许环境多开</label>
+        </div>
+      </div>
+    </details>
     <label>偏好设置
       <select id="batch-add-template">
         <option value="">使用新环境默认偏好</option>

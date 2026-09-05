@@ -1760,3 +1760,87 @@ dialog[open] .dialog-head > button {
   .start-progress-fill { transition: none; }
   .start-progress-shimmer { animation: none; display: none; }
 }
+
+/* Platform preset group and mini chips */
+.platform-preset-group {
+  margin-top: 4px;
+  margin-bottom: 6px;
+}
+.platform-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  margin-bottom: 4px;
+}
+.mini-chip {
+  padding: 3px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 999px;
+  border: 1px solid var(--ui-border, #d1d5db);
+  background: var(--ui-bg-subtle, #f8fafc);
+  color: var(--ui-text, #1e293b);
+  cursor: pointer;
+  transition: all 160ms ease;
+  user-select: none;
+}
+.mini-chip:hover {
+  border-color: var(--ui-accent, #245cff);
+  color: var(--ui-accent, #245cff);
+  background: var(--ui-accent-soft, rgba(36, 92, 255, 0.08));
+}
+.mini-chip.active {
+  border-color: var(--ui-accent, #245cff);
+  background: var(--ui-accent, #245cff);
+  color: #fff;
+  font-weight: 500;
+}
+
+/* Batch add preferences accordion */
+.batch-add-preferences-accordion summary {
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.batch-add-preferences-accordion summary::-webkit-details-marker {
+  display: none;
+}
+.batch-add-preferences-accordion summary::before {
+  content: '▶';
+  font-size: 9px;
+  display: inline-block;
+  transition: transform 160ms ease;
+}
+.batch-add-preferences-accordion[open] summary::before {
+  transform: rotate(90deg);
+}
+
+/* Proxy apply dialog */
+#proxy-apply-dialog {
+  width: min(540px, 94vw);
+}
+#proxy-apply-dialog .assign-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+#proxy-apply-dialog .assign-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+#proxy-apply-dialog .assign-item:hover {
+  background: var(--ui-bg-subtle, #f1f5f9);
+}
+#proxy-apply-dialog .assign-item input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
