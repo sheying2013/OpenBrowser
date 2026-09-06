@@ -130,20 +130,35 @@ function normalizeStep(step = {}) {
   delete params.id;
   const blocks = Array.isArray(params.blocks) ? params.blocks : [];
   let children = Array.isArray(step.children) ? step.children.map(normalizeStep) : [];
+  let elseChildren = Array.isArray(step.elseChildren)
+    ? step.elseChildren.map(normalizeStep)
+    : (Array.isArray(params.elseChildren) ? params.elseChildren.map(normalizeStep) : undefined);
+  let errorChildren = Array.isArray(step.errorChildren)
+    ? step.errorChildren.map(normalizeStep)
+    : (Array.isArray(params.errorChildren) ? params.errorChildren.map(normalizeStep) : undefined);
+  delete params.elseChildren;
+  delete params.errorChildren;
   if (blocks.length) {
     children = blocks.map((block) => normalizeStep(block.data || block));
     delete params.blocks;
   }
-  return {
+  const result = {
     type,
     params,
     children,
     id: step.id || null,
   };
+  if (elseChildren) result.elseChildren = elseChildren;
+  if (errorChildren) result.errorChildren = errorChildren;
+  return result;
 }
 
 function isLoopType(type) {
   return ['forLists', 'forElements', 'forTimes', 'whileData'].includes(type);
+}
+
+function isContainerType(type) {
+  return ['forLists', 'forElements', 'forTimes', 'whileData', 'openNewBrowser'].includes(type);
 }
 
 function edgeHandle(edge, nodeId) {
@@ -152,6 +167,51 @@ function edgeHandle(edge, nodeId) {
 
 function isRegistered(type) {
   return RPA_PLUS_ACTIONS.includes(type);
+}
+
+function findConvergence(startA, startB, outgoing, stopIds = new Set()) {
+  if (!startA || !startB) return null;
+  if (startA === startB) return startA;
+
+  function getReachable(start) {
+    const visited = new Set();
+    const q = [start];
+    while (q.length > 0) {
+      const curr = q.shift();
+      if (!curr || visited.has(curr) || stopIds.has(curr)) continue;
+      visited.add(curr);
+      const edges = outgoing.get(curr) || [];
+      for (const e of edges) {
+        const h = edgeHandle(e, curr);
+        if (h === '-output-start' || h === '-output-error') continue;
+        if (!visited.has(e.target) && !stopIds.has(e.target)) {
+          q.push(e.target);
+        }
+      }
+    }
+    return visited;
+  }
+
+  const reachA = getReachable(startA);
+  if (reachA.has(startB)) return startB;
+  const reachB = getReachable(startB);
+  if (reachB.has(startA)) return startA;
+
+  const common = new Set([...reachA].filter((id) => reachB.has(id)));
+  if (common.size === 0) return null;
+
+  for (const c of common) {
+    let hasPredecessor = false;
+    for (const other of common) {
+      if (other === c) continue;
+      if (getReachable(other).has(c)) {
+        hasPredecessor = true;
+        break;
+      }
+    }
+    if (!hasPredecessor) return c;
+  }
+  return null;
 }
 
 /**
@@ -171,10 +231,6 @@ function parseProcessContent(raw) {
   if (Array.isArray(value.steps)) return value.steps.map(normalizeStep);
   if (Array.isArray(value.content)) return value.content.map(normalizeStep);
   if (Array.isArray(value.nodes)) {
-    // Compile the graph into nested steps. Loop bodies return through an
-    // `input-end` edge, while condition branches use `output` / `output-else`.
-    // Keeping these boundaries prevents marketplace workflows from silently
-    // becoming a one-pass linear sequence.
     const byId = new Map(value.nodes.map((n) => [n.id, n]));
     const start = value.nodes.find((n) => n.type === 'startNode') || value.nodes[0];
     const outgoing = new Map();
@@ -189,46 +245,84 @@ function parseProcessContent(raw) {
       const ordered = [];
       let currentId = nodeId;
       const path = new Set(pathIds);
+
       while (currentId && !stopIds.has(currentId) && !path.has(currentId)) {
         const current = byId.get(currentId);
         if (!current) break;
         path.add(currentId);
         const edges = outgoing.get(currentId) || [];
         const type = String(current.type || '');
+        let nextId = null;
 
         if (type !== 'startNode') {
           const step = normalizeStep(current);
+
+          // Error branch (-output-error) available on all nodes
+          const errorEdge = edges.find((edge) => /-output-error$/.test(edgeHandle(edge, currentId)));
+          if (errorEdge) {
+            step.errorChildren = compileSequence(errorEdge.target, new Set(stopIds), new Set(path));
+          }
+
           if (type === 'ifElse') {
-            const trueEdge = edges.find((edge) => /-output$/.test(edgeHandle(edge, currentId)));
-            const falseEdge = edges.find((edge) => /-output-else$/.test(edgeHandle(edge, currentId)));
-            step.children = trueEdge
-              ? compileSequence(trueEdge.target, new Set(stopIds), new Set(path))
-              : step.children;
-            if (falseEdge) {
-              step.elseChildren = compileSequence(falseEdge.target, new Set(stopIds), new Set(path));
+            const ifEdge = edges.find((edge) => /-output-if$/.test(edgeHandle(edge, currentId)));
+            const elseEdge = edges.find((edge) => /-output-else$/.test(edgeHandle(edge, currentId)));
+            const outEdge = edges.find((edge) => /-output$/.test(edgeHandle(edge, currentId)));
+
+            if (ifEdge && outEdge) {
+              // Explicit continuation edge
+              step.children = compileSequence(ifEdge.target, new Set([...stopIds, outEdge.target]), new Set(path));
+              if (elseEdge) {
+                step.elseChildren = compileSequence(elseEdge.target, new Set([...stopIds, outEdge.target]), new Set(path));
+              }
+              nextId = outEdge.target;
+            } else {
+              const trueTarget = (ifEdge || outEdge)?.target;
+              const falseTarget = elseEdge?.target;
+
+              if (trueTarget && falseTarget) {
+                const conv = findConvergence(trueTarget, falseTarget, outgoing, stopIds);
+                const branchStops = conv ? new Set([...stopIds, conv]) : new Set(stopIds);
+                step.children = (trueTarget === conv) ? [] : compileSequence(trueTarget, branchStops, new Set(path));
+                step.elseChildren = (falseTarget === conv) ? [] : compileSequence(falseTarget, branchStops, new Set(path));
+                nextId = conv || null;
+              } else if (trueTarget) {
+                step.children = compileSequence(trueTarget, new Set(stopIds), new Set(path));
+                nextId = null;
+              } else if (falseTarget) {
+                step.elseChildren = compileSequence(falseTarget, new Set(stopIds), new Set(path));
+                nextId = null;
+              }
             }
-          } else if (isLoopType(type)) {
+          } else if (isContainerType(type) || edges.some((edge) => /-output-start$/.test(edgeHandle(edge, currentId)))) {
             const bodyEdge = edges.find((edge) => /-output-start$/.test(edgeHandle(edge, currentId)));
             if (bodyEdge) {
               step.children = compileSequence(bodyEdge.target, new Set([...stopIds, currentId]), new Set(path));
             }
+            const contEdge = edges.find((edge) => /-output$/.test(edgeHandle(edge, currentId)));
+            nextId = contEdge?.target || null;
+          } else {
+            const contEdge = edges.find((edge) => {
+              const h = edgeHandle(edge, currentId);
+              return !/-output-(?:start|else|if|error)$/.test(h);
+            });
+            nextId = contEdge?.target || null;
           }
+
           ordered.push(step);
+        } else {
+          const contEdge = edges.find((edge) => {
+            const h = edgeHandle(edge, currentId);
+            return !/-output-(?:start|else|if|error)$/.test(h);
+          });
+          nextId = contEdge?.target || null;
         }
 
-        const continuation = edges.find((edge) => {
-          const handle = edgeHandle(edge, currentId);
-          if (type === 'ifElse') return false;
-          if (isLoopType(type)) return /-output$/.test(handle);
-          return !/-output-(?:start|else)$/.test(handle);
-        });
-        currentId = continuation?.target || null;
+        currentId = nextId;
       }
       return ordered;
     };
 
     const ordered = compileSequence(start?.id);
-    // Fallback: array order excluding startNode (workflow export without edges)
     if (!ordered.length) {
       return value.nodes.filter((n) => n && n.type !== 'startNode').map(normalizeStep);
     }
@@ -250,4 +344,6 @@ module.exports = {
   isRegistered,
   parseProcessContent,
   randomNum,
+  findConvergence,
+  isContainerType,
 };

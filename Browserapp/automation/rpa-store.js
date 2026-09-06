@@ -252,8 +252,10 @@ class RpaStore {
       }
       if (Array.isArray(step.children)) step.children.forEach(mark);
       if (Array.isArray(step.elseChildren)) step.elseChildren.forEach(mark);
+      if (Array.isArray(step.errorChildren)) step.errorChildren.forEach(mark);
       if (Array.isArray(step.params?.children)) step.params.children.forEach(mark);
       if (Array.isArray(step.params?.elseChildren)) step.params.elseChildren.forEach(mark);
+      if (Array.isArray(step.params?.errorChildren)) step.params.errorChildren.forEach(mark);
     };
     steps.forEach(mark);
     return steps;

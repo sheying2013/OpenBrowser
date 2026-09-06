@@ -118,9 +118,9 @@ const EXECUTABLE_STEP_TYPES = new Set([
   'click', 'clickelement', 'waitforselector', 'fortimes',
   'javascript', 'evaluate', 'script', 'js',
   'scroll', 'scrollpage', 'screenshotpage', 'screenshot',
-  'geturl', 'clearcookies', 'startnode', 'noop', 'breakloop',
+  'geturl', 'clearcookies', 'startnode', 'noop', 'breakloop', 'break',
   'key', 'press', 'keyboard',
-  'combineprocess', 'getelement', 'passingelement', 'focuselement',
+  'combineprocess', 'getelement', 'passingelement', 'hover', 'focuselement',
   'selectelement', 'getrequest',
   'ifelse', 'forelements', 'forlists', 'whiledata', 'tojson', 'extractkey',
   'extractdata', 'savedata', 'exportexcel', 'saveremark', 'variableoperation',
@@ -150,6 +150,10 @@ function findUnsupportedSteps(steps, path = []) {
       ? step.elseChildren
       : (Array.isArray(step.params?.elseChildren) ? step.params.elseChildren : null);
     if (elseChildren) unsupported.push(...findUnsupportedSteps(elseChildren, currentPath));
+    const errorChildren = Array.isArray(step.errorChildren)
+      ? step.errorChildren
+      : (Array.isArray(step.params?.errorChildren) ? step.params.errorChildren : null);
+    if (errorChildren) unsupported.push(...findUnsupportedSteps(errorChildren, currentPath));
   }
   return unsupported;
 }
@@ -204,6 +208,82 @@ function formatRpaError(error) {
     ].join(' ');
   }
   return message;
+}
+
+
+class BreakLoopSignal extends Error {
+  constructor(message = 'breakLoop') {
+    super(message);
+    this.name = 'BreakLoopSignal';
+  }
+}
+
+function resolveSerial(params = {}) {
+  if (params.serialType === 'randomInterval' || params.serialType === 'random') {
+    const min = Number(params.serialMin) || 1;
+    const max = Number(params.serialMax) || 1;
+    return randomBetween(min, max);
+  }
+  const val = Number(params.serial);
+  return Number.isFinite(val) && val > 0 ? Math.floor(val) : 1;
+}
+
+function resolveElementTarget(params = {}, variables = {}) {
+  let selector = '';
+  let selectorRadio = params.selectorRadio || 'CSS';
+  if (params.selectorType === 'element' && params.element) {
+    const stored = variables[params.element];
+    if (typeof stored === 'string') {
+      selector = stored;
+    } else if (stored && typeof stored === 'object') {
+      selector = stored.selector || '';
+      if (stored.selectorRadio) selectorRadio = stored.selectorRadio;
+    }
+  } else {
+    selector = String(params.selector || '');
+    if (!selector && params.element && variables[params.element]) {
+      const stored = variables[params.element];
+      if (typeof stored === 'string') {
+        selector = stored;
+      } else if (stored && typeof stored === 'object') {
+        selector = stored.selector || '';
+        if (stored.selectorRadio) selectorRadio = stored.selectorRadio;
+      }
+    }
+  }
+  if (selector && variables) {
+    selector = interpolate(selector, variables);
+  }
+  const serial = resolveSerial(params);
+  return { selector, selectorRadio, serial };
+}
+
+function resolveConditionValue(input, variables = {}) {
+  if (Array.isArray(input)) {
+    return input.map((item) => resolveConditionValue(item, variables));
+  }
+  if (input == null) return input;
+  if (typeof input !== 'string') return input;
+  const trimmed = input.trim();
+  const match = trimmed.match(/^\$\{([^}]+)\}$/);
+  if (match) {
+    return variables[match[1].trim()];
+  }
+  if (trimmed === 'true') return true;
+  if (trimmed === 'false') return false;
+  if (trimmed === 'null') return null;
+  if (trimmed === 'undefined') return undefined;
+
+  if (Object.prototype.hasOwnProperty.call(variables, trimmed)) {
+    return variables[trimmed];
+  }
+  if (trimmed.includes('${')) {
+    return interpolate(trimmed, variables);
+  }
+  if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed)) {
+    return undefined;
+  }
+  return input;
 }
 
 /**
@@ -339,7 +419,15 @@ class RpaEngine {
         const step = steps[index] || {};
         const type = String(step.type || step.action || '').toLowerCase();
         await log(`step ${index + 1}/${steps.length}: ${type}`);
-        await this.executeStep(port, step, context);
+        try {
+          await this.executeStep(port, step, context);
+        } catch (stepErr) {
+          if (stepErr instanceof BreakLoopSignal) {
+            await log('task received break signal at top level; exiting flow');
+            break;
+          }
+          throw stepErr;
+        }
       }
 
       const snapshot = snapshotVariables(context.variables);
@@ -432,6 +520,27 @@ class RpaEngine {
   }
 
   async executeStep(port, step, ctx) {
+    try {
+      await this.executeStepInternal(port, step, ctx);
+    } catch (error) {
+      if (error instanceof BreakLoopSignal) {
+        throw error;
+      }
+      const errorChildren = Array.isArray(step.errorChildren)
+        ? step.errorChildren
+        : (Array.isArray(step.params?.errorChildren) ? step.params.errorChildren : null);
+      if (Array.isArray(errorChildren) && errorChildren.length > 0) {
+        if (ctx?.log) await ctx.log(`step error handled by errorChildren: ${error.message}`);
+        for (const child of errorChildren) {
+          await this.executeStep(port, child, ctx);
+        }
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async executeStepInternal(port, step, ctx) {
     port = ctx?.port || port;
     const type = String(step.type || step.action || '').toLowerCase();
     const rawParams = step.params && typeof step.params === 'object' ? step.params : step;
@@ -444,7 +553,6 @@ class RpaEngine {
 
     if (type === 'wait' || type === 'sleep' || type === 'delay' || type === 'waittime') {
       let ms = Number(params.ms ?? params.timeout ?? params.time ?? 1000);
-      // timeoutType === "randomInterval" → random between timeoutMin/timeoutMax
       if (params.timeoutType === 'randomInterval' || params.timeoutType === 'random') {
         ms = randomBetween(params.timeoutMin ?? params.minMs ?? 300, params.timeoutMax ?? params.maxMs ?? 800);
       }
@@ -458,7 +566,7 @@ class RpaEngine {
       return;
     }
 
-    if (type === 'reload') {
+    if (type === 'reload' || type === 'refreshpage') {
       await cdp.reload(port);
       return;
     }
@@ -475,21 +583,34 @@ class RpaEngine {
     }
 
     if (type === 'typetext' || type === 'type' || type === 'input' || type === 'inserttext' || type === 'inputcontent') {
-      const inputText = text(params.text ?? params.value ?? params.content ?? (params.isRandom ? params.randomContent : ''));
-      const clear = params.clear || params.isClear;
+      const isRandom = params.isRandom === '1' || params.isRandom === 1 || params.isRandom === true;
+      let inputText = '';
+      if (isRandom && params.randomContent) {
+        const lines = String(params.randomContent).split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+        if (lines.length > 0) {
+          inputText = lines[Math.floor(Math.random() * lines.length)];
+        }
+      }
+      if (!inputText) {
+        inputText = text(params.text ?? params.value ?? params.content ?? params.randomContent ?? '');
+      }
+      const clear = params.clear === true || params.clear === 1 || params.clear === '1'
+        || params.isClear === true || params.isClear === 1 || params.isClear === '1';
       const optional = isOptionalElementStep(params);
-      if (clear && !params.selector) await cdp.clearFocused(port).catch(() => {});
-      if (params.selector) {
+      const target = resolveElementTarget(params, variables);
+      const selector = target.selector;
+
+      if (clear && !selector) await cdp.clearFocused(port).catch(() => {});
+      if (selector) {
         try {
           await this.withPage(port, async (ws) => {
-            await this.focusSelector(ws, params.selector, params.selectorRadio);
+            await this.focusSelector(ws, selector, target.selectorRadio, target.serial);
             if (clear) {
               await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 65, modifiers: 2 });
               await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 65, modifiers: 2 });
               await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 8 });
               await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 8 });
             }
-            // intervals / human typing
             const human = params.human || params.intervals;
             if (human) {
               for (const ch of inputText) {
@@ -502,7 +623,7 @@ class RpaEngine {
           });
         } catch (error) {
           if (optional && isMissingElementError(error)) {
-            if (ctx?.log) await ctx.log('optional input skipped (not found): ' + params.selector);
+            if (ctx?.log) await ctx.log('optional input skipped (not found): ' + selector);
             return;
           }
           throw error;
@@ -515,15 +636,16 @@ class RpaEngine {
 
     if (type === 'click' || type === 'clickelement') {
       const optional = isOptionalElementStep(params);
+      const target = resolveElementTarget(params, variables);
       await this.withPage(port, async (ws) => {
-        if (params.selector) {
-          const box = await this.boundingBox(ws, params.selector, params.selectorRadio);
+        if (target.selector) {
+          const box = await this.boundingBox(ws, target.selector, target.selectorRadio, target.serial);
           if (!box) {
             if (optional) {
-              if (ctx?.log) await ctx.log('optional click skipped (not found): ' + params.selector);
+              if (ctx?.log) await ctx.log('optional click skipped (not found): ' + target.selector);
               return;
             }
-            throw new Error('Element not found: ' + params.selector);
+            throw new Error('Element not found: ' + target.selector);
           }
           const x = box.x + box.width / 2;
           const y = box.y + box.height / 2;
@@ -535,8 +657,10 @@ class RpaEngine {
         } else if (Number.isFinite(Number(params.x)) && Number.isFinite(Number(params.y))) {
           const x = Number(params.x);
           const y = Number(params.y);
-          await cdp.call(ws, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
-          await cdp.call(ws, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+          const button = params.button === 'right' ? 'right' : params.button === 'middle' ? 'middle' : 'left';
+          const clickCount = params.type === 'dblclick' ? 2 : 1;
+          await cdp.call(ws, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount });
+          await cdp.call(ws, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount });
         } else {
           throw new Error('click requires selector or x/y');
         }
@@ -544,9 +668,36 @@ class RpaEngine {
       return;
     }
 
+    if (type === 'passingelement' || type === 'hover') {
+      const optional = isOptionalElementStep(params);
+      const target = resolveElementTarget(params, variables);
+      if (!target.selector) {
+        if (optional) {
+          if (ctx?.log) await ctx.log('optional passingElement skipped (no selector)');
+          return;
+        }
+        throw new Error('passingElement requires selector or a stored element');
+      }
+      await this.withPage(port, async (ws) => {
+        const box = await this.boundingBox(ws, target.selector, target.selectorRadio, target.serial);
+        if (!box) {
+          if (optional) {
+            if (ctx?.log) await ctx.log('optional passingElement skipped (not found): ' + target.selector);
+            return;
+          }
+          throw new Error('Element not found: ' + target.selector);
+        }
+        const x = box.x + box.width / 2;
+        const y = box.y + box.height / 2;
+        await cdp.call(ws, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+      });
+      return;
+    }
+
     if (type === 'selectelement') {
       const optional = isOptionalElementStep(params);
-      const selector = text(params.selector || variables[params.element]?.selector);
+      const target = resolveElementTarget(params, variables);
+      const selector = target.selector;
       const selectedValue = text(params.value);
       if (!selector) {
         if (optional) {
@@ -557,13 +708,13 @@ class RpaEngine {
       }
       try {
         await this.withPage(port, async (ws) => {
-          const expression = this.elementExpression(selector, params.selectorRadio, `el => {
+          const expression = this.elementExpression(selector, target.selectorRadio, `el => {
             if (!(el instanceof HTMLSelectElement)) return false;
             el.value = ${JSON.stringify(selectedValue)};
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
             return el.value === ${JSON.stringify(selectedValue)};
-          }`);
+          }`, false, target.serial);
           const result = await cdp.call(ws, 'Runtime.evaluate', { expression, returnByValue: true });
           if (result.result?.value !== true) throw new Error('selectElement failed: ' + selector);
         });
@@ -578,31 +729,47 @@ class RpaEngine {
     }
 
     if (type === 'waitforselector') {
-      const timeout = Number(params.timeout) || 30000;
-      const selector = String(params.selector || '');
+      const target = resolveElementTarget(params, variables);
+      const selector = target.selector;
       if (!selector) throw new Error('waitForSelector requires selector');
+      const timeout = Number(params.timeout) || 30000;
+      const isShow = !(params.isShow === '0' || params.isShow === 0 || params.isShow === false);
       const deadline = Date.now() + timeout;
+      let success = false;
       while (Date.now() < deadline) {
         if (this.cancelled.has?.(null)) break;
         const found = await this.withPage(port, async (ws) => {
           try {
-            await this.focusSelector(ws, selector, params.selectorRadio);
+            await this.focusSelector(ws, selector, target.selectorRadio, target.serial);
             return true;
           } catch (_) { return false; }
         });
-        if (found) return;
+        if (isShow ? found : !found) {
+          success = true;
+          break;
+        }
         await sleep(200);
       }
-      if (isOptionalElementStep(params)) return;
-      throw new Error('waitForSelector timeout: ' + selector);
+      if (params.variable) {
+        variables[params.variable] = success;
+      }
+      if (!success && !params.variable && !isOptionalElementStep(params)) {
+        throw new Error('waitForSelector timeout: ' + selector);
+      }
+      return;
     }
 
     if (type === 'fortimes') {
       const times = Math.max(0, Math.min(1000, Number(value(params.times)) || 1));
       const children = Array.isArray(step.children) ? step.children : (Array.isArray(params.children) ? params.children : []);
-      for (let i = 0; i < times; i += 1) {
-        if (params.variableIndex) variables[params.variableIndex] = i;
-        for (const child of children) await this.executeStep(port, child, ctx);
+      try {
+        for (let i = 0; i < times; i += 1) {
+          if (params.variableIndex) variables[params.variableIndex] = i;
+          for (const child of children) await this.executeStep(port, child, ctx);
+        }
+      } catch (err) {
+        if (err instanceof BreakLoopSignal) return;
+        throw err;
       }
       return;
     }
@@ -621,74 +788,106 @@ class RpaEngine {
       }
       if (!Array.isArray(items)) throw new Error('forLists requires an array variable: ' + String(params.content || ''));
       const children = Array.isArray(step.children) ? step.children : (Array.isArray(params.children) ? params.children : []);
-      for (let index = 0; index < items.length; index += 1) {
-        variables[params.variable || 'item'] = items[index];
-        if (params.variableIndex) variables[params.variableIndex] = index;
-        for (const child of children) await this.executeStep(port, child, ctx);
+      try {
+        for (let index = 0; index < items.length; index += 1) {
+          variables[params.variable || 'item'] = items[index];
+          if (params.variableIndex) variables[params.variableIndex] = index;
+          for (const child of children) await this.executeStep(port, child, ctx);
+        }
+      } catch (err) {
+        if (err instanceof BreakLoopSignal) return;
+        throw err;
       }
       return;
     }
 
-    if (type === 'ifelse' || type === 'whiledata') {
+    if (type === 'ifelse') {
       const condition = this.evaluateCondition(params, variables);
       const children = Array.isArray(step.children) ? step.children : (Array.isArray(params.children) ? params.children : []);
       const elseChildren = Array.isArray(step.elseChildren) ? step.elseChildren : (Array.isArray(params.elseChildren) ? params.elseChildren : []);
-      if (type === 'ifelse' && !condition) {
+      if (!condition) {
         for (const child of elseChildren) await this.executeStep(port, child, ctx);
-        return;
-      }
-      const max = type === 'whiledata' ? 100 : 1;
-      for (let count = 0; count < max && (type === 'ifelse' || this.evaluateCondition(params, variables)); count += 1) {
+      } else {
         for (const child of children) await this.executeStep(port, child, ctx);
       }
       return;
     }
 
-    if (type === 'getelement' || type === 'passingelement' || type === 'focuselement') {
+    if (type === 'whiledata') {
+      const max = Math.max(1, Math.min(10000, Number(params.maxLoops || 100)));
+      const children = Array.isArray(step.children) ? step.children : (Array.isArray(params.children) ? params.children : []);
+      try {
+        for (let count = 0; count < max && this.evaluateCondition(params, variables); count += 1) {
+          for (const child of children) await this.executeStep(port, child, ctx);
+        }
+      } catch (err) {
+        if (err instanceof BreakLoopSignal) return;
+        throw err;
+      }
+      return;
+    }
+
+    if (type === 'focuselement') {
       const optional = isOptionalElementStep(params);
-      const selector = text(params.selector || (params.selectorType === 'element' ? variables[params.element]?.selector : ''));
-      const referenced = params.element && variables[params.element];
-      if (!selector && !referenced) {
+      const target = resolveElementTarget(params, variables);
+      if (!target.selector) {
         if (optional) {
-          if (ctx?.log) await ctx.log(`optional ${type} skipped (no selector)`);
+          if (ctx?.log) await ctx.log('optional focusElement skipped (no selector)');
           return;
         }
-        throw new Error(`${type} requires selector or a stored element`);
+        throw new Error('focusElement requires selector or a stored element');
       }
-      if (type === 'focuselement') {
-        try {
-          await this.withPage(port, (ws) => this.focusSelector(ws, selector || referenced.selector, params.selectorRadio));
-        } catch (error) {
-          if (optional && isMissingElementError(error)) {
-            if (ctx?.log) await ctx.log('optional focus skipped: ' + (selector || referenced.selector));
-            return;
-          }
-          throw error;
+      try {
+        await this.withPage(port, (ws) => this.focusSelector(ws, target.selector, target.selectorRadio, target.serial));
+      } catch (error) {
+        if (optional && isMissingElementError(error)) {
+          if (ctx?.log) await ctx.log('optional focus skipped: ' + target.selector);
+          return;
         }
-        return;
+        throw error;
       }
-      const result = await this.withPage(port, async (ws) => this.readElement(ws, selector || referenced.selector, params));
-      if (result == null) {
+      return;
+    }
+
+    if (type === 'getelement') {
+      const optional = isOptionalElementStep(params);
+      const target = resolveElementTarget(params, variables);
+      if (!target.selector) {
         if (optional) {
-          if (ctx?.log) await ctx.log('optional getElement skipped (not found): ' + (selector || referenced.selector));
+          if (ctx?.log) await ctx.log('optional getElement skipped (no selector)');
           if (params.variable) variables[params.variable] = null;
           return;
         }
-        throw new Error('Element not found: ' + (selector || referenced.selector));
+        throw new Error('getElement requires selector or a stored element');
+      }
+      const result = await this.withPage(port, async (ws) => this.readElement(ws, target.selector, params, target.serial));
+      if (result == null) {
+        if (optional) {
+          if (ctx?.log) await ctx.log('optional getElement skipped (not found): ' + target.selector);
+          if (params.variable) variables[params.variable] = null;
+          return;
+        }
+        throw new Error('Element not found: ' + target.selector);
       }
       if (params.variable) variables[params.variable] = result;
       return;
     }
 
     if (type === 'forelements') {
-      const selector = text(params.selector);
+      const target = resolveElementTarget(params, variables);
+      const selector = target.selector;
       if (!selector) throw new Error('forElements requires selector');
       const elements = await this.withPage(port, (ws) => this.listElements(ws, selector, params));
       const children = Array.isArray(step.children) ? step.children : (Array.isArray(params.children) ? params.children : []);
-      for (let index = 0; index < elements.length; index += 1) {
-        variables[params.variable || 'element'] = elements[index];
-        if (params.variableIndex) variables[params.variableIndex] = index;
-        for (const child of children) await this.executeStep(port, child, ctx);
+      try {
+        for (let index = 0; index < elements.length; index += 1) {
+          variables[params.variable || 'element'] = elements[index];
+          if (params.variableIndex) variables[params.variableIndex] = index;
+          for (const child of children) await this.executeStep(port, child, ctx);
+        }
+      } catch (err) {
+        if (err instanceof BreakLoopSignal) return;
+        throw err;
       }
       return;
     }
@@ -741,9 +940,21 @@ class RpaEngine {
     }
 
     if (type === 'variableoperation') {
+      const opType = String(params.type || '').toLowerCase();
       const fields = Array.isArray(params.fields) ? params.fields.map(String) : [];
-      if (String(params.type || '').toLowerCase() === 'export') {
+      if (opType === 'export') {
         variables.__exported = Object.fromEntries(fields.map((field) => [field, variables[field]]));
+      } else if (opType === 'add' || opType === 'set') {
+        const list = Array.isArray(params.variableObjList) ? params.variableObjList : [];
+        for (const item of list) {
+          if (!item || !item.key) continue;
+          let val = getVariableValue(item.value, variables);
+          if (item.type === 'number') {
+            const num = Number(val);
+            val = Number.isFinite(num) ? num : val;
+          }
+          variables[String(item.key).trim()] = val;
+        }
       }
       return;
     }
@@ -767,7 +978,6 @@ class RpaEngine {
         ?? params.excelPath
         ?? params.content
       ).trim();
-      // Unresolved ${var} placeholders mean the user has not configured a spreadsheet yet.
       if (!filePath || /\$\{[^}]+\}/.test(filePath)) {
         if (!skippable) {
           throw new Error(
@@ -872,7 +1082,6 @@ class RpaEngine {
     }
 
     if (type === 'get2facode') {
-      // Best-effort: read a pre-supplied code from variables or params.
       const code = text(params.code || params.content || variables[params.variable || 'otp'] || '');
       variables[params.saveVariable || params.variable || 'otpCode'] = code;
       if (!code && ctx?.log) await ctx.log('get2faCode: no code provided in variables/params');
@@ -880,7 +1089,6 @@ class RpaEngine {
     }
 
     if (type === 'googlesheet') {
-      // Offline-safe stub: accept preloaded sheet data from variables.
       const sheet = variables[params.variable || 'sheetData'];
       if (sheet == null) {
         if (ctx?.log) await ctx.log('googleSheet: no local sheetData variable; skipped remote Google API');
@@ -997,21 +1205,36 @@ class RpaEngine {
       return;
     }
 
-    if (type === 'javascript' || type === 'evaluate' || type === 'script' || type === 'js') {
-      // handled below with evaluate
-    }
-
     if (type === 'scroll' || type === 'scrollpage') {
       await this.withPage(port, async (ws) => {
-        const deltaX = Number(params.deltaX || 0);
-        const deltaY = Number(params.deltaY ?? params.y ?? 400);
-        await cdp.call(ws, 'Input.dispatchMouseEvent', {
-          type: 'mouseWheel',
-          x: Number(params.x || 200),
-          y: Number(params.y || 200),
-          deltaX,
-          deltaY,
-        });
+        const scrollType = String(params.scrollType || 'pixel').toLowerCase();
+        const behavior = params.type === 'smooth' ? 'smooth' : 'auto';
+        if (scrollType === 'position') {
+          const position = String(params.position || 'bottom').toLowerCase();
+          let scrollExpr = '';
+          if (position === 'top') {
+            scrollExpr = `window.scrollTo({ top: 0, left: 0, behavior: ${JSON.stringify(behavior)} })`;
+          } else if (position === 'middle') {
+            scrollExpr = `window.scrollTo({ top: (document.documentElement.scrollHeight || document.body.scrollHeight) / 2, behavior: ${JSON.stringify(behavior)} })`;
+          } else {
+            scrollExpr = `window.scrollTo({ top: (document.documentElement.scrollHeight || document.body.scrollHeight), behavior: ${JSON.stringify(behavior)} })`;
+          }
+          await cdp.call(ws, 'Runtime.evaluate', { expression: scrollExpr, returnByValue: true });
+        } else {
+          const distance = Number(params.distance ?? params.deltaY ?? params.y ?? 400);
+          const deltaX = Number(params.deltaX || 0);
+          await cdp.call(ws, 'Runtime.evaluate', {
+            expression: `window.scrollBy({ top: ${distance}, left: ${deltaX}, behavior: ${JSON.stringify(behavior)} })`,
+            returnByValue: true,
+          });
+          await cdp.call(ws, 'Input.dispatchMouseEvent', {
+            type: 'mouseWheel',
+            x: Number(params.x || 200),
+            y: Number(params.y || 200),
+            deltaX,
+            deltaY: distance || 100,
+          }).catch(() => {});
+        }
       });
       return;
     }
@@ -1037,11 +1260,6 @@ class RpaEngine {
         if (params.variable) variables[params.variable] = resultValue;
         if (ctx?.log) await ctx.log('evaluate result: ' + JSON.stringify(resultValue));
       });
-      return;
-    }
-
-    if (type === 'refreshpage' || type === 'reload') {
-      await cdp.reload(port);
       return;
     }
 
@@ -1095,13 +1313,33 @@ class RpaEngine {
       if (!profile) throw new Error('openNewBrowser local environment not found: ' + requestedNumber);
       const started = await this.engine.start(profile);
       if (!started?.port) throw new Error('openNewBrowser did not return a CDP port');
+      const prevPort = ctx.port;
+      const prevProfileId = ctx.activeProfileId;
       ctx.port = started.port;
       ctx.activeProfileId = profile.id;
       variables.openedBrowserProfileId = profile.id;
+
+      const children = Array.isArray(step.children) ? step.children : (Array.isArray(params.children) ? params.children : []);
+      try {
+        for (const child of children) {
+          await this.executeStep(ctx.port, child, ctx);
+        }
+      } finally {
+        const shouldClose = params.autoClose === true || params.autoClose === 1 || params.autoClose === '1';
+        if (shouldClose && typeof this.engine?.stop === 'function') {
+          await this.engine.stop(profile.id).catch(() => {});
+        }
+        ctx.port = prevPort;
+        ctx.activeProfileId = prevProfileId;
+      }
       return;
     }
 
-    if (type === 'startnode' || type === 'noop' || type === 'breakloop') return;
+    if (type === 'breakloop' || type === 'break') {
+      throw new BreakLoopSignal();
+    }
+
+    if (type === 'startnode' || type === 'noop') return;
 
     if (type === 'key' || type === 'press' || type === 'keyboard') {
       await this.withPage(port, async (ws) => {
@@ -1231,24 +1469,90 @@ class RpaEngine {
   }
 
   evaluateCondition(params, variables) {
-    const conditions = Array.isArray(params.condition) ? params.condition : [params.condition];
-    const values = conditions.filter((item) => item != null && item !== '').map((item) => valueOf(item, variables));
-    const actual = values.length <= 1 ? values[0] : values;
-    const expected = valueOf(params.result, variables);
+    const rawCond = params.condition;
+    const condList = Array.isArray(rawCond) ? rawCond : [rawCond];
+    const resolvedValues = condList.map((item) => resolveConditionValue(item, variables));
+    const actual = (Array.isArray(rawCond) && rawCond.length > 1) ? resolvedValues : resolvedValues[0];
+    const expected = getVariableValue(params.result, variables);
     const relation = String(params.relation || 'exist').toLowerCase();
-    if (relation === 'exist') return Array.isArray(actual) ? actual.every(Boolean) : Boolean(actual);
-    if (relation === 'notexist') return Array.isArray(actual) ? actual.every((item) => !item) : !actual;
-    if (relation === 'contain') return String(actual ?? '').includes(String(expected ?? ''));
-    if (relation === 'equal') return String(actual ?? '') === String(expected ?? '');
-    if (relation === 'notequal') return String(actual ?? '') !== String(expected ?? '');
+
+    function isPresent(val) {
+      if (val === undefined || val === null || val === '' || val === false) return false;
+      if (Array.isArray(val) && val.length === 0) return false;
+      return true;
+    }
+
+    if (relation === 'exist') {
+      if (expected != null && String(expected).trim() !== '') {
+        const expectedStr = String(expected).trim();
+        const candidates = expectedStr.split(',').map((s) => s.trim());
+        if (Array.isArray(actual)) {
+          return actual.every((v) => candidates.includes(String(v ?? '').trim()) || isPresent(v));
+        }
+        return candidates.includes(String(actual ?? '').trim());
+      }
+      return Array.isArray(actual) ? actual.every(isPresent) : isPresent(actual);
+    }
+
+    if (relation === 'notexist') {
+      if (expected != null && String(expected).trim() !== '') {
+        const expectedStr = String(expected).trim();
+        const candidates = expectedStr.split(',').map((s) => s.trim());
+        if (Array.isArray(actual)) {
+          return !actual.every((v) => candidates.includes(String(v ?? '').trim()));
+        }
+        return !candidates.includes(String(actual ?? '').trim());
+      }
+      return Array.isArray(actual) ? actual.every((v) => !isPresent(v)) : !isPresent(actual);
+    }
+
+    if (relation === 'contain') {
+      return String(actual ?? '').includes(String(expected ?? ''));
+    }
+
+    if (relation === 'notcontain') {
+      return !String(actual ?? '').includes(String(expected ?? ''));
+    }
+
+    if (relation === 'equal') {
+      const expStr = String(expected ?? '');
+      if (expStr.includes(',')) {
+        const parts = expStr.split(',').map((s) => s.trim());
+        return parts.includes(String(actual ?? '').trim());
+      }
+      return String(actual ?? '') === expStr;
+    }
+
+    if (relation === 'notequal') {
+      const expStr = String(expected ?? '');
+      if (expStr.includes(',')) {
+        const parts = expStr.split(',').map((s) => s.trim());
+        return !parts.includes(String(actual ?? '').trim());
+      }
+      return String(actual ?? '') !== expStr;
+    }
+
+    if (relation === 'oneof') {
+      if (Array.isArray(expected)) {
+        return expected.map(String).includes(String(actual ?? ''));
+      }
+      const expStr = String(expected ?? '');
+      if (expStr.includes(',')) {
+        const parts = expStr.split(',').map((s) => s.trim());
+        if (parts.includes(String(actual ?? '').trim())) return true;
+      }
+      return expStr.includes(String(actual ?? ''));
+    }
+
     if (relation === 'less') return Number(actual) < Number(expected);
     if (relation === 'lessequal') return Number(actual) <= Number(expected);
     if (relation === 'more') return Number(actual) > Number(expected);
     if (relation === 'moreequal') return Number(actual) >= Number(expected);
+
     return Boolean(actual);
   }
 
-  async readElement(ws, selector, params) {
+  async readElement(ws, selector, params, serial = 1) {
     const elementType = String(params.type || 'object');
     const key = String(params.key || '');
     const expression = this.elementExpression(selector, params.selectorRadio, `el => {
@@ -1259,7 +1563,7 @@ class RpaEngine {
       if (${JSON.stringify(elementType)} === 'value') return el.value || '';
       if (${JSON.stringify(elementType)} === 'childrenNode') { const child = el.querySelector(${JSON.stringify(key)}); return child ? { selector: ${JSON.stringify(selector)} + ' ' + ${JSON.stringify(key)} } : null; }
       return { selector: ${JSON.stringify(selector)} };
-    }`);
+    }`, false, serial);
     const result = await cdp.call(ws, 'Runtime.evaluate', { expression, returnByValue: true });
     return result.result?.value ?? null;
   }
@@ -1276,11 +1580,26 @@ class RpaEngine {
     return Array.isArray(result.result?.value) ? result.result.value : [];
   }
 
-  elementExpression(selector, selectorRadio, mapper, multiple = false) {
-    const finder = String(selectorRadio || 'CSS').toUpperCase().startsWith('X')
-      ? `Array.from(document.evaluate(${JSON.stringify(selector)}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null), (_, i) => document.evaluate(${JSON.stringify(selector)}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null).snapshotItem(i))`
+  elementExpression(selector, selectorRadio, mapper, multiple = false, serial = 1) {
+    const isXpath = String(selectorRadio || 'CSS').toUpperCase().startsWith('X');
+    const finder = isXpath
+      ? `(() => {
+          const snap = document.evaluate(${JSON.stringify(selector)}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+          const arr = [];
+          for (let i = 0; i < snap.snapshotLength; i++) arr.push(snap.snapshotItem(i));
+          return arr;
+        })()`
       : `Array.from(document.querySelectorAll(${JSON.stringify(selector)}))`;
-    return `(() => { const nodes = ${finder}; const map = ${mapper}; const values = nodes.map(map).filter((item) => item != null); return ${multiple ? 'values' : 'values[0] ?? null'}; })()`;
+    const index = Math.max(0, (Number(serial) || 1) - 1);
+    return `(() => {
+      const nodes = ${finder};
+      const map = ${mapper};
+      if (${multiple}) {
+        return nodes.map(map).filter((item) => item != null);
+      }
+      const target = nodes[${index}];
+      return target ? map(target) : null;
+    })()`;
   }
 
   outputPath(name, extension) {
@@ -1326,26 +1645,54 @@ class RpaEngine {
     return fn(tab.webSocketDebuggerUrl);
   }
 
-  async focusSelector(ws, selector, selectorRadio = 'CSS') {
-    const mode = String(selectorRadio || 'CSS').toUpperCase();
-    const expression = mode === 'XPATH' || mode === 'XP'
-      ? `(() => { const r = document.evaluate(${JSON.stringify(selector)}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null); const el = r.singleNodeValue; if (!el) return false; el.focus?.(); el.scrollIntoView?.({block:'center', inline:'center'}); return true; })()`
-      : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.focus(); el.scrollIntoView({block:'center', inline:'center'}); return true; })()`;
+  async focusSelector(ws, selector, selectorRadio = 'CSS', serial = 1) {
+    const isXpath = String(selectorRadio || 'CSS').toUpperCase().startsWith('X');
+    const index = Math.max(0, (Number(serial) || 1) - 1);
+    const expression = isXpath
+      ? `(() => {
+          const snap = document.evaluate(${JSON.stringify(selector)}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+          if (!snap || snap.snapshotLength <= ${index}) return false;
+          const el = snap.snapshotItem(${index});
+          if (!el) return false;
+          el.focus?.();
+          el.scrollIntoView?.({ block: 'center', inline: 'center' });
+          return true;
+        })()`
+      : `(() => {
+          const nodes = document.querySelectorAll(${JSON.stringify(selector)});
+          if (!nodes || nodes.length <= ${index}) return false;
+          const el = nodes[${index}];
+          if (!el) return false;
+          el.focus?.();
+          el.scrollIntoView?.({ block: 'center', inline: 'center' });
+          return true;
+        })()`;
     const result = await cdp.call(ws, 'Runtime.evaluate', { expression, returnByValue: true });
-    if (result.result?.value !== true) throw new Error('Selector not found: ' + selector);
+    if (result.result?.value !== true) throw new Error('Selector not found: ' + selector + (serial > 1 ? ` (index ${serial})` : ''));
   }
 
-  async boundingBox(ws, selector, selectorRadio = 'CSS') {
-    const mode = String(selectorRadio || 'CSS').toUpperCase();
-    const expression = mode === 'XPATH' || mode === 'XP'
-      ? `(() => { const r = document.evaluate(${JSON.stringify(selector)}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null); const el = r.singleNodeValue; if (!el || !el.getBoundingClientRect) return null; el.scrollIntoView?.({block:'center', inline:'center'}); const b = el.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; })()`
+  async boundingBox(ws, selector, selectorRadio = 'CSS', serial = 1) {
+    const isXpath = String(selectorRadio || 'CSS').toUpperCase().startsWith('X');
+    const index = Math.max(0, (Number(serial) || 1) - 1);
+    const expression = isXpath
+      ? `(() => {
+          const snap = document.evaluate(${JSON.stringify(selector)}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+          if (!snap || snap.snapshotLength <= ${index}) return null;
+          const el = snap.snapshotItem(${index});
+          if (!el || !el.getBoundingClientRect) return null;
+          el.scrollIntoView?.({ block: 'center', inline: 'center' });
+          const b = el.getBoundingClientRect();
+          return { x: b.x, y: b.y, width: b.width, height: b.height };
+        })()`
       : `(() => {
-      const el = document.querySelector(${JSON.stringify(selector)});
-      if (!el) return null;
-      el.scrollIntoView({block:'center', inline:'center'});
-      const r = el.getBoundingClientRect();
-      return { x: r.x, y: r.y, width: r.width, height: r.height };
-    })()`;
+          const nodes = document.querySelectorAll(${JSON.stringify(selector)});
+          if (!nodes || nodes.length <= ${index}) return null;
+          const el = nodes[${index}];
+          if (!el || !el.getBoundingClientRect) return null;
+          el.scrollIntoView?.({ block: 'center', inline: 'center' });
+          const r = el.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        })()`;
     const result = await cdp.call(ws, 'Runtime.evaluate', { expression, returnByValue: true });
     return result.result?.value || null;
   }
@@ -1355,4 +1702,13 @@ function valueOf(input, variables) {
   return getVariableValue(input, variables);
 }
 
-module.exports = { RpaEngine, RPA_PLUS_ACTIONS, parseProcessContent, findUnsupportedSteps, snapshotVariables };
+module.exports = {
+  RpaEngine,
+  RPA_PLUS_ACTIONS,
+  parseProcessContent,
+  findUnsupportedSteps,
+  snapshotVariables,
+  BreakLoopSignal,
+  resolveElementTarget,
+  resolveSerial,
+};

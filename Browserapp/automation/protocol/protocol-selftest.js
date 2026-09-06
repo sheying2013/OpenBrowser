@@ -128,6 +128,106 @@ async function main() {
   assert.ok(graph.some((s) => s.type === 'gotoUrl'));
   pass('process_content graph linearize');
 
+  // ---- ifElse convergence and errorChildren graph compilation ----
+  const branchingGraph = parseProcessContent({
+    nodes: [
+      { id: 'start', type: 'startNode' },
+      { id: 'cond', type: 'ifElse', condition: 'found', relation: 'exist' },
+      { id: 'branchTrue', type: 'click', selector: '#ok' },
+      { id: 'branchFalse', type: 'click', selector: '#cancel' },
+      { id: 'converged', type: 'waitTime', timeout: 100 },
+    ],
+    edges: [
+      { source: 'start', target: 'cond' },
+      { source: 'cond', sourceHandle: 'cond-output-if', target: 'branchTrue' },
+      { source: 'cond', sourceHandle: 'cond-output-else', target: 'branchFalse' },
+      { source: 'branchTrue', target: 'converged' },
+      { source: 'branchFalse', target: 'converged' },
+    ],
+  });
+  assert.strictEqual(branchingGraph.length, 2);
+  assert.strictEqual(branchingGraph[0].type, 'ifElse');
+  assert.strictEqual(branchingGraph[0].children[0].type, 'click');
+  assert.strictEqual(branchingGraph[0].children[0].params.selector, '#ok');
+  assert.strictEqual(branchingGraph[0].elseChildren[0].type, 'click');
+  assert.strictEqual(branchingGraph[0].elseChildren[0].params.selector, '#cancel');
+  assert.strictEqual(branchingGraph[1].type, 'waitTime');
+  pass('ifElse convergence algorithm correctly nests branches');
+
+  // ---- RPA Engine unit assertions ----
+  const { RpaEngine, BreakLoopSignal, resolveElementTarget, resolveSerial } = require('../rpa-engine');
+
+  // BreakLoopSignal
+  const bSig = new BreakLoopSignal();
+  assert.ok(bSig instanceof Error);
+  assert.strictEqual(bSig.name, 'BreakLoopSignal');
+  pass('BreakLoopSignal is Error with proper name');
+
+  // resolveSerial
+  assert.strictEqual(resolveSerial({}), 1);
+  assert.strictEqual(resolveSerial({ serial: '3' }), 3);
+  assert.strictEqual(resolveSerial({ serial: -1 }), 1);
+  const randSerial = resolveSerial({ serialType: 'random', serialMin: 5, serialMax: 10 });
+  assert.ok(randSerial >= 5 && randSerial <= 10);
+  pass('resolveSerial bounds and defaults');
+
+  // resolveElementTarget
+  const target1 = resolveElementTarget({ selector: '#submit', selectorRadio: 'CSS', serial: 2 });
+  assert.strictEqual(target1.selector, '#submit');
+  assert.strictEqual(target1.selectorRadio, 'CSS');
+  assert.strictEqual(target1.serial, 2);
+
+  const target2 = resolveElementTarget(
+    { selectorType: 'element', element: 'myBtn' },
+    { myBtn: { selector: '//button[@id="save"]', selectorRadio: 'XPath' } }
+  );
+  assert.strictEqual(target2.selector, '//button[@id="save"]');
+  assert.strictEqual(target2.selectorRadio, 'XPath');
+  assert.strictEqual(target2.serial, 1);
+
+  const target3 = resolveElementTarget(
+    { selector: '#item-${id}' },
+    { id: '123' }
+  );
+  assert.strictEqual(target3.selector, '#item-123');
+  pass('resolveElementTarget selector, variables, and serial');
+
+  // evaluateCondition
+  const engine = new RpaEngine();
+  // bare variable name in condition
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'exist' }, { status: 'active' }), true);
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'exist' }, {}), false);
+  assert.strictEqual(engine.evaluateCondition({ condition: '${status}', relation: 'exist' }, { status: 'active' }), true);
+
+  // exist with candidates
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'exist', result: 'active,pending' }, { status: 'active' }), true);
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'exist', result: 'ready,done' }, { status: 'active' }), false);
+
+  // notexist
+  assert.strictEqual(engine.evaluateCondition({ condition: 'missing', relation: 'notexist' }, {}), true);
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'notexist' }, { status: 'active' }), false);
+
+  // contain & notcontain
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'contain', result: 'act' }, { status: 'active' }), true);
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'notcontain', result: 'xyz' }, { status: 'active' }), true);
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'notcontain', result: 'act' }, { status: 'active' }), false);
+
+  // equal & notequal with comma separation
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'equal', result: 'active' }, { status: 'active' }), true);
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'equal', result: 'a,b,active' }, { status: 'active' }), true);
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'notequal', result: 'failed' }, { status: 'active' }), true);
+  assert.strictEqual(engine.evaluateCondition({ condition: 'status', relation: 'notequal', result: 'a,b,active' }, { status: 'active' }), false);
+
+  // oneof
+  assert.strictEqual(engine.evaluateCondition({ condition: 'role', relation: 'oneof', result: ['admin', 'user'] }, { role: 'admin' }), true);
+  assert.strictEqual(engine.evaluateCondition({ condition: 'role', relation: 'oneof', result: 'admin,user' }, { role: 'admin' }), true);
+  assert.strictEqual(engine.evaluateCondition({ condition: 'role', relation: 'oneof', result: 'guest,viewer' }, { role: 'admin' }), false);
+
+  // numeric comparisons
+  assert.strictEqual(engine.evaluateCondition({ condition: 'count', relation: 'more', result: 5 }, { count: 10 }), true);
+  assert.strictEqual(engine.evaluateCondition({ condition: 'count', relation: 'less', result: 5 }, { count: 10 }), false);
+  pass('evaluateCondition bare variables, relations, oneOf, notContain');
+
   // ---- app center copy protocol ----
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'openbrowser-appcenter-'));
   const globalRoot = path.join(root, 'extension');
