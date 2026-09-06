@@ -1148,7 +1148,8 @@ let themedSelectId = 0;
 
 function closeSelectMenu({ restoreFocus = false } = {}) {
   if (!openSelectMenu) return;
-  const { button, menu } = openSelectMenu;
+  const { button, menu, settleTimer } = openSelectMenu;
+  if (settleTimer) clearTimeout(settleTimer);
   menu.remove();
   button.classList.remove('open');
   button.setAttribute('aria-expanded', 'false');
@@ -1213,17 +1214,30 @@ function positionSelectMenu(menu, button) {
   const maxHeight = Math.max(120, Math.min(Math.floor(window.innerHeight * 0.5), Math.max(space, 160), 420));
   menu.style.position = 'fixed';
   menu.style.zIndex = '2147483000';
-  menu.style.left = `${menuLeft}px`;
   menu.style.width = `${menuWidth}px`;
   menu.style.maxHeight = `${maxHeight}px`;
   menu.style.overflowY = 'auto';
   menu.style.overflowX = 'hidden';
+
+  const parent = menu.offsetParent;
+  const parentRect = parent && parent !== document.body && parent !== document.documentElement
+    ? parent.getBoundingClientRect()
+    : null;
+
+  const adjustedLeft = parentRect ? menuLeft - parentRect.left : menuLeft;
+  menu.style.left = `${adjustedLeft}px`;
+
   if (openAbove) {
-    menu.style.top = 'auto';
-    menu.style.bottom = `${Math.max(viewportPadding, window.innerHeight - rect.top + gap)}px`;
-  } else {
+    const menuHeight = Math.min(menu.scrollHeight || maxHeight, maxHeight);
+    const targetTop = Math.max(viewportPadding, rect.top - gap - menuHeight);
+    const adjustedTop = parentRect ? targetTop - parentRect.top : targetTop;
+    menu.style.top = `${adjustedTop}px`;
     menu.style.bottom = 'auto';
-    menu.style.top = `${rect.bottom + gap}px`;
+  } else {
+    const targetTop = rect.bottom + gap;
+    const adjustedTop = parentRect ? targetTop - parentRect.top : targetTop;
+    menu.style.top = `${adjustedTop}px`;
+    menu.style.bottom = 'auto';
   }
 }
 
@@ -1274,7 +1288,10 @@ function openThemedSelect(select, button, focusIndex = null) {
   owner.append(menu);
   button.classList.add('open');
   button.setAttribute('aria-expanded', 'true');
-  openSelectMenu = { select, button, menu, settling: true };
+  const settleTimer = setTimeout(() => {
+    if (openSelectMenu?.menu === menu) openSelectMenu.settling = false;
+  }, 350);
+  openSelectMenu = { select, button, menu, settling: true, settleTimer };
   positionSelectMenu(menu, button);
   // scrollIntoView can fire capture scroll and would close the menu — settle first
   requestAnimationFrame(() => {
@@ -1286,9 +1303,7 @@ function openThemedSelect(select, button, focusIndex = null) {
       active?.scrollIntoView({ block: 'nearest' });
       active?.focus({ preventScroll: true });
     } catch (_) {}
-    requestAnimationFrame(() => {
-      if (openSelectMenu?.menu === menu) openSelectMenu.settling = false;
-    });
+    positionSelectMenu(menu, button);
   });
 }
 
@@ -4192,7 +4207,7 @@ document.addEventListener('click', async (event) => {
 });
 
 document.addEventListener('focusin', (event) => {
-  if (!openSelectMenu) return;
+  if (!openSelectMenu || openSelectMenu.settling) return;
   if (openSelectMenu.menu.contains(event.target) || openSelectMenu.button.contains(event.target)) return;
   closeSelectMenu();
 });
@@ -4253,6 +4268,10 @@ window.addEventListener('scroll', (event) => {
   if (target === openSelectMenu.menu || openSelectMenu.menu.contains(target)) return;
   // Also ignore scrolls bubbling from within the open menu (some browsers)
   if (typeof target?.closest === 'function' && target.closest('.themed-select-menu')) return;
+  if (target instanceof Element && (target.contains(openSelectMenu.button) || openSelectMenu.button.closest('dialog') === target)) {
+    positionSelectMenu(openSelectMenu.menu, openSelectMenu.button);
+    return;
+  }
   closeSelectMenu();
 }, true);
 document.addEventListener('keydown', (event) => {

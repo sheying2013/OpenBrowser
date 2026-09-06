@@ -517,6 +517,25 @@ async function testFullscreenFrameRoutingAndPopupVisibility() {
     const generationBeforePopup = controller.windowGuardGeneration;
     controller.pauseGeometrySync(500, 'native-menu-race');
     assert.ok(controller.windowGuardGeneration > generationBeforePopup, 'a newly opened browser surface must invalidate in-flight geometry work');
+
+    // Verify picker interaction protection (select/date/color etc.)
+    controller.geometryPausedUntil = 0; controller.browserOwnedUntil = 0;
+    controller.syncSettings.click = false; // even when click sync is disabled
+    controller.enqueueForward('master-tab', { type: 'click', tag: 'select' });
+    assert.ok(controller.browserOwnedUntil > Date.now() + 3000, 'select picker click must grant at least 3500ms protection even when click sync is off');
+    assert.ok(controller.geometryPausedUntil > Date.now() + 3000, 'select picker click must pause geometry sync for at least 3500ms');
+    controller.syncSettings.click = true;
+
+    // Verify pickerOpen directly blocks geometry sync
+    controller.browserOwnedUntil = 0;
+    controller.connections.get('master-tab').connection.command = async () => ({
+      result: { value: { focused: true, picker: true, pickerOpen: true } },
+    });
+    controller.geometryPausedUntil = 0; controller.lastWindowSync = 0;
+    resizeCalls.length = 0;
+    await controller.syncWindowGeometry();
+    assert.strictEqual(resizeCalls.length, 0, 'open picker must block geometry writes and refresh browserOwnedUntil');
+    assert.ok(controller.browserOwnedUntil > Date.now() + 3000, 'open picker must extend browserOwnedUntil');
   } finally {
     cdp.call = originalCall;
     cdp.targets = originalTargets;

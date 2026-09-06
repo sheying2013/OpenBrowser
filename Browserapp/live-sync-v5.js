@@ -756,26 +756,37 @@ class LiveSyncController extends LiveSyncV4 {
 
   enqueueForward(tabId, payload, action = 'forward') {
     const type = payload?.type;
+    const tag = String(payload?.tag || '').toLowerCase();
+    const elementType = String(payload?.elementType || '').toLowerCase();
+    const role = String(payload?.role || '').toLowerCase();
+    const isPicker = tag === 'select'
+      || (tag === 'input' && /^(date|datetime-local|month|time|week|color|file)$/.test(elementType))
+      || role === 'combobox'
+      || role === 'listbox';
+
     if (type === 'surface') {
       const inactive = payload?.visible === false || payload?.focused === false;
-      this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + (inactive ? 1800 : 350));
-      this.pauseGeometrySync(inactive ? 1800 : 500, inactive ? 'browser-surface-blur' : 'browser-surface-focus');
+      this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + (inactive ? 4000 : 500));
+      this.pauseGeometrySync(inactive ? 4000 : 500, inactive ? 'browser-surface-blur' : 'browser-surface-focus');
       return;
     }
     if (type === 'contextmenu' || (type === 'mouse' && (payload?.button === 2 || (payload?.phase === 'down' && payload?.button === 2)))) {
       this.pauseGeometrySync(5000, 'contextmenu');
       this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 5000);
     }
+    if (isPicker && ['click', 'focus', 'beforeinput', 'input', 'change', 'mouse'].includes(type)) {
+      this.pauseGeometrySync(4000, 'picker-interaction');
+      this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 4000);
+    } else if (['click', 'focus', 'beforeinput', 'input', 'change'].includes(type)) {
+      this.pauseGeometrySync(1500, 'page-interaction');
+      this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 2000);
+    }
     if (action === 'forward') {
       if (!this.syncSettings.keyboard && ['key', 'input', 'beforeinput'].includes(type)) return;
-      if (!this.syncSettings.click && (type === 'click' || type === 'focus' || (type === 'mouse' && payload?.phase !== 'move'))) return;
+      if (!this.syncSettings.click && (type === 'click' || type === 'focus' || type === 'change' || (type === 'mouse' && payload?.phase !== 'move'))) return;
       if (!this.syncSettings.track && type === 'mouse' && payload?.phase === 'move') return;
       if (!this.syncSettings.scroll && ['wheel', 'scroll'].includes(type)) return;
-      if (this.nativeDevToolsMode && ['click', 'mouse', 'wheel', 'scroll'].includes(type)) return;
-    }
-    if (['click', 'focus', 'beforeinput', 'input'].includes(type)) {
-      this.pauseGeometrySync(1200, 'page-interaction');
-      this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 1800);
+      if (this.nativeDevToolsMode && ['click', 'mouse', 'wheel', 'scroll', 'change'].includes(type)) return;
     }
     return super.enqueueForward(tabId, payload, action);
   }
@@ -1887,14 +1898,21 @@ class LiveSyncController extends LiveSyncV4 {
     if (!value?.connection?.command) return false;
     try {
       const result = await value.connection.command('Runtime.evaluate', {
-        expression: "(() => { const e = document.activeElement; const tag = String(e?.tagName || '').toLowerCase(); const type = String(e?.type || '').toLowerCase(); const picker = tag === 'select' || (tag === 'input' && /^(date|datetime-local|month|time|week|color|file)$/.test(type)); return { focused: typeof document.hasFocus === 'function' ? document.hasFocus() : true, picker }; })()",
+        expression: "(() => { const safeMatch = (el, sel) => { try { return Boolean(el?.matches?.(sel)); } catch (_) { return false; } }; let e = document.activeElement; while (e && e.shadowRoot && e.shadowRoot.activeElement) { e = e.shadowRoot.activeElement; } const tag = String(e?.tagName || '').toLowerCase(); const type = String(e?.type || '').toLowerCase(); const role = String(e?.getAttribute?.('role') || '').toLowerCase(); const picker = tag === 'select' || (tag === 'input' && /^(date|datetime-local|month|time|week|color|file)$/.test(type)) || role === 'combobox' || role === 'listbox'; const pickerOpen = picker && (safeMatch(e, ':open') || safeMatch(e, ':popover-open') || e?.getAttribute?.('aria-expanded') === 'true' || Boolean(document.querySelector('select:open, dialog[open], [popover]:popover-open'))); return { focused: typeof document.hasFocus === 'function' ? document.hasFocus() : true, picker, pickerOpen }; })()",
         returnByValue: true,
       });
       const state = result.result?.value || {};
-      return state.focused === false
-        || (state.picker === true
-          && ((process.platform === 'win32' && this.nativePopupActive)
-            || Date.now() < (this.browserOwnedUntil || 0)));
+      if (state.focused === false) {
+        this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 3500);
+        return true;
+      }
+      if (state.pickerOpen) {
+        this.browserOwnedUntil = Math.max(this.browserOwnedUntil || 0, Date.now() + 4000);
+        return true;
+      }
+      return state.picker === true
+        && ((process.platform === 'win32' && this.nativePopupActive)
+          || Date.now() < (this.browserOwnedUntil || 0));
     } catch (_) {
       // A page target that is changing focus/navigation is exactly when a
       // top-level resize is most likely to dismiss browser-owned UI.
