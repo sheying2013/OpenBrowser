@@ -876,6 +876,7 @@ html[data-ui-theme="element-admin"] .themed-multiselect-check { color: currentCo
 /* ========== surfaces: grouped list / table ========== */
 html[data-ui-theme="element-admin"] .table-card,
 html[data-ui-theme="element-admin"] .extension-card,
+html[data-ui-theme="element-admin"] .console,
 html[data-ui-theme="element-admin"] .settings-grid article,
 html[data-ui-theme="element-admin"] .editor-form,
 html[data-ui-theme="element-admin"] .profile-summary,
@@ -1023,9 +1024,7 @@ html[data-ui-theme="element-admin"] .rpa-seg button.active {
   font-weight: 500;
 }
 
-/* code / console = monospaced inset */
-html[data-ui-theme="element-admin"] .console,
-html[data-ui-theme="element-admin"] .console-panel,
+/* code = monospaced inset */
 html[data-ui-theme="element-admin"] .rpa-log,
 html[data-ui-theme="element-admin"] .rpa-code-block,
 html[data-ui-theme="element-admin"] .api-code-block,
@@ -1073,10 +1072,49 @@ html[data-ui-theme="element-admin"] .rpa-log .log-line.level-success .log-level,
 html[data-ui-theme="element-admin"] .rpa-log .log-line.level-ok .log-msg,
 html[data-ui-theme="element-admin"] .rpa-log .log-line.level-success .log-msg { color: #30d158 !important; }
 html[data-ui-theme="element-admin"] .console-head {
-  border-bottom: 1px solid #38383a;
-  background: #2c2c2e;
-  color: #ebebf5;
+  border-bottom: 1px solid var(--desk-separator);
+  background: var(--desk-surface);
+  color: var(--desk-text);
   border-radius: calc(var(--desk-radius) - 1px) calc(var(--desk-radius) - 1px) 0 0;
+}
+html[data-ui-theme="element-admin"] .console-tabs {
+  background: var(--desk-surface-2);
+  border: 1px solid var(--desk-separator);
+  border-radius: var(--desk-radius-sm);
+  padding: 3px;
+  gap: 3px;
+  margin: 10px 12px 0;
+}
+html[data-ui-theme="element-admin"] .console-tabs button {
+  background: transparent;
+  color: var(--desk-text-secondary);
+  border: 0;
+  border-radius: calc(var(--desk-radius-sm) - 2px) !important;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 8px;
+}
+html[data-ui-theme="element-admin"] .console-tabs button.active {
+  background: var(--desk-surface);
+  color: var(--desk-text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  font-weight: 600;
+}
+html[data-ui-theme="element-admin"] #view-sync .action-grid button,
+html[data-ui-theme="element-admin"] #view-sync .row-actions button {
+  background: var(--desk-surface);
+  border: 1px solid var(--desk-separator);
+  color: var(--desk-text);
+  border-radius: var(--desk-radius-sm);
+}
+html[data-ui-theme="element-admin"] #view-sync .action-grid button:hover,
+html[data-ui-theme="element-admin"] #view-sync .row-actions button:hover {
+  background: var(--desk-surface-2);
+}
+html[data-ui-theme="element-admin"] #view-sync .action-grid button[data-window].active {
+  background: var(--desk-accent-soft);
+  color: var(--desk-accent-text);
+  border-color: var(--desk-accent);
 }
 html[data-ui-theme="element-admin"] .sync-layout,
 html[data-ui-theme="element-admin"] .environment-editor { gap: 14px; }
