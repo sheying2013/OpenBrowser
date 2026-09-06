@@ -673,7 +673,8 @@ body {
 #view-profiles .table-card td.col-group { width: 9%; max-width: none !important; }
 #view-profiles .table-card th.col-browser,
 #view-profiles .table-card td.col-browser { width: 12%; max-width: none !important; }
-#view-profiles .table-card td.col-browser .env-browser-cell-app {
+#view-profiles .table-card td.col-browser .env-browser-cell-app,
+#view-profiles .table-card td.col-browser .env-browser-cell-engine {
   gap: 8px;
 }
 #view-profiles .table-card td.col-browser .env-badge {

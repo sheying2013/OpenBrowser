@@ -365,6 +365,63 @@ html[data-theme-mode="dark"] .rpa-store-card:hover{
 }
 .env-badge-num-sm{font-size:12px}
 .env-badge-num-xs{font-size:10px}
+
+/* Micro sandbox window badge */
+.env-badge.env-window-badge {
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+.env-badge.env-window-badge::after {
+  display: none !important;
+}
+.env-window-svg {
+  display: block;
+  flex-shrink: 0;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), filter 0.18s ease;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.25));
+}
+.env-identity:hover .env-window-svg,
+.env-badge.env-window-badge:hover .env-window-svg {
+  transform: translateY(-1px) scale(1.03);
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.38));
+}
+html[data-ui-theme="retro-desktop"] .env-window-svg,
+html[data-ui-theme="nes-light"] .env-window-svg,
+html[data-color-mode="light"] .env-window-svg {
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.08));
+}
+html[data-ui-theme="retro-desktop"] .env-identity:hover .env-window-svg,
+html[data-ui-theme="nes-light"] .env-identity:hover .env-window-svg,
+html[data-color-mode="light"] .env-identity:hover .env-window-svg {
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.15));
+}
+
+/* Browser Engine Cell (Chromium / Edge column) */
+.env-browser-cell-engine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.browser-engine-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease;
+}
+.browser-engine-icon svg {
+  display: block;
+}
+.env-browser-cell-engine:hover .browser-engine-icon {
+  transform: scale(1.08);
+}
 .env-identity{display:flex;align-items:center;gap:10px}
 .env-identity-text strong{display:block;font-size:13px}
 .env-identity-text small{display:block;margin-top:3px;color:var(--theme-muted,#8a95a7);font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

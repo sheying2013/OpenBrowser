@@ -695,24 +695,40 @@ function displayProfileNumber(profile) {
   return String(positiveProfileNumber(profile?.number) || profile?.name || profile?.id || '');
 }
 
-/** Env identity colors (not Chrome branding) */
-const ENV_ICON_PALETTE = [
-  ['#2563eb', '#1d4ed8'],
-  ['#7c3aed', '#5b21b6'],
-  ['#db2777', '#9d174d'],
-  ['#ea580c', '#c2410c'],
-  ['#059669', '#047857'],
-  ['#0891b2', '#0e7490'],
-  ['#4f46e5', '#3730a3'],
-  ['#ca8a04', '#a16207'],
-  ['#0d9488', '#0f766e'],
-  ['#e11d48', '#be123c'],
+/** 12-Color Precision Studio Jewel Palette — engineered for obsidian dark and ceramic light */
+const JEWEL_PALETTE = [
+  // 0: Cobalt Sapphire (青曜)
+  { id: 'sapphire', accent: '#38bdf8', border: '#0284c7', glow: 'rgba(56,189,248,0.3)', dark1: '#131b2e', dark2: '#0b101d', light1: '#f0f9ff', light2: '#e0f2fe', lightBorder: '#7dd3fc', lightText: '#0284c7' },
+  // 1: Iris Amethyst (紫晶)
+  { id: 'amethyst', accent: '#c084fc', border: '#9333ea', glow: 'rgba(192,132,252,0.3)', dark1: '#221533', dark2: '#12091f', light1: '#faf5ff', light2: '#f3e8ff', lightBorder: '#c084fc', lightText: '#7e22ce' },
+  // 2: Velvet Rose (玫瑰)
+  { id: 'rose', accent: '#fb7185', border: '#e11d48', glow: 'rgba(251,113,133,0.3)', dark1: '#29121d', dark2: '#18070e', light1: '#fff1f2', light2: '#ffe4e6', lightBorder: '#fda4af', lightText: '#be123c' },
+  // 3: Warm Amber (琥珀)
+  { id: 'amber', accent: '#fbbf24', border: '#d97706', glow: 'rgba(251,191,36,0.3)', dark1: '#291b0c', dark2: '#170c04', light1: '#fffbeb', light2: '#fef3c7', lightBorder: '#fcd34d', lightText: '#b45309' },
+  // 4: Forest Emerald (翡翠)
+  { id: 'emerald', accent: '#34d399', border: '#059669', glow: 'rgba(52,211,153,0.3)', dark1: '#0e261b', dark2: '#06160e', light1: '#f0fdf4', light2: '#dcfce7', lightBorder: '#86efac', lightText: '#047857' },
+  // 5: Arctic Cyan (海蓝)
+  { id: 'cyan', accent: '#22d3ee', border: '#0891b2', glow: 'rgba(34,211,238,0.3)', dark1: '#0c242c', dark2: '#05151b', light1: '#ecfeff', light2: '#cffafe', lightBorder: '#67e8f9', lightText: '#0e7490' },
+  // 6: Royal Indigo (皇家靛)
+  { id: 'indigo', accent: '#818cf8', border: '#4f46e5', glow: 'rgba(129,140,248,0.3)', dark1: '#181938', dark2: '#0c0d22', light1: '#eef2ff', light2: '#e0e7ff', lightBorder: '#a5b4fc', lightText: '#4338ca' },
+  // 7: Topaz Gold (黄玉)
+  { id: 'topaz', accent: '#facc15', border: '#ca8a04', glow: 'rgba(250,204,21,0.3)', dark1: '#26200a', dark2: '#151103', light1: '#fefce8', light2: '#fef9c3', lightBorder: '#fde047', lightText: '#a16207' },
+  // 8: Marine Teal (碧玉)
+  { id: 'teal', accent: '#2dd4bf', border: '#0d9488', glow: 'rgba(45,212,191,0.3)', dark1: '#0d2624', dark2: '#061615', light1: '#f0fdfa', light2: '#ccfbf1', lightBorder: '#5eead4', lightText: '#0f766e' },
+  // 9: Crimson Coral (珊瑚)
+  { id: 'coral', accent: '#f87171', border: '#dc2626', glow: 'rgba(248,113,113,0.3)', dark1: '#281313', dark2: '#170707', light1: '#fef2f2', light2: '#fee2e2', lightBorder: '#fca5a5', lightText: '#b91c1c' },
+  // 10: Radiant Violet (兰花)
+  { id: 'violet', accent: '#e879f9', border: '#c026d3', glow: 'rgba(232,121,249,0.3)', dark1: '#26112c', dark2: '#16081c', light1: '#fdf4ff', light2: '#fae8ff', lightBorder: '#f0abfc', lightText: '#a21caf' },
+  // 11: Sleek Slate (冷钛)
+  { id: 'slate', accent: '#94a3b8', border: '#475569', glow: 'rgba(148,163,184,0.3)', dark1: '#181e28', dark2: '#0d121a', light1: '#f8fafc', light2: '#f1f5f9', lightBorder: '#cbd5e1', lightText: '#334155' }
 ];
 
+const ENV_ICON_PALETTE = JEWEL_PALETTE.map((item) => Object.assign([item.dark1, item.dark2], item));
+
 function envBadgeColors(profileOrNumber) {
-  const n = typeof profileOrNumber === 'object'
-    ? positiveProfileNumber(profileOrNumber?.number) || 0
-    : Number(profileOrNumber) || 0;
+  const n = typeof profileOrNumber === 'object' && profileOrNumber !== null
+    ? positiveProfileNumber(profileOrNumber.number) || 0
+    : (parseInt(profileOrNumber, 10) || 0);
   return ENV_ICON_PALETTE[Math.abs(n) % ENV_ICON_PALETTE.length];
 }
 
@@ -735,11 +751,11 @@ function markGradientFromColor(color) {
     const d = (n) => Math.max(0, Math.min(255, Math.round(n * 0.72)));
     return `linear-gradient(145deg, ${raw}, rgb(${d(r)}, ${d(g)}, ${d(b)}))`;
   }
-  const hue = hashHue(raw || 'mark');
+  const hue = hashHue(raw || 'default');
   return `linear-gradient(145deg, hsl(${hue} 72% 52%), hsl(${hue} 68% 38%))`;
 }
 
-/** Colored square badge (env / group / proxy / extension) — same visual language */
+/** Colored square badge (env / group / proxy / extension) — clean modern mark */
 function buildSquareMark(label, { color, title, size = UI_MARK_SIZE, className = '' } = {}) {
   const badge = document.createElement('div');
   badge.className = ('env-badge ui-mark ' + (className || '')).trim();
@@ -757,22 +773,103 @@ function buildSquareMark(label, { color, title, size = UI_MARK_SIZE, className =
   return badge;
 }
 
-/** Colored square badge with environment number — replaces Chrome icon usage in UI */
+function escapeXmlAttr(str) {
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function isCurrentThemeLight() {
+  if (typeof document === 'undefined' || !document.documentElement) return false;
+  const theme = document.documentElement.dataset.uiTheme || 'pixel-workstation';
+  if (theme === 'element-admin') {
+    const mode = document.documentElement.dataset.colorMode || (typeof uiColorMode !== 'undefined' ? uiColorMode : 'light');
+    return mode === 'light';
+  }
+  const def = (typeof UI_THEMES !== 'undefined' && UI_THEMES[theme]) ? UI_THEMES[theme] : null;
+  return def ? def.colorScheme === 'light' : false;
+}
+
+/** Precision miniature browser sandbox window SVG badge */
+function renderMicroWindowSvg(num, isLight = false, size = UI_MARK_SIZE) {
+  const pal = envBadgeColors(num);
+  const nStr = String(num);
+  const len = nStr.length;
+
+  let fontSize = 10.5;
+  let chipWidth = 14;
+  let chipX = 16;
+  if (len === 3) {
+    fontSize = 9;
+    chipWidth = 16.5;
+    chipX = 14;
+  } else if (len >= 4) {
+    fontSize = 7.5;
+    chipWidth = 18.5;
+    chipX = 12.5;
+  }
+
+  const safeId = String(num).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const bgGradId = `win-bg-${safeId}-${isLight ? 'l' : 'd'}`;
+  const chipGradId = `chip-bg-${safeId}-${isLight ? 'l' : 'd'}`;
+
+  const winBg1 = isLight ? (pal.light1 || '#f0f9ff') : (pal.dark1 || '#131b2e');
+  const winBg2 = isLight ? (pal.light2 || '#e0f2fe') : (pal.dark2 || '#0b101d');
+  const winBorder = isLight ? (pal.lightBorder || '#7dd3fc') : 'rgba(255,255,255,0.12)';
+  const titlebarBg = isLight ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.06)';
+  const dividerStroke = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)';
+  const pillBg = isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.08)';
+  const pillBorder = isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.14)';
+  const lineMuted1 = isLight ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.22)';
+  const lineMuted2 = isLight ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.14)';
+  const lineMuted3 = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)';
+
+  const chipBg1 = isLight ? '#ffffff' : 'rgba(255,255,255,0.12)';
+  const chipBg2 = isLight ? pal.light2 : 'rgba(255,255,255,0.02)';
+  const chipStroke = isLight ? pal.lightBorder : pal.accent;
+  const chipStrokeOpacity = isLight ? '1' : '0.6';
+  const numColor = isLight ? pal.lightText : '#ffffff';
+
+  return `<svg class="env-window-svg" width="${size}" height="${size}" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="${bgGradId}" x1="0" y1="0" x2="0" y2="34" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="${winBg1}"/>
+        <stop offset="100%" stop-color="${winBg2}"/>
+      </linearGradient>
+      <linearGradient id="${chipGradId}" x1="${chipX}" y1="12" x2="${chipX + chipWidth}" y2="28" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="${chipBg1}"/>
+        <stop offset="100%" stop-color="${chipBg2}"/>
+      </linearGradient>
+    </defs>
+    <rect x="0.5" y="0.5" width="33" height="33" rx="7" fill="url(#${bgGradId})" stroke="${winBorder}" stroke-width="1" />
+    <path d="M0.5 7.5C0.5 3.63401 3.63401 0.5 7.5 0.5H26.5C30.366 0.5 33.5 3.63401 33.5 7.5V10H0.5V7.5Z" fill="${titlebarBg}"/>
+    <line x1="0.5" y1="10" x2="33.5" y2="10" stroke="${dividerStroke}" stroke-width="0.75"/>
+    <circle cx="4.5" cy="5.2" r="1.3" fill="#ff5f56" />
+    <circle cx="8" cy="5.2" r="1.3" fill="#ffbd2e" />
+    <circle cx="11.5" cy="5.2" r="1.3" fill="#27c93f" />
+    <rect x="15" y="3.2" width="15" height="4" rx="2" fill="${pillBg}" stroke="${pillBorder}" stroke-width="0.6"/>
+    <circle cx="17.5" cy="5.2" r="0.7" fill="${pal.accent}" opacity="0.9"/>
+    <rect x="4.5" y="13.5" width="6.5" height="2" rx="1" fill="${pal.accent}" opacity="0.95"/>
+    <rect x="4.5" y="17.8" width="7.5" height="1.4" rx="0.7" fill="${lineMuted1}"/>
+    <rect x="4.5" y="21.2" width="5.5" height="1.4" rx="0.7" fill="${lineMuted2}"/>
+    <rect x="4.5" y="24.6" width="7" height="1.4" rx="0.7" fill="${lineMuted3}"/>
+    <rect x="${chipX}" y="12.5" width="${chipWidth}" height="16" rx="4" fill="url(#${chipGradId})" stroke="${chipStroke}" stroke-opacity="${chipStrokeOpacity}" stroke-width="0.8"/>
+    <circle cx="${chipX + chipWidth - 3}" cy="15.5" r="1" fill="${pal.accent}" opacity="0.85"/>
+    <text x="${chipX + chipWidth / 2 - 0.5}" y="21.2" text-anchor="middle" dominant-baseline="central" 
+          font-family="system-ui, -apple-system, 'SF Pro Text', 'Segoe UI', Roboto, 'Chakra Petch', sans-serif" 
+          font-size="${fontSize}" font-weight="800" fill="${numColor}" 
+          letter-spacing="-0.02em">${escapeXmlAttr(nStr)}</text>
+  </svg>`;
+}
+
+/** Colored badge with environment number — precision miniature browser window */
 function buildEnvBadge(profile, size = UI_MARK_SIZE) {
   const n = displayProfileNumber(profile);
-  const [c1, c2] = envBadgeColors(profile);
+  const isLight = isCurrentThemeLight();
   const badge = document.createElement('div');
-  badge.className = 'env-badge ui-mark';
+  badge.className = 'env-badge ui-mark env-window-badge';
   badge.style.width = size + 'px';
   badge.style.height = size + 'px';
-  badge.style.background = `linear-gradient(145deg, ${c1}, ${c2})`;
   badge.title = t('profiles.envName', { n });
-  const num = document.createElement('span');
-  num.className = 'env-badge-num';
-  num.textContent = n;
-  if (String(n).length >= 3) num.classList.add('env-badge-num-sm');
-  if (String(n).length >= 4) num.classList.add('env-badge-num-xs');
-  badge.append(num);
+  badge.innerHTML = renderMicroWindowSvg(n, isLight, size);
   return badge;
 }
 
@@ -796,24 +893,84 @@ function buildEnvIdentity(profile) {
   return box;
 }
 
+/** Vector browser engine icons for Chromium and Microsoft Edge */
+function buildBrowserEngineIcon(name, size = 26) {
+  const isEdge = /edge/i.test(name);
+  if (isEdge) {
+    return `<svg width="${size}" height="${size}" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="edge-b1" x1="26.5" y1="21.5" x2="14" y2="30.5" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#0C59A4"/>
+          <stop offset="1" stop-color="#114A8B"/>
+        </linearGradient>
+        <linearGradient id="edge-b2" x1="16" y1="16" x2="31.5" y2="16" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#0078D7"/>
+          <stop offset="0.82" stop-color="#00BCF2"/>
+        </linearGradient>
+        <linearGradient id="edge-b3" x1="16" y1="0.5" x2="2.5" y2="24.5" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#00BCF2"/>
+          <stop offset="0.25" stop-color="#00B294"/>
+          <stop offset="0.6" stop-color="#009E49"/>
+          <stop offset="1" stop-color="#BAD80A"/>
+        </linearGradient>
+      </defs>
+      <path d="M30 17.5C29.4 17.4 28.7 17.4 28 17.5C21.8 17.9 16.5 22.5 16.5 28.5C16.5 29.5 16.7 30.4 17 31.3C11.5 30.6 7 26.5 5.5 21C6.7 21.6 8 21.9 9.5 21.9C15.8 21.9 20.8 17.4 21.5 11.2C21.6 10.3 21.5 9.4 21.2 8.5C26.5 9.8 30.5 14.5 30 17.5Z" fill="url(#edge-b1)"/>
+      <path d="M21.2 8.5C20.5 9.4 19.5 10.1 18.3 10.6C12.8 12.8 6.5 10 4.3 4.5C3.8 3.3 3.6 2.1 3.5 0.9C10.5 -1.2 18.2 0.8 23.3 6C22.6 6.8 21.9 7.6 21.2 8.5Z" fill="url(#edge-b3)"/>
+      <path d="M16.5 28.5C16.5 24 19.5 20.2 23.7 19.2C25.7 18.7 27.8 18.9 29.8 19.8C31.2 23.5 29.8 27.8 26.3 30.1C23.5 31.8 20 31.9 17 30.3C16.7 29.7 16.5 29.1 16.5 28.5Z" fill="url(#edge-b2)"/>
+    </svg>`;
+  }
+  return `<svg width="${size}" height="${size}" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="cr-red" x1="16" y1="2" x2="28" y2="12" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#EA4335"/>
+        <stop offset="1" stop-color="#D93025"/>
+      </linearGradient>
+      <linearGradient id="cr-green" x1="5" y1="26" x2="16" y2="30" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#34A853"/>
+        <stop offset="1" stop-color="#1E8E3E"/>
+      </linearGradient>
+      <linearGradient id="cr-yellow" x1="28" y1="12" x2="20" y2="30" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#FBBC04"/>
+        <stop offset="1" stop-color="#F9AB00"/>
+      </linearGradient>
+      <linearGradient id="cr-blue" x1="12" y1="12" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#4285F4"/>
+        <stop offset="1" stop-color="#1A73E8"/>
+      </linearGradient>
+    </defs>
+    <path d="M16 2C21.7 2 26.6 5.4 28.8 10.3L16 10.3C12.9 10.3 10.3 12.9 10.3 16C10.3 16.4 10.4 16.8 10.5 17.2L4.2 13.5C6.1 6.8 10.5 2 16 2Z" fill="url(#cr-red)"/>
+    <path d="M16 30C10.6 30 5.9 26.9 3.6 22.3L10 11.3C11.5 14.1 14.5 16 18 16L18 23.3C14.7 27.4 9 30 16 30Z" fill="url(#cr-green)"/>
+    <path d="M30 16C30 22.8 25 28.5 18.5 29.8L12.2 18.9C13.2 19.6 14.5 20 16 20C18.2 20 20 18.2 20 16C20 14.7 19.4 13.5 18.5 12.7L28.8 10.3C29.6 12 30 14 30 16Z" fill="url(#cr-yellow)"/>
+    <circle cx="16" cy="16" r="6.2" fill="#FFFFFF"/>
+    <circle cx="16" cy="16" r="5" fill="url(#cr-blue)"/>
+  </svg>`;
+}
+
 function buildEnvBrowserCell(profile) {
-  // App-icon style: env number square mark (never Chrome brand icon/text)
   const wrap = document.createElement('div');
-  wrap.className = 'env-browser-cell env-browser-cell-app';
-  const n = displayProfileNumber(profile);
-  wrap.append(buildEnvBadge(profile, UI_MARK_SIZE));
+  wrap.className = 'env-browser-cell env-browser-cell-engine';
+  const rawBrowser = String(profile.browser || '').trim();
+  const isEdge = /edge/i.test(rawBrowser);
+
+  const iconWrap = document.createElement('div');
+  iconWrap.className = 'browser-engine-icon';
+  iconWrap.innerHTML = buildBrowserEngineIcon(isEdge ? 'Edge' : 'Chrome', 26);
+  wrap.append(iconWrap);
+
   const label = document.createElement('div');
   label.className = 'env-browser-label';
-  label.append(element('strong', '', t('profiles.envName', { n })));
-  const kernel = String(profile.browser || '').replace(/^Google\s+/i, '').trim();
-  // Neutral kernel label — avoid "Chrome" product branding in list
-  let kernelLabel = t('profiles.kernel.independent');
-  if (/edge/i.test(kernel)) kernelLabel = t('profiles.kernel.edge');
-  else if (/chromium|wayfern|donut|testing/i.test(kernel)) kernelLabel = t('profiles.kernel.independent');
-  else if (kernel && !/chrome/i.test(kernel)) kernelLabel = kernel.slice(0, 12);
-  label.append(element('small', '', kernelLabel));
+
+  let engineName = isEdge ? 'Microsoft Edge' : 'Chromium';
+  let versionMatch = rawBrowser.match(/\b(?:Chrome|Chromium|Edge)\/(\d+[\.\d]*)/i) || rawBrowser.match(/\b(\d{2,3})\b/);
+  let versionStr = versionMatch ? versionMatch[1] : '130';
+
+  const titleEl = element('strong', '', `${engineName} ${versionStr}`);
+  let kernelSub = isEdge ? t('profiles.kernel.edge') : t('profiles.kernel.independent');
+  const subEl = element('small', '', kernelSub);
+
+  label.append(titleEl, subEl);
   wrap.append(label);
-  wrap.title = t('profiles.envName', { n }) + ' · ' + kernelLabel;
+  wrap.title = `${engineName} ${versionStr} · ${kernelSub}`;
   return wrap;
 }
 
@@ -1371,6 +1528,8 @@ function applyColorMode(pref, persist = true) {
   requestAnimationFrame(() => {
     refreshIcons();
     if (typeof positionThemePopover === 'function') positionThemePopover();
+    if (typeof renderProfiles === 'function') renderProfiles();
+    if (typeof renderSessions === 'function') renderSessions();
   });
 }
 
@@ -1409,6 +1568,8 @@ function applyUiTheme(value, persist = true) {
     refreshIcons();
     // Appearance row may appear/hide — re-clamp so options stay fully on-screen after scale
     if (typeof positionThemePopover === 'function') positionThemePopover();
+    if (typeof renderProfiles === 'function') renderProfiles();
+    if (typeof renderSessions === 'function') renderSessions();
   });
 }
 
