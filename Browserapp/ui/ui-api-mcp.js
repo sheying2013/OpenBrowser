@@ -143,7 +143,13 @@ document.getElementById('mcp-copy-cmd')?.addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(text); toast(tx('已复制命令')); } catch (_) {}
 });
 document.getElementById('api-key-rotate')?.addEventListener('click', async () => {
-  if (!confirm(tx('重新生成 API Key？本地 mcp-key.json 会立即更新，使用此 Key 的 MCP 客户端需要同步更新。'))) return;
+  const approved = await app.confirmAction?.({
+    title: tx('重新生成 API Key'),
+    message: tx('重新生成 API Key？本地 mcp-key.json 会立即更新，使用此 Key 的 MCP 客户端需要同步更新。'),
+    confirmLabel: tx('重新生成'),
+    tone: 'danger',
+  });
+  if (!approved) return;
   try {
     const res = await window.ops.rotateApiKey();
     if (res?.apiKey) {

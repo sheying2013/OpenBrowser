@@ -60,6 +60,7 @@ assert(resolveProfileLanguage({ privacy: { languageMode: 'zh-CN' } }, {}) === 'z
 const runtimeSourceFiles = [
   'renderer.js',
   'ui/ui-rpa.js',
+  'ui/ui-dialogs.js',
   'ui/ui-api-mcp.js',
   'ui/ui-kernel.js',
   'ui/ui-cloud.js',

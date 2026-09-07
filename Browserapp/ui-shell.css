@@ -19,6 +19,14 @@
   --ui-accent-soft: rgba(22, 119, 255, 0.1);
   --ui-danger: #d94654;
   --ui-shadow: 0 10px 28px rgba(25, 35, 55, 0.09);
+  /* Component tokens stay stable across skins; each theme only changes values. */
+  --surface-raised: var(--ui-surface);
+  --control-bg: var(--ui-surface);
+  --control-border: var(--ui-border-strong);
+  --focus-ring: color-mix(in srgb, var(--ui-accent) 38%, transparent);
+  --danger: var(--ui-danger);
+  --table-hover: var(--ui-accent-soft);
+  --dialog-shadow: var(--ui-shadow);
 }
 
 /* Lucide baseline — without this, SVGs can render as empty boxes */
@@ -1857,4 +1865,77 @@ button.mini-btn {
 #proxy-apply-dialog .assign-item input[type="checkbox"] {
   margin: 0;
   cursor: pointer;
+}
+
+/* Shared action density: icon-only table controls retain explicit tooltips and labels. */
+.actions .action-icon {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 !important;
+  display: inline-grid;
+  place-items: center;
+}
+.actions .action-icon .lucide,
+.actions .action-icon i[data-lucide] {
+  width: 14px;
+  height: 14px;
+}
+
+/* Keep work surfaces intentional on large desktop windows. Data grids remain full width;
+   form, API and guide views get a readable measure instead of a large empty tail. */
+#view-system > .settings-grid,
+#view-api-mcp .rpa-api-page {
+  width: min(100%, 1180px);
+  margin-inline: auto;
+}
+#view-rpa-guide .rpa-guide-page,
+#view-rpa-guide .rpa-guide-layout {
+  margin-inline: auto;
+}
+#view-rpa .rpa-panel[data-rpa-panel="flows"],
+#view-rpa .rpa-panel[data-rpa-panel="store"],
+#view-profile-editor .environment-editor {
+  max-width: 1440px;
+  margin-inline: auto;
+}
+
+/* One visual contract for confirmations, regardless of the active skin. */
+.app-confirm-dialog {
+  width: min(30rem, calc(100vw - 2rem));
+  max-height: min(40rem, calc(100vh - 2rem));
+  padding: 0;
+  border: 1px solid var(--control-border);
+  border-radius: var(--ui-radius);
+  color: var(--ui-text);
+  background: var(--surface-raised);
+  box-shadow: var(--dialog-shadow);
+}
+.app-confirm-dialog::backdrop { background: rgba(7, 12, 20, .42); }
+.app-confirm-dialog form { display: grid; gap: 0; min-width: 0; }
+.app-confirm-dialog .dialog-head { border-bottom: 1px solid var(--ui-border); }
+.app-confirm-dialog .app-confirm-body {
+  padding: 16px 18px;
+  white-space: pre-line;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.app-confirm-dialog .delete-warning { margin: 0 18px 14px; }
+.app-confirm-dialog .dialog-actions { border-top: 1px solid var(--ui-border); }
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.toast[data-tone="error"] { border-color: var(--danger) !important; }
+.toast[data-tone="warning"] { border-color: color-mix(in srgb, var(--danger) 55%, var(--ui-border)) !important; }
+
+@media (max-width: 760px) {
+  #view-system > .settings-grid,
+  #view-api-mcp .rpa-api-page { width: 100%; }
+  .app-confirm-dialog { width: calc(100vw - 1rem); }
 }

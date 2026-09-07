@@ -2189,7 +2189,27 @@
     "socks5://user:pass@host:port 或 host:port:user:pass": "socks5://user:pass@host:port or host:port:user:pass",
     "host:port 或 socks5://user:pass@host:port": "host:port or socks5://user:pass@host:port",
     "操作": "Action",
-    "保存": "Save"
+    "保存": "Save",
+    "确定": "Confirm",
+    "操作确认": "Confirm action",
+    "此操作不可撤销，请谨慎操作。": "This action cannot be undone. Continue carefully.",
+    "确认服务尚未就绪，请稍后重试": "Confirmation service is not ready. Try again shortly.",
+    "确认清除": "Clear now",
+    "重排环境编号": "Renumber profiles",
+    "确认重排": "Renumber now",
+    "删除代理": "Delete proxy",
+    "确认删除": "Delete now",
+    "恢复云端备份": "Restore cloud backup",
+    "确认恢复": "Restore now",
+    "导入备份文件": "Import backup file",
+    "确认导入": "Import now",
+    "重新生成 API Key": "Regenerate API Key",
+    "删除任务": "Delete task",
+    "删除模板": "Delete template",
+    "确定要删除任务「${taskName}」吗？": "Delete task \"${taskName}\"?",
+    "确定要删除选中的 ${ids.length} 个任务吗？": "Delete ${ids.length} selected tasks?",
+    "确定删除选中的 ": "Delete selected ",
+    " 个流程？": " flows?"
   });
   const UI_ZH_FALLBACKS = Object.freeze({ ...UI_ZH_EN, ...RUNTIME_ZH_EN });
   const UI_ZH_KEYS = Object.keys(UI_ZH_FALLBACKS).sort((a, b) => b.length - a.length);

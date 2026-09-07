@@ -318,7 +318,13 @@ $('#cloud-restore-now')?.addEventListener('click', async () => {
     : (mode === 'local-wins'
       ? '仅从云端新增本地没有的环境，已有环境不变。继续？'
       : '智能合并：同 ID 取较新版本，本地独有环境会保留。继续？');
-  if (!confirm(warn)) return;
+  const approved = await app.confirmAction?.({
+    title: tx('恢复云端备份'),
+    message: tx(warn),
+    confirmLabel: tx('确认恢复'),
+    tone: mode === 'overwrite' ? 'danger' : 'primary',
+  });
+  if (!approved) return;
   try {
     await window.ops.cloudSetConfig(cloud);
     toast(tx('正在恢复…'));
@@ -349,7 +355,13 @@ $('#cloud-import-file')?.addEventListener('click', async () => {
   const warn = mode === 'overwrite'
     ? '导入将完全覆盖本地环境列表。确定？'
     : '导入将按当前恢复策略合并。继续？';
-  if (!confirm(warn)) return;
+  const approved = await app.confirmAction?.({
+    title: tx('导入备份文件'),
+    message: tx(warn),
+    confirmLabel: tx('确认导入'),
+    tone: mode === 'overwrite' ? 'danger' : 'primary',
+  });
+  if (!approved) return;
   try {
     const result = await window.ops.cloudImportFile({
       passphrase: cloud.passphrase || '',

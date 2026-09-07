@@ -104,6 +104,13 @@ html[data-ui-theme="merge-gateway"] {
   --ui-shadow: none;
   --ui-radius: var(--xai-radius-panel);
   --ui-radius-sm: var(--xai-radius-control);
+  --surface-raised: var(--xai-white);
+  --control-bg: var(--xai-white);
+  --control-border: var(--xai-border-hover);
+  --focus-ring: rgb(10 10 10 / 28%);
+  --danger: var(--xai-danger);
+  --table-hover: var(--xai-fill-hover);
+  --dialog-shadow: var(--xai-shadow-dialog);
   --blue: var(--xai-ink-console);
   --blue2: var(--xai-fill-soft);
   --border: var(--xai-border);

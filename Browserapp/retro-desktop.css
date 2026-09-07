@@ -53,6 +53,13 @@ html[data-ui-theme="retro-desktop"] {
   --ui-accent-soft: #dceaf7;
   --ui-danger: var(--danger);
   --ui-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  --surface-raised: #ffffff;
+  --control-bg: #ffffff;
+  --control-border: #a8a8a8;
+  --focus-ring: rgba(74, 144, 217, .48);
+  --danger: var(--danger);
+  --table-hover: #eef5fc;
+  --dialog-shadow: 0 12px 28px rgba(0, 0, 0, .22);
   --ui-radius: 10px;
   --ui-radius-sm: 7px;
   --start-progress-height: 12px;

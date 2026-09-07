@@ -44,7 +44,10 @@
     "selftest:artifacts": "node env-artifact-cache-selftest.js",
     "selftest:apikey": "node automation/api-key-store-selftest.js",
     "selftest:ui-modules": "node ui-module-load-selftest.js",
-    "selftest:i18n": "node i18n-selftest.js"
+    "selftest:i18n": "node i18n-selftest.js",
+    "selftest:ui-dialogs": "node ui-dialogs-selftest.js",
+    "selftest:rpa-ui": "node ui/ui-rpa-selftest.js",
+    "selftest:profile-list": "node profile-list-selftest.js"
   },
   "devDependencies": {
     "desktop-shell": "npm:electron@43.1.1",

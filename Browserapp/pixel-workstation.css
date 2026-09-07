@@ -28,6 +28,15 @@ html[data-ui-theme="pixel-workstation"] {
   --ui-sidebar: #0c0f13;
   --ui-header: #161c20;
   --ui-surface: #cedcce;
+  /* Unified Component Design Tokens */
+  --surface-raised: #cedcce;
+  --control-bg: #dbe9d5;
+  --control-border: #05080b;
+  --focus-ring: rgba(96, 145, 148, 0.45);
+  --danger: #9c5757;
+  --table-hover: #c4d4c5;
+  --dialog-shadow: 6px 6px 0 #05080b;
+
   --ui-surface-muted: #b5c4bd;
   --ui-border: #05080b;
   --ui-border-strong: #05080b;
@@ -467,8 +476,9 @@ html[data-ui-theme="pixel-workstation"] .log-row span:last-child { overflow-wrap
 html[data-ui-theme="pixel-workstation"] .log-empty { display: grid; min-height: 420px; place-items: center; color: #67737a; font-size: 12px; background-image: repeating-linear-gradient(0deg, transparent 0 27px, #151f24 27px 28px); }
 
 @media (max-width: 1250px) {
-  html[data-ui-theme="pixel-workstation"] { --ui-sidebar-width: 188px; }
+  html[data-ui-theme="pixel-workstation"] { --ui-sidebar-width: 186px; }
   html[data-ui-theme="pixel-workstation"] .brand strong { font-size: 14px; }
+  html[data-ui-theme="pixel-workstation"] .content > main { padding-inline: 14px; }
 }
 @media (prefers-reduced-transparency: reduce) {
   html[data-ui-theme="pixel-workstation"] body::after { display: none; }
@@ -545,11 +555,6 @@ html[data-ui-theme="pixel-workstation"][data-platform="windows"] button:focus-vi
 html[data-ui-theme="pixel-workstation"][data-platform="windows"] input:focus-visible,
 html[data-ui-theme="pixel-workstation"][data-platform="windows"] textarea:focus-visible,
 html[data-ui-theme="pixel-workstation"][data-platform="windows"] .themed-select-button:focus-visible { outline: 1px solid #486567 !important; outline-offset: 1px; }
-
-@media (max-width: 1250px) {
-  html[data-ui-theme="pixel-workstation"] { --ui-sidebar-width: 186px; }
-  html[data-ui-theme="pixel-workstation"] .content > main { padding-inline: 14px; }
-}
 
 /* Compact profile metadata: keep secondary state from competing with the profile name and actions. */
 html[data-ui-theme="pixel-workstation"] #view-profiles .group-chip-row {

@@ -40,9 +40,47 @@ let rpaStoreCategories = ['全部'];
 let rpaStoreActiveCat = '全部';
 let rpaPreviewTemplateId = null;
 
-function showRpaPanel(tab) {
-  setTimeout(() => afterUiRender(document.getElementById('view-rpa') || document), 0);
+function rpaApplyLocalUi(root) {
+  if (!root) return;
+  try { afterUiRender(root); } catch (_) {}
+}
 
+async function confirmRpaAction(options) {
+  const host = window.OpenBrowserApp || app || {};
+  const fn = typeof host.confirmAction === 'function'
+    ? host.confirmAction
+    : (typeof window.confirmAction === 'function' ? window.confirmAction : null);
+
+  if (fn) {
+    try {
+      const payload = typeof options === 'string'
+        ? {
+            title: '',
+            message: options,
+            danger: true,
+            okText: tx('删除'),
+            cancelText: tx('取消'),
+            toString() { return this.message; },
+          }
+        : {
+            title: options.title || '',
+            message: options.message || '',
+            danger: options.danger !== false,
+            okText: options.okText || tx('删除'),
+            cancelText: options.cancelText || tx('取消'),
+            toString() { return this.message; },
+          };
+      return Boolean(await fn(payload));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 基础层尚未提供 confirmAction 时不执行破坏性操作：绝不回退到阻塞式原生 confirm()。
+  return false;
+}
+
+function showRpaPanel(tab) {
   currentRpaTab = tab || 'flows';
   document.querySelectorAll('[data-rpa-panel]').forEach((el) => {
     el.hidden = el.getAttribute('data-rpa-panel') !== currentRpaTab;
@@ -64,6 +102,12 @@ function showRpaPanel(tab) {
   if (toggle && !toggle.classList.contains('open')) {
     toggle.setAttribute('aria-expanded', 'true');
     toggle.classList.add('open');
+  }
+
+  const targetPanel = document.querySelector(`[data-rpa-panel="${currentRpaTab}"]`)
+    || document.getElementById('view-rpa');
+  if (targetPanel) {
+    setTimeout(() => rpaApplyLocalUi(targetPanel), 0);
   }
 }
 
@@ -107,7 +151,12 @@ function renderRpaPlans() {
     const row = document.createElement('tr');
     if (plan.id === rpaSelectedId) row.classList.add('active');
     row.dataset.rpaPlan = plan.id;
-    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.dataset.rpaPlanCheck = plan.id;
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.rpaPlanCheck = plan.id;
+    const planLabel = plan.plan_name || plan.id;
+    cb.title = planLabel;
+    cb.setAttribute('aria-label', planLabel);
     const td0 = document.createElement('td'); td0.append(cb);
     row.append(
       td0,
@@ -120,6 +169,7 @@ function renderRpaPlans() {
   }
   setRpaEditorVisible(list.length > 0 || Boolean(rpaSelectedId));
   if (!list.length && !rpaSelectedId) setRpaEditorVisible(false);
+  rpaApplyLocalUi(table);
 }
 
 function loadRpaPlanToEditor(plan) {
@@ -219,6 +269,9 @@ async function refreshRpaTasks() {
     cb.type = 'checkbox';
     cb.className = 'rpa-task-checkbox';
     cb.dataset.taskId = t.id;
+    const taskName = t.process_name || t.id;
+    cb.title = taskName;
+    cb.setAttribute('aria-label', taskName);
     cb.onchange = () => {
       updateDeleteCheckedBtnVisibility();
       if (selectAll) {
@@ -229,15 +282,28 @@ async function refreshRpaTasks() {
     };
     const td0 = document.createElement('td'); td0.append(cb);
     const runBtn = element('button', 'outline', tx('详情'));
+    runBtn.type = 'button';
+    runBtn.title = tx('详情');
+    runBtn.setAttribute('aria-label', `${taskName} · ${tx('详情')}`);
     runBtn.onclick = () => {
       appendRpaLog(JSON.stringify(t));
       showRpaPanel('runs');
       toast(tx('见运行记录/日志'));
     };
     const delBtn = element('button', 'danger outline', tx('删除'));
+    delBtn.type = 'button';
     delBtn.style.marginLeft = '6px';
+    delBtn.title = tx('删除');
+    delBtn.setAttribute('aria-label', `${taskName} · ${tx('删除')}`);
     delBtn.onclick = async () => {
-      if (!confirm(`确定要删除任务「${t.process_name || t.id}」吗？`)) return;
+      const ok = await confirmRpaAction({
+        title: tx('删除任务'),
+        message: `确定要删除任务「${taskName}」吗？`,
+        danger: true,
+        okText: tx('删除'),
+        cancelText: tx('取消'),
+      });
+      if (!ok) return;
       try {
         await window.ops.rpaTaskDelete([t.id]);
         toast(tx('任务已删除'));
@@ -265,6 +331,7 @@ async function refreshRpaTasks() {
   if (empty) {
     empty.style.display = list.length ? 'none' : 'grid';
   }
+  rpaApplyLocalUi(table);
 }
 
 async function refreshRpaRuns() {
@@ -293,6 +360,7 @@ async function refreshRpaRuns() {
     table.append(row);
   }
   if (empty) empty.style.display = list.length ? 'none' : 'grid';
+  rpaApplyLocalUi(table);
 }
 
 function rpaCategoryLabel(cat) {
@@ -322,11 +390,15 @@ function syncRpaStoreCategoryUi(categories) {
     for (const c of rpaStoreCategories) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.textContent = rpaCategoryLabel(c);
+      const catLabel = rpaCategoryLabel(c);
+      b.textContent = catLabel;
+      b.title = catLabel;
+      b.setAttribute('aria-label', catLabel);
       b.dataset.storeCat = c;
       if (c === rpaStoreActiveCat) b.classList.add('active');
       chips.append(b);
     }
+    rpaApplyLocalUi(chips);
   }
 }
 
@@ -375,7 +447,21 @@ function renderRpaStore() {
   if (countEl) {
     const wrap = countEl.parentElement;
     if (wrap && wrap.classList.contains('rpa-toolbar-right')) {
-      wrap.innerHTML = `${t('rpa.store.countPrefix') || '共 '}<b id="rpa-store-count">${list.length}</b>${t('rpa.store.countMiddle') || ' 个 · '}<span id="rpa-store-sync-meta">${t('rpa.store.localMeta')}</span>`;
+      const prefixNode = document.createTextNode(t('rpa.store.countPrefix') || '共 ');
+      let countB = wrap.querySelector('#rpa-store-count');
+      if (!countB) {
+        countB = document.createElement('b');
+        countB.id = 'rpa-store-count';
+      }
+      countB.textContent = String(list.length);
+      const middleNode = document.createTextNode(t('rpa.store.countMiddle') || ' 个 · ');
+      let metaSpan = wrap.querySelector('#rpa-store-sync-meta');
+      if (!metaSpan) {
+        metaSpan = document.createElement('span');
+        metaSpan.id = 'rpa-store-sync-meta';
+      }
+      metaSpan.textContent = t('rpa.store.localMeta') || '';
+      wrap.replaceChildren(prefixNode, countB, middleNode, metaSpan);
     } else {
       countEl.textContent = String(list.length);
     }
@@ -390,41 +476,66 @@ function renderRpaStore() {
     const stepCount = Array.isArray(tpl.steps) ? tpl.steps.length : 0;
     const runnable = tpl.runnable === true;
     const tags = Array.isArray(tpl.tags) ? tpl.tags.slice(0, 4) : [];
-    card.innerHTML = `
-      <h4></h4>
-      <p></p>
-      <div class="rpa-store-tags"></div>
-      <div class="rpa-store-meta"><span></span><span></span></div>
-      <div class="rpa-store-actions"></div>`;
-    card.querySelector('h4').textContent = tpl.name || tpl.id;
-    card.querySelector('p').textContent = tpl.desc || '';
-    const tagBox = card.querySelector('.rpa-store-tags');
+
+    const h4 = document.createElement('h4');
+    h4.textContent = tpl.name || tpl.id;
+
+    const p = document.createElement('p');
+    p.textContent = tpl.desc || '';
+
+    const tagBox = document.createElement('div');
+    tagBox.className = 'rpa-store-tags';
     for (const tag of tags) {
       const i = document.createElement('i');
-      i.textContent = tag;
+      i.textContent = String(tag);
       tagBox.append(i);
     }
     if (tpl.developer) {
       const i = document.createElement('i');
-      i.textContent = tpl.developer;
+      i.textContent = String(tpl.developer);
       tagBox.append(i);
     }
-    const meta = card.querySelectorAll('.rpa-store-meta span');
-    meta[0].textContent = `${tpl.cat || '—'} · ${sourceLabel}`;
-    meta[1].textContent = t('rpa.store.steps', { n: stepCount });
-    const actions = card.querySelector('.rpa-store-actions');
+
+    const meta = document.createElement('div');
+    meta.className = 'rpa-store-meta';
+    const spanCat = document.createElement('span');
+    spanCat.textContent = `${tpl.cat || '—'} · ${sourceLabel}`;
+    const spanSteps = document.createElement('span');
+    spanSteps.textContent = t('rpa.store.steps', { n: stepCount });
+    meta.append(spanCat, spanSteps);
+
+    const actions = document.createElement('div');
+    actions.className = 'rpa-store-actions';
+
     const useBtn = document.createElement('button');
-    useBtn.type = 'button'; useBtn.className = 'primary'; useBtn.textContent = runnable ? t('action.use') : t('action.unavailable');
+    useBtn.type = 'button';
+    useBtn.className = 'primary';
+    const useText = runnable ? t('action.use') : t('action.unavailable');
+    useBtn.textContent = useText;
     useBtn.disabled = !runnable;
-    useBtn.title = runnable
+    const useTitle = runnable
       ? t('rpa.store.createFlow')
       : (stepCount ? t('rpa.store.unsupportedPrefix', { items: (tpl.unsupported_steps || []).slice(0, 3).map((item) => item.type).join(', ') }) : t('rpa.store.noSteps'));
+    useBtn.title = useTitle;
+    useBtn.setAttribute('aria-label', `${tpl.name || tpl.id} · ${useText}`);
     useBtn.onclick = () => installRpaTemplate(tpl.id).catch((e) => toast(e.message));
+
     const previewBtn = document.createElement('button');
-    previewBtn.type = 'button'; previewBtn.className = 'outline'; previewBtn.textContent = t('action.preview');
+    previewBtn.type = 'button';
+    previewBtn.className = 'outline';
+    const previewText = t('action.preview');
+    previewBtn.textContent = previewText;
+    previewBtn.title = previewText;
+    previewBtn.setAttribute('aria-label', `${tpl.name || tpl.id} · ${previewText}`);
     previewBtn.onclick = () => openRpaTemplatePreview(tpl);
+
     const exportBtn = document.createElement('button');
-    exportBtn.type = 'button'; exportBtn.className = 'outline'; exportBtn.textContent = t('action.export');
+    exportBtn.type = 'button';
+    exportBtn.className = 'outline';
+    const exportText = t('action.export');
+    exportBtn.textContent = exportText;
+    exportBtn.title = exportText;
+    exportBtn.setAttribute('aria-label', `${tpl.name || tpl.id} · ${exportText}`);
     exportBtn.onclick = async () => {
       try {
         const result = await window.ops.rpaTemplateExport(tpl.id);
@@ -433,11 +544,24 @@ function renderRpaStore() {
       } catch (e) { toast(e.message); }
     };
     actions.append(useBtn, previewBtn, exportBtn);
+
     if (!tpl.builtin && tpl.source !== 'builtin' && tpl.source !== 'catalog') {
       const delBtn = document.createElement('button');
-      delBtn.type = 'button'; delBtn.className = 'outline rpa-btn-danger'; delBtn.textContent = t('action.delete');
+      delBtn.type = 'button';
+      delBtn.className = 'outline rpa-btn-danger';
+      const delText = t('action.delete');
+      delBtn.textContent = delText;
+      delBtn.title = delText;
+      delBtn.setAttribute('aria-label', `${tpl.name || tpl.id} · ${delText}`);
       delBtn.onclick = async () => {
-        if (!confirm(t('rpa.store.deleteConfirm', { name: tpl.name || '' }))) return;
+        const ok = await confirmRpaAction({
+          title: tx('删除模板'),
+          message: t('rpa.store.deleteConfirm', { name: tpl.name || '' }),
+          danger: true,
+          okText: tx('删除'),
+          cancelText: tx('取消'),
+        });
+        if (!ok) return;
         try {
           await window.ops.rpaTemplateDelete(tpl.id);
           toast(t('toast.deleted'));
@@ -446,8 +570,12 @@ function renderRpaStore() {
       };
       actions.append(delBtn);
     }
+
+    card.append(h4, p, tagBox, meta, actions);
     grid.append(card);
   }
+
+  rpaApplyLocalUi(grid);
 }
 
 async function installRpaTemplate(id) {
@@ -459,7 +587,8 @@ async function installRpaTemplate(id) {
   await refreshRpaPage();
   loadRpaPlanToEditor(plan);
   toast(`${t('rpa.store.createFlow')}：${plan.plan_name || plan.id}（${t('rpa.store.steps', { n: plan.steps?.length || 0 })}）`);
-  afterUiRender(document.getElementById('view-rpa') || document);
+  const rpaView = document.getElementById('view-rpa');
+  rpaApplyLocalUi(rpaView);
   return plan;
 }
 
@@ -536,7 +665,8 @@ async function refreshRpaPage() {
   await refreshRpaTasks();
   await refreshRpaRuns();
   await refreshRpaStore();
-  afterUiRender(document.getElementById('view-rpa') || document);
+  const rpaView = document.getElementById('view-rpa');
+  rpaApplyLocalUi(rpaView);
 }
 
 async function createRpaPlan(name) {
@@ -571,7 +701,14 @@ document.getElementById('rpa-task-delete-checked')?.addEventListener('click', as
   const checkedBoxes = [...table.querySelectorAll('.rpa-task-checkbox:checked')];
   const ids = checkedBoxes.map((cb) => cb.dataset.taskId).filter(Boolean);
   if (!ids.length) return toast(tx('请先勾选要删除的任务'));
-  if (!confirm(`确定要删除选中的 ${ids.length} 个任务吗？`)) return;
+  const ok = await confirmRpaAction({
+    title: tx('批量删除任务'),
+    message: `确定要删除选中的 ${ids.length} 个任务吗？`,
+    danger: true,
+    okText: tx('删除'),
+    cancelText: tx('取消'),
+  });
+  if (!ok) return;
   try {
     const res = await window.ops.rpaTaskDelete(ids);
     toast(`已删除 ${res?.deleted?.length || ids.length} 个任务`);
@@ -695,7 +832,14 @@ document.getElementById('rpa-delete')?.addEventListener('click', async () => {
   const checked = [...document.querySelectorAll('[data-rpa-plan-check]:checked')].map((el) => el.dataset.rpaPlanCheck);
   const ids = checked.length ? checked : (rpaSelectedId ? [rpaSelectedId] : []);
   if (!ids.length) return toast(tx('请先选择流程'));
-  if (!confirm(tx('确定删除选中的 ') + ids.length + tx(' 个流程？'))) return;
+  const ok = await confirmRpaAction({
+    title: tx('删除流程'),
+    message: tx('确定删除选中的 ') + ids.length + tx(' 个流程？'),
+    danger: true,
+    okText: tx('删除'),
+    cancelText: tx('取消'),
+  });
+  if (!ok) return;
   try {
     for (const id of ids) await window.ops.rpaDeletePlan(id);
     if (ids.includes(rpaSelectedId)) rpaSelectedId = null;
@@ -802,4 +946,5 @@ window.refreshRpaStatusBadge = refreshRpaStatusBadge;
 window.refreshRpaTasks = refreshRpaTasks;
 window.refreshRpaRuns = refreshRpaRuns;
 window.renderRpaStore = renderRpaStore;
+window.confirmRpaAction = confirmRpaAction;
 })();

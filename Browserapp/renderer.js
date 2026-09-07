@@ -170,6 +170,8 @@ document.getElementById('app-check-update')?.addEventListener('click', () => che
 document.getElementById('app-download-update')?.addEventListener('click', () => downloadAppUpdate());
 
 function afterUiRender(root) {
+  // Renderers always pass the view or card they just changed. Keeping i18n scoped
+  // avoids walking the entire desktop shell after every table/card update.
   try { window.OpenBrowserI18n?.applyDom?.(root || document); } catch (_) {}
 }
 
@@ -1068,6 +1070,18 @@ let specifiedTextGroups = loadSpecifiedTextGroups();
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const element = (tag, className, text) => { const value = document.createElement(tag); if (className) value.className = className; if (text !== undefined) value.textContent = text; return value; };
+
+function iconActionButton(icon, label, className = 'mini') {
+  const button = element('button', `${className} action-icon`);
+  button.type = 'button';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  const glyph = document.createElement('i');
+  glyph.dataset.lucide = icon;
+  glyph.setAttribute('aria-hidden', 'true');
+  button.append(glyph);
+  return button;
+}
 function redactProxyForStorage(proxy) {
   const raw = String(proxy || '').trim();
   if (!raw || /^(direct|offline|none)$/i.test(raw)) return raw || 'Direct';
@@ -1643,7 +1657,26 @@ new MutationObserver((records) => {
   }));
 }).observe(document.body, { childList: true, subtree: true });
 
-function toast(message) { const value = $('#toast'); value.textContent = message; value.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => value.classList.remove('show'), 2400); }
+function toast(message, { tone = 'status' } = {}) {
+  const value = $('#toast');
+  if (!value) return;
+  value.textContent = message;
+  value.dataset.tone = tone;
+  value.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+  value.setAttribute('aria-live', tone === 'error' ? 'assertive' : 'polite');
+  value.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => value.classList.remove('show'), 2400);
+}
+
+async function confirmAction(options) {
+  const confirmUi = window.OpenBrowserApp?.confirmAction || window.confirmAction;
+  if (typeof confirmUi !== 'function') {
+    toast(tx('确认服务尚未就绪，请稍后重试'), { tone: 'error' });
+    return false;
+  }
+  return confirmUi(options);
+}
 function log(module, message) { ui.logs.unshift({ time: new Date().toLocaleTimeString('zh-CN', { hour12: false }), module, message }); ui.logs = ui.logs.slice(0, 200); save(); renderLogs(); }
 function initials(name) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(); }
 function isDirectProxy(value) {
@@ -2948,11 +2981,16 @@ function saveGroupFromDialog() {
   fillGroupSelect($('#batch-assign-group'), '', { includeUngrouped: true });
 }
 
-function deleteGroup(id) {
+async function deleteGroup(id) {
   const g = findGroup(id);
   if (!g) return;
   const n = countProfilesInGroup(id);
-  if (!confirm(tx(`删除分组「${g.name}」？\n其中 ${n} 个环境将变为「未分组」。`))) return;
+  if (!await confirmAction({
+    title: tx('删除分组'),
+    message: tx(`删除分组「${g.name}」？\n其中 ${n} 个环境将变为「未分组」。`),
+    confirmLabel: tx('删除分组'),
+    tone: 'danger',
+  })) return;
   ui.profiles = ui.profiles.map((p) => (p.groupId === id ? { ...p, groupId: UNGROUPED_ID } : p));
   ui.groups = ui.groups.filter((item) => item.id !== id);
   if (activeGroupFilter === id) activeGroupFilter = 'all';
@@ -3010,11 +3048,11 @@ function renderProxies() {
     const latency = Number.isFinite(Number(item.lastLatencyMs)) ? `${Number(item.lastLatencyMs)}ms` : '—';
     const netType = item.lastNetworkType || '—';
     const actions = element('div', 'actions');
-    const edit = element('button', 'mini edit', t('action.edit')); edit.dataset.proxyEdit = item.id;
-    const test = element('button', 'mini blue', t('action.check')); test.dataset.proxyTest = item.id;
-    const apply = element('button', 'mini', tx('应用')); apply.dataset.proxyApply = item.id;
-    const use = element('button', 'mini', t('action.use')); use.dataset.proxyUse = item.id;
-    const del = element('button', 'mini', t('action.delete')); del.dataset.proxyDelete = item.id;
+    const edit = iconActionButton('pencil', t('action.edit'), 'mini edit'); edit.dataset.proxyEdit = item.id;
+    const test = iconActionButton('activity', t('action.check'), 'mini blue'); test.dataset.proxyTest = item.id;
+    const apply = iconActionButton('users-round', tx('应用')); apply.dataset.proxyApply = item.id;
+    const use = iconActionButton('link-2', t('action.use')); use.dataset.proxyUse = item.id;
+    const del = iconActionButton('trash-2', t('action.delete'), 'mini danger'); del.dataset.proxyDelete = item.id;
     actions.append(edit, test, apply, use, del);
     const actionCell = document.createElement('td'); actionCell.append(actions);
     const proto = String(item.protocol || 'proxy').toUpperCase();
@@ -3289,20 +3327,34 @@ async function cloneProfile(id) {
   }
 }
 
-function renderProfiles() {
-  renderGroupFilterChips();
-  const filter = $('#profile-search').value.trim().toLowerCase();
-  const table = $('#profile-table'); table.replaceChildren();
-  let filtered = ui.profiles.filter((profile) => {
+function filteredProfilesForCurrentView() {
+  const filter = $('#profile-search')?.value || '';
+  const profileList = window.OpenBrowserProfileList;
+  if (profileList?.filterProfiles) {
+    return profileList.filterProfiles({
+      profiles: ui.profiles,
+      activeGroupFilter,
+      query: filter,
+      displayProfileNumber,
+      groupNameOf,
+    });
+  }
+  return ui.profiles.filter((profile) => {
     if (activeGroupFilter === 'ungrouped') return !profile.groupId;
     if (activeGroupFilter !== 'all' && profile.groupId !== activeGroupFilter) return false;
     return true;
   });
-  filtered = filtered.filter((profile) => [profile.id, displayProfileNumber(profile), profile.browser, profile.proxy, profile.tag, groupNameOf(profile)].join(' ').toLowerCase().includes(filter));
-  const totalPages = Math.max(1, Math.ceil(filtered.length / profilePageSize));
-  profilePage = Math.min(Math.max(1, profilePage), totalPages);
-  const pageStart = (profilePage - 1) * profilePageSize;
-  const visible = filtered.slice(pageStart, pageStart + profilePageSize);
+}
+
+function renderProfiles() {
+  renderGroupFilterChips();
+  const table = $('#profile-table'); table.replaceChildren();
+  const filtered = filteredProfilesForCurrentView();
+  const pageData = window.OpenBrowserProfileList?.paginate?.(filtered, profilePage, profilePageSize)
+    || { items: filtered, currentPage: 1, totalPages: 1 };
+  profilePage = pageData.currentPage;
+  const totalPages = pageData.totalPages;
+  const visible = pageData.items;
   for (const profile of visible) {
     const info = profileEngine(profile.id); const row = document.createElement('tr');
     row.dataset.profileId = profile.id;
@@ -3356,7 +3408,7 @@ function renderProfiles() {
     const actionCell = document.createElement('td');
     actionCell.className = 'col-actions';
     const actions = element('div', 'actions');
-    const toggle = element('button', 'mini', info.running ? t('action.stop') : (starting ? t('status.starting') : t('action.start')));
+    const toggle = iconActionButton(info.running ? 'square' : 'play', info.running ? t('action.stop') : (starting ? t('status.starting') : t('action.start')));
     toggle.dataset.action = info.running ? 'stop' : 'start';
     toggle.dataset.id = profile.id;
     if (starting) {
@@ -3364,9 +3416,9 @@ function renderProfiles() {
       toggle.classList.add('is-starting');
       toggle.title = startProgressLabel(startingProfiles.get(profile.id));
     }
-    const sync = element('button', 'mini blue', t('action.sync')); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting; sync.title = t('profiles.syncSelect');
-    const edit = element('button', 'mini edit', t('action.edit')); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
-    const clone = element('button', 'mini clone', t('action.clone') || '克隆'); clone.dataset.action = 'clone'; clone.dataset.id = profile.id; clone.title = t('action.clone') || '克隆';
+    const sync = iconActionButton('panels-top-left', t('profiles.syncSelect'), 'mini blue'); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting;
+    const edit = iconActionButton('pencil', t('action.edit'), 'mini edit'); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
+    const clone = iconActionButton('copy', t('action.clone') || '克隆', 'mini clone'); clone.dataset.action = 'clone'; clone.dataset.id = profile.id;
     actions.append(toggle, sync, edit, clone); actionCell.append(actions);
     row.append(selectCell, idCell, nameCell, groupCell, browserCell, proxyCell, networkCell, extensionCell, statusCell, actionCell); table.append(row);
   }
@@ -3409,12 +3461,10 @@ function renderProfiles() {
 }
 
 function visibleProfilePageIds() {
-  const filter = $('#profile-search').value.trim().toLowerCase();
-  const filtered = ui.profiles.filter((profile) => [profile.id, displayProfileNumber(profile), profile.browser, profile.proxy, profile.tag].join(' ').toLowerCase().includes(filter));
-  const totalPages = Math.max(1, Math.ceil(filtered.length / profilePageSize));
-  const page = Math.min(Math.max(1, profilePage), totalPages);
-  const pageStart = (page - 1) * profilePageSize;
-  return filtered.slice(pageStart, pageStart + profilePageSize).map((profile) => profile.id);
+  const filtered = filteredProfilesForCurrentView();
+  const pageData = window.OpenBrowserProfileList?.paginate?.(filtered, profilePage, profilePageSize)
+    || { items: filtered };
+  return pageData.items.map((profile) => profile.id);
 }
 
 async function refreshStatus() {
@@ -3432,6 +3482,23 @@ let __rafPending = 0;
 function scheduleRenderProfiles() {
   if (__rafPending) return;
   __rafPending = requestAnimationFrame(() => { __rafPending = 0; renderProfiles(); });
+}
+let __profileSearchTimer = 0;
+function scheduleProfileSearchRender() {
+  clearTimeout(__profileSearchTimer);
+  __profileSearchTimer = setTimeout(() => {
+    __profileSearchTimer = 0;
+    profilePage = 1;
+    renderProfiles();
+  }, 90);
+}
+let __proxySearchFrame = 0;
+function scheduleProxySearchRender() {
+  if (__proxySearchFrame) cancelAnimationFrame(__proxySearchFrame);
+  __proxySearchFrame = requestAnimationFrame(() => {
+    __proxySearchFrame = 0;
+    renderProxies();
+  });
 }
 // Leading-guard throttle: fetch at most once per window during a burst (keeps progress
 // visible) instead of once per event; the trailing fetch captures the settled state.
@@ -4322,7 +4389,7 @@ document.addEventListener('change', async (event) => {
 $('#select-all-profiles').addEventListener('change', (event) => { for (const id of visibleProfilePageIds()) event.target.checked ? selectedProfiles.add(id) : selectedProfiles.delete(id); renderProfiles(); });
 $('#select-all-sessions').addEventListener('change', (event) => { if (syncState.active) return; const group = $('#sync-group').value || 'all'; const visible = group === 'all' ? sessions : sessions.filter((item) => String(item.profile?.tag || '未分组') === group); for (const item of visible) event.target.checked ? selectedSessions.add(item.id) : selectedSessions.delete(item.id); if (!selectedSessions.has(preferredMasterId)) preferredMasterId = [...selectedSessions][0] || null; pushSyncSelection(); renderSessions(); });
 $('#sync-group').addEventListener('change', () => { if (syncState.active) return; const group = $('#sync-group').value || 'all'; const values = group === 'all' ? sessions : sessions.filter((item) => String(item.profile?.tag || '未分组') === group); selectedSessions = new Set(values.map((item) => item.id)); preferredMasterId = values[0]?.id || null; pushSyncSelection(); renderSessions(); });
-$('#profile-search').addEventListener('input', () => { profilePage = 1; renderProfiles(); }); $('#extension-search').addEventListener('input', renderExtensions);
+$('#profile-search').addEventListener('input', scheduleProfileSearchRender); $('#extension-search').addEventListener('input', renderExtensions);
 $('#profile-page-size').addEventListener('change', (event) => { const value = Number(event.target.value); profilePageSize = PROFILE_PAGE_SIZES.includes(value) ? value : 10; profilePage = 1; try { localStorage.setItem(PROFILE_PAGE_SIZE_KEY, String(profilePageSize)); } catch (_) {} renderProfiles(); });
 $('#profile-prev').addEventListener('click', () => { profilePage = Math.max(1, profilePage - 1); renderProfiles(); });
 $('#profile-next').addEventListener('click', () => { profilePage += 1; renderProfiles(); });
@@ -4646,7 +4713,12 @@ document.getElementById('editor-cookie-file')?.addEventListener('change', async 
 });
 document.getElementById('editor-clear-cache-cookie')?.addEventListener('click', async () => {
   if (!editingProfileId) return toast(tx('未打开环境'));
-  if (!confirm(tx('清除该环境的缓存及 Cookie？需先关闭窗口。'))) return;
+  if (!await confirmAction({
+    title: tx('清除缓存及 Cookie'),
+    message: tx('清除该环境的缓存及 Cookie？需先关闭窗口。'),
+    confirmLabel: tx('确认清除'),
+    tone: 'danger',
+  })) return;
   try {
     await window.ops.clearProfileCacheCookies(editingProfileId);
     editorSet('#editor-cookies', '');
@@ -4889,7 +4961,12 @@ $('#copy-selected')?.addEventListener('click', async () => {
 });
 $('#renumber-profiles')?.addEventListener('click', async () => {
   if (!ui.profiles || !ui.profiles.length) return toast(tx('当前暂无环境'));
-  if (!confirm(tx('是否将所有环境按列表顺序重新编号为 1 到 N？'))) return;
+  if (!await confirmAction({
+    title: tx('重排环境编号'),
+    message: tx('是否将所有环境按列表顺序重新编号为 1 到 N？'),
+    confirmLabel: tx('确认重排'),
+    tone: 'danger',
+  })) return;
   try {
     ui.profiles.forEach((profile, index) => {
       const num = index + 1;
@@ -4939,7 +5016,7 @@ $('#app-center-tabs')?.addEventListener('click', (event) => {
 // ---- proxy library ----
 $('#proxy-create')?.addEventListener('click', () => openProxyDialog(null));
 $('#proxy-refresh')?.addEventListener('click', refreshProxies);
-$('#proxy-search')?.addEventListener('input', renderProxies);
+$('#proxy-search')?.addEventListener('input', scheduleProxySearchRender);
 $('#proxy-select-all')?.addEventListener('change', (event) => {
   const checked = event.target.checked;
   const q = ($('#proxy-search')?.value || '').trim().toLowerCase();
@@ -4952,7 +5029,12 @@ $('#proxy-select-all')?.addEventListener('change', (event) => {
 $('#proxy-delete-selected')?.addEventListener('click', async () => {
   const ids = [...selectedProxies];
   if (!ids.length) return toast(tx('请先勾选代理'));
-  if (!confirm(tx(`确定删除选中的 ${ids.length} 条代理？`))) return;
+  if (!await confirmAction({
+    title: tx('删除代理'),
+    message: tx(`确定删除选中的 ${ids.length} 条代理？`),
+    confirmLabel: tx('确认删除'),
+    tone: 'danger',
+  })) return;
   try {
     await window.ops.proxyDelete(ids);
     ids.forEach((id) => selectedProxies.delete(id));
@@ -5009,7 +5091,12 @@ document.addEventListener('click', async (event) => {
   const del = event.target.closest('[data-proxy-delete]');
   if (del) {
     const id = del.dataset.proxyDelete;
-    if (!confirm(tx('确定删除该代理？'))) return;
+    if (!await confirmAction({
+      title: tx('删除代理'),
+      message: tx('确定删除该代理？'),
+      confirmLabel: tx('确认删除'),
+      tone: 'danger',
+    })) return;
     try {
       await window.ops.proxyDelete([id]);
       selectedProxies.delete(id);
@@ -6092,14 +6179,11 @@ window.syncThemedSelects = syncThemedSelects;
 const _switchViewKernel = switchView;
 switchView = function(view) {
   _switchViewKernel.apply(this, arguments);
-  // Re-translate static + dynamic chrome for every page (API/MCP, guide, settings, store…)
+  // Re-translate only the view that was activated. Static copy lives inside its
+  // view, so a document-wide scan is unnecessary and becomes visible on large lists.
   try {
     const root = document.getElementById('view-' + view) || document;
     afterUiRender(root);
-    // guide + system + api are mostly static HTML — full document pass catches options/labels
-    if (view === 'system' || view === 'api-mcp' || view === 'rpa' || view === 'rpa-guide' || view === 'logs') {
-      afterUiRender(document);
-    }
   } catch (_) {}
   if (view === 'system') {
     refreshLocaleChrome();

@@ -12,6 +12,7 @@ const vm = require('vm');
 const root = __dirname;
 const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const expectedModules = [
+  'ui/ui-dialogs.js',
   'ui/ui-rpa.js',
   'ui/ui-api-mcp.js',
   'ui/ui-kernel.js',
@@ -116,13 +117,14 @@ for (const script of expectedModules) {
 }
 
 for (const name of [
-  'showRpaPanel', 'refreshRpaPage', 'appendRpaLog', 'refreshApiMcpPage',
+  'confirmAction', 'confirmDialog', 'showRpaPanel', 'refreshRpaPage', 'appendRpaLog', 'refreshApiMcpPage',
   'setLocalApiStatus', 'refreshKernelPanel', 'refreshCloudPanel',
 ]) {
   assert.strictEqual(typeof context[name], 'function', name + ' is exported after module load');
 }
 
 new vm.Script(`
+  if (typeof confirmAction !== 'function') throw new Error('renderer modules cannot resolve confirmation export');
   if (typeof showRpaPanel !== 'function') throw new Error('renderer cannot resolve RPA export');
   if (typeof refreshApiMcpPage !== 'function') throw new Error('renderer cannot resolve API/MCP export');
   if (typeof refreshKernelPanel !== 'function') throw new Error('renderer cannot resolve kernel export');

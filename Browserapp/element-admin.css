@@ -75,6 +75,13 @@ html[data-ui-theme="element-admin"] {
   --ui-shadow: var(--desk-shadow);
   --ui-radius: var(--desk-radius);
   --ui-radius-sm: var(--desk-radius-sm);
+  --surface-raised: var(--desk-surface);
+  --control-bg: var(--desk-surface);
+  --control-border: var(--desk-separator-strong);
+  --focus-ring: color-mix(in srgb, var(--desk-accent) 36%, transparent);
+  --danger: var(--desk-danger);
+  --table-hover: var(--desk-accent-soft);
+  --dialog-shadow: var(--desk-shadow-menu);
   color-scheme: light;
 }
 

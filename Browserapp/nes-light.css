@@ -38,6 +38,13 @@ html[data-ui-theme="nes-light"] {
   --ui-accent-soft: #bfb59d;
   --ui-danger: #aa5a5a;
   --ui-shadow: 4px 4px 0 #27221b;
+  --surface-raised: #e7ddc8;
+  --control-bg: #ece3cf;
+  --control-border: #362f26;
+  --focus-ring: rgba(81, 120, 122, .55);
+  --danger: #aa5a5a;
+  --table-hover: #cddcd8;
+  --dialog-shadow: 8px 8px 0 #362f26, 14px 14px 0 rgba(79,143,147,.25);
   --ui-radius: 0px;
   --ui-radius-sm: 0px;
   --start-progress-height: 8px;
