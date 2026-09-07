@@ -1,3 +1,6 @@
+(() => {
+'use strict';
+
 /**
  * OpenBrowser UI submodule
  */
@@ -15,8 +18,9 @@ const {
 } = window.OpenBrowserApp || window;
 const $ = window.$ || ((s, root = document) => root.querySelector(s));
 const $$ = window.$$ || ((s, root = document) => [...root.querySelectorAll(s)]);
-const ui = window.OpenBrowserApp?.ui || window.ui || { profiles: [] };
-const save = window.OpenBrowserApp?.save || window.save || (() => {});
+const app = window.OpenBrowserApp || window;
+const ui = app.ui || { profiles: [] };
+const save = app.save || (() => {});
 
 // ---------- Cloud backup UI (本地设置) ----------
 const CLOUD_BRIDGE_PRESETS = {
@@ -221,7 +225,7 @@ function applyRestoredProfiles(result) {
   }
   save();
   window.ops.syncProfiles(ui.profiles).catch(() => {});
-  renderProfiles();
+  app.renderProfiles?.();
   refreshProxies?.().catch?.(() => {});
 }
 
@@ -361,24 +365,26 @@ $('#cloud-import-file')?.addEventListener('click', async () => {
 });
 document.getElementById('editor-cloud-push-one')?.addEventListener('click', async () => {
   try {
-    if (!editingProfileId) throw new Error(tx('未打开环境'));
+    const profileId = app.editingProfileId;
+    if (!profileId) throw new Error(tx('未打开环境'));
     // ensure current form flags saved conceptually: require cloudBackup checked
     if (!$('#editor-cloud-backup')?.checked) throw new Error(tx('请先勾选「云备份」并保存环境'));
     // stamp draft cloud on and push current saved profile
-    const idx = ui.profiles.findIndex((p) => p.id === editingProfileId);
+    const idx = ui.profiles.findIndex((p) => p.id === profileId);
     if (idx < 0) throw new Error(tx('环境不存在'));
     // apply current editor draft flags without full save
-    ui.profiles[idx] = { ...ui.profiles[idx], ...editorDraft(false), updatedAt: new Date().toISOString() };
+    ui.profiles[idx] = { ...ui.profiles[idx], ...app.editorDraft(false), updatedAt: new Date().toISOString() };
     save();
     await window.ops.syncProfiles(ui.profiles);
-    await pushProfilesToCloud([editingProfileId]);
+    await pushProfilesToCloud([profileId]);
   } catch (error) { toast(error.message); }
 });
 document.getElementById('editor-cloud-pull-one')?.addEventListener('click', async () => {
   try {
-    if (!editingProfileId) throw new Error(tx('未打开环境'));
-    await pullProfilesFromCloud([editingProfileId]);
-    openProfileEditor(editingProfileId);
+    const profileId = app.editingProfileId;
+    if (!profileId) throw new Error(tx('未打开环境'));
+    await pullProfilesFromCloud([profileId]);
+    app.openProfileEditor(profileId);
   } catch (error) { toast(error.message); }
 });
 
@@ -412,3 +418,4 @@ window.refreshCloudPanel = refreshCloudPanel;
 window.CLOUD_BRIDGE_PRESETS = CLOUD_BRIDGE_PRESETS;
 window.pushProfilesToCloud = pushProfilesToCloud;
 window.pullProfilesFromCloud = pullProfilesFromCloud;
+})();

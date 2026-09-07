@@ -1,3 +1,6 @@
+(() => {
+'use strict';
+
 /**
  * OpenBrowser UI submodule
  */
@@ -15,8 +18,9 @@ const {
 } = window.OpenBrowserApp || window;
 const $ = window.$ || ((s, root = document) => root.querySelector(s));
 const $$ = window.$$ || ((s, root = document) => [...root.querySelectorAll(s)]);
-const ui = window.OpenBrowserApp?.ui || window.ui || { profiles: [] };
-const save = window.OpenBrowserApp?.save || window.save || (() => {});
+const app = window.OpenBrowserApp || window;
+const ui = app.ui || { profiles: [] };
+const save = app.save || (() => {});
 
 // ========== Independent browser kernel — Donut Wayfern channel ==========
 function kernelSourceLabel(source) {
@@ -187,3 +191,4 @@ document.getElementById('kernel-system-browser')?.addEventListener('change', asy
 
 window.refreshKernelPanel = refreshKernelPanel;
 window.kernelSourceLabel = kernelSourceLabel;
+})();

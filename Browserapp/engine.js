@@ -3,11 +3,11 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
-const { spawn, execFileSync } = require('child_process');
+const { spawn } = require('child_process');
 const cdp = require('./cdp');
 const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
-const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError, normalizeIpLookupChannel } = require('./proxy-forwarder');
+const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
 const { resolveProfileLanguage, localeFromCountryCode } = require('./automation/locale-from-country');
 const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
 const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = require('./automation/env-icon');
@@ -26,7 +26,6 @@ const {
 const { fpLog, summarizeFp, LIVE_PROBE_EXPRESSION, logPath: fingerprintLogPath } = require('./automation/fingerprint-debug-log');
 
 const KERNEL_POLICY_VERSION = 4;
-const MAX_PROFILE_PROXY_LENGTH = 64 * 1024;
 // Chromium's Windows renderer/GPU helpers can outlive the browser process by
 // several seconds while profile databases close. Keep the profile lock until
 // the OS process list confirms they are gone, but give taskkill enough time to

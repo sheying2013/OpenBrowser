@@ -6048,6 +6048,8 @@ $('#batch-update-form').addEventListener('submit', async (event) => {
 // Expose core app utilities and state to UI submodules
 window.OpenBrowserApp = {
   get ui() { return ui; },
+  get engineProfiles() { return engineProfiles; },
+  get editingProfileId() { return editingProfileId; },
   save,
   toast,
   tx,
@@ -6061,6 +6063,9 @@ window.OpenBrowserApp = {
   updateEngineBadge,
   afterUiRender,
   syncThemedSelects,
+  editorDraft,
+  openProfileEditor,
+  renderProfiles,
 };
 window.ui = ui;
 window.save = save;

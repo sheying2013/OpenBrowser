@@ -1,3 +1,6 @@
+(() => {
+'use strict';
+
 /**
  * OpenBrowser UI submodule
  */
@@ -15,8 +18,9 @@ const {
 } = window.OpenBrowserApp || window;
 const $ = window.$ || ((s, root = document) => root.querySelector(s));
 const $$ = window.$$ || ((s, root = document) => [...root.querySelectorAll(s)]);
-const ui = window.OpenBrowserApp?.ui || window.ui || { profiles: [] };
-const save = window.OpenBrowserApp?.save || window.save || (() => {});
+const app = window.OpenBrowserApp || window;
+const ui = app.ui || { profiles: [] };
+const save = app.save || (() => {});
 
 // ========== Automation scripts (local-only panels) ==========
 let rpaPlans = [];
@@ -73,7 +77,7 @@ function setRpaEditorVisible(show) {
 function fillRpaProfileSelect(selectedIds = []) {
   const sel = document.getElementById('rpa-profile-ids');
   if (!sel) return;
-  const running = (engineProfiles || []).filter((p) => p.running);
+  const running = (app.engineProfiles || []).filter((p) => p.running);
   sel.replaceChildren();
   for (const profile of (ui.profiles || [])) {
     const opt = document.createElement('option');
@@ -798,3 +802,4 @@ window.refreshRpaStatusBadge = refreshRpaStatusBadge;
 window.refreshRpaTasks = refreshRpaTasks;
 window.refreshRpaRuns = refreshRpaRuns;
 window.renderRpaStore = renderRpaStore;
+})();

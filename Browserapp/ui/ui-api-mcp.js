@@ -1,3 +1,6 @@
+(() => {
+'use strict';
+
 /**
  * OpenBrowser UI submodule
  */
@@ -15,8 +18,9 @@ const {
 } = window.OpenBrowserApp || window;
 const $ = window.$ || ((s, root = document) => root.querySelector(s));
 const $$ = window.$$ || ((s, root = document) => [...root.querySelectorAll(s)]);
-const ui = window.OpenBrowserApp?.ui || window.ui || { profiles: [] };
-const save = window.OpenBrowserApp?.save || window.save || (() => {});
+const app = window.OpenBrowserApp || window;
+const ui = app.ui || { profiles: [] };
+const save = app.save || (() => {});
 
 // ========== API & MCP (local-only) ==========
 function shellQuote(value) {
@@ -162,12 +166,12 @@ document.getElementById('mcp-config-tabs')?.addEventListener('click', (event) =>
 });
 
 window.ops.onEvent((value) => {
-  if (value?.type === 'rpa-log') appendRpaLog((value.level || 'info') + ': ' + value.message);
+  if (value?.type === 'rpa-log') window.appendRpaLog?.((value.level || 'info') + ': ' + value.message);
   if (value?.type === 'rpa-task') {
-    appendRpaLog('task ' + value.taskId + ' → ' + value.status + (value.message ? ' · ' + value.message : ''));
-    refreshRpaStatusBadge();
-    refreshRpaTasks();
-    refreshRpaRuns();
+    window.appendRpaLog?.('task ' + value.taskId + ' → ' + value.status + (value.message ? ' · ' + value.message : ''));
+    window.refreshRpaStatusBadge?.();
+    window.refreshRpaTasks?.();
+    window.refreshRpaRuns?.();
   }
   if (value?.type === 'local-api') {
     setLocalApiStatus(true);
@@ -176,3 +180,4 @@ window.ops.onEvent((value) => {
 
 window.refreshApiMcpPage = refreshApiMcpPage;
 window.setLocalApiStatus = setLocalApiStatus;
+})();

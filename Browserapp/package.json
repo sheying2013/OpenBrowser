@@ -42,7 +42,8 @@
     "selftest:devprofile": "node device-profile-wiring-selftest.js",
     "selftest:fonts": "node font-persona-selftest.js",
     "selftest:artifacts": "node env-artifact-cache-selftest.js",
-    "selftest:apikey": "node automation/api-key-store-selftest.js"
+    "selftest:apikey": "node automation/api-key-store-selftest.js",
+    "selftest:ui-modules": "node ui-module-load-selftest.js"
   },
   "devDependencies": {
     "desktop-shell": "npm:electron@43.1.1",
