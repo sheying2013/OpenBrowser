@@ -43,7 +43,8 @@
     "selftest:fonts": "node font-persona-selftest.js",
     "selftest:artifacts": "node env-artifact-cache-selftest.js",
     "selftest:apikey": "node automation/api-key-store-selftest.js",
-    "selftest:ui-modules": "node ui-module-load-selftest.js"
+    "selftest:ui-modules": "node ui-module-load-selftest.js",
+    "selftest:i18n": "node i18n-selftest.js"
   },
   "devDependencies": {
     "desktop-shell": "npm:electron@43.1.1",
