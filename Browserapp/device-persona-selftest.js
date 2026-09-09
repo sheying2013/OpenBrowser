@@ -18,6 +18,10 @@ const { PERSONAS_BY_OS, pickPersona, isCoherent, personasForOs } = require('./au
 
 // Captured from the build before personas existed. Any drift here means an existing
 // profile's fingerprint moved without opting in.
+//
+// One deliberate exception: mac-user's deviceMemory moved 16 -> 8. navigator.deviceMemory is
+// quantised by the spec to 0.25/0.5/1/2/4/8, so 16 was a reading no real Chrome can produce and
+// identified the browser as spoofed on its own. Correcting it is worth the one-time move.
 const GOLDEN = {
   "legacy-a": {
     "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
@@ -63,7 +67,7 @@ const GOLDEN = {
       "devicePixelRatio": 1
     },
     "webglVendor": "Google Inc. (NVIDIA)",
-    "webglRenderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "webglRenderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 Direct3D11 vs_5_0 ps_5_0, D3D11)",
     "languages": [
       "en-US"
     ],
@@ -87,8 +91,8 @@ const GOLDEN = {
       "pixelDepth": 30,
       "devicePixelRatio": 1
     },
-    "webglVendor": "Google Inc. (NVIDIA)",
-    "webglRenderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "webglVendor": "Google Inc. (Intel)",
+    "webglRenderer": "ANGLE (Intel, Intel(R) Arc(TM) A770 Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
     "languages": [
       "en-US"
     ],
@@ -112,8 +116,8 @@ const GOLDEN = {
       "pixelDepth": 24,
       "devicePixelRatio": 2
     },
-    "webglVendor": "Google Inc. (AMD)",
-    "webglRenderer": "ANGLE (AMD, AMD Radeon RX 580 Series Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "webglVendor": "Google Inc. (Intel)",
+    "webglRenderer": "ANGLE (Intel, Intel(R) UHD Graphics 770 Direct3D11 vs_5_0 ps_5_0, D3D11)",
     "languages": [
       "en-US"
     ],
@@ -123,7 +127,7 @@ const GOLDEN = {
     "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "platform": "MacIntel",
     "hardwareConcurrency": 4,
-    "deviceMemory": 16,
+    "deviceMemory": 8,
     "screen": {
       "width": 1280,
       "height": 820,
@@ -241,7 +245,31 @@ const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.
     privacy: { deviceProfile: 'persona', fingerprint: { cores: 24, memory: 64 } },
   }));
   ok('explicit cores override beats the persona', fp.hardwareConcurrency === 24);
-  ok('explicit memory override beats the persona', fp.deviceMemory === 64);
+  // deviceMemory is quantised by the spec to 0.25/0.5/1/2/4/8, so an override of 64 is snapped
+  // to the nearest legal step rather than reported verbatim — a value no real Chrome can return
+  // identifies the browser as spoofed on a single read.
+  ok('out-of-spec memory override snaps to the nearest legal step', fp.deviceMemory === 8);
+  const fp2 = buildFingerprint(base('override-2', {
+    userAgent: WIN_UA,
+    privacy: { deviceProfile: 'persona', fingerprint: { memory: 2 } },
+  }));
+  ok('in-spec memory override is honoured exactly', fp2.deviceMemory === 2);
+  const fp3 = buildFingerprint(base('override-3', {
+    userAgent: WIN_UA,
+    privacy: { deviceProfile: 'persona', fingerprint: { memory: 0.5 } },
+  }));
+  ok('fractional in-spec memory override is honoured', fp3.deviceMemory === 0.5);
+}
+
+// --- 6a. deviceMemory never leaves the values a real Chrome can report ---
+{
+  const LEGAL = new Set([0.25, 0.5, 1, 2, 4, 8]);
+  let allLegal = true;
+  for (let i = 0; i < 400; i += 1) {
+    const fp = buildFingerprint(base('mem-scan-' + i, { userAgent: WIN_UA }));
+    if (!LEGAL.has(fp.deviceMemory)) { allLegal = false; break; }
+  }
+  ok('generated deviceMemory always lands on a spec-legal step', allLegal);
 }
 
 // --- 6b. speech voices match the OS the profile claims ---

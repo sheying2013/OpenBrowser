@@ -8,14 +8,24 @@ const { planFanoutFromPayload } = require('./automation/protocol/sync-fanout');
 const { settingsToOperateList } = require('./automation/protocol/event-map');
 const { syncCapabilities } = require('./automation/protocol/cross-platform');
 
-let electronScreen = null;
-try { electronScreen = require('electron').screen; } catch (_) {}
+function getElectronScreen() {
+  try {
+    const bridge = require('./host-bridge');
+    if (bridge?.screen) return bridge.screen;
+  } catch (_) {}
+  try {
+    const electron = require('electron');
+    if (electron?.screen) return electron.screen;
+  } catch (_) {}
+  return null;
+}
 
 function clampWindowBounds(bounds) {
   try {
-    if (!electronScreen) return bounds;
+    const sc = getElectronScreen();
+    if (!sc) return bounds;
     const point = { x: Number(bounds.left) || 0, y: Number(bounds.top) || 0 };
-    const display = electronScreen.getDisplayNearestPoint ? electronScreen.getDisplayNearestPoint(point) : electronScreen.getPrimaryDisplay?.();
+    const display = sc.getDisplayNearestPoint ? sc.getDisplayNearestPoint(point) : sc.getPrimaryDisplay?.();
     const work = display?.workArea;
     if (!work) return bounds;
     const width = Math.max(320, Math.min(Math.round(Number(bounds.width) || 800), work.width));
@@ -31,6 +41,8 @@ function clampWindowBounds(bounds) {
 }
 
 const masterMarker = String.raw`(() => {
+  const host = location.hostname;
+  if (host && host !== '127.0.0.1' && host !== 'localhost' && !host.endsWith('.local')) return;
   const install = () => { if (!document.documentElement) return requestAnimationFrame(install); if (document.getElementById('openbrowser-master-marker')) return; const marker = document.createElement('div'); marker.id='openbrowser-master-marker'; marker.textContent='\u4e3b\u63a7\u7a97\u53e3'; marker.style.cssText='position:fixed;left:12px;top:12px;z-index:2147483647;background:#123a8c;color:white;padding:8px 14px;border-radius:8px;font:700 14px Segoe UI,sans-serif;box-shadow:0 4px 18px #0005;pointer-events:none'; document.documentElement.appendChild(marker); document.documentElement.style.boxShadow='inset 0 0 0 5px #123a8c'; };
   install();
 })();`;
@@ -39,8 +51,22 @@ const fullscreenInjection = String.raw`(() => {
   // Install in every execution context. A player inside an iframe (including an
   // OOPIF) owns its own fullscreen document, so restricting this to window.top
   // silently loses fullscreenchange events from otherwise valid players.
-  if (window.__openBrowserFullscreenSyncV5) return;
-  window.__openBrowserFullscreenSyncV5 = true;
+  // Deduplicate per realm without a probe-able global. Symbol.for writes into the cross-realm
+  // registry, so Object.getOwnPropertySymbols(window) enumerates the flag and Symbol.for(name)
+  // recovers it by name. A non-enumerable own property on document is not a property of window
+  // and, unlike an attribute, never appears in the serialised HTML.
+  const FLAG = '__obFsInstalled';
+  const doc = document;
+  if (!doc) return;
+  try {
+    if (doc[FLAG]) return;
+    Object.defineProperty(doc, FLAG, {
+      value: true, writable: true, configurable: true, enumerable: false,
+    });
+  } catch (_) {
+    if (doc[FLAG]) return;
+    doc[FLAG] = true;
+  }
   const frameToken = (() => {
     try { return crypto.randomUUID(); } catch (_) { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
   })();
@@ -156,8 +182,12 @@ const fullscreenInjection = String.raw`(() => {
     reportTimer = setTimeout(flush, 0);
   };
   const installShadowRoot = (root) => {
-    if (!root || root.__openBrowserFullscreenSyncV5) return;
-    try { Object.defineProperty(root, '__openBrowserFullscreenSyncV5', { value: true }); } catch (_) {}
+    if (!root || root[FLAG]) return;
+    try {
+      Object.defineProperty(root, FLAG, {
+        value: true, writable: true, configurable: true, enumerable: false,
+      });
+    } catch (_) { return; }
     root.addEventListener('fullscreenchange', () => report('change'), true);
     root.addEventListener('webkitfullscreenchange', () => report('webkit-change'), true);
     root.addEventListener('fullscreenerror', () => report('error', 'Fullscreen request was rejected'), true);
@@ -469,17 +499,22 @@ function chooseFullscreenFrame(frameTree, payload = {}) {
   return bestScore > 0 ? best.frame : null;
 }
 
-function environmentMarker(id, master) { const text = (master ? '\u4e3b\u63a7 | ' : '') + '\u73af\u5883\u7f16\u53f7: ' + id; const color = master ? '#123a8c' : '#334155'; return `(() => { const install=()=>{if(!document.documentElement)return requestAnimationFrame(install);let e=document.getElementById('openbrowser-environment-marker');if(!e){e=document.createElement('div');e.id='openbrowser-environment-marker';document.documentElement.appendChild(e);}e.textContent=${JSON.stringify(text)};e.style.cssText='position:fixed;right:12px;top:12px;z-index:2147483646;background:${color};color:white;padding:7px 12px;border-radius:8px;font:700 13px Segoe UI,sans-serif;box-shadow:0 4px 16px #0004;pointer-events:none';};install();})()`; }
+function environmentMarker(id, master) { const text = (master ? '\u4e3b\u63a7 | ' : '') + '\u73af\u5883\u7f16\u53f7: ' + id; const color = master ? '#123a8c' : '#334155'; return `(() => { const host = location.hostname; if (host && host !== \x27127.0.0.1\x27 && host !== \x27localhost\x27 && !host.endsWith(\x27.local\x27)) return; const install=()=>{if(!document.documentElement)return requestAnimationFrame(install);let e=document.getElementById(\x27openbrowser-environment-marker\x27);if(!e){e=document.createElement('div');e.id='openbrowser-environment-marker';document.documentElement.appendChild(e);}e.textContent=${JSON.stringify(text)};e.style.cssText='position:fixed;right:12px;top:12px;z-index:2147483646;background:${color};color:white;padding:7px 12px;border-radius:8px;font:700 13px Segoe UI,sans-serif;box-shadow:0 4px 16px #0004;pointer-events:none';};install();})()`; }
 
-function managedTabs(values) { return values.filter((tab) => !/^(devtools|chrome-extension|edge-extension):/i.test(tab.url)); }
 const ALLOWED_INTERNAL_PAGES = new RegExp("^" + "(chrome|edge)://(newtab|new-tab-page|extensions|settings|downloads|history|flags|version|bookmarks|about)", "i");
-function normalTabs(values) {
-  return values.filter((tab) => {
+function managedTabs(values) {
+  return (values || []).filter((tab) => {
     if (!tab || !tab.url) return false;
     if (/^(devtools|chrome-extension|edge-extension):/i.test(tab.url)) return false;
-    if (/^(chrome|edge):/i.test(tab.url)) {
-const ALLOWED_INTERNAL_PAGES = new RegExp("^" + "(chrome|edge)://(newtab|new-tab-page|extensions|settings|downloads|history|flags|version|bookmarks|about)", "i");
-    }
+    if (/^(chrome|edge):/i.test(tab.url)) return ALLOWED_INTERNAL_PAGES.test(tab.url);
+    return true;
+  });
+}
+function normalTabs(values) {
+  return (values || []).filter((tab) => {
+    if (!tab || !tab.url) return false;
+    if (/^(devtools|chrome-extension|edge-extension):/i.test(tab.url)) return false;
+    if (/^(chrome|edge):/i.test(tab.url)) return ALLOWED_INTERNAL_PAGES.test(tab.url);
     return true;
   });
 }
@@ -1856,10 +1891,36 @@ class LiveSyncController extends LiveSyncV4 {
         if (pending?.width === targetWidth && pending?.height === targetHeight && (pending.attempts || 0) >= 2 && now - (pending.at || 0) < 10000) return;
         const slaveLeft = Number.isFinite(own.left) ? own.left : 0;
         const slaveTop = Number.isFinite(own.top) ? own.top : 0;
+        // Only shrink where the master's size would push this window off its own display; a
+        // window clipped by the OS reports a viewport that no longer matches the size we asked
+        // for, so the geometry sync would keep re-issuing the same rejected bounds.
+        //
+        // The trade-off is deliberate: on a smaller slave display the two windows end up with
+        // different viewports, which a site can observe. Matching the master exactly is not an
+        // option either — the window would be clipped and report a different size anyway — so we
+        // prefer bounds the compositor will actually honour. Windows that fit are untouched.
+        const sc = getElectronScreen();
+        const display = sc?.getDisplayNearestPoint ? sc.getDisplayNearestPoint({ x: slaveLeft, y: slaveTop }) : sc?.getPrimaryDisplay?.();
+        const work = display?.workArea;
+        let effectiveWidth = targetWidth;
+        let effectiveHeight = targetHeight;
+        if (work) {
+          if (slaveLeft + effectiveWidth > work.x + work.width) {
+            if (slaveLeft > work.x) {
+              effectiveWidth = Math.max(320, work.x + work.width - slaveLeft);
+            }
+          }
+          if (slaveTop + effectiveHeight > work.y + work.height) {
+            if (slaveTop > work.y) {
+              effectiveHeight = Math.max(240, work.y + work.height - slaveTop);
+            }
+          }
+        }
         const bounded = clampWindowBounds({
           left: slaveLeft,
           top: slaveTop,
-          ...desired,
+          width: effectiveWidth,
+          height: effectiveHeight,
         });
         await cdp.setWindowBounds(slave.port, bounded, { forceNormal: false, ...(slaveTargetId ? { targetId: slaveTargetId } : {}) });
         if (!sessionIsCurrent()) return;
@@ -1971,7 +2032,8 @@ class LiveSyncController extends LiveSyncV4 {
     if (foreground) {
       // Drive navigation only when the master URL actually changed.
       const urlKey = this.urlKey(state.url);
-      if (state.url && !/^(chrome|edge|devtools|chrome-extension|edge-extension):/i.test(state.url) && value.lastSyncedUrl !== urlKey) {
+      const isAllowedNav = state.url && (ALLOWED_INTERNAL_PAGES.test(state.url) || !/^(chrome|edge|devtools|chrome-extension|edge-extension):/i.test(state.url));
+      if (isAllowedNav && value.lastSyncedUrl !== urlKey) {
         value.lastSyncedUrl = urlKey;
         this.markActivity?.();
         await this.navigateSlaves(value.tab.id, state.url);

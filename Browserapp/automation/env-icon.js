@@ -438,7 +438,7 @@ function rebuildAppShortcutIcons() {
 // v2: the Dock wrapper now strips CFBundleIconName, so wrappers built by v1 must be rebuilt
 // or they keep resolving their icon out of the kernel's asset catalog.
 // v3: do not inject --no-proxy-server (it overrides Chromium --proxy-server and leaks the real IP).
-const ARTIFACT_STAMP_VERSION = 3;
+const ARTIFACT_STAMP_VERSION = 4;
 
 /** True when the stamp matches and every expected output is still present. */
 function artifactIsFresh(stampPath, key, outputs) {
@@ -509,6 +509,8 @@ async function prepareMarkerExtension({ profileId, envNumber, userDataPath, temp
 
   // In-page badge shows env number (toolbar icon already has logo-native+number)
   const markerJs = `(() => {
+  const host = location.hostname;
+  if (host && host !== \x27127.0.0.1\x27 && host !== \x27localhost\x27 && !host.endsWith(\x27.local\x27)) return;
   const id = 'openbrowser-profile-marker';
   const label = ${JSON.stringify(label)};
   const existing = document.getElementById(id);

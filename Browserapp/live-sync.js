@@ -41,8 +41,18 @@ class PersistentCdp {
 }
 
 const injection = String.raw`(() => {
-  if (window.__openBrowserLiveSyncInstalled) return;
-  window.__openBrowserLiveSyncInstalled = true;
+  // Deduplicate installs without adding a probe-able global. Symbol.for writes into the
+  // cross-realm registry, so Object.getOwnPropertySymbols(window) enumerates it and
+  // Symbol.for(name) in window recovers it by name. The CDP binding below is already an
+  // unavoidable global, so carrying the flag on it adds no new surface.
+  const binding = window.openBrowserSync;
+  if (typeof binding !== 'function') return;
+  if (binding.__installed) return;
+  try {
+    Object.defineProperty(binding, '__installed', {
+      value: true, writable: true, configurable: true, enumerable: false,
+    });
+  } catch (_) { return; }
   const send = (type, data) => { try { window.openBrowserSync(JSON.stringify({ type, ...data })); } catch (_) {} };
   const selector = (element) => {
     if (!(element instanceof Element)) return '';

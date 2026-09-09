@@ -21,7 +21,7 @@
 /** @type {DevicePersona[]} */
 const WINDOWS_PERSONAS = [
   {
-    os: 'windows', cores: 8, memory: 16, colorDepth: 24, devicePixelRatio: 1,
+    os: 'windows', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
       vendor: 'Google Inc. (Intel)',
@@ -39,7 +39,7 @@ const WINDOWS_PERSONAS = [
     },
   },
   {
-    os: 'windows', cores: 12, memory: 16, colorDepth: 24, devicePixelRatio: 1,
+    os: 'windows', cores: 12, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
       vendor: 'Google Inc. (NVIDIA)',
@@ -48,7 +48,7 @@ const WINDOWS_PERSONAS = [
     },
   },
   {
-    os: 'windows', cores: 16, memory: 32, colorDepth: 24, devicePixelRatio: 1,
+    os: 'windows', cores: 16, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 2560, height: 1440 },
     webgl: {
       vendor: 'Google Inc. (NVIDIA)',
@@ -57,7 +57,7 @@ const WINDOWS_PERSONAS = [
     },
   },
   {
-    os: 'windows', cores: 8, memory: 16, colorDepth: 24, devicePixelRatio: 1.25,
+    os: 'windows', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
       vendor: 'Google Inc. (AMD)',
@@ -88,7 +88,7 @@ const MACOS_PERSONAS = [
     },
   },
   {
-    os: 'macos', cores: 10, memory: 16, colorDepth: 30, devicePixelRatio: 2,
+    os: 'macos', cores: 10, memory: 8, colorDepth: 30, devicePixelRatio: 2,
     screen: { width: 1512, height: 982 },
     webgl: {
       vendor: 'Google Inc. (Apple)',
@@ -97,7 +97,7 @@ const MACOS_PERSONAS = [
     },
   },
   {
-    os: 'macos', cores: 12, memory: 32, colorDepth: 30, devicePixelRatio: 2,
+    os: 'macos', cores: 12, memory: 8, colorDepth: 30, devicePixelRatio: 2,
     screen: { width: 1728, height: 1117 },
     webgl: {
       vendor: 'Google Inc. (Apple)',
@@ -106,7 +106,7 @@ const MACOS_PERSONAS = [
     },
   },
   {
-    os: 'macos', cores: 8, memory: 16, colorDepth: 24, devicePixelRatio: 2,
+    os: 'macos', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 2,
     screen: { width: 1680, height: 1050 },
     webgl: {
       vendor: 'Google Inc. (Intel)',
@@ -118,7 +118,7 @@ const MACOS_PERSONAS = [
 
 const LINUX_PERSONAS = [
   {
-    os: 'linux', cores: 8, memory: 16, colorDepth: 24, devicePixelRatio: 1,
+    os: 'linux', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
       vendor: 'Google Inc. (Intel)',
@@ -127,7 +127,7 @@ const LINUX_PERSONAS = [
     },
   },
   {
-    os: 'linux', cores: 12, memory: 32, colorDepth: 24, devicePixelRatio: 1,
+    os: 'linux', cores: 12, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 2560, height: 1440 },
     webgl: {
       vendor: 'Google Inc. (NVIDIA)',
@@ -245,9 +245,9 @@ function isCoherent(persona) {
   if (!persona) return false;
   const { cores, memory, colorDepth, devicePixelRatio, os, webgl } = persona;
   if (!Number.isInteger(cores) || cores < 2 || cores > 64) return false;
-  if (!Number.isInteger(memory) || memory < 4 || memory > 128) return false;
+  if (!Number.isInteger(memory) || memory < 4 || memory > 8) return false;
   // Memory tracks core count on real machines: no 4-core/32 GB or 16-core/4 GB laptops.
-  if (cores <= 4 && memory > 16) return false;
+  if (cores <= 2 && memory > 8) return false;
   if (cores >= 12 && memory < 8) return false;
   if (![24, 30].includes(colorDepth)) return false;
   if (!(devicePixelRatio >= 1 && devicePixelRatio <= 3)) return false;

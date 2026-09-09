@@ -1025,7 +1025,7 @@ async function tile(ids, cascade = false) {
       }, work));
     }));
   }
-  liveSync?.pauseGeometrySync?.(900, cascade ? 'manual-cascade-settle' : 'manual-tile-settle');
+  liveSync?.pauseGeometrySync?.(5000, cascade ? 'manual-cascade-settle' : 'manual-tile-settle');
   return { success: true, count: entries.length, mode: cascade ? 'cascade' : 'tile', platform: process.platform, workArea: work };
 }
 

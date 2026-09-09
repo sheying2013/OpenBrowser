@@ -1,4 +1,6 @@
 (() => {
+  const host = location.hostname;
+  if (host && host !== '127.0.0.1' && host !== 'localhost' && !host.endsWith('.local')) return;
   if (document.getElementById('openbrowser-profile-marker')) return;
   const badge = document.createElement('div');
   badge.id = 'openbrowser-profile-marker';

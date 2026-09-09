@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.5'
+        default: 'v1.0.6'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,21 +42,29 @@ env:
 
     ### 中文
 
-    - **内核与主题**：合并 PR #11，Linux 支持官方 Google Chrome Stable 独立解压运行，新增 Merge Gateway 主题与自适应界面。
-    - **开发者工具**：修复 macOS x86 内核开发者工具（DevTools）禁用问题（#9），强制注入 DeveloperToolsAvailability 策略。
-    - **扩展程序**：修复本地安装扩展版本更新后不生效问题（#6），启动自动同步 manifest.json，新增扩展卡片「重新加载」按钮。
-    - **窗口与同步**：修复 Windows 1.25x/1.5x 高 DPI 缩放下平铺跳跃与窗口越界（#19），放行常用 `chrome://` 内部管理页实时同步。
-    - **WebGL 防指纹**：扩充现代独立显卡预设（RTX 40/30 系列等），全面对齐 Vendor、Renderer 与 WebGPU Adapter 深度伪装。
-    - **API 与安全**：解决 MCP Server 与本地 API 的 401 鉴权问题，完善回环控制与安全防护。
+    - **指纹深度伪装与反检测加固（全面解决网站识别指纹浏览器问题）**：
+      - **时区伪装全面自洽（彻底修复 #21）**：针对 Chromium 在 Windows 环境下忽略 `TZ` 环境变量以及 CDP 短连接失效的问题，新增自闭环 JavaScript 原生层 Date / Intl 注入。补齐 `Intl.DateTimeFormat.prototype.constructor` 规避原型校验；补齐 Date 全套本地时间面（`getMinutes`/`getSeconds`/`getMilliseconds`/`getYear` 及全部本地 setter），彻底消除跨半小时/45分钟特殊时区（如印度、南澳等）的时分矛盾；修正多参构造器 `new Date(y, m, d...)` 与无时区字符串 `Date.parse(...)` 的本地墙上时间反推，页面刷新后时区与经纬度持续稳定一致。
+      - **硬件与内存规范化**：将 `navigator.deviceMemory` 严格收敛至 W3C 规范合法档位（`[0.25, 0.5, 1, 2, 4, 8]`，上限 8），彻底移除不可信的 16/32/64 非法档位，消除被指纹库单点识破的风险。
+      - **音频指纹加噪与静音保护**：恢复并加固 `AudioBuffer.prototype.getChannelData` 注入，增加静音全零缓冲精确保护，杜绝无声音频产生异常扰动，防止多环境音频指纹聚类。
+      - **WebGL / Canvas 深度伪装（#19）**：扩充 Windows 现代独立显卡预设（RTX 4070S/4060Ti/3060Ti/3050、Arc A750 等），解决 GPU Vendor、Renderer 与 WebGPU Adapter 矛盾；增加 `webgl_debug_renderer_info` 扩展门控（未启用时返回原生 `null`）；引入 WebGL Canvas 隔离防护，避免 2D 转换破坏图形渲染。
+      - **原生对象与原型链防刺探**：重写 `nativeLike` 机制，非构造器函数天然无 `.prototype` 且不可 `new`（抛出标准 TypeError）；Permissions、MediaDevices 等全部改用原型级 Hook；完善 `matchMedia` 返回真实 `MediaQueryList` 实例及完整原型链与监听机制；重构 `Function.prototype.toString` 防御，避免覆盖指纹层 Disguise；移除可被枚举的全局 `Symbol.for` 污染。
+      - **WebRTC SDP 修复**：改为原型 Hook（`RTCPeerConnection.prototype`），重写 SDP 避免内部函数泄露。
+    - **窗口管理与同步器优化（#19）**：
+      - 修复 Windows 高 DPI（1.25x/1.5x）缩放下窗口大小跳跃与平铺越界问题，实时根据工作区安全边界动态收缩窗口。
+      - 同步器全面放行 `chrome://` 常用内部管理页面（扩展管理、设置、下载、历史记录等）。
 
     ### English
 
-    - **Kernel & Themes**: Merged PR #11, standalone Linux Google Chrome Stable support, and new Merge Gateway theme.
-    - **DevTools**: Fixed macOS x86 DevTools availability and launch failure (#9).
-    - **Extensions**: Added local extension hot-reload and real-time version sync from manifest.json (#6).
-    - **Window Tiling & Sync**: Fixed 1.25x high-DPI tiling jump and screen boundary overflow (#19), enabled `chrome://` internal page sync.
-    - **Fingerprinting**: Expanded modern GPU WebGL presets (RTX 40/30 series, Intel Arc, RX 7900) with coherent WebGL/WebGPU adapter spoofing.
-    - **API & MCP**: Fixed MCP 401 auth issues and added granular permission control.
+    - **Fingerprint Deep Hardening & Anti-Detection**:
+      - **Coherent Timezone Spoofing (Fixed #21)**: Resolved Chromium's ignorance of `TZ` on Windows and CDP session expiry with self-consistent JS injection. Fixed `Intl.DateTimeFormat.prototype.constructor` prototype chain; added full suite of Date local APIs (`getMinutes`, `getSeconds`, `getMilliseconds`, `getYear`, and all local setters) to eliminate discrepancies in half-hour/45-min timezones; corrected multi-arg `new Date(...)` constructor and timezone-less `Date.parse(...)` local wall-clock interpretation across page reloads.
+      - **Spec-Compliant Device Memory**: Quantized `navigator.deviceMemory` strictly to W3C-specified steps (`[0.25, 0.5, 1, 2, 4, 8]`, max 8), eliminating invalid 16/32/64 values that trigger fingerprint detection.
+      - **Audio Fingerprint Protection**: Restored `AudioBuffer.prototype.getChannelData` injection with silence detection (zero-buffers kept intact) to prevent audio fingerprint clustering.
+      - **WebGL & Canvas Spoofing (#19)**: Expanded Windows modern GPU presets (RTX 40/30 series, Intel Arc, Radeon RX) with coherent Vendor/Renderer/WebGPU Adapter mapping; added `webgl_debug_renderer_info` extension gating; added WebGL Canvas isolation to prevent 2D conversion conflicts.
+      - **Native Function & Prototype Disguise**: Refactored `nativeLike` so non-constructors have no `.prototype` and throw standard `TypeError` on `new`; converted hooks to prototype-level methods; returned authentic `MediaQueryList` instances with full prototype chains and event listeners from `matchMedia`; prevented `Function.prototype.toString` overwrites; eliminated detectable `Symbol.for` registry leaks.
+      - **WebRTC SDP Isolation**: Switched to prototype hooks on `RTCPeerConnection.prototype` with safe SDP rewriting.
+    - **Window Management & Synchronizer (#19)**:
+      - Fixed Windows 1.25x/1.5x high-DPI tiling jump and screen overflow, dynamically clamping window geometry within screen work areas.
+      - Allowed synchronizer control on common `chrome://` internal pages (extensions, settings, downloads, history).
 
     ### 下载 / Downloads
 
@@ -69,6 +77,7 @@ env:
     | **Ubuntu x86_64 · 内置内核** | `OpenBrowser-Linux-x86_64-with-kernel.tar.gz` |
 
     > 标签说明：`with-kernel` = 安装包内置独立浏览器内核，运行时无需再下载内核。
+
 
 jobs:
   ensure-release:

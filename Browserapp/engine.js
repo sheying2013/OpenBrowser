@@ -786,17 +786,34 @@ class BrowserEngine {
         const isLocal = (h) => !h || h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.local');
         const Orig = globalThis.WebSocket;
         if (Orig) {
-          globalThis.WebSocket = function(url, protocols) {
+          const OrigProto = Orig.prototype;
+          const origToString = Function.prototype.toString;
+          const Wrapped = function WebSocket(url, protocols) {
             try {
               const u = new URL(url, location.href);
               const port = Number(u.port || (u.protocol === 'wss:' ? 443 : 80));
               if (isLocal(u.hostname) && !allow.has(port) && port !== 80 && port !== 443) {
-                throw new Error('Port scan blocked');
+                throw new DOMException("Failed to construct 'WebSocket': An insecure or blocked port was specified.", 'SecurityError');
               }
-            } catch (e) { if (String(e.message||'').includes('Port scan')) throw e; }
+            } catch (e) { if (e instanceof DOMException) throw e; }
             return protocols !== undefined ? new Orig(url, protocols) : new Orig(url);
           };
-          globalThis.WebSocket.prototype = Orig.prototype;
+          Wrapped.prototype = OrigProto;
+          try { Object.defineProperty(Wrapped, 'name', { configurable: true, value: 'WebSocket' }); } catch (_) {}
+          try { Object.defineProperty(Wrapped, 'length', { configurable: true, value: 1 }); } catch (_) {}
+          try {
+            // Chain onto whatever toString is already installed (the fingerprint layer installs
+            // its own); replacing it outright would drop the disguises registered before us and
+            // leave the survivor stringifying as readable source.
+            const prev = Function.prototype.toString;
+            const patched = function toString() {
+              if (this === Wrapped) return 'function WebSocket() { [native code] }';
+              if (this === patched) return 'function toString() { [native code] }';
+              return prev.call(this);
+            };
+            Object.defineProperty(Function.prototype, 'toString', { configurable: true, writable: true, value: patched });
+          } catch (_) {}
+          globalThis.WebSocket = Wrapped;
         }
       })();`;
     }
@@ -2532,10 +2549,28 @@ class BrowserEngine {
         finalArgs.push('--headless=new');
         if (!finalArgs.some((arg) => String(arg).split('=')[0] === '--disable-gpu')) finalArgs.push('--disable-gpu');
       }
+      const effectiveTimezone = profile.exitTimezone
+        || pageNetwork?.timezone
+        || (profile.privacy?.timezoneMode === 'custom' ? profile.privacy.timezone : '')
+        || '';
+      // TZ moves the timezone for the whole browser process on POSIX, which keeps the C++ side
+      // (ICU, cookie expiry, cert validity, Date in every worker) consistent with the profile
+      // without relying on injected JS.
+      //
+      // It does NOT work on Windows: ICU's uprv_tzname() takes the
+      // U_PLATFORM_USES_ONLY_WIN32_API branch and calls uprv_detectWindowsTimeZone(), which
+      // reads the machine's registry setting and never consults TZ. On Windows the JS hooks in
+      // automation/fingerprint.js are the only thing holding the timezone, so they must stay
+      // self-consistent (Intl, every Date getter/setter, the multi-arg constructor and parse).
+      const spawnEnv = { ...process.env };
+      if (effectiveTimezone && profile.privacy?.timezoneMode !== 'real' && process.platform !== 'win32') {
+        spawnEnv.TZ = effectiveTimezone;
+      }
       child = spawn(launchBinary, finalArgs, {
         detached: process.platform !== 'win32',
         windowsHide: headless,
         stdio: ['ignore', 'pipe', 'pipe'],
+        env: spawnEnv,
       });
       startupResources.child = child;
       // Register these listeners immediately after spawn. CDP setup can take

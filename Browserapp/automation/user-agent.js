@@ -299,16 +299,16 @@ function buildUaInjectionScript(uaProfile) {
     userAgent: uaProfile.userAgent,
     appVersion: uaProfile.appVersion,
     platform: uaProfile.platform,
-    vendor: uaProfile.vendor || 'Google Inc.',
+    vendor: uaProfile.vendor || "Google Inc.",
     brands: uaProfile.metadata?.brands || [],
     fullVersionList: uaProfile.metadata?.fullVersionList || [],
     fullVersion: uaProfile.metadata?.uaFullVersion || uaProfile.chromeFull,
-    chPlatform: uaProfile.metadata?.platform || 'Windows',
-    platformVersion: uaProfile.metadata?.platformVersion || '',
-    architecture: uaProfile.metadata?.architecture || 'x86',
-    model: uaProfile.metadata?.model || '',
+    chPlatform: uaProfile.metadata?.platform || "Windows",
+    platformVersion: uaProfile.metadata?.platformVersion || "",
+    architecture: uaProfile.metadata?.architecture || "x86",
+    model: uaProfile.metadata?.model || "",
     mobile: Boolean(uaProfile.metadata?.mobile),
-    bitness: uaProfile.metadata?.bitness || '64',
+    bitness: uaProfile.metadata?.bitness || "64",
     wow64: Boolean(uaProfile.metadata?.wow64),
   };
   const json = JSON.stringify(payload);
@@ -317,21 +317,27 @@ function buildUaInjectionScript(uaProfile) {
   const nativeSource = new WeakMap();
   const originalToString = Function.prototype.toString;
   const nativeLike = (wrapper, original) => {
-    try { Object.defineProperty(wrapper, 'name', { configurable: true, value: original?.name || wrapper.name }); } catch (_) {}
-    try { Object.defineProperty(wrapper, 'length', { configurable: true, value: original?.length ?? wrapper.length }); } catch (_) {}
-    try { nativeSource.set(wrapper, original ? originalToString.call(original) : 'function () { [native code] }'); } catch (_) {}
+    try { Object.defineProperty(wrapper, "name", { configurable: true, value: original?.name || wrapper.name }); } catch (_) {}
+    try { Object.defineProperty(wrapper, "length", { configurable: true, value: original?.length ?? wrapper.length }); } catch (_) {}
+    try { nativeSource.set(wrapper, original ? originalToString.call(original) : "function () { [native code] }"); } catch (_) {}
     return wrapper;
   };
   try {
-    const patchedToString = nativeLike(function toString() {
-      if (nativeSource.has(this)) return nativeSource.get(this);
-      return originalToString.call(this);
-    }, originalToString);
-    Object.defineProperty(Function.prototype, 'toString', {
-      configurable: true,
-      writable: true,
-      value: patchedToString,
-    });
+    if (!nativeSource.has(Function.prototype.toString)) {
+      const holder = {
+        toString() {
+          if (nativeSource.has(this)) return nativeSource.get(this);
+          return originalToString.call(this);
+        }
+      };
+      const patchedToString = holder.toString;
+      nativeSource.set(patchedToString, "function toString() { [native code] }");
+      Object.defineProperty(Function.prototype, "toString", {
+        configurable: true,
+        writable: true,
+        value: patchedToString,
+      });
+    }
   } catch (_) {}
   const sameValue = (obj, key, expected) => {
     try { return obj && obj[key] === expected; } catch (_) { return false; }
@@ -346,7 +352,19 @@ function buildUaInjectionScript(uaProfile) {
         cursor = Object.getPrototypeOf(cursor);
       }
     } catch (_) {}
-    const nativeGetter = nativeLike(getter, originalGetter);
+    const holder = {
+      get [key]() {
+        if (this !== (typeof navigator !== "undefined" ? navigator : null) &&
+            !(typeof Navigator !== "undefined" && this instanceof Navigator)) {
+          throw new TypeError("Illegal invocation");
+        }
+        return getter();
+      }
+    };
+    const nativeGetter = Object.getOwnPropertyDescriptor(holder, key).get;
+    try { Object.defineProperty(nativeGetter, "name", { configurable: true, value: originalGetter?.name || ("get " + key) }); } catch (_) {}
+    try { Object.defineProperty(nativeGetter, "length", { configurable: true, value: 0 }); } catch (_) {}
+    try { nativeSource.set(nativeGetter, originalGetter ? originalToString.call(originalGetter) : ("function get " + key + "() { [native code] }")); } catch (_) {}
     try {
       Object.defineProperty(obj, key, { configurable: true, enumerable: true, get: nativeGetter });
       return true;
@@ -355,15 +373,20 @@ function buildUaInjectionScript(uaProfile) {
     }
   };
   try {
-    define(Navigator.prototype, 'userAgent', () => U.userAgent);
-    define(Navigator.prototype, 'appVersion', () => U.appVersion);
-    define(Navigator.prototype, 'platform', () => U.platform);
-    define(Navigator.prototype, 'vendor', () => U.vendor);
-    define(Navigator.prototype, 'appCodeName', () => 'Mozilla');
-    define(Navigator.prototype, 'appName', () => 'Netscape');
-    define(Navigator.prototype, 'product', () => 'Gecko');
-    define(Navigator.prototype, 'productSub', () => '20030107');
-    define(Navigator.prototype, 'vendorSub', () => '');
+    define(Navigator.prototype, "userAgent", () => U.userAgent);
+    define(Navigator.prototype, "appVersion", () => U.appVersion);
+    define(Navigator.prototype, "platform", () => U.platform);
+    define(Navigator.prototype, "vendor", () => U.vendor);
+    define(Navigator.prototype, "appCodeName", () => "Mozilla");
+    define(Navigator.prototype, "appName", () => "Netscape");
+    define(Navigator.prototype, "product", () => "Gecko");
+    define(Navigator.prototype, "productSub", () => "20030107");
+    define(Navigator.prototype, "vendorSub", () => "");
+    if (typeof navigator !== "undefined") {
+      ["userAgent", "appVersion", "platform", "vendor", "appCodeName", "appName", "product", "productSub", "vendorSub"].forEach((k) => {
+        try { delete navigator[k]; } catch (_) {}
+      });
+    }
   } catch (_) {}
 
   // userAgentData (Client Hints JS API) — critical; bare UA string is not enough
@@ -373,46 +396,71 @@ function buildUaInjectionScript(uaProfile) {
     const highEntropy = {
       brands,
       fullVersionList,
-      fullVersion: String(U.fullVersion || ''),
-      platform: String(U.chPlatform || ''),
-      platformVersion: String(U.platformVersion || ''),
-      architecture: String(U.architecture || ''),
-      model: String(U.model || ''),
+      fullVersion: String(U.fullVersion || ""),
+      platform: String(U.chPlatform || ""),
+      platformVersion: String(U.platformVersion || ""),
+      architecture: String(U.architecture || ""),
+      model: String(U.model || ""),
       mobile: Boolean(U.mobile),
-      bitness: String(U.bitness || '64'),
+      bitness: String(U.bitness || "64"),
       wow64: Boolean(U.wow64),
-      uaFullVersion: String(U.fullVersion || ''),
+      uaFullVersion: String(U.fullVersion || ""),
     };
-    const uaData = {
-      brands,
-      mobile: Boolean(U.mobile),
-      platform: String(U.chPlatform || ''),
+    const uaDataProto = typeof NavigatorUAData !== "undefined" ? NavigatorUAData.prototype : Object.prototype;
+    const uaData = Object.create(uaDataProto);
+    const makeUaGetter = (prop, fn) => {
+      const h = {
+        get [prop]() {
+          if (this !== uaData && !(typeof NavigatorUAData !== "undefined" && this instanceof NavigatorUAData)) {
+            throw new TypeError("Illegal invocation");
+          }
+          return fn();
+        }
+      };
+      const g = Object.getOwnPropertyDescriptor(h, prop).get;
+      nativeSource.set(g, "function get " + prop + "() { [native code] }");
+      return g;
+    };
+    Object.defineProperty(uaData, "brands", { get: makeUaGetter("brands", () => Object.freeze(brands)), enumerable: true, configurable: true });
+    Object.defineProperty(uaData, "mobile", { get: makeUaGetter("mobile", () => Boolean(U.mobile)), enumerable: true, configurable: true });
+    Object.defineProperty(uaData, "platform", { get: makeUaGetter("platform", () => String(U.chPlatform || "")), enumerable: true, configurable: true });
+    const geh = {
       getHighEntropyValues(hints) {
+        if (this !== uaData && !(typeof NavigatorUAData !== "undefined" && this instanceof NavigatorUAData)) {
+          return Promise.reject(new TypeError("Illegal invocation"));
+        }
         const want = Array.isArray(hints) ? hints : [];
-        const out = { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || '') };
+        const out = { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
         for (const h of want) {
           if (h in highEntropy) out[h] = highEntropy[h];
-          if (h === 'uaFullVersion') out.uaFullVersion = highEntropy.fullVersion;
+          if (h === "uaFullVersion") out.uaFullVersion = highEntropy.fullVersion;
         }
         return Promise.resolve(out);
-      },
+      }
+    }.getHighEntropyValues;
+    nativeSource.set(geh, "function getHighEntropyValues() { [native code] }");
+    Object.defineProperty(uaData, "getHighEntropyValues", { configurable: true, writable: true, value: geh });
+    const tj = {
       toJSON() {
-        return { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || '') };
-      },
-    };
+        if (this !== uaData && !(typeof NavigatorUAData !== "undefined" && this instanceof NavigatorUAData)) {
+          throw new TypeError("Illegal invocation");
+        }
+        return { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
+      }
+    }.toJSON;
+    nativeSource.set(tj, "function toJSON() { [native code] }");
+    Object.defineProperty(uaData, "toJSON", { configurable: true, writable: true, value: tj });
+
     const existing = (() => { try { return navigator.userAgentData; } catch (_) { return null; } })();
-    const existingBrands = (() => { try { return JSON.stringify(existing?.brands || []); } catch (_) { return ''; } })();
+    const existingBrands = (() => { try { return JSON.stringify(existing?.brands || []); } catch (_) { return ""; } })();
     if (!existing || existing.platform !== uaData.platform || existing.mobile !== uaData.mobile || existingBrands !== JSON.stringify(brands)) {
-      define(Navigator.prototype, 'userAgentData', () => uaData);
-      try { define(navigator, 'userAgentData', () => uaData); } catch (_) {}
+      define(Navigator.prototype, "userAgentData", () => uaData);
+      try { delete navigator.userAgentData; } catch (_) {}
     }
   } catch (_) {}
 })();`;
 }
 
-/**
- * Seeded random UA for multi-open isolation (deterministic per profile seed).
- */
 function randomUaForSeed(seedU32, options = {}) {
   const osList = options.osList || ['windows', 'windows', 'macos', 'linux'];
   const os = osList[seedU32 % osList.length];
