@@ -1258,9 +1258,15 @@ function buildInjectionScript(fp) {
       clean = holder[fnName];
       try { Object.defineProperty(clean, "length", { configurable: true, value: fnLength }); } catch (_) {}
     }
-    const nativeStr = (typeof original === "function")
-      ? (nativeSource.get(original) || originalToString.call(original))
-      : ("function " + fnName + "() { [native code] }");
+    let nativeStr;
+    if (typeof original === "function") {
+      const origStr = nativeSource.get(original) || originalToString.call(original);
+      nativeStr = (origStr && origStr.includes("[native code]"))
+        ? origStr
+        : ("function " + fnName + "() { [native code] }");
+    } else {
+      nativeStr = "function " + fnName + "() { [native code] }";
+    }
     try { nativeSource.set(clean, nativeStr); } catch (_) {}
     try { nativeSource.set(wrapper, nativeStr); } catch (_) {}
     return clean;
@@ -1269,15 +1275,19 @@ function buildInjectionScript(fp) {
     const holder = {
       get [key]() {
         if (targetType === "navigator") {
-          if (this !== (typeof navigator !== "undefined" ? navigator : null) &&
-              !(typeof Navigator !== "undefined" && this instanceof Navigator)) {
-            throw new TypeError("Illegal invocation");
-          }
+          const isNav = this && (
+            this === (typeof navigator !== "undefined" ? navigator : null) ||
+            (typeof Navigator !== "undefined" && this instanceof Navigator) ||
+            Object.prototype.toString.call(this) === "[object Navigator]"
+          );
+          if (!isNav) throw new TypeError("Illegal invocation");
         } else if (targetType === "screen") {
-          if (this !== (typeof screen !== "undefined" ? screen : null) &&
-              !(typeof Screen !== "undefined" && this instanceof Screen)) {
-            throw new TypeError("Illegal invocation");
-          }
+          const isScr = this && (
+            this === (typeof screen !== "undefined" ? screen : null) ||
+            (typeof Screen !== "undefined" && this instanceof Screen) ||
+            Object.prototype.toString.call(this) === "[object Screen]"
+          );
+          if (!isScr) throw new TypeError("Illegal invocation");
         }
         return getValue.call(this);
       }
@@ -1392,17 +1402,28 @@ function buildInjectionScript(fp) {
   try {
     const permProto = typeof Permissions !== "undefined" ? Permissions.prototype : (typeof navigator !== "undefined" && navigator.permissions ? Object.getPrototypeOf(navigator.permissions) : null);
     if (permProto && typeof permProto.query === "function") {
+      const notificationStatuses = new WeakSet();
+      if (typeof PermissionStatus !== "undefined" && PermissionStatus.prototype) {
+        const stateDesc = Object.getOwnPropertyDescriptor(PermissionStatus.prototype, "state");
+        if (stateDesc && typeof stateDesc.get === "function") {
+          const origStateGet = stateDesc.get;
+          const patchedStateGet = nativeLike(function state() {
+            if (notificationStatuses.has(this) && typeof Notification !== "undefined") {
+              return Notification.permission === "default" ? "prompt" : Notification.permission;
+            }
+            return origStateGet.call(this);
+          }, origStateGet, "get state", 0);
+          Object.defineProperty(PermissionStatus.prototype, "state", {
+            configurable: true,
+            enumerable: true,
+            get: patchedStateGet,
+          });
+        }
+      }
       replaceMethod(permProto, "query", (origQuery) => async function query(descriptor) {
         const status = await origQuery.call(this, descriptor);
-        if (descriptor && descriptor.name === 'notifications' && typeof Notification !== 'undefined') {
-          const expectedState = Notification.permission === 'default' ? 'prompt' : Notification.permission;
-          try {
-            Object.defineProperty(status, 'state', nativeAccessor('state', {
-              configurable: true,
-              enumerable: true,
-              get: () => expectedState,
-            }));
-          } catch (_) {}
+        if (descriptor && descriptor.name === 'notifications') {
+          if (status) notificationStatuses.add(status);
         }
         return status;
       });
@@ -1425,26 +1446,8 @@ function buildInjectionScript(fp) {
           runningState: nativeLike(() => "cannot_run", null, "runningState", 0),
         };
       }
-      if (!window.chrome.csi) {
-        window.chrome.csi = nativeLike(() => ({ startE: Date.now(), onloadT: Date.now(), pageT: 100, tran: 15 }), null, "csi", 0);
-      }
-      if (!window.chrome.loadTimes) {
-        window.chrome.loadTimes = nativeLike(() => ({
-          commitLoadTime: Date.now() / 1000,
-          connectionInfo: "http/1.1",
-          finishDocumentLoadTime: Date.now() / 1000,
-          finishLoadTime: Date.now() / 1000,
-          firstPaintAfterLoadTime: 0,
-          firstPaintTime: Date.now() / 1000,
-          navigationType: "Other",
-          npnNegotiatedProtocol: "unknown",
-          requestTime: (Date.now() - 200) / 1000,
-          startLoadTime: (Date.now() - 200) / 1000,
-          wasAlternateProtocolAvailable: false,
-          wasFetchedViaSpdy: false,
-          wasNpnNegotiated: false,
-        }), null, "loadTimes", 0);
-      }
+      // Modern Chromium (v117+) has completely removed chrome.loadTimes and chrome.csi.
+      // Retaining those obsolete mocks is an instant signature of legacy puppeteer-extra-plugin-stealth.
     }
   } catch (_) {}
 
@@ -1781,6 +1784,51 @@ function buildInjectionScript(fp) {
           } catch (_) {}
           return data;
         });
+
+        if (AudioBuffer.prototype.copyFromChannel) {
+          replaceMethod(AudioBuffer.prototype, 'copyFromChannel', (original) => function(destination, channelNumber, startInChannel) {
+            const chData = this.getChannelData(Number(channelNumber) || 0);
+            const start = Number(startInChannel) || 0;
+            const len = Math.min(destination.length, Math.max(0, chData.length - start));
+            for (let i = 0; i < len; i += 1) {
+              destination[i] = chData[start + i];
+            }
+          });
+        }
+      }
+      if (globalThis.AnalyserNode) {
+        const patchFreq = (name) => {
+          if (!AnalyserNode.prototype || !AnalyserNode.prototype[name]) return;
+          replaceMethod(AnalyserNode.prototype, name, (original) => function(...args) {
+            const res = original.apply(this, args);
+            try {
+              const array = args[0];
+              if (array && array.length) {
+                const step = Math.max(1, Math.floor(array.length / 32));
+                if (name.includes('Byte')) {
+                  for (let i = 0; i < array.length; i += step) {
+                    if (array[i] > 0 && array[i] < 255) {
+                      const delta = noise(i + mark) > 0.5 ? 1 : -1;
+                      array[i] = Math.max(0, Math.min(255, array[i] + delta));
+                    }
+                  }
+                } else {
+                  const amp = 1e-5;
+                  for (let i = 0; i < array.length; i += step) {
+                    if (array[i] !== 0 && !isNaN(array[i]) && isFinite(array[i])) {
+                      array[i] += (noise(i + mark) - 0.5) * amp;
+                    }
+                  }
+                }
+              }
+            } catch (_) {}
+            return res;
+          });
+        };
+        patchFreq('getFloatFrequencyData');
+        patchFreq('getByteFrequencyData');
+        patchFreq('getFloatTimeDomainData');
+        patchFreq('getByteTimeDomainData');
       }
     } catch (_) {}
   }
@@ -2047,6 +2095,15 @@ function buildInjectionScript(fp) {
               try { delete subWin.navigator[key]; } catch (_) {}
             }
           }
+          if (typeof Navigator !== "undefined" && Navigator.prototype) {
+            for (const k of ['userAgent', 'appVersion', 'userAgentData']) {
+              const d = Object.getOwnPropertyDescriptor(Navigator.prototype, k);
+              if (d) {
+                try { Object.defineProperty(subNav, k, d); } catch (_) {}
+                if (subWin.navigator) { try { delete subWin.navigator[k]; } catch (_) {} }
+              }
+            }
+          }
         }
         const subScreen = subWin.Screen && subWin.Screen.prototype;
         if (subScreen) {
@@ -2058,6 +2115,14 @@ function buildInjectionScript(fp) {
             }
           }
         }
+        if (CFG.timezone && subWin.Date && subWin.Date !== Date) {
+          try {
+            subWin.Date = Date;
+            if (subWin.Intl && subWin.Intl.DateTimeFormat) {
+              subWin.Intl.DateTimeFormat = Intl.DateTimeFormat;
+            }
+          } catch (_) {}
+        }
       } catch (_) {}
     };
 
@@ -2066,14 +2131,11 @@ function buildInjectionScript(fp) {
         const desc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "contentWindow");
         if (desc && typeof desc.get === "function") {
           const origCW = desc.get;
-          const patchedCW = {
-            get contentWindow() {
-              const subWin = origCW.call(this);
-              if (subWin) patchSubWindow(subWin);
-              return subWin;
-            }
-          }.contentWindow;
-          nativeSource.set(patchedCW, "function get contentWindow() { [native code] }");
+          const patchedCW = nativeGetter("contentWindow", function() {
+            const subWin = origCW.call(this);
+            if (subWin) patchSubWindow(subWin);
+            return subWin;
+          });
           Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
             configurable: true,
             enumerable: true,
@@ -2083,14 +2145,11 @@ function buildInjectionScript(fp) {
         const docDesc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "contentDocument");
         if (docDesc && typeof docDesc.get === "function") {
           const origCD = docDesc.get;
-          const patchedCD = {
-            get contentDocument() {
-              const subDoc = origCD.call(this);
-              if (subDoc && subDoc.defaultView) patchSubWindow(subDoc.defaultView);
-              return subDoc;
-            }
-          }.contentDocument;
-          nativeSource.set(patchedCD, "function get contentDocument() { [native code] }");
+          const patchedCD = nativeGetter("contentDocument", function() {
+            const subDoc = origCD.call(this);
+            if (subDoc && subDoc.defaultView) patchSubWindow(subDoc.defaultView);
+            return subDoc;
+          });
           Object.defineProperty(HTMLIFrameElement.prototype, "contentDocument", {
             configurable: true,
             enumerable: true,
@@ -2288,9 +2347,12 @@ function buildInjectionScript(fp) {
         replaceMethod(proto, 'getExtension', (original) => function(name) {
           const extName = String(name || '').toLowerCase();
           if (metaMode === 'blocked' && extName === 'webgl_debug_renderer_info') return null;
-          const ext = original.apply(this, arguments);
-          if (ext && extName === 'webgl_debug_renderer_info') {
-            enabledDebugExts.add(this);
+          let ext = original.apply(this, arguments);
+          if (extName === 'webgl_debug_renderer_info') {
+            if (!ext && metaMode !== 'blocked' && (CFG.webgl?.vendor || CFG.webgl?.renderer)) {
+              ext = { UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246 };
+            }
+            if (ext) enabledDebugExts.add(this);
           }
           return ext;
         });
@@ -2350,6 +2412,11 @@ function buildInjectionScript(fp) {
           if (metaMode === 'blocked' && Array.isArray(list)) {
             return list.filter((ext) => String(ext).toLowerCase() !== 'webgl_debug_renderer_info');
           }
+          if (Array.isArray(list) && metaMode !== 'blocked' && (CFG.webgl?.vendor || CFG.webgl?.renderer)) {
+            if (!list.some((ext) => String(ext).toLowerCase() === 'webgl_debug_renderer_info')) {
+              return [...list, 'WEBGL_debug_renderer_info'];
+            }
+          }
           return list;
         });
       };
@@ -2371,20 +2438,15 @@ function buildInjectionScript(fp) {
       try {
         const wrapCtx = (proto) => {
           if (!proto || !proto.getContext) return;
-          const original = proto.getContext;
-          Object.defineProperty(proto, 'getContext', {
-            configurable: true,
-            writable: true,
-            value: nativeLike(function(...args) {
-              const ctx = original.apply(this, args);
-              try {
-                const type = String(args[0] || '').toLowerCase();
-                if (type.includes('webgl') || type.includes('experimental-webgl')) {
-                  webglCanvases.add(this);
-                }
-              } catch (_) {}
-              return ctx;
-            }, original),
+          replaceMethod(proto, 'getContext', (original) => function(...args) {
+            const ctx = original.apply(this, args);
+            try {
+              const type = String(args[0] || '').toLowerCase();
+              if (type.includes('webgl') || type.includes('experimental-webgl')) {
+                webglCanvases.add(this);
+              }
+            } catch (_) {}
+            return ctx;
           });
         };
         wrapCtx(globalThis.HTMLCanvasElement && HTMLCanvasElement.prototype);

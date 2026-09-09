@@ -26,7 +26,8 @@ function normalizeProxyProtocol(value) {
 
 function splitProxyRemark(value) {
   const raw = String(value || '').trim();
-  const marker = raw.indexOf('#');
+  const at = raw.lastIndexOf('@');
+  const marker = at >= 0 ? raw.indexOf('#', at) : raw.indexOf('#');
   if (marker < 0) return { source: raw, remark: '' };
   return {
     source: raw.slice(0, marker).trim(),
@@ -428,17 +429,18 @@ async function connectSocksTargetOnce(config, host, port, signal = null) {
   try {
     upstream = await connectSocket(config.host, config.port, 8000, signal); upstream.on('error', () => {});
     const reader = new BufferedReader(upstream); const timeout = 8000;
-    upstream.write(config.authenticated ? Buffer.from([5, 2, 0, 2]) : Buffer.from([5, 1, 0]));
+    upstream.write(config.authenticated ? Buffer.from([5, 1, 2]) : Buffer.from([5, 1, 0]));
     const method = await reader.read(2, timeout); if (method[0] !== 5 || method[1] === 255) throw new Error('SOCKS5 proxy rejected available authentication methods');
     if (method[1] === 2) {
-      const user = Buffer.from(config.username, 'utf8'); const password = Buffer.from(config.password, 'utf8');
-      if (!user.length || user.length > 255 || !password.length || password.length > 255) throw new Error('SOCKS5 username or password length is invalid');
+      const user = Buffer.from(config.username || '', 'utf8'); const password = Buffer.from(config.password || '', 'utf8');
+      if (user.length > 255 || password.length > 255) throw new Error('SOCKS5 username or password length is invalid');
       upstream.write(Buffer.concat([Buffer.from([1, user.length]), user, Buffer.from([password.length]), password]));
       const auth = await reader.read(2, timeout); if (auth[1] !== 0) throw new Error('SOCKS5 authentication failed');
     } else if (method[1] !== 0) throw new Error('SOCKS5 proxy selected an unsupported authentication method');
     upstream.write(Buffer.concat([Buffer.from([5, 1, 0]), encodeSocksAddress(host), Buffer.from([port >> 8, port & 255])]));
-    const response = await reader.read(4, timeout); await readSocksAddress(reader, response[3]); await reader.read(2, timeout);
+    const response = await reader.read(4, timeout);
     if (response[1] !== 0) throw new Error('SOCKS5 upstream connection failed with code ' + response[1]);
+    await readSocksAddress(reader, response[3]); await reader.read(2, timeout);
     const remainder = reader.release(); return { upstream, remainder };
   } catch (error) {
     upstream?.destroy();
@@ -465,7 +467,7 @@ async function connectSocksTarget(config, host, port, attempts = 3, signal = nul
   throw lastError || new Error('SOCKS5 connection failed');
 }
 
-function concurrentConnector(callback, maxConcurrent = 4, spacing = 60) {
+function concurrentConnector(callback, maxConcurrent = 128, spacing = 0) {
   const queue = []; let active = 0; let nextAt = 0; let timer = null;
   const pump = () => {
     if (timer) return;
@@ -485,16 +487,34 @@ function parseHttpTarget(header) {
     const separator = target.lastIndexOf(':'); if (separator < 1) throw new Error('Invalid HTTP CONNECT target');
     return { method, host: target.slice(0, separator).replace(/^\[|\]$/g, ''), port: Number(target.slice(separator + 1)), header };
   }
-  const url = new URL(target); const path = (url.pathname || '/') + url.search;
+  let host = ''; let port = 80; let path = target;
+  if (/^https?:\/\//i.test(target)) {
+    const url = new URL(target);
+    host = url.hostname;
+    port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+    path = (url.pathname || '/') + url.search;
+  } else {
+    const hostLine = header.split('\r\n').find((l) => /^host:/i.test(l));
+    const hostVal = hostLine ? hostLine.replace(/^host:\s*/i, '').trim() : '';
+    if (!hostVal) throw new Error('Invalid HTTP proxy request: missing Host header');
+    const colon = hostVal.lastIndexOf(':');
+    if (colon >= 0 && !hostVal.endsWith(']')) {
+      host = hostVal.slice(0, colon).replace(/^\[|\]$/g, '');
+      port = Number(hostVal.slice(colon + 1)) || 80;
+    } else {
+      host = hostVal.replace(/^\[|\]$/g, '');
+      port = 80;
+    }
+  }
   const lines = header.split('\r\n'); lines[0] = method + ' ' + path + ' ' + (parts[2] || 'HTTP/1.1');
-  return { method, host: url.hostname, port: Number(url.port || (url.protocol === 'https:' ? 443 : 80)), header: lines.filter((line) => !/^proxy-authorization:/i.test(line) && !/^proxy-connection:/i.test(line)).join('\r\n') };
+  return { method, host, port, header: lines.filter((line) => !/^proxy-authorization:/i.test(line) && !/^proxy-connection:/i.test(line)).join('\r\n') };
 }
 
 async function startHttpToSocks5Bridge(config, onStatus) {
   const sockets = new Set(); const notify = makeNotifier(onStatus); const controller = new AbortController();
   // Keep authentication handshakes paced for residential proxies, without
   // making a modern Chrome page wait almost a second for every connection.
-  const connectTarget = concurrentConnector((host, port) => connectSocksTarget(config, host, port, 3, controller.signal), 4, 60);
+  const connectTarget = concurrentConnector((host, port) => connectSocksTarget(config, host, port, 3, controller.signal), 128, 0);
   const server = net.createServer((client) => {
     sockets.add(client); client.setNoDelay(true); client.on('error', () => {}); client.once('close', () => sockets.delete(client));
     let pending = Buffer.alloc(0);
@@ -508,7 +528,7 @@ async function startHttpToSocks5Bridge(config, onStatus) {
       (async () => {
         target = parseHttpTarget(header);
         if (process.env.OPENBROWSER_PROXY_DIAGNOSTICS === '1') notify('REQUEST', target.host + ':' + target.port);
-        if (/^(mtalk\.google\.com|android\.clients\.google\.com|connectivitycheck\.gstatic\.com|update\.googleapis\.com)$/i.test(target.host)) { client.end(target.method === 'CONNECT' ? 'HTTP/1.1 502 Background Request Blocked\r\nConnection: close\r\n\r\n' : 'HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n'); return; }
+        if (/^(mtalk\.google\.com|android\.clients\.google\.com|update\.googleapis\.com)$/i.test(target.host)) { client.end(target.method === 'CONNECT' ? 'HTTP/1.1 502 Background Request Blocked\r\nConnection: close\r\n\r\n' : 'HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n'); return; }
         const connected = await connectTarget(target.host, target.port); const upstream = connected.upstream;
         if (process.env.OPENBROWSER_PROXY_DIAGNOSTICS === '1') notify('CONNECTED', target.host + ':' + target.port);
         if (client.destroyed) { upstream.destroy(); return; }
@@ -542,19 +562,24 @@ async function startSocks5Bridge(config, onStatus) {
       const upstream = await connectSocket(config.host, config.port); sockets.add(upstream);
       upstream.on('error', () => { if (!client.destroyed) client.destroy(); }); client.on('error', () => upstream.destroy()); upstream.once('close', () => sockets.delete(upstream));
       const remote = new BufferedReader(upstream);
-      upstream.write(config.authenticated ? Buffer.from([5, 2, 0, 2]) : Buffer.from([5, 1, 0]));
+      upstream.write(config.authenticated ? Buffer.from([5, 1, 2]) : Buffer.from([5, 1, 0]));
       const method = await remote.read(2); if (method[0] !== 5 || method[1] === 255) throw new Error('SOCKS5 proxy rejected available authentication methods');
       if (method[1] === 2) {
-        const user = Buffer.from(config.username, 'utf8'); const password = Buffer.from(config.password, 'utf8');
-        if (!user.length || user.length > 255 || !password.length || password.length > 255) throw new Error('SOCKS5 username or password length is invalid');
+        const user = Buffer.from(config.username || '', 'utf8'); const password = Buffer.from(config.password || '', 'utf8');
+        if (user.length > 255 || password.length > 255) throw new Error('SOCKS5 username or password length is invalid');
         upstream.write(Buffer.concat([Buffer.from([1, user.length]), user, Buffer.from([password.length]), password]));
         const auth = await remote.read(2);
         if (auth[1] !== 0) { notify('AUTH_FAILED', 'SOCKS5 username or password was rejected'); throw new Error('SOCKS5 authentication failed'); }
       } else if (method[1] !== 0) throw new Error('SOCKS5 proxy selected an unsupported authentication method');
       upstream.write(Buffer.concat([requestHead, requestAddress, requestPort]));
-      const responseHead = await remote.read(4); const responseAddress = await readSocksAddress(remote, responseHead[3]); const responsePort = await remote.read(2);
+      const responseHead = await remote.read(4);
+      if (responseHead[1] !== 0) {
+        notify('TUNNEL_FAILED', 'SOCKS5 tunnel failed with code ' + responseHead[1]);
+        if (!client.destroyed) client.end(Buffer.concat([responseHead, Buffer.from([1, 0, 0, 0, 0, 0, 0])]));
+        throw new Error('SOCKS5 upstream connection failed with code ' + responseHead[1]);
+      }
+      const responseAddress = await readSocksAddress(remote, responseHead[3]); const responsePort = await remote.read(2);
       client.write(Buffer.concat([responseHead, responseAddress, responsePort]));
-      if (responseHead[1] !== 0) { notify('TUNNEL_FAILED', 'SOCKS5 tunnel failed with code ' + responseHead[1]); throw new Error('SOCKS5 upstream connection failed'); }
       const localRemainder = local.release(); const remoteRemainder = remote.release();
       if (localRemainder.length) upstream.write(localRemainder); if (remoteRemainder.length) client.write(remoteRemainder);
       client.pipe(upstream); upstream.pipe(client);
@@ -671,9 +696,11 @@ async function connectBridge(bridge, hostname, port) {
   } else {
     socket.write(Buffer.from([5, 1, 0])); const greeting = await reader.read(2); if (greeting[1] !== 0) throw new Error('Local SOCKS5 bridge rejected no-auth mode');
     const host = Buffer.from(hostname, 'utf8'); socket.write(Buffer.concat([Buffer.from([5, 1, 0, 3, host.length]), host, Buffer.from([port >> 8, port & 255])]));
-    const reply = await reader.read(4); await readSocksAddress(reader, reply[3]); await reader.read(2); if (reply[1] !== 0) throw new Error('SOCKS5 proxy test tunnel failed with code ' + reply[1]);
+    const reply = await reader.read(4);
+    if (reply[1] !== 0) throw new Error('SOCKS5 proxy test tunnel failed with code ' + reply[1]);
+    await readSocksAddress(reader, reply[3]); await reader.read(2);
   }
-  const remainder = reader.release(); if (remainder.length) throw new Error('Unexpected bytes before TLS handshake');
+  const remainder = reader.release(); if (remainder.length) socket.unshift(remainder);
   return socket;
 }
 

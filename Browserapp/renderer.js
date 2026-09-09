@@ -1736,7 +1736,8 @@ function normalizeProxyProtocolForUi(value, fallback = 'socks5') {
 
 function splitProxyRemarkForUi(value) {
   const raw = String(value || '').trim();
-  const index = raw.indexOf('#');
+  const at = raw.lastIndexOf('@');
+  const index = at >= 0 ? raw.indexOf('#', at) : raw.indexOf('#');
   return index < 0
     ? { source: raw, remark: '' }
     : { source: raw.slice(0, index).trim(), remark: decodeProxyPartForUi(raw.slice(index + 1)).trim() };
@@ -5405,7 +5406,7 @@ $('#profile-create-template')?.addEventListener('change', (event) => {
         if ($('#create-proxy-port')) $('#create-proxy-port').value = parsed.port;
         if ($('#create-proxy-user')) $('#create-proxy-user').value = parsed.username;
         if ($('#create-proxy-password')) $('#create-proxy-password').value = parsed.password;
-        if (proxyInput) proxyInput.value = `${parsed.host}:${parsed.port}`;
+        if (proxyInput) proxyInput.value = parsed.raw || `${parsed.host}:${parsed.port}`;
       }
     } catch (_) {}
   } else {

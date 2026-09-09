@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.6'
+        default: 'v1.0.7'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,29 +42,41 @@ env:
 
     ### 中文
 
-    - **指纹深度伪装与反检测加固（全面解决网站识别指纹浏览器问题）**：
-      - **时区伪装全面自洽（彻底修复 #21）**：针对 Chromium 在 Windows 环境下忽略 `TZ` 环境变量以及 CDP 短连接失效的问题，新增自闭环 JavaScript 原生层 Date / Intl 注入。补齐 `Intl.DateTimeFormat.prototype.constructor` 规避原型校验；补齐 Date 全套本地时间面（`getMinutes`/`getSeconds`/`getMilliseconds`/`getYear` 及全部本地 setter），彻底消除跨半小时/45分钟特殊时区（如印度、南澳等）的时分矛盾；修正多参构造器 `new Date(y, m, d...)` 与无时区字符串 `Date.parse(...)` 的本地墙上时间反推，页面刷新后时区与经纬度持续稳定一致。
-      - **硬件与内存规范化**：将 `navigator.deviceMemory` 严格收敛至 W3C 规范合法档位（`[0.25, 0.5, 1, 2, 4, 8]`，上限 8），彻底移除不可信的 16/32/64 非法档位，消除被指纹库单点识破的风险。
-      - **音频指纹加噪与静音保护**：恢复并加固 `AudioBuffer.prototype.getChannelData` 注入，增加静音全零缓冲精确保护，杜绝无声音频产生异常扰动，防止多环境音频指纹聚类。
-      - **WebGL / Canvas 深度伪装（#19）**：扩充 Windows 现代独立显卡预设（RTX 4070S/4060Ti/3060Ti/3050、Arc A750 等），解决 GPU Vendor、Renderer 与 WebGPU Adapter 矛盾；增加 `webgl_debug_renderer_info` 扩展门控（未启用时返回原生 `null`）；引入 WebGL Canvas 隔离防护，避免 2D 转换破坏图形渲染。
-      - **原生对象与原型链防刺探**：重写 `nativeLike` 机制，非构造器函数天然无 `.prototype` 且不可 `new`（抛出标准 TypeError）；Permissions、MediaDevices 等全部改用原型级 Hook；完善 `matchMedia` 返回真实 `MediaQueryList` 实例及完整原型链与监听机制；重构 `Function.prototype.toString` 防御，避免覆盖指纹层 Disguise；移除可被枚举的全局 `Symbol.for` 污染。
-      - **WebRTC SDP 修复**：改为原型 Hook（`RTCPeerConnection.prototype`），重写 SDP 避免内部函数泄露。
-    - **窗口管理与同步器优化（#19）**：
-      - 修复 Windows 高 DPI（1.25x/1.5x）缩放下窗口大小跳跃与平铺越界问题，实时根据工作区安全边界动态收缩窗口。
-      - 同步器全面放行 `chrome://` 常用内部管理页面（扩展管理、设置、下载、历史记录等）。
+    - **SOCKS5 代理认证与网络连通性深度修复（彻底修复 #22）**：
+      - **RFC 1928/1929 握手认证协商修复**：对需要认证的 SOCKS5 代理，握手阶段严格仅声明用户名密码认证方法（`[5, 1, 2]`），彻底解决双模/自适应代理（Dante、3proxy、海外住宅代理等）因优先协商 0x00 无认证导致后续 CONNECT 隧道被拒的问题。
+      - **解除并发连接锁死**：并发连接调度器并发上限由 4 提升至 128，请求间隔设为 0，彻底消除网页并发多资源加载时的排队阻塞、假死超时与“无法联网”现象。
+      - **修复凭据包含 `#` 截断问题**：优化代理配置切分逻辑，仅以 `@` 之后的 `#` 作为备注起始符，防止密码本身包含 `#` 时凭据被腰斩导致认证失败。
+      - **放行系统连通性探测**：从 502 阻断名单中剔除 `connectivitycheck.gstatic.com`，杜绝 Chromium 将有效代理误判为 Captive Portal 或无网络。
+      - **错误即时反馈与安全路径解析**：SOCKS5 CONNECT 收到错误即时断开并透传错误码，杜绝无谓等待；HTTP 相对路径支持从 Host 头自动推导；启动页隧道（Start Page Server）增加完整 SOCKS5 代理支持。
+    - **防指纹深度加固（全面解决网站识别指纹浏览器问题）**：
+      - **`navigator.userAgentData` 原型与自身属性对齐**：将 `brands`、`mobile`、`platform`、`getHighEntropyValues`、`toJSON` 完整定义在 `NavigatorUAData.prototype` 上，并在实例上清空自身属性（`Object.getOwnPropertyNames(navigator.userAgentData)` 返回空数组 `[]`，方法 `enumerable: false`），消除 CreepJS、Turnstile、DataDome 依赖的 Client Hints 伪造指纹。
+      - **iframe 跨 Realm 时区与原生环境全链路穿透同步**：修复 `HTMLIFrameElement.prototype.contentWindow/contentDocument` getter 劫持机制（杜绝非法调用异常），跨 Realm 自动同步父级伪装的时区（`Date` 与 `Intl.DateTimeFormat`）、`navigator.platform`、`userAgent` 及 `userAgentData`，彻底解决检测脚本通过动态创建空白 iframe 读取真实宿主时区与环境的穿透漏洞。
+      - **移除过时的 Puppeteer-Stealth 特征签名**：彻底移除 Chromium 117+ 已被官方完全废弃的 `window.chrome.csi` 与 `window.chrome.loadTimes` 桩函数，消除反爬风控依赖的陈旧自动化特征标记。
+      - **跨 Realm 异常防御（解决 `TypeError: Illegal invocation`）**：强化 `makeNativeGetter` 与 `define` 的跨 Realm 宿主环境容错，避免子窗口或跨域检测脚本触发非法调用异常直接暴露 Hook。
+      - **权限一致性检测加固（`PermissionStatus`）**：对 `navigator.permissions.query({ name: 'notifications' })` 改为在 `PermissionStatus.prototype` 原型上动态代理 `state`，杜绝在返回值实例上新增自身属性导致 `status.hasOwnProperty('state')` 被识破。
+      - **音频与 WebGL 双重 API 对齐与双域噪音注入**：增加 `AudioBuffer.prototype.copyFromChannel` 代理拦截并对齐加噪通道；增加 `AnalyserNode` 频域与时域整数/浮点自适应噪音；WebGL 在无调试扩展时软件补齐标准对象并放行 `getParameter(0x9245/0x9246)`，消除 SwiftShader 与集成显卡无调试扩展时的指纹脱壳。
+      - **Chromium 特性参数合并（JA3/JA4 TLS 对齐）**：修复 `chromeArgsForFingerprint` 参数合并逻辑，确保 `--enable-features=PermuteTLSExtensions` 正确生效，TLS ClientHello 扩展顺序与 UA 版本完美对齐。
+    - **窗口管理与平铺（#19）与时区刷新稳定性（#21）闭环**：
+      - 彻底锁死 Windows 环境下统一 `--force-device-scale-factor=1`，消灭高 DPI 机器下窗口大小跳跃与 1.25x 界面错位；多窗口平铺严格约束在当前屏幕安全工作区（WorkArea）。
 
     ### English
 
-    - **Fingerprint Deep Hardening & Anti-Detection**:
-      - **Coherent Timezone Spoofing (Fixed #21)**: Resolved Chromium's ignorance of `TZ` on Windows and CDP session expiry with self-consistent JS injection. Fixed `Intl.DateTimeFormat.prototype.constructor` prototype chain; added full suite of Date local APIs (`getMinutes`, `getSeconds`, `getMilliseconds`, `getYear`, and all local setters) to eliminate discrepancies in half-hour/45-min timezones; corrected multi-arg `new Date(...)` constructor and timezone-less `Date.parse(...)` local wall-clock interpretation across page reloads.
-      - **Spec-Compliant Device Memory**: Quantized `navigator.deviceMemory` strictly to W3C-specified steps (`[0.25, 0.5, 1, 2, 4, 8]`, max 8), eliminating invalid 16/32/64 values that trigger fingerprint detection.
-      - **Audio Fingerprint Protection**: Restored `AudioBuffer.prototype.getChannelData` injection with silence detection (zero-buffers kept intact) to prevent audio fingerprint clustering.
-      - **WebGL & Canvas Spoofing (#19)**: Expanded Windows modern GPU presets (RTX 40/30 series, Intel Arc, Radeon RX) with coherent Vendor/Renderer/WebGPU Adapter mapping; added `webgl_debug_renderer_info` extension gating; added WebGL Canvas isolation to prevent 2D conversion conflicts.
-      - **Native Function & Prototype Disguise**: Refactored `nativeLike` so non-constructors have no `.prototype` and throw standard `TypeError` on `new`; converted hooks to prototype-level methods; returned authentic `MediaQueryList` instances with full prototype chains and event listeners from `matchMedia`; prevented `Function.prototype.toString` overwrites; eliminated detectable `Symbol.for` registry leaks.
-      - **WebRTC SDP Isolation**: Switched to prototype hooks on `RTCPeerConnection.prototype` with safe SDP rewriting.
-    - **Window Management & Synchronizer (#19)**:
-      - Fixed Windows 1.25x/1.5x high-DPI tiling jump and screen overflow, dynamically clamping window geometry within screen work areas.
-      - Allowed synchronizer control on common `chrome://` internal pages (extensions, settings, downloads, history).
+    - **SOCKS5 Proxy Authentication & Connectivity (Fixed #22)**:
+      - **RFC 1928/1929 Handshake Method Negotiation**: Strictly advertise only username/password authentication (`[5, 1, 2]`) for authenticated proxies, preventing dual-mode proxies (Dante, 3proxy, residential proxies) from picking 0x00 and rejecting subsequent CONNECT tunnels.
+      - **Concurrency Bottleneck Lifted**: Increased concurrency limit from 4 to 128 with zero throttle interval, eliminating queue starvation and connection freezes during parallel asset loading.
+      - **Remark Truncation Fix**: Parsed `#` remark separator only after the `@` credentials delimiter, preventing passwords containing `#` from being split.
+      - **Connectivity Check Unblocked**: Whitelisted `connectivitycheck.gstatic.com` to prevent Chromium from misidentifying proxy connections as Captive Portals.
+      - **Instant Error Feedback & Safe HTTP Path Resolution**: Immediate error code propagation on CONNECT failures; relative HTTP paths safely derived from Host headers; full SOCKS5 support added to start page server.
+    - **Anti-Detection Hardening**:
+      - **`navigator.userAgentData` Alignment**: Moved properties to `NavigatorUAData.prototype` with `enumerable: false` methods, leaving `Object.getOwnPropertyNames(navigator.userAgentData)` empty as in native Chrome.
+      - **Iframe Cross-Realm Timezone & Environment Sync**: Fixed `HTMLIFrameElement.prototype.contentWindow/contentDocument` getters to prevent `Illegal invocation` errors; syncs spoofed timezone, Date, Intl, platform, and userAgentData across blank iframes.
+      - **Removed Legacy Puppeteer-Stealth Signatures**: Removed obsolete `window.chrome.csi` and `window.chrome.loadTimes` which were removed in Chrome 117+ and flagged by modern bot detectors.
+      - **Cross-Realm Tolerance**: Protected getters from throwing `TypeError: Illegal invocation` when accessed across realms or inside iframes.
+      - **PermissionStatus Consistency**: Replaced `state` on `PermissionStatus.prototype` rather than injecting own properties on query results, ensuring `status.hasOwnProperty('state') === false`.
+      - **Audio & WebGL Dual API Parity**: Added `AudioBuffer.prototype.copyFromChannel` interception and `AnalyserNode` frequency/time-domain noise; WebGL debug info extension fallback for environments without native extensions.
+      - **TLS JA3/JA4 Permutation**: Corrected `--enable-features=PermuteTLSExtensions` parameter merging to match UA versions.
+    - **Window Management & Tiling (#19) and Timezone Consistency (#21)**:
+      - Enforced consistent `--force-device-scale-factor=1` on Windows, preventing 1.25x scaling jumps and tiling overflow; all windows strictly clamped to screen work areas.
 
     ### 下载 / Downloads
 

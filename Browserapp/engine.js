@@ -2371,7 +2371,22 @@ class BrowserEngine {
     ];
     // Fingerprint chrome flags (UA / webrtc / webgl / lang / window-size)
     for (const flag of chromeArgsForFingerprint(fingerprint, profile)) {
-      if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) args.push(flag);
+      if (flag.startsWith('--enable-features=') || flag.startsWith('--disable-features=')) {
+        const key = flag.split('=')[0];
+        const val = flag.slice(key.length + 1);
+        const existing = args.findIndex((a) => a.startsWith(key + '='));
+        if (existing >= 0) {
+          const cur = args[existing].slice(key.length + 1).split(',').filter(Boolean);
+          for (const part of val.split(',')) {
+            if (part && !cur.includes(part)) cur.push(part);
+          }
+          args[existing] = key + '=' + cur.join(',');
+        } else {
+          args.push(flag);
+        }
+      } else if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) {
+        args.push(flag);
+      }
     }
     // openbrowser-148: write profile/init.json so Framework native FP matches buildFingerprint
     let runtimeFingerprint = fingerprint;

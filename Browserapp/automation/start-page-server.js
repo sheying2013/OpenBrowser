@@ -244,8 +244,71 @@ async function connectProxyTunnel(bridge, hostname, port, timeout = 8000) {
     }
     if (head.leftover.length) socket.unshift(head.leftover);
     socket.resume();
+  } else if (bridge.protocol === 'socks5') {
+    socket.write(Buffer.from([5, 1, 0]));
+    const head = await new Promise((resolve, reject) => {
+      let buf = Buffer.alloc(0);
+      const timer = setTimeout(() => reject(new Error('proxy SOCKS5 greeting timeout')), timeout);
+      const onData = (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+        if (buf.length >= 2) {
+          clearTimeout(timer);
+          socket.off('data', onData);
+          resolve(buf);
+        }
+      };
+      socket.on('data', onData);
+      socket.once('error', (error) => { clearTimeout(timer); reject(error); });
+    });
+    if (head[0] !== 5 || head[1] !== 0) {
+      socket.destroy();
+      throw new Error('Local SOCKS5 bridge rejected no-auth mode');
+    }
+    const hostBuf = Buffer.from(hostname, 'utf8');
+    socket.write(Buffer.concat([Buffer.from([5, 1, 0, 3, hostBuf.length]), hostBuf, Buffer.from([port >> 8, port & 255])]));
+    const resp = await new Promise((resolve, reject) => {
+      let buf = Buffer.alloc(0);
+      const timer = setTimeout(() => reject(new Error('proxy SOCKS5 connect timeout')), timeout);
+      const onData = (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+        if (buf.length >= 4) {
+          clearTimeout(timer);
+          socket.off('data', onData);
+          resolve(buf);
+        }
+      };
+      socket.on('data', onData);
+      socket.once('error', (error) => { clearTimeout(timer); reject(error); });
+    });
+    if (resp[1] !== 0) {
+      socket.destroy();
+      throw new Error('SOCKS5 proxy test tunnel failed with code ' + resp[1]);
+    }
+    let addrLen = 0;
+    if (resp[3] === 1) addrLen = 4;
+    else if (resp[3] === 4) addrLen = 16;
+    else if (resp[3] === 3) addrLen = (resp.length > 4 ? resp[4] : 0) + 1;
+    const totalLen = 4 + addrLen + 2;
+    if (resp.length < totalLen) {
+      await new Promise((resolve, reject) => {
+        let buf = resp;
+        const timer = setTimeout(() => reject(new Error('proxy SOCKS5 address read timeout')), timeout);
+        const onData = (chunk) => {
+          buf = Buffer.concat([buf, chunk]);
+          if (buf.length >= totalLen) {
+            clearTimeout(timer);
+            socket.off('data', onData);
+            if (buf.length > totalLen) socket.unshift(buf.subarray(totalLen));
+            resolve();
+          }
+        };
+        socket.on('data', onData);
+        socket.once('error', (error) => { clearTimeout(timer); reject(error); });
+      });
+    } else if (resp.length > totalLen) {
+      socket.unshift(resp.subarray(totalLen));
+    }
   } else {
-    // local auth bridge for socks is HTTP-facing in OpenBrowser; if not, fail soft
     socket.destroy();
     throw new Error('unsupported local bridge protocol for site probe');
   }

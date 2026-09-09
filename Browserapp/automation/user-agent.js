@@ -354,8 +354,12 @@ function buildUaInjectionScript(uaProfile) {
     } catch (_) {}
     const holder = {
       get [key]() {
-        if (this !== (typeof navigator !== "undefined" ? navigator : null) &&
-            !(typeof Navigator !== "undefined" && this instanceof Navigator)) {
+        const isNav = this && (
+          this === (typeof navigator !== "undefined" ? navigator : null) ||
+          (typeof Navigator !== "undefined" && this instanceof Navigator) ||
+          Object.prototype.toString.call(this) === "[object Navigator]"
+        );
+        if (!isNav) {
           throw new TypeError("Illegal invocation");
         }
         return getter();
@@ -406,54 +410,109 @@ function buildUaInjectionScript(uaProfile) {
       wow64: Boolean(U.wow64),
       uaFullVersion: String(U.fullVersion || ""),
     };
-    const uaDataProto = typeof NavigatorUAData !== "undefined" ? NavigatorUAData.prototype : Object.prototype;
-    const uaData = Object.create(uaDataProto);
-    const makeUaGetter = (prop, fn) => {
-      const h = {
-        get [prop]() {
-          if (this !== uaData && !(typeof NavigatorUAData !== "undefined" && this instanceof NavigatorUAData)) {
+    if (typeof NavigatorUAData !== "undefined") {
+      const targetProto = NavigatorUAData.prototype;
+      const makeUaGetter = (prop, fn) => {
+        const h = {
+          get [prop]() {
+            if (!(this instanceof NavigatorUAData) && Object.prototype.toString.call(this) !== "[object NavigatorUAData]") {
+              throw new TypeError("Illegal invocation");
+            }
+            return fn.call(this);
+          }
+        };
+        const g = Object.getOwnPropertyDescriptor(h, prop).get;
+        nativeSource.set(g, "function get " + prop + "() { [native code] }");
+        return g;
+      };
+      Object.defineProperty(targetProto, "brands", { get: makeUaGetter("brands", () => Object.freeze(brands)), enumerable: true, configurable: true });
+      Object.defineProperty(targetProto, "mobile", { get: makeUaGetter("mobile", () => Boolean(U.mobile)), enumerable: true, configurable: true });
+      Object.defineProperty(targetProto, "platform", { get: makeUaGetter("platform", () => String(U.chPlatform || "")), enumerable: true, configurable: true });
+      const geh = {
+        getHighEntropyValues(hints) {
+          if (!(this instanceof NavigatorUAData) && Object.prototype.toString.call(this) !== "[object NavigatorUAData]") {
+            return Promise.reject(new TypeError("Illegal invocation"));
+          }
+          const want = Array.isArray(hints) ? hints : [];
+          const out = { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
+          for (const h of want) {
+            if (h in highEntropy) out[h] = highEntropy[h];
+            if (h === "uaFullVersion") out.uaFullVersion = highEntropy.fullVersion;
+          }
+          return Promise.resolve(out);
+        }
+      }.getHighEntropyValues;
+      nativeSource.set(geh, "function getHighEntropyValues() { [native code] }");
+      Object.defineProperty(targetProto, "getHighEntropyValues", { configurable: true, writable: true, enumerable: false, value: geh });
+      const tj = {
+        toJSON() {
+          if (!(this instanceof NavigatorUAData) && Object.prototype.toString.call(this) !== "[object NavigatorUAData]") {
             throw new TypeError("Illegal invocation");
           }
-          return fn();
+          return { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
         }
-      };
-      const g = Object.getOwnPropertyDescriptor(h, prop).get;
-      nativeSource.set(g, "function get " + prop + "() { [native code] }");
-      return g;
-    };
-    Object.defineProperty(uaData, "brands", { get: makeUaGetter("brands", () => Object.freeze(brands)), enumerable: true, configurable: true });
-    Object.defineProperty(uaData, "mobile", { get: makeUaGetter("mobile", () => Boolean(U.mobile)), enumerable: true, configurable: true });
-    Object.defineProperty(uaData, "platform", { get: makeUaGetter("platform", () => String(U.chPlatform || "")), enumerable: true, configurable: true });
-    const geh = {
-      getHighEntropyValues(hints) {
-        if (this !== uaData && !(typeof NavigatorUAData !== "undefined" && this instanceof NavigatorUAData)) {
-          return Promise.reject(new TypeError("Illegal invocation"));
-        }
-        const want = Array.isArray(hints) ? hints : [];
-        const out = { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
-        for (const h of want) {
-          if (h in highEntropy) out[h] = highEntropy[h];
-          if (h === "uaFullVersion") out.uaFullVersion = highEntropy.fullVersion;
-        }
-        return Promise.resolve(out);
-      }
-    }.getHighEntropyValues;
-    nativeSource.set(geh, "function getHighEntropyValues() { [native code] }");
-    Object.defineProperty(uaData, "getHighEntropyValues", { configurable: true, writable: true, value: geh });
-    const tj = {
-      toJSON() {
-        if (this !== uaData && !(typeof NavigatorUAData !== "undefined" && this instanceof NavigatorUAData)) {
-          throw new TypeError("Illegal invocation");
-        }
-        return { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
-      }
-    }.toJSON;
-    nativeSource.set(tj, "function toJSON() { [native code] }");
-    Object.defineProperty(uaData, "toJSON", { configurable: true, writable: true, value: tj });
+      }.toJSON;
+      nativeSource.set(tj, "function toJSON() { [native code] }");
+      Object.defineProperty(targetProto, "toJSON", { configurable: true, writable: true, enumerable: false, value: tj });
 
-    const existing = (() => { try { return navigator.userAgentData; } catch (_) { return null; } })();
-    const existingBrands = (() => { try { return JSON.stringify(existing?.brands || []); } catch (_) { return ""; } })();
-    if (!existing || existing.platform !== uaData.platform || existing.mobile !== uaData.mobile || existingBrands !== JSON.stringify(brands)) {
+      const existing = (() => { try { return navigator.userAgentData; } catch (_) { return null; } })();
+      if (existing) {
+        try {
+          delete existing.brands;
+          delete existing.mobile;
+          delete existing.platform;
+          delete existing.getHighEntropyValues;
+          delete existing.toJSON;
+        } catch (_) {}
+      } else {
+        const uaData = Object.create(targetProto);
+        define(Navigator.prototype, "userAgentData", () => uaData);
+        try { delete navigator.userAgentData; } catch (_) {}
+      }
+    } else {
+      const uaData = {};
+      const makeUaGetter = (prop, fn) => {
+        const h = {
+          get [prop]() {
+            if (this !== uaData) {
+              throw new TypeError("Illegal invocation");
+            }
+            return fn.call(this);
+          }
+        };
+        const g = Object.getOwnPropertyDescriptor(h, prop).get;
+        nativeSource.set(g, "function get " + prop + "() { [native code] }");
+        return g;
+      };
+      Object.defineProperty(uaData, "brands", { get: makeUaGetter("brands", () => Object.freeze(brands)), enumerable: true, configurable: true });
+      Object.defineProperty(uaData, "mobile", { get: makeUaGetter("mobile", () => Boolean(U.mobile)), enumerable: true, configurable: true });
+      Object.defineProperty(uaData, "platform", { get: makeUaGetter("platform", () => String(U.chPlatform || "")), enumerable: true, configurable: true });
+      const geh = {
+        getHighEntropyValues(hints) {
+          if (this !== uaData) {
+            return Promise.reject(new TypeError("Illegal invocation"));
+          }
+          const want = Array.isArray(hints) ? hints : [];
+          const out = { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
+          for (const h of want) {
+            if (h in highEntropy) out[h] = highEntropy[h];
+            if (h === "uaFullVersion") out.uaFullVersion = highEntropy.fullVersion;
+          }
+          return Promise.resolve(out);
+        }
+      }.getHighEntropyValues;
+      nativeSource.set(geh, "function getHighEntropyValues() { [native code] }");
+      Object.defineProperty(uaData, "getHighEntropyValues", { configurable: true, writable: true, enumerable: false, value: geh });
+      const tj = {
+        toJSON() {
+          if (this !== uaData) {
+            throw new TypeError("Illegal invocation");
+          }
+          return { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
+        }
+      }.toJSON;
+      nativeSource.set(tj, "function toJSON() { [native code] }");
+      Object.defineProperty(uaData, "toJSON", { configurable: true, writable: true, enumerable: false, value: tj });
       define(Navigator.prototype, "userAgentData", () => uaData);
       try { delete navigator.userAgentData; } catch (_) {}
     }
