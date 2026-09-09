@@ -768,7 +768,24 @@ function packageMac() {
   if (!['UDZO', 'ULMO'].includes(dmgFormat)) {
     throw new Error(`Unsupported macOS DMG format: ${dmgFormat}`);
   }
-  run('hdiutil', ['create', '-volname', 'OpenBrowser', '-srcfolder', packageRoot, '-ov', '-format', dmgFormat, dmg]);
+  // Prevent Spotlight indexing inside packageRoot during image creation to avoid 'Resource busy'
+  try { fs.writeFileSync(path.join(packageRoot, '.metadata_never_index'), ''); } catch (_) {}
+
+  // Retry on transient runner lockouts (e.g. hdiutil: create failed - Resource busy)
+  let attempts = 0;
+  while (true) {
+    attempts += 1;
+    try {
+      run('hdiutil', ['create', '-volname', 'OpenBrowser', '-srcfolder', packageRoot, '-ov', '-format', dmgFormat, dmg]);
+      break;
+    } catch (error) {
+      if (attempts >= 4) throw error;
+      console.warn(`[package] hdiutil create failed (attempt ${attempts}), retrying in 5s:`, error.message);
+      try { run('hdiutil', ['detach', '/Volumes/OpenBrowser', '-force'], { stdio: 'ignore' }); } catch (_) {}
+      const waitEnd = Date.now() + 5000;
+      while (Date.now() < waitEnd) {}
+    }
+  }
   console.log('macOS 安装映像：' + dmg);
   console.log('macOS 打包目录：' + packageRoot);
   console.log('主机：' + os.platform() + ' ' + os.arch());
