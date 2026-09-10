@@ -1071,15 +1071,44 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const element = (tag, className, text) => { const value = document.createElement(tag); if (className) value.className = className; if (text !== undefined) value.textContent = text; return value; };
 
+function toLucidePascalCase(str) {
+  return String(str || '')
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join('');
+}
+
+function createLucideIconElement(iconName, customAttrs = {}) {
+  try {
+    const pascal = toLucidePascalCase(iconName);
+    const def = window.lucide?.icons?.[pascal];
+    if (def && typeof window.lucide?.createElement === 'function') {
+      return window.lucide.createElement(def, {
+        'aria-hidden': 'true',
+        'stroke-width': '1.75',
+        stroke: 'currentColor',
+        class: `lucide lucide-${iconName}`,
+        ...customAttrs,
+      });
+    }
+  } catch (_) {}
+  const glyph = document.createElement('i');
+  glyph.dataset.lucide = iconName;
+  glyph.setAttribute('aria-hidden', 'true');
+  return glyph;
+}
+
 function iconActionButton(icon, label, className = 'mini') {
   const button = element('button', `${className} action-icon`);
   button.type = 'button';
   button.title = label;
   button.setAttribute('aria-label', label);
-  const glyph = document.createElement('i');
-  glyph.dataset.lucide = icon;
-  glyph.setAttribute('aria-hidden', 'true');
-  button.append(glyph);
+  const iconEl = createLucideIconElement(icon);
+  button.append(iconEl);
+  if (iconEl.tagName === 'I' && typeof refreshIcons === 'function') {
+    requestAnimationFrame(() => refreshIcons());
+  }
   return button;
 }
 function redactProxyForStorage(proxy) {
@@ -3097,6 +3126,7 @@ function renderProxies() {
     selectAll.checked = ids.length > 0 && n === ids.length;
     selectAll.indeterminate = n > 0 && n < ids.length;
   }
+  if (typeof refreshIcons === 'function') refreshIcons();
 }
 
 async function refreshProxies() {
@@ -3459,6 +3489,7 @@ function renderProfiles() {
   updateProfileSelectionUi();
   // Translate any remaining Chinese chrome text that was just injected
   afterUiRender(document.getElementById('view-profiles') || document);
+  if (typeof refreshIcons === 'function') refreshIcons();
 }
 
 function visibleProfilePageIds() {

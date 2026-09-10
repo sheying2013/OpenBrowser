@@ -1239,6 +1239,7 @@ function buildInjectionScript(fp) {
     return imageData;
   };
   const nativeSource = new WeakMap();
+  const subWindowSyncHooks = [];
   const originalToString = Function.prototype.toString;
   const nativeLike = (wrapper, original, nameOverride, lengthOverride, isConstructor = false) => {
     if (typeof wrapper !== "function") return wrapper;
@@ -2096,7 +2097,7 @@ function buildInjectionScript(fp) {
             }
           }
           if (typeof Navigator !== "undefined" && Navigator.prototype) {
-            for (const k of ['userAgent', 'appVersion', 'userAgentData']) {
+            for (const k of ['userAgent', 'appVersion', 'userAgentData', 'plugins', 'mimeTypes']) {
               const d = Object.getOwnPropertyDescriptor(Navigator.prototype, k);
               if (d) {
                 try { Object.defineProperty(subNav, k, d); } catch (_) {}
@@ -2122,6 +2123,12 @@ function buildInjectionScript(fp) {
               subWin.Intl.DateTimeFormat = Intl.DateTimeFormat;
             }
           } catch (_) {}
+        }
+        if (!subWin.chrome && typeof window !== "undefined" && window.chrome) {
+          try { subWin.chrome = window.chrome; } catch (_) {}
+        }
+        for (const hook of subWindowSyncHooks) {
+          try { hook(subWin); } catch (_) {}
         }
       } catch (_) {}
     };
@@ -2350,7 +2357,10 @@ function buildInjectionScript(fp) {
           let ext = original.apply(this, arguments);
           if (extName === 'webgl_debug_renderer_info') {
             if (!ext && metaMode !== 'blocked' && (CFG.webgl?.vendor || CFG.webgl?.renderer)) {
-              ext = { UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246 };
+              const debugProto = typeof WebGLDebugRendererInfo !== "undefined" ? WebGLDebugRendererInfo.prototype : Object.prototype;
+              ext = Object.create(debugProto);
+              Object.defineProperty(ext, 'UNMASKED_VENDOR_WEBGL', { value: 0x9245, enumerable: true, writable: false, configurable: false });
+              Object.defineProperty(ext, 'UNMASKED_RENDERER_WEBGL', { value: 0x9246, enumerable: true, writable: false, configurable: false });
             }
             if (ext) enabledDebugExts.add(this);
           }
@@ -2433,6 +2443,20 @@ function buildInjectionScript(fp) {
         patchGetExtension(WebGL2RenderingContext.prototype);
         patchGetSupportedExtensions(WebGL2RenderingContext.prototype);
       }
+      subWindowSyncHooks.push((subWin) => {
+        if (subWin.WebGLRenderingContext) {
+          patchGetParameter(subWin.WebGLRenderingContext.prototype);
+          patchReadPixels(subWin.WebGLRenderingContext.prototype);
+          patchGetExtension(subWin.WebGLRenderingContext.prototype);
+          patchGetSupportedExtensions(subWin.WebGLRenderingContext.prototype);
+        }
+        if (subWin.WebGL2RenderingContext) {
+          patchGetParameter(subWin.WebGL2RenderingContext.prototype);
+          patchReadPixels(subWin.WebGL2RenderingContext.prototype);
+          patchGetExtension(subWin.WebGL2RenderingContext.prototype);
+          patchGetSupportedExtensions(subWin.WebGL2RenderingContext.prototype);
+        }
+      });
 
       // Track WebGL canvases so 2D toDataURL does not attempt to draw them
       try {
@@ -2553,13 +2577,19 @@ function buildInjectionScript(fp) {
       const devProto = typeof MediaDeviceInfo !== "undefined" ? MediaDeviceInfo.prototype : Object.prototype;
       const devices = CFG.mediaDevices.devices.map((d) => {
         const item = Object.create(devProto);
-        Object.assign(item, {
+        const props = {
           deviceId: String(d.deviceId || ""),
           kind: String(d.kind || ""),
           label: "", // Empty label in compliance with W3C privacy spec
           groupId: String(d.groupId || ""),
-          toJSON() { return { deviceId: this.deviceId, kind: this.kind, label: this.label, groupId: this.groupId }; },
-        });
+        };
+        for (const [k, v] of Object.entries(props)) {
+          Object.defineProperty(item, k, { value: v, enumerable: false, writable: false, configurable: true });
+        }
+        item.toJSON = function toJSON() {
+          return { deviceId: item.deviceId, kind: item.kind, label: item.label, groupId: item.groupId };
+        };
+        Object.defineProperty(item, 'toJSON', { enumerable: false, writable: true, configurable: true });
         return item;
       });
       const mdProto = typeof MediaDevices !== 'undefined' ? MediaDevices.prototype : null;
@@ -2590,13 +2620,16 @@ function buildInjectionScript(fp) {
       const voiceProto = typeof SpeechSynthesisVoice !== "undefined" ? SpeechSynthesisVoice.prototype : Object.prototype;
       const voices = CFG.speech.voices.map((v) => {
         const voice = Object.create(voiceProto);
-        Object.assign(voice, {
+        const props = {
           name: String(v.name || ""),
           lang: String(v.lang || "en-US"),
           default: Boolean(v.default),
           localService: v.localService !== false,
           voiceURI: String(v.voiceURI || v.name || ""),
-        });
+        };
+        for (const [k, val] of Object.entries(props)) {
+          Object.defineProperty(voice, k, { value: val, enumerable: false, writable: false, configurable: true });
+        }
         return voice;
       });
       const spProto = typeof SpeechSynthesis !== 'undefined' ? SpeechSynthesis.prototype : null;
@@ -2627,19 +2660,19 @@ function buildInjectionScript(fp) {
       const battProto = typeof BatteryManager !== "undefined" ? BatteryManager.prototype : (typeof EventTarget !== "undefined" ? EventTarget.prototype : Object.prototype);
       const makeManager = () => {
         const manager = Object.create(battProto);
-        Object.assign(manager, {
+        const props = {
           charging: Boolean(snap.charging),
           chargingTime: snap.chargingTime == null ? Infinity : Number(snap.chargingTime),
           dischargingTime: snap.dischargingTime == null ? Infinity : Number(snap.dischargingTime),
           level: Math.min(1, Math.max(0, Number(snap.level) || 0)),
-          addEventListener() {},
-          removeEventListener() {},
-          dispatchEvent() { return false; },
           onchargingchange: null,
           onchargingtimechange: null,
           ondischargingtimechange: null,
           onlevelchange: null,
-        });
+        };
+        for (const [k, val] of Object.entries(props)) {
+          Object.defineProperty(manager, k, { value: val, enumerable: false, writable: false, configurable: true });
+        }
         return manager;
       };
       const spoofed = function getBattery() { return Promise.resolve(makeManager()); };
@@ -2682,7 +2715,7 @@ function buildInjectionScript(fp) {
       });
     } catch (_) {}
   }
-} catch (e) { try { console.warn('[OpenBrowser] fingerprint inject', e && e.message || e); } catch (_) {} }
+} catch (_) {}
 })();`;
 }
 

@@ -65,6 +65,7 @@ function createMockDom() {
       },
       Navigator: class SubNavigator extends Navigator {},
       Screen: class SubScreen extends Screen {},
+      WebGLRenderingContext: class SubWebGLRenderingContext extends WebGLRenderingContext {},
     };
     this._subWin.navigator = new this._subWin.Navigator();
     this._subWin.screen = new this._subWin.Screen();
@@ -184,6 +185,12 @@ ok('WebGL debug info extension added when supported', exts.includes('WEBGL_debug
 vm.runInContext("gl.getExtension('WEBGL_debug_renderer_info')", ctx);
 const unmaskedVendor = vm.runInContext("gl.getParameter(0x9245)", ctx);
 ok('WebGL unmasked vendor is spoofed even if native getExtension was null', typeof unmaskedVendor === 'string' && unmaskedVendor.length > 0);
+
+// 8. iframe WebGL sync check
+ctx.subGl = vm.runInContext("new iframeWin.WebGLRenderingContext()", ctx);
+vm.runInContext("subGl.getExtension('WEBGL_debug_renderer_info')", ctx);
+const subVendor = vm.runInContext("subGl.getParameter(0x9245)", ctx);
+ok('iframe.contentWindow WebGL vendor matches parent window', subVendor === unmaskedVendor);
 
 testPermissions().then(() => {
   console.log("\nfingerprint-stealth-selftest: ALL CHECKS PASSED.");

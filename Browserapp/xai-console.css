@@ -591,17 +591,17 @@ html[data-ui-theme="merge-gateway"] #view-profiles .table-card td {
 
 html[data-ui-theme="merge-gateway"] #view-profiles .table-card th { color: var(--xai-secondary); }
 html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr:last-child td { border-bottom: 0 !important; }
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-check { width: 4% !important; }
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-num { width: 5% !important; }
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-check { width: 38px !important; min-width: 38px !important; }
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-num { width: 52px !important; min-width: 52px !important; }
 html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-profile-id { width: 9% !important; }
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-name { width: 18% !important; }
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-group { width: 7% !important; }
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-browser { width: 10% !important; }
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-network { width: 7% !important; }
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-exit { width: 8% !important; }
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-ext { width: 4% !important; }
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-status { width: 8% !important; }
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-actions { width: 20% !important; }
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-name { width: 18% !important; min-width: 160px !important; }
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-group { width: 95px !important; min-width: 95px !important; }
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-browser { width: 145px !important; min-width: 145px !important; }
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-network { width: 65px !important; min-width: 65px !important; }
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-exit { width: 110px !important; min-width: 110px !important; }
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-ext { width: 48px !important; min-width: 48px !important; }
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-status { width: 105px !important; min-width: 105px !important; }
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-actions { width: 148px !important; min-width: 148px !important; }
 
 html[data-ui-theme="merge-gateway"] #view-profiles .profile-name small,
 html[data-ui-theme="merge-gateway"] #view-profiles .env-browser-label small {
@@ -1315,7 +1315,7 @@ html[data-ui-theme="merge-gateway"] .editor-tabs::-webkit-scrollbar-thumb { back
   html[data-ui-theme="merge-gateway"] .environment-editor { grid-template-columns: minmax(0, 1fr) 252px; }
   html[data-ui-theme="merge-gateway"] .extension-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
   html[data-ui-theme="merge-gateway"] #view-profiles .table-card { overflow-x: hidden; }
-  html[data-ui-theme="merge-gateway"] #view-profiles .table-card table.profile-table-compact { min-width: 0 !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card table.profile-table-compact { min-width: 980px !important; }
   html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-profile-id,
   html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-ext { display: none; }
 }

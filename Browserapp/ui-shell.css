@@ -621,7 +621,7 @@ body {
 #view-profiles .table-card table,
 #view-profiles .table-card table.profile-table-compact {
   width: 100% !important;
-  min-width: 0 !important; /* fill card; scale columns together instead of clipping right */
+  min-width: 980px !important; /* fill card; ensure columns never get overly squeezed */
   table-layout: fixed !important;
   border-collapse: separate;
   border-spacing: 0;
@@ -654,20 +654,24 @@ body {
 }
 
 /*
-  Even % widths (sum 100%). Name flexes most; meta columns share remaining space.
-  Actions sticky right so it never “disappears” when the viewport shrinks.
+  Balanced column widths. Minimum widths protect key text (ID, group, engine, ext)
+  from severe truncation on 1080p or split-window displays.
+  Actions sticky right so controls remain accessible without clipping.
 */
 #view-profiles .table-card th.col-check,
 #view-profiles .table-card td:first-child,
 #view-profiles .table-card td.col-check {
-  width: 3.5%;
+  width: 38px;
+  min-width: 38px;
+  max-width: 38px;
   padding-left: 10px !important;
   padding-right: 4px !important;
 }
 #view-profiles .table-card th.col-num,
 #view-profiles .table-card td:nth-child(2),
 #view-profiles .table-card td.col-num {
-  width: 5%;
+  width: 52px;
+  min-width: 52px;
   text-align: center;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -675,38 +679,61 @@ body {
 #view-profiles .table-card th.col-name,
 #view-profiles .table-card td:nth-child(3),
 #view-profiles .table-card td.col-name {
-  width: 20%;
+  width: 18%;
+  min-width: 160px;
 }
 #view-profiles .table-card th.col-group,
-#view-profiles .table-card td.col-group { width: 9%; max-width: none !important; }
+#view-profiles .table-card td.col-group {
+  width: 95px;
+  min-width: 95px;
+  max-width: none !important;
+}
 #view-profiles .table-card th.col-browser,
-#view-profiles .table-card td.col-browser { width: 12%; max-width: none !important; }
+#view-profiles .table-card td.col-browser {
+  width: 145px;
+  min-width: 145px;
+  max-width: none !important;
+}
 #view-profiles .table-card td.col-browser .env-browser-cell-app,
 #view-profiles .table-card td.col-browser .env-browser-cell-engine {
   gap: 8px;
+  min-width: 0;
 }
 #view-profiles .table-card td.col-browser .env-badge {
   /* same app-mark language as 环境名称 column */
   flex: 0 0 var(--ui-mark-size, 2.125rem);
 }
 #view-profiles .table-card th.col-network,
-#view-profiles .table-card td.col-network { width: 7%; max-width: none !important; }
+#view-profiles .table-card td.col-network {
+  width: 65px;
+  min-width: 65px;
+  max-width: none !important;
+}
 #view-profiles .table-card th.col-exit,
-#view-profiles .table-card td.col-exit { width: 10%; max-width: none !important; }
+#view-profiles .table-card td.col-exit {
+  width: 110px;
+  min-width: 110px;
+  max-width: none !important;
+}
 #view-profiles .table-card th.col-ext,
 #view-profiles .table-card td.col-ext {
-  width: 5%;
+  width: 48px;
+  min-width: 48px;
   max-width: none !important;
   text-align: center;
   color: var(--ui-muted);
   font-variant-numeric: tabular-nums;
 }
 #view-profiles .table-card th.col-status,
-#view-profiles .table-card td.col-status { width: 10%; min-width: 96px; max-width: none !important; }
+#view-profiles .table-card td.col-status {
+  width: 105px;
+  min-width: 105px;
+  max-width: none !important;
+}
 #view-profiles .table-card th.col-actions,
 #view-profiles .table-card td.col-actions {
-  width: 15.5%;
-  min-width: 132px;
+  width: 148px;
+  min-width: 148px;
   overflow: visible;
   text-overflow: clip;
   position: sticky;
@@ -1878,9 +1905,11 @@ button.mini-btn {
   place-items: center;
 }
 .actions .action-icon .lucide,
-.actions .action-icon i[data-lucide] {
+.actions .action-icon i[data-lucide],
+.actions .action-icon svg {
   width: 14px;
   height: 14px;
+  stroke: currentColor;
 }
 
 /* Keep work surfaces intentional on large desktop windows. Data grids remain full width;
