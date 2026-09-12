@@ -329,6 +329,7 @@ jobs:
           npm run selftest:surfacediff
           npm run selftest:mediae2e
           npm run selftest:popupe2e
+          npm run selftest:doclifecycle
           npm run selftest:mobilefp
           npm run selftest:workerfp
           npm run selftest:workerscope
@@ -405,6 +406,7 @@ jobs:
           npm run selftest:surfacediff
           npm run selftest:mediae2e
           npm run selftest:popupe2e
+          npm run selftest:doclifecycle
           npm run selftest:mobilefp
           npm run selftest:workerfp
           npm run selftest:workerscope
