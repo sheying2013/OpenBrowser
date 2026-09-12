@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.21'
+        default: 'v1.0.20'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,19 +42,21 @@ env:
 
     ### 中文
 
-    - **清理随安装包发布的内核模板残留数据**：内置的 `init_template.json` 里长期带着不属于本产品的内容 —— 一份**账户绑定的令牌 blob**、一份**原生消息扩展白名单**（8 个扩展 ID，本产品从未引用、也从未附带对应扩展）、一份**代理绕过列表**（其中含一个固定外部主机）。这些会随每个 profile 落到用户磁盘。现已全部清理：绕过列表与白名单置空；令牌改为**本地生成**。
-    - **令牌必须保留结构（实测结论）**：把令牌换成简单字符串会让内核在启动早期直接 `abort`（SIGABRT，exit 134）。因此改为**保留内核要求的结构、使用本地生成的值**，账户绑定字段清空；实测启动正常、CDP 可用。
-    - **模板完整性回归**：`selftest:kernelinit` 新增断言 —— 模板与写入后的 profile 都不得携带账户绑定令牌、扩展白名单、代理绕过列表、以及固定的外部绕过主机。
-    - **把指纹回归真正接入发布门禁**：此前 CI 只跑固定 6 个套件，新加的护栏（静态表面差分、媒体设备端到端、内核模板映射、隐身断言）根本没有参与发布。现在 `kernelinit`、`stealth` 在四平台构建任务中都会执行，`surfacediff` 与 `mediae2e` 在两个 macOS 任务中执行（在无法启动内核的托管环境中显式 SKIP，本地运行仍会硬失败）。
-    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.21**。
+    - **修复 v1.0.18/v1.0.19 引入的全屏死循环（严重）**：这两个版本为了让两个全屏入口各自保留名字，把同一个兼容层拆成了两个独立替换函数；而该兼容层的失败重试会去调用"另一个入口"，于是两个替换函数互相调用 —— 页面一旦触发全屏失败（例如没有用户手势时调用 `element.requestFullscreen()`，真实 Chrome 会 reject），标签页就会陷入无限重试并卡死。现已**彻底不再改写全屏入口**，两个方法保持内核原样。
+    - **全屏调用结果不再被伪造**：原有兼容层在全屏失败时返回成功（resolve）。实测本内核 `requestFullscreen()` 原生 reject（`Permissions check failed`），而 `webkitRequestFullscreen()` 直接 resolve 但并不真正进入全屏 —— 重试 legacy 会把失败伪装成成功，真实构建不会这样。现在全屏调用的 resolve/reject 与内核原生逐项一致。
+    - **非法接收者行为（真实缺陷，八个入口）**：替换函数此前对所有接收者都直接作答，而真实构建会先做品牌检查。用普通对象当接收者时，`speechSynthesis.getVoices`、`mediaDevices.enumerateDevices`、`navigator.getBattery`、`requestFullscreen`、`document.fullscreenEnabled`、`visualViewport.width`/`height`、`userAgentData.getHighEntropyValues`/`toJSON`、`AudioBuffer.copyFromChannel` 的结果都与原生不同（应为同步抛 `TypeError: Illegal invocation` 或返回被拒绝的 Promise）。已改为**只服务目标接收者，其余一律交回原生实现**。
+    - **参数校验错误文案对齐**：`AudioBuffer.copyFromChannel(null)`、`copyFromChannel(越界声道)`、`HTMLCanvasElement.toBlob()` 缺参数等场景此前抛出的是包装层自造的报错文案；现在一律交回原生实现，错误类型与文案与内核逐字一致（75 个入口的错误接收者矩阵、14 个畸形参数场景均为 0 差异）。
+    - **回归扩容与变异验证**：`selftest:surfacediff` 增至 8 项断言（属性集合 / 顺序 / Symbol / 描述符属性 / 函数对象身份 / 活动实例形态 / 错误接收者矩阵 / 全屏存活），并修正了一个"测试输入未开启对应伪装导致断言空跑"的问题；变异验证（还原接收者守卫）可立刻失败。
+    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.20**。
 
     ### English
 
-    - **Cleared inherited data from the bundled kernel template**: `init_template.json` had been shipping content that does not belong to this product - an **account-bound token blob**, a **native-messaging extension allowlist** (eight extension ids this product never references and never ships), and a **proxy bypass list** containing a fixed external host. All of it was written into every profile on disk. The allowlist and bypass list are now empty and the token is generated locally.
-    - **The token structure is required (measured)**: replacing the token with a plain string made the kernel `abort` during early startup (SIGABRT, exit 134). The fix therefore keeps the structure the platform service requires and fills it with locally generated values, clearing the account-bound fields; startup and CDP were verified afterwards.
-    - **Template integrity regression**: `selftest:kernelinit` now asserts that neither the template nor a written profile carries an account-bound token, an extension allowlist, a proxy bypass list, or a fixed external bypass host.
-    - **Fingerprint regressions now gate releases**: CI used to run a fixed set of six suites, so the newer guards (static surface diff, media-device end to end, kernel template mapping, stealth assertions) never ran before a release. `kernelinit` and `stealth` now run in all four build jobs, and `surfacediff` plus `mediae2e` run in both macOS jobs (hosted environments that cannot launch the kernel report an explicit SKIP, while an ordinary run still fails loudly).
-    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.21**.
+    - **Fullscreen infinite retry introduced in v1.0.18/v1.0.19 (severe) - fixed**: those versions split one compatibility shim into two separate replacements so each entry point kept its own name. The shim's failure path called "the other entry point", so the two replacements called each other - any failing fullscreen call (for example `element.requestFullscreen()` without a user gesture, which a real Chrome rejects) sent the tab into an endless retry and froze it. The fullscreen entry points are now **left completely untouched**.
+    - **Fullscreen results are no longer faked**: the old shim resolved on failure. On this kernel `requestFullscreen()` rejects natively (`Permissions check failed`) while `webkitRequestFullscreen()` resolves without actually entering fullscreen, so retrying through the legacy entry point turned a failure into a success that a real build never reports. Resolve/reject now matches the kernel exactly.
+    - **Wrong-receiver behaviour (real defect, eight entry points)**: the replacements answered for every receiver while a genuine build brand-checks first. With a plain object as the receiver, `speechSynthesis.getVoices`, `mediaDevices.enumerateDevices`, `navigator.getBattery`, `requestFullscreen`, `document.fullscreenEnabled`, `visualViewport.width`/`height`, `userAgentData.getHighEntropyValues`/`toJSON` and `AudioBuffer.copyFromChannel` all differed from the native outcome. Replacements now **serve only their intended receiver and hand anything else back to the native implementation**.
+    - **Argument-validation messages aligned**: `AudioBuffer.copyFromChannel(null)`, an out-of-range channel index, `HTMLCanvasElement.toBlob()` without a callback and similar malformed calls used to raise a message assembled by the wrapper; they are now handed to the native implementation, so error types and text match the kernel word for word (zero differences across a 75-entry wrong-receiver matrix and 14 malformed-argument cases).
+    - **Regression widened, mutation-tested**: `selftest:surfacediff` now carries 8 assertions (property set, order, symbols, descriptor attributes, function identities, live instances, wrong-receiver matrix, fullscreen liveness), and a case where the test profile did not enable the relevant spoofing - making the assertion vacuous - was found and fixed through mutation testing.
+    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.20**.
 
     ### 下载 / Downloads
 
