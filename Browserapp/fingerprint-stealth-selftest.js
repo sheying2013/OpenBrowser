@@ -162,13 +162,17 @@ const ctxDesc = vm.runInContext("Object.getOwnPropertyDescriptor(HTMLCanvasEleme
 const ctxStr = vm.runInContext("HTMLCanvasElement.prototype.getContext.toString()", ctx);
 ok('HTMLCanvasElement.prototype.getContext is non-enumerable and native', ctxDesc.enumerable === false && /\[native code\]/.test(ctxStr));
 
-// 5. iframe timezone & environment sync check
+// 5. iframe realm & environment sync check
 ctx.iframe = vm.runInContext("new HTMLIFrameElement()", ctx);
 ctx.iframeWin = vm.runInContext("iframe.contentWindow", ctx);
-const iframeTz = vm.runInContext("iframeWin.Intl.DateTimeFormat().resolvedOptions().timeZone", ctx);
-ok('iframe.contentWindow inherits spoofed timezone', iframeTz === 'America/New_York');
-const iframeDateSame = vm.runInContext("iframeWin.Date === Date", ctx);
-ok('iframe.contentWindow shares Date implementation', iframeDateSame === true);
+// A frame is its own realm. Handing it the parent constructors would make
+// frame.contentWindow.Date === Date, which no unmodified browser produces, so the injector must
+// leave them alone: every frame runs the document-start inject in its own realm instead (that
+// path is covered end to end by selftest:timezonee2e).
+const iframeOwnDate = vm.runInContext("iframeWin.Date !== Date", ctx);
+ok('iframe.contentWindow keeps its own Date', iframeOwnDate === true);
+const iframeOwnIntl = vm.runInContext("iframeWin.Intl.DateTimeFormat !== Intl.DateTimeFormat", ctx);
+ok('iframe.contentWindow keeps its own Intl.DateTimeFormat', iframeOwnIntl === true);
 const iframePlatform = vm.runInContext("iframeWin.navigator.platform", ctx);
 const topPlatform = vm.runInContext("navigator.platform", ctx);
 ok('iframe.contentWindow inherits navigator.platform without illegal invocation', iframePlatform === topPlatform);

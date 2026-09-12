@@ -1557,7 +1557,19 @@ function buildInjectionScript(fp) {
   } catch (_) {}
 
   // --- timezone spoofing (Intl.DateTimeFormat & Date) ---
-  if (CFG.timezone) {
+  // The engine can already be in the target zone on its own (the CDP timezone override does exactly
+  // that), and re-implementing the same surfaces on top of a correct engine is pure difference: the
+  // zone name V8 prints for years outside the modern range, the TypeError the accessors owe a
+  // receiver that is not a Date, and the number of times an options getter is read would all change
+  // while nothing is hidden. So the script layer stays out of the way unless the engine is still
+  // reporting some other zone.
+  const engineReportsTargetZone = (() => {
+    try {
+      const want = new Intl.DateTimeFormat('en-US', { timeZone: String(CFG.timezone).trim() }).resolvedOptions().timeZone;
+      return new Intl.DateTimeFormat().resolvedOptions().timeZone === want;
+    } catch (_) { return false; }
+  })();
+  if (CFG.timezone && !engineReportsTargetZone) {
     try {
       const targetTz = String(CFG.timezone).trim();
       new Intl.DateTimeFormat('en-US', { timeZone: targetTz }).format();
@@ -1567,42 +1579,120 @@ function buildInjectionScript(fp) {
 
       const origSetTime = Date.prototype.setTime;
       const origGetTzOffset = Date.prototype.getTimezoneOffset;
+      const origGetTime = Date.prototype.getTime;
+      // Native getTime is the brand check: a receiver that is not a Date has to throw exactly the
+      // TypeError the engine throws rather than answer with a coerced value.
+      const asDate = (self) => { origGetTime.call(self); return self; };
+      // The zone offset for an instant comes straight from ICU numeric long-offset form. Rebuilding
+      // the wall clock through Date.UTC is not equivalent: that route cannot represent years outside
+      // 1..9999 or before the common era, and it drops the sub-minute offsets some zones had.
+      const offsetFormatter = new OrigDateTimeFormat('en-US', { timeZone: targetTz, timeZoneName: 'longOffset' });
       const getOffsetMinutes = (date) => {
         try {
           const ts = date.getTime();
           if (isNaN(ts)) return NaN;
-          const partsTz = new OrigDateTimeFormat('en-US', {
-            timeZone: targetTz,
-            hour12: false,
-            year: 'numeric', month: '2-digit', day: '2-digit',
-            hour: '2-digit', minute: '2-digit', second: '2-digit'
-          }).formatToParts(date);
-          const getVal = (t) => parseInt(partsTz.find(p => p.type === t)?.value || '0', 10);
-          const y = getVal('year');
-          const m = getVal('month') - 1;
-          const d = getVal('day');
-          const h = getVal('hour') % 24;
-          const min = getVal('minute');
-          const s = getVal('second');
-          const tzUtcTs = Date.UTC(y, m, d, h, min, s);
-          return Math.round((Math.floor(ts / 1000) * 1000 - tzUtcTs) / 60000);
+          const raw = (offsetFormatter.formatToParts(date).find((p) => p.type === 'timeZoneName')?.value || '').replace(/^GMT/, '');
+          const m = raw.match(/^([+-])(\\d{1,2})(?::(\\d{2}))?(?::(\\d{2}))?$/);
+          if (!m) return 0;
+          const seconds = Number(m[2]) * 3600 + Number(m[3] || 0) * 60 + Number(m[4] || 0);
+          return (m[1] === '-' ? 1 : -1) * (seconds / 60);
         } catch (_) {
           return 0;
         }
       };
+      // ICU has no long zone name for every instant, while V8 still prints one: outside the modern
+      // metazone range the long form degrades to a numeric offset. A reference instant in the same
+      // standard/daylight state supplies the name V8 prints, chosen by nearest offset.
+      const zoneNameRefs = (() => {
+        const nameAt = (ms) => new OrigDateTimeFormat(undefined, { timeZone: targetTz, timeZoneName: 'long' })
+          .formatToParts(new Date(ms)).find((p) => p.type === 'timeZoneName')?.value || '';
+        const winter = Date.UTC(2026, 0, 15, 12);
+        const summer = Date.UTC(2026, 6, 15, 12);
+        return [{ offset: getOffsetMinutes(new Date(winter)), name: nameAt(winter) }, { offset: getOffsetMinutes(new Date(summer)), name: nameAt(summer) }];
+      })();
+      const zoneNameFor = (date) => {
+        const name = new OrigDateTimeFormat(undefined, { timeZone: targetTz, timeZoneName: 'long' })
+          .formatToParts(date).find((p) => p.type === 'timeZoneName')?.value || '';
+        const offset = getOffsetMinutes(date);
+        const exact = zoneNameRefs.find((ref) => ref.offset === offset);
+        if (exact) return /^GMT/.test(name) ? (exact.name || name) : name;
+        let best = zoneNameRefs[0];
+        for (const ref of zoneNameRefs) if (Math.abs(ref.offset - offset) < Math.abs(best.offset - offset)) best = ref;
+        return best.name || name;
+      };
 
       const getLocalComponents = (date) => {
         const off = getOffsetMinutes(date);
-        return new Date(date.getTime() - off * 60000);
+        const shifted = new Date(date.getTime() - off * 60000);
+        if (!isNaN(shifted.getTime())) return shifted;
+        // ICU still answers at the domain edges, where the shifted instant is not representable, and
+        // the wall clock there can itself sit past the Date domain, so the fields are handed back as
+        // a read-only view instead of a Date that cannot exist.
+        const parts = new OrigDateTimeFormat('en-US', {
+          timeZone: targetTz, era: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+        }).formatToParts(date);
+        const get = (type) => parts.find((p) => p.type === type)?.value || '';
+        const year = /BC/i.test(get('era')) ? 1 - parseInt(get('year'), 10) : numbered;
+        const month = parseInt(get('month'), 10) - 1;
+        const day = parseInt(get('day'), 10);
+        const hour = parseInt(get('hour'), 10) % 24;
+        const minute = parseInt(get('minute'), 10);
+        const second = parseInt(get('second'), 10);
+        const millisecond = ((date.getTime() % 1000) + 1000) % 1000;
+        const weekday = new Date(Date.UTC(year, month, day)).getUTCDay();
+        const invalid = () => NaN;
+        return {
+          getUTCFullYear: () => year,
+          getUTCMonth: () => month,
+          getUTCDate: () => day,
+          getUTCDay: () => weekday,
+          getUTCHours: () => hour,
+          getUTCMinutes: () => minute,
+          getUTCSeconds: () => second,
+          getUTCMilliseconds: () => millisecond,
+          getTime: invalid,
+          setUTCFullYear: invalid,
+          setUTCMonth: invalid,
+          setUTCDate: invalid,
+          setUTCHours: invalid,
+          setUTCMinutes: invalid,
+          setUTCSeconds: invalid,
+          setUTCMilliseconds: invalid,
+        };
       };
 
+      // Reading timeZone here would add an access the engine already makes, and copying the options
+      // would read every other option a second time, so a prototype-chained copy carries the default
+      // zone while the page options stay the only source for everything else. A null argument has to
+      // reach the engine unchanged, because the TypeError it raises is part of the surface.
+      const withDefaultTimeZone = (options) => {
+        if (options === undefined) return { timeZone: targetTz };
+        if (options === null) return options;
+        const boxed = Object(options);
+        const opts = Object.create(boxed);
+        // The engine reads timeZone exactly once, so the substitute is a lazy accessor rather than a
+        // value: it forwards to the page options on the engine read and answers the target zone when
+        // the page left the option absent or undefined. Copying the options would instead read every
+        // other option a second time.
+        let read = false;
+        let resolved = targetTz;
+        Object.defineProperty(opts, 'timeZone', {
+          enumerable: true,
+          configurable: true,
+          get() {
+            if (!read) {
+              read = true;
+              const fromPage = boxed.timeZone;
+              resolved = fromPage === undefined ? targetTz : fromPage;
+            }
+            return resolved;
+          },
+        });
+        return opts;
+      };
       const PatchedDateTimeFormat = function DateTimeFormat(locales, options) {
-        let opts = options;
-        if (!opts) {
-          opts = { timeZone: targetTz };
-        } else if (opts.timeZone === undefined) {
-          opts = Object.assign({}, opts, { timeZone: targetTz });
-        }
+        const opts = withDefaultTimeZone(options);
         if (!(this instanceof PatchedDateTimeFormat)) {
           return Reflect.construct(OrigDateTimeFormat, [locales, opts]);
         }
@@ -1628,11 +1718,16 @@ function buildInjectionScript(fp) {
       Intl.DateTimeFormat = PatchedDateTimeFormat;
 
       replaceMethod(Date.prototype, 'getTimezoneOffset', () => function getTimezoneOffset() {
-        return getOffsetMinutes(this);
+        const minutes = getOffsetMinutes(asDate(this));
+        if (!isFinite(minutes)) return NaN;
+        const whole = Math.trunc(minutes);
+        return whole === 0 ? 0 : whole;
       });
 
       const formatTzDate = (date) => {
         try {
+          // en-US on purpose: the weekday and month abbreviations V8 prints are fixed English,
+          // while the zone name in the parenthetical follows the default locale (zoneNameFor).
           const parts = new OrigDateTimeFormat('en-US', {
             timeZone: targetTz,
             weekday: 'short',
@@ -1649,14 +1744,15 @@ function buildInjectionScript(fp) {
           const weekday = get('weekday');
           const month = get('month');
           const day = get('day');
-          const year = get('year');
+          const localYear = getLocalComponents(date).getUTCFullYear();
+          const year = localYear < 0 ? '-' + String(-localYear).padStart(4, '0') : String(localYear).padStart(4, '0');
           const hour = (get('hour') === '24' ? '00' : get('hour')).padStart(2, '0');
           const minute = get('minute').padStart(2, '0');
           const second = get('second').padStart(2, '0');
-          const tzName = get('timeZoneName');
+          const tzName = zoneNameFor(date);
           const diffMins = getOffsetMinutes(date);
           const sign = diffMins <= 0 ? '+' : '-';
-          const absMins = Math.abs(diffMins);
+          const absMins = Math.trunc(Math.abs(diffMins));
           const offH = String(Math.floor(absMins / 60)).padStart(2, '0');
           const offM = String(absMins % 60).padStart(2, '0');
           const gmt = 'GMT' + sign + offH + offM;
@@ -1667,19 +1763,19 @@ function buildInjectionScript(fp) {
       };
 
       replaceMethod(Date.prototype, 'toString', () => function toString() {
-        if (isNaN(this.getTime())) return 'Invalid Date';
+        if (isNaN(asDate(this).getTime())) return 'Invalid Date';
         return formatTzDate(this);
       });
 
       replaceMethod(Date.prototype, 'toTimeString', () => function toTimeString() {
-        if (isNaN(this.getTime())) return 'Invalid Date';
+        if (isNaN(asDate(this).getTime())) return 'Invalid Date';
         const full = formatTzDate(this);
         const match = full.match(/[0-9]{4}[ ]+(.*)/);
         return match ? match[1] : full;
       });
 
       replaceMethod(Date.prototype, 'toDateString', () => function toDateString() {
-        if (isNaN(this.getTime())) return 'Invalid Date';
+        if (isNaN(asDate(this).getTime())) return 'Invalid Date';
         const full = formatTzDate(this);
         return full.split(' ').slice(0, 4).join(' ');
       });
@@ -1700,47 +1796,47 @@ function buildInjectionScript(fp) {
       });
 
       replaceMethod(Date.prototype, 'getHours', () => function getHours() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCHours();
       });
 
       replaceMethod(Date.prototype, 'getDate', () => function getDate() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCDate();
       });
 
       replaceMethod(Date.prototype, 'getDay', () => function getDay() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCDay();
       });
 
       replaceMethod(Date.prototype, 'getFullYear', () => function getFullYear() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCFullYear();
       });
 
       replaceMethod(Date.prototype, 'getMonth', () => function getMonth() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCMonth();
       });
 
       replaceMethod(Date.prototype, 'getMinutes', () => function getMinutes() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCMinutes();
       });
 
       replaceMethod(Date.prototype, 'getSeconds', () => function getSeconds() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCSeconds();
       });
 
       replaceMethod(Date.prototype, 'getMilliseconds', () => function getMilliseconds() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCMilliseconds();
       });
 
       replaceMethod(Date.prototype, 'getYear', () => function getYear() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCFullYear() - 1900;
       });
 
@@ -1748,7 +1844,7 @@ function buildInjectionScript(fp) {
       // patched getters while writing it through the host zone leaves the two disagreeing,
       // which is a stronger signal than not spoofing at all.
       const setLocal = (self, mutate) => {
-        if (isNaN(self.getTime())) return NaN;
+        if (isNaN(asDate(self).getTime())) return NaN;
         const shifted = getLocalComponents(self);
         mutate(shifted);
         // Resolve the offset twice: the write may have crossed a DST boundary.
@@ -1829,14 +1925,17 @@ function buildInjectionScript(fp) {
           // parse them first would apply the host zone's offset, which the correction below
           // would then apply a second time.
           const y = Number(args[0]);
+          // undefined means "default"; anything else is coerced the way the engine would, so a NaN
+          // field leaves the whole date Invalid instead of folding to 0.
+          const field = (value, fallback) => (value === undefined ? fallback : Number(value));
           const wall = OrigDate.UTC(
             y >= 0 && y <= 99 ? y + 1900 : y,
-            Number(args[1]) || 0,
-            args[2] === undefined ? 1 : Number(args[2]),
-            Number(args[3]) || 0,
-            Number(args[4]) || 0,
-            Number(args[5]) || 0,
-            Number(args[6]) || 0
+            field(args[1], 0),
+            field(args[2], 1),
+            field(args[3], 0),
+            field(args[4], 0),
+            field(args[5], 0),
+            field(args[6], 0)
           );
           return Reflect.construct(OrigDate, [localToUtc(wall)], new.target);
         };
@@ -2272,14 +2371,9 @@ function buildInjectionScript(fp) {
             }
           }
         }
-        if (CFG.timezone && subWin.Date && subWin.Date !== Date) {
-          try {
-            subWin.Date = Date;
-            if (subWin.Intl && subWin.Intl.DateTimeFormat) {
-              subWin.Intl.DateTimeFormat = Intl.DateTimeFormat;
-            }
-          } catch (_) {}
-        }
+        // No cross-realm assignment of Date / Intl.DateTimeFormat here: every frame runs this script
+        // in its own realm, and swapping in the parent constructor made
+        // frame.contentWindow.Date === Date, which no unmodified browser does.
         if (!subWin.chrome && typeof window !== "undefined" && window.chrome) {
           try { subWin.chrome = window.chrome; } catch (_) {}
         }
@@ -3808,7 +3902,15 @@ function buildWorkerInjectionScript(fp) {
     }
   } catch (_) {}
 
-  if (CFG.timezone) {
+  // Same guard as the page copy: the engine may already be in the target zone, and re-implementing
+  // the Date and Intl surfaces on top of a correct engine only adds differences.
+  const engineReportsTargetZone = (() => {
+    try {
+      const want = new Intl.DateTimeFormat('en-US', { timeZone: String(CFG.timezone).trim() }).resolvedOptions().timeZone;
+      return new Intl.DateTimeFormat().resolvedOptions().timeZone === want;
+    } catch (_) { return false; }
+  })();
+  if (CFG.timezone && !engineReportsTargetZone) {
     try {
       const targetTz = String(CFG.timezone).trim();
       new Intl.DateTimeFormat('en-US', { timeZone: targetTz }).format();
@@ -3818,42 +3920,120 @@ function buildWorkerInjectionScript(fp) {
 
       const origSetTime = Date.prototype.setTime;
       const origGetTzOffset = Date.prototype.getTimezoneOffset;
+      const origGetTime = Date.prototype.getTime;
+      // Native getTime is the brand check: a receiver that is not a Date has to throw exactly the
+      // TypeError the engine throws rather than answer with a coerced value.
+      const asDate = (self) => { origGetTime.call(self); return self; };
+      // The zone offset for an instant comes straight from ICU numeric long-offset form. Rebuilding
+      // the wall clock through Date.UTC is not equivalent: that route cannot represent years outside
+      // 1..9999 or before the common era, and it drops the sub-minute offsets some zones had.
+      const offsetFormatter = new OrigDateTimeFormat('en-US', { timeZone: targetTz, timeZoneName: 'longOffset' });
       const getOffsetMinutes = (date) => {
         try {
           const ts = date.getTime();
           if (isNaN(ts)) return NaN;
-          const partsTz = new OrigDateTimeFormat('en-US', {
-            timeZone: targetTz,
-            hour12: false,
-            year: 'numeric', month: '2-digit', day: '2-digit',
-            hour: '2-digit', minute: '2-digit', second: '2-digit'
-          }).formatToParts(date);
-          const getVal = (t) => parseInt(partsTz.find(p => p.type === t)?.value || '0', 10);
-          const y = getVal('year');
-          const m = getVal('month') - 1;
-          const d = getVal('day');
-          const h = getVal('hour') % 24;
-          const min = getVal('minute');
-          const s = getVal('second');
-          const tzUtcTs = Date.UTC(y, m, d, h, min, s);
-          return Math.round((Math.floor(ts / 1000) * 1000 - tzUtcTs) / 60000);
+          const raw = (offsetFormatter.formatToParts(date).find((p) => p.type === 'timeZoneName')?.value || '').replace(/^GMT/, '');
+          const m = raw.match(/^([+-])(\\d{1,2})(?::(\\d{2}))?(?::(\\d{2}))?$/);
+          if (!m) return 0;
+          const seconds = Number(m[2]) * 3600 + Number(m[3] || 0) * 60 + Number(m[4] || 0);
+          return (m[1] === '-' ? 1 : -1) * (seconds / 60);
         } catch (_) {
           return 0;
         }
       };
+      // ICU has no long zone name for every instant, while V8 still prints one: outside the modern
+      // metazone range the long form degrades to a numeric offset. A reference instant in the same
+      // standard/daylight state supplies the name V8 prints, chosen by nearest offset.
+      const zoneNameRefs = (() => {
+        const nameAt = (ms) => new OrigDateTimeFormat(undefined, { timeZone: targetTz, timeZoneName: 'long' })
+          .formatToParts(new Date(ms)).find((p) => p.type === 'timeZoneName')?.value || '';
+        const winter = Date.UTC(2026, 0, 15, 12);
+        const summer = Date.UTC(2026, 6, 15, 12);
+        return [{ offset: getOffsetMinutes(new Date(winter)), name: nameAt(winter) }, { offset: getOffsetMinutes(new Date(summer)), name: nameAt(summer) }];
+      })();
+      const zoneNameFor = (date) => {
+        const name = new OrigDateTimeFormat(undefined, { timeZone: targetTz, timeZoneName: 'long' })
+          .formatToParts(date).find((p) => p.type === 'timeZoneName')?.value || '';
+        const offset = getOffsetMinutes(date);
+        const exact = zoneNameRefs.find((ref) => ref.offset === offset);
+        if (exact) return /^GMT/.test(name) ? (exact.name || name) : name;
+        let best = zoneNameRefs[0];
+        for (const ref of zoneNameRefs) if (Math.abs(ref.offset - offset) < Math.abs(best.offset - offset)) best = ref;
+        return best.name || name;
+      };
 
       const getLocalComponents = (date) => {
         const off = getOffsetMinutes(date);
-        return new Date(date.getTime() - off * 60000);
+        const shifted = new Date(date.getTime() - off * 60000);
+        if (!isNaN(shifted.getTime())) return shifted;
+        // ICU still answers at the domain edges, where the shifted instant is not representable, and
+        // the wall clock there can itself sit past the Date domain, so the fields are handed back as
+        // a read-only view instead of a Date that cannot exist.
+        const parts = new OrigDateTimeFormat('en-US', {
+          timeZone: targetTz, era: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+        }).formatToParts(date);
+        const get = (type) => parts.find((p) => p.type === type)?.value || '';
+        const year = /BC/i.test(get('era')) ? 1 - parseInt(get('year'), 10) : numbered;
+        const month = parseInt(get('month'), 10) - 1;
+        const day = parseInt(get('day'), 10);
+        const hour = parseInt(get('hour'), 10) % 24;
+        const minute = parseInt(get('minute'), 10);
+        const second = parseInt(get('second'), 10);
+        const millisecond = ((date.getTime() % 1000) + 1000) % 1000;
+        const weekday = new Date(Date.UTC(year, month, day)).getUTCDay();
+        const invalid = () => NaN;
+        return {
+          getUTCFullYear: () => year,
+          getUTCMonth: () => month,
+          getUTCDate: () => day,
+          getUTCDay: () => weekday,
+          getUTCHours: () => hour,
+          getUTCMinutes: () => minute,
+          getUTCSeconds: () => second,
+          getUTCMilliseconds: () => millisecond,
+          getTime: invalid,
+          setUTCFullYear: invalid,
+          setUTCMonth: invalid,
+          setUTCDate: invalid,
+          setUTCHours: invalid,
+          setUTCMinutes: invalid,
+          setUTCSeconds: invalid,
+          setUTCMilliseconds: invalid,
+        };
       };
 
+      // Reading timeZone here would add an access the engine already makes, and copying the options
+      // would read every other option a second time, so a prototype-chained copy carries the default
+      // zone while the page options stay the only source for everything else. A null argument has to
+      // reach the engine unchanged, because the TypeError it raises is part of the surface.
+      const withDefaultTimeZone = (options) => {
+        if (options === undefined) return { timeZone: targetTz };
+        if (options === null) return options;
+        const boxed = Object(options);
+        const opts = Object.create(boxed);
+        // The engine reads timeZone exactly once, so the substitute is a lazy accessor rather than a
+        // value: it forwards to the page options on the engine read and answers the target zone when
+        // the page left the option absent or undefined. Copying the options would instead read every
+        // other option a second time.
+        let read = false;
+        let resolved = targetTz;
+        Object.defineProperty(opts, 'timeZone', {
+          enumerable: true,
+          configurable: true,
+          get() {
+            if (!read) {
+              read = true;
+              const fromPage = boxed.timeZone;
+              resolved = fromPage === undefined ? targetTz : fromPage;
+            }
+            return resolved;
+          },
+        });
+        return opts;
+      };
       const PatchedDateTimeFormat = function DateTimeFormat(locales, options) {
-        let opts = options;
-        if (!opts) {
-          opts = { timeZone: targetTz };
-        } else if (opts.timeZone === undefined) {
-          opts = Object.assign({}, opts, { timeZone: targetTz });
-        }
+        const opts = withDefaultTimeZone(options);
         if (!(this instanceof PatchedDateTimeFormat)) {
           return Reflect.construct(OrigDateTimeFormat, [locales, opts]);
         }
@@ -3879,11 +4059,16 @@ function buildWorkerInjectionScript(fp) {
       Intl.DateTimeFormat = PatchedDateTimeFormat;
 
       replace(Date.prototype, 'getTimezoneOffset', () => function getTimezoneOffset() {
-        return getOffsetMinutes(this);
+        const minutes = getOffsetMinutes(asDate(this));
+        if (!isFinite(minutes)) return NaN;
+        const whole = Math.trunc(minutes);
+        return whole === 0 ? 0 : whole;
       });
 
       const formatTzDate = (date) => {
         try {
+          // en-US on purpose: the weekday and month abbreviations V8 prints are fixed English,
+          // while the zone name in the parenthetical follows the default locale (zoneNameFor).
           const parts = new OrigDateTimeFormat('en-US', {
             timeZone: targetTz,
             weekday: 'short',
@@ -3900,14 +4085,15 @@ function buildWorkerInjectionScript(fp) {
           const weekday = get('weekday');
           const month = get('month');
           const day = get('day');
-          const year = get('year');
+          const localYear = getLocalComponents(date).getUTCFullYear();
+          const year = localYear < 0 ? '-' + String(-localYear).padStart(4, '0') : String(localYear).padStart(4, '0');
           const hour = (get('hour') === '24' ? '00' : get('hour')).padStart(2, '0');
           const minute = get('minute').padStart(2, '0');
           const second = get('second').padStart(2, '0');
-          const tzName = get('timeZoneName');
+          const tzName = zoneNameFor(date);
           const diffMins = getOffsetMinutes(date);
           const sign = diffMins <= 0 ? '+' : '-';
-          const absMins = Math.abs(diffMins);
+          const absMins = Math.trunc(Math.abs(diffMins));
           const offH = String(Math.floor(absMins / 60)).padStart(2, '0');
           const offM = String(absMins % 60).padStart(2, '0');
           const gmt = 'GMT' + sign + offH + offM;
@@ -3918,19 +4104,19 @@ function buildWorkerInjectionScript(fp) {
       };
 
       replace(Date.prototype, 'toString', () => function toString() {
-        if (isNaN(this.getTime())) return 'Invalid Date';
+        if (isNaN(asDate(this).getTime())) return 'Invalid Date';
         return formatTzDate(this);
       });
 
       replace(Date.prototype, 'toTimeString', () => function toTimeString() {
-        if (isNaN(this.getTime())) return 'Invalid Date';
+        if (isNaN(asDate(this).getTime())) return 'Invalid Date';
         const full = formatTzDate(this);
         const match = full.match(/[0-9]{4}[ ]+(.*)/);
         return match ? match[1] : full;
       });
 
       replace(Date.prototype, 'toDateString', () => function toDateString() {
-        if (isNaN(this.getTime())) return 'Invalid Date';
+        if (isNaN(asDate(this).getTime())) return 'Invalid Date';
         const full = formatTzDate(this);
         return full.split(' ').slice(0, 4).join(' ');
       });
@@ -3951,47 +4137,47 @@ function buildWorkerInjectionScript(fp) {
       });
 
       replace(Date.prototype, 'getHours', () => function getHours() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCHours();
       });
 
       replace(Date.prototype, 'getDate', () => function getDate() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCDate();
       });
 
       replace(Date.prototype, 'getDay', () => function getDay() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCDay();
       });
 
       replace(Date.prototype, 'getFullYear', () => function getFullYear() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCFullYear();
       });
 
       replace(Date.prototype, 'getMonth', () => function getMonth() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCMonth();
       });
 
       replace(Date.prototype, 'getMinutes', () => function getMinutes() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCMinutes();
       });
 
       replace(Date.prototype, 'getSeconds', () => function getSeconds() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCSeconds();
       });
 
       replace(Date.prototype, 'getMilliseconds', () => function getMilliseconds() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCMilliseconds();
       });
 
       replace(Date.prototype, 'getYear', () => function getYear() {
-        if (isNaN(this.getTime())) return NaN;
+        if (isNaN(asDate(this).getTime())) return NaN;
         return getLocalComponents(this).getUTCFullYear() - 1900;
       });
 
@@ -3999,7 +4185,7 @@ function buildWorkerInjectionScript(fp) {
       // patched getters while writing it through the host zone leaves the two disagreeing,
       // which is a stronger signal than not spoofing at all.
       const setLocal = (self, mutate) => {
-        if (isNaN(self.getTime())) return NaN;
+        if (isNaN(asDate(self).getTime())) return NaN;
         const shifted = getLocalComponents(self);
         mutate(shifted);
         // Resolve the offset twice: the write may have crossed a DST boundary.
@@ -4080,14 +4266,17 @@ function buildWorkerInjectionScript(fp) {
           // parse them first would apply the host zone's offset, which the correction below
           // would then apply a second time.
           const y = Number(args[0]);
+          // undefined means "default"; anything else is coerced the way the engine would, so a NaN
+          // field leaves the whole date Invalid instead of folding to 0.
+          const field = (value, fallback) => (value === undefined ? fallback : Number(value));
           const wall = OrigDate.UTC(
             y >= 0 && y <= 99 ? y + 1900 : y,
-            Number(args[1]) || 0,
-            args[2] === undefined ? 1 : Number(args[2]),
-            Number(args[3]) || 0,
-            Number(args[4]) || 0,
-            Number(args[5]) || 0,
-            Number(args[6]) || 0
+            field(args[1], 0),
+            field(args[2], 1),
+            field(args[3], 0),
+            field(args[4], 0),
+            field(args[5], 0),
+            field(args[6], 0)
           );
           return Reflect.construct(OrigDate, [localToUtc(wall)], new.target);
         };

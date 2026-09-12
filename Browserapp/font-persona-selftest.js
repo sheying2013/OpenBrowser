@@ -45,12 +45,13 @@ const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.
 // --- escaping guard for the emitted script ---
 // The injection scripts are built as template literals, so a backslash written once is eaten
 // before it reaches the page: \s arrives as a literal "s" and the regex silently stops
-// matching. That is invisible in the source and only shows up as a hook that never fires.
+// matching (the same happens to a quantifier: \d{1,2} arrives as d{1,2}). That is invisible in the
+// source and only shows up as a hook that never fires.
 {
   const fp = buildFingerprint({ id: 'escape', userAgent: WIN_UA, privacy: { deviceProfile: 'persona' }, advanced: {} });
   const src = buildInjectionScript(fp);
   const literals = src.match(/\/(?![/*])(?:\\.|\[[^\]]*\]|[^/\n\\])+\/[gimsuy]*/g) || [];
-  const suspicious = literals.filter((r) => /\((\?:)?\^\|s\)/.test(r) || /\)s\*/.test(r) || /[^\\]\bs\+/.test(r) || /[^\\]\bd\+/.test(r));
+  const suspicious = literals.filter((r) => /\((\?:)?\^\|s\)/.test(r) || /\)s\*/.test(r) || /[^\\]\bs\+/.test(r) || /[^\\]\bd\+/.test(r) || /[^\\]\b[swdb]\{/.test(r));
   ok(`emitted regexes keep their escapes (${literals.length} scanned)`, suspicious.length === 0);
   if (suspicious.length) suspicious.forEach((r) => console.log('     x ' + r));
 }
