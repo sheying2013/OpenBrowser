@@ -26,7 +26,7 @@ const launcher = path.join(kernelRoot, 'launch_openbrowser.sh');
 
 const WINDOWS_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
 
-const WORKER_SRC = `self.onmessage = () => {
+const WORKER_SRC = `self.onmessage = async () => {
   const c = new OffscreenCanvas(300, 150);
   const g = c.getContext('2d');
   g.textBaseline = 'top'; g.font = '14px Arial'; g.fillStyle = '#f60'; g.fillRect(0, 0, 300, 150);
@@ -44,7 +44,23 @@ const WORKER_SRC = `self.onmessage = () => {
       glRenderer = String(gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
     }
   } catch (e) { glRenderer = 'ERR:' + e.name; }
-  self.postMessage({ hash: h >>> 0, cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory,
+  let uad = null;
+  try {
+    const value = navigator.userAgentData;
+    if (value) {
+      const hev = await value.getHighEntropyValues(['platform', 'architecture', 'bitness', 'model']);
+      uad = {
+        own: Object.getOwnPropertyNames(value).sort(),
+        instanceofNative: typeof NavigatorUAData !== 'undefined' ? value instanceof NavigatorUAData : null,
+        protoNames: Object.getOwnPropertyNames(Object.getPrototypeOf(value)).sort(),
+        mobile: value.mobile,
+        platform: value.platform,
+        toJSON: typeof value.toJSON === 'function' ? value.toJSON() : null,
+        hev: { platform: hev.platform, architecture: hev.architecture, bitness: hev.bitness, model: hev.model },
+      };
+    } else uad = { missing: true };
+  } catch (e) { uad = { error: String(e && e.name || e) }; }
+  self.postMessage({ uad, hash: h >>> 0, cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory,
     ua: navigator.userAgent, platform: navigator.platform, langs: (navigator.languages || []).join(','),
     glVendor, glRenderer });
 };`;
@@ -203,6 +219,14 @@ function stop(child, dir) {
     assert.strictEqual(w.platform, fp.platform, `worker platform ${w.platform} !== ${fp.platform}`);
     assert.strictEqual(w.ua, fp.userAgent, 'worker userAgent must match the profile');
     assert.strictEqual(Number(w.cores), Number(fp.hardwareConcurrency), `worker cores ${w.cores} !== ${fp.hardwareConcurrency}`);
+    assert.ok(w.uad && !w.uad.error && !w.uad.missing, 'worker userAgentData must be available');
+    assert.deepStrictEqual(w.uad.own, [], 'worker userAgentData must not gain own members');
+    assert.strictEqual(w.uad.instanceofNative, true, 'worker userAgentData must keep the NavigatorUAData brand');
+    assert.ok(w.uad.protoNames.includes('getHighEntropyValues') && w.uad.protoNames.includes('toJSON'), 'worker userAgentData methods must stay on the prototype');
+    assert.strictEqual(w.uad.platform, fp.userAgentMetadata.platform, 'worker Client Hints platform mismatch');
+    assert.strictEqual(w.uad.hev.platform, fp.userAgentMetadata.platform, 'worker high-entropy platform mismatch');
+    assert.strictEqual(w.uad.hev.architecture, fp.userAgentMetadata.architecture, 'worker high-entropy architecture mismatch');
+    assert.strictEqual(w.uad.hev.bitness, fp.userAgentMetadata.bitness, 'worker high-entropy bitness mismatch');
   });
 
   const failed = results.filter((r) => !r.ok);

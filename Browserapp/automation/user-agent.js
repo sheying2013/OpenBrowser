@@ -308,10 +308,10 @@ function buildUaInjectionScript(uaProfile) {
     fullVersion: uaProfile.metadata?.uaFullVersion || uaProfile.chromeFull,
     chPlatform: uaProfile.metadata?.platform || "Windows",
     platformVersion: uaProfile.metadata?.platformVersion || "",
-    architecture: uaProfile.metadata?.architecture || "x86",
+    architecture: uaProfile.metadata?.architecture ?? "x86",
     model: uaProfile.metadata?.model || "",
     mobile: Boolean(uaProfile.metadata?.mobile),
-    bitness: uaProfile.metadata?.bitness || "64",
+    bitness: uaProfile.metadata?.bitness ?? "64",
     wow64: Boolean(uaProfile.metadata?.wow64),
   };
   const json = JSON.stringify(payload);
@@ -409,7 +409,7 @@ function buildUaInjectionScript(uaProfile) {
       architecture: String(U.architecture || ""),
       model: String(U.model || ""),
       mobile: Boolean(U.mobile),
-      bitness: String(U.bitness || "64"),
+      bitness: String(U.bitness ?? "64"),
       wow64: Boolean(U.wow64),
       uaFullVersion: String(U.fullVersion || ""),
     };

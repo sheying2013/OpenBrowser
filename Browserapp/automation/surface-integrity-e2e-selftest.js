@@ -227,6 +227,143 @@ const RECEIVER_PROBE = `(async () => {
   return JSON.stringify(out);
 })()`;
 
+// A spoofed BatteryManager must stay a real native object: the browser exposes its four values as
+// prototype accessors and the instance has no own members. The probe records both the shape and the
+// live values so the injected run can be compared with the stock run and the configured profile.
+const BATTERY_PROBE = `(async () => {
+  const out = {};
+  try {
+    const manager = await navigator.getBattery();
+    const proto = Object.getPrototypeOf(manager);
+    const descriptors = {};
+    for (const key of ['charging', 'chargingTime', 'dischargingTime', 'level']) {
+      const descriptor = Object.getOwnPropertyDescriptor(proto, key);
+      descriptors[key] = descriptor ? {
+        getterName: descriptor.get && descriptor.get.name,
+        getterLength: descriptor.get && descriptor.get.length,
+        enumerable: descriptor.enumerable,
+        configurable: descriptor.configurable,
+      } : null;
+    }
+    let listenerOk = false;
+    try { manager.addEventListener('levelchange', () => {}); listenerOk = true; } catch (_) {}
+    out.own = Object.getOwnPropertyNames(manager).sort();
+    out.protoNames = Object.getOwnPropertyNames(proto).sort();
+    out.descriptors = descriptors;
+    out.tag = Object.prototype.toString.call(manager);
+    out.instanceofBatteryManager = typeof BatteryManager !== 'undefined' ? manager instanceof BatteryManager : null;
+    out.listenerOk = listenerOk;
+    out.values = {
+      charging: manager.charging,
+      chargingTime: manager.chargingTime,
+      dischargingTime: manager.dischargingTime,
+      level: manager.level,
+    };
+  } catch (error) { out.error = String(error && error.name || error) + ':' + String(error && error.message || ''); }
+  return JSON.stringify(out);
+})()`;
+
+// Synthetic objects that model browser interfaces must not add own members or replace prototype
+// accessors with data properties. A page can detect that without calling any of the spoofed values,
+// so the stock and injected runs are compared as object graphs rather than only as value sets.
+const SPOOF_INSTANCE_PROBE = `(async () => {
+  const out = {};
+  const shapeOf = (obj, keys) => {
+    if (!obj) return null;
+    const proto = Object.getPrototypeOf(obj);
+    const descriptors = {};
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(proto, key);
+      descriptors[key] = descriptor ? {
+        kind: descriptor.value !== undefined ? 'value' : (descriptor.get ? 'getter' : 'unknown'),
+        enumerable: descriptor.enumerable,
+        configurable: descriptor.configurable,
+        name: descriptor.get && descriptor.get.name,
+        length: descriptor.get && descriptor.get.length,
+      } : null;
+    }
+    return { own: Object.getOwnPropertyNames(obj).sort(), protoNames: Object.getOwnPropertyNames(proto).sort(), descriptors, tag: Object.prototype.toString.call(obj) };
+  };
+  const protoShape = (ctor, keys) => {
+    if (!ctor || !ctor.prototype) return null;
+    const descriptors = {};
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(ctor.prototype, key);
+      descriptors[key] = descriptor ? {
+        kind: descriptor.value !== undefined ? 'value' : (descriptor.get ? 'getter' : 'unknown'),
+        enumerable: descriptor.enumerable,
+        configurable: descriptor.configurable,
+        name: descriptor.get && descriptor.get.name,
+        length: descriptor.get && descriptor.get.length,
+      } : null;
+    }
+    return { names: Object.getOwnPropertyNames(ctor.prototype).sort(), descriptors };
+  };
+  try { out.mediaProto = protoShape(typeof MediaDeviceInfo !== 'undefined' ? MediaDeviceInfo : null, ['deviceId', 'kind', 'label', 'groupId', 'toJSON']); } catch (_) {}
+  try {
+    const list = await navigator.mediaDevices.enumerateDevices();
+    const item = list[0];
+    out.media = shapeOf(item, ['deviceId', 'kind', 'label', 'groupId']);
+    out.mediaValues = item ? { deviceId: item.deviceId, kind: item.kind, label: item.label, groupId: item.groupId } : null;
+    out.mediaJSON = item && typeof item.toJSON === 'function' ? item.toJSON() : null;
+    out.mediaInstanceof = !!(item && typeof MediaDeviceInfo !== 'undefined' && item instanceof MediaDeviceInfo);
+  } catch (error) { out.mediaError = String(error && error.name || error); }
+  try {
+    const voice = speechSynthesis.getVoices()[0];
+    out.voice = shapeOf(voice, ['name', 'lang', 'default', 'localService', 'voiceURI']);
+    out.voiceInstanceof = !!(voice && typeof SpeechSynthesisVoice !== 'undefined' && voice instanceof SpeechSynthesisVoice);
+  } catch (error) { out.voiceError = String(error && error.name || error); }
+  try {
+    if (navigator.gpu) {
+      const adapter = await navigator.gpu.requestAdapter();
+      out.adapter = shapeOf(adapter, ['info', 'features', 'limits']);
+      out.adapterInstanceof = !!(adapter && typeof GPUAdapter !== 'undefined' && adapter instanceof GPUAdapter);
+      const info = adapter && adapter.info;
+      out.adapterInfo = shapeOf(info, ['vendor', 'architecture', 'device', 'description']);
+      out.adapterInfoInstanceof = !!(info && typeof GPUAdapterInfo !== 'undefined' && info instanceof GPUAdapterInfo);
+      const ownInfo = adapter ? Object.getOwnPropertyDescriptor(adapter, 'info') : null;
+      out.adapterInfoOwnDescriptor = ownInfo ? { kind: ownInfo.get ? 'getter' : 'value', enumerable: ownInfo.enumerable, configurable: ownInfo.configurable } : null;
+    }
+  } catch (error) { out.gpuError = String(error && error.name || error); }
+  return JSON.stringify(out);
+})()`;
+
+// DOMRectList has indexed own properties but no own length; length/item/iterator live on the
+// prototype. Compare the live object graph as well as the returned geometry.
+const RECTS_PROBE = `(() => {
+  const out = {};
+  const snap = (obj) => {
+    if (!obj) return null;
+    const chain = [];
+    let cursor = obj;
+    let guard = 0;
+    while (cursor && guard++ < 6) { chain.push(Object.prototype.toString.call(cursor)); cursor = Object.getPrototypeOf(cursor); }
+    const descriptors = {};
+    for (const key of Object.getOwnPropertyNames(obj)) {
+      const descriptor = Object.getOwnPropertyDescriptor(obj, key);
+      descriptors[key] = descriptor ? { kind: descriptor.get ? 'getter' : 'value', enumerable: descriptor.enumerable, configurable: descriptor.configurable, writable: descriptor.writable, valueType: typeof descriptor.value } : null;
+    }
+    return { own: Object.getOwnPropertyNames(obj).sort(), symbols: Object.getOwnPropertySymbols(obj).map(String).sort(), chain, descriptors, tag: Object.prototype.toString.call(obj) };
+  };
+  const el = document.createElement('div');
+  el.textContent = 'rect probe';
+  el.style.cssText = 'position:absolute;left:10px;top:20px;width:100px;height:30px;font:14px Arial;white-space:nowrap';
+  document.body.appendChild(el);
+  const list = el.getClientRects();
+  const rect = el.getBoundingClientRect();
+  out.list = snap(list);
+  out.rect = snap(rect);
+  out.listInstanceof = typeof DOMRectList !== 'undefined' ? list instanceof DOMRectList : null;
+  out.rectInstanceof = typeof DOMRect !== 'undefined' ? rect instanceof DOMRect : null;
+  out.length = list.length;
+  out.itemType = typeof list.item;
+  out.item0 = list.item(0) ? Object.prototype.toString.call(list.item(0)) : null;
+  out.arrayLength = Array.from(list).length;
+  out.spreadLength = (() => { try { return [...list].length; } catch (_) { return 'ERR'; } })();
+  el.remove();
+  return JSON.stringify(out);
+})()`;
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const startLoopbackServer = () => new Promise((res) => {
@@ -263,7 +400,7 @@ function profileFor(id) {
   // vacuous.
   return { id, name: id, kernelVersion: '148.0.7778.165', os: 'macos', canvas: 'noise', webgl: 'noise',
     audio: 'noise', clientRects: 'noise', webrtc: 'proxy', cores: 8, memory: 8,
-    privacy: { speech: 'noise', battery: 'noise' } };
+    privacy: { speech: 'noise', battery: 'noise', webgpu: 'webgl' } };
 }
 
 function stop(child, dir) {
@@ -319,6 +456,16 @@ async function measure(profileId, inject) {
           const m2 = await cdp.send('Runtime.evaluate', { expression: RECEIVER_PROBE, returnByValue: true, awaitPromise: true }, sessionId);
           const val2 = m2 && m2.result && m2.result.result ? m2.result.result.value : null;
           try { result.receivers = JSON.parse(val2); } catch (_) { result.receivers = { error: 'receiver probe parse failed' }; }
+          const rectResult = await cdp.send('Runtime.evaluate', { expression: RECTS_PROBE, returnByValue: true, awaitPromise: true }, sessionId);
+          const rectValue = rectResult && rectResult.result && rectResult.result.result ? rectResult.result.result.value : null;
+          try { result.rects = JSON.parse(rectValue); } catch (_) { result.rects = { error: 'rect probe parse failed' }; }
+          const m3 = await cdp.send('Runtime.evaluate', { expression: BATTERY_PROBE, returnByValue: true, awaitPromise: true }, sessionId);
+          const val3 = m3 && m3.result && m3.result.result ? m3.result.result.value : null;
+          try { result.battery = JSON.parse(val3); } catch (_) { result.battery = { error: 'battery probe parse failed' }; }
+          const m4 = await cdp.send('Runtime.evaluate', { expression: SPOOF_INSTANCE_PROBE, returnByValue: true, awaitPromise: true }, sessionId);
+          const val4 = m4 && m4.result && m4.result.result ? m4.result.result.value : null;
+          try { result.spoofInstances = JSON.parse(val4); } catch (_) { result.spoofInstances = { error: 'spoof instance probe parse failed' }; }
+          result.expectedBattery = fp.battery && fp.battery.value ? fp.battery.value : null;
           await cdp.send('Target.closeTarget', { targetId });
         } else { result = { error: 'attach failed' }; }
         try { ws.close(); } catch (_) {}
@@ -436,6 +583,69 @@ const check = (name, fn) => {
     }
     assert.deepStrictEqual(drift, [],
       `instances gained or lost own members versus the same build without injection: ${drift.join('; ')}`);
+  });
+
+  check('synthetic browser objects keep the native own-property and prototype shape', () => {
+    const before = baseline.spoofInstances || {};
+    const after = injected.spoofInstances || {};
+    assert.ok(!after.error, `spoof instance probe failed: ${after.error}`);
+    if (before.mediaProto && after.mediaProto) {
+      assert.deepStrictEqual(after.mediaProto, before.mediaProto, 'MediaDeviceInfo prototype shape changed');
+    }
+    if (after.media) {
+      assert.deepStrictEqual(after.media.own, [], 'MediaDeviceInfo instances must not gain own members');
+      assert.strictEqual(after.mediaInstanceof, true, 'MediaDeviceInfo instances must keep their native brand');
+      assert.ok(after.mediaJSON && typeof after.mediaJSON.deviceId === 'string', 'MediaDeviceInfo.toJSON must stay usable');
+    }
+    for (const [name, instanceKey, brandKey] of [
+      ['SpeechSynthesisVoice', 'voice', 'voiceInstanceof'],
+      ['GPUAdapter', 'adapter', 'adapterInstanceof'],
+      ['GPUAdapterInfo', 'adapterInfo', 'adapterInfoInstanceof'],
+    ]) {
+      const expected = before[instanceKey];
+      const actual = after[instanceKey];
+      if (expected && actual) assert.deepStrictEqual(actual, expected, `${name} instance shape changed`);
+      if (actual) {
+        assert.deepStrictEqual(actual.own, [], `${name} instances must not gain own members`);
+        assert.strictEqual(after[brandKey], true, `${name} instances must keep their native brand`);
+      }
+    }
+    if (after.adapter) {
+      assert.strictEqual(after.adapterInfoOwnDescriptor, null, 'GPUAdapter.info must stay on the prototype');
+    }
+  });
+
+  check('client-rect lists keep the native own-property, prototype and iterator shape', () => {
+    const before = baseline.rects || {};
+    const after = injected.rects || {};
+    assert.ok(!before.error && !after.error, `rect probe failed: ${before.error || after.error}`);
+    assert.deepStrictEqual(after.list, before.list, 'DOMRectList instance shape changed');
+    assert.deepStrictEqual(after.rect, before.rect, 'DOMRect instance shape changed');
+    assert.strictEqual(after.listInstanceof, before.listInstanceof, 'DOMRectList brand changed');
+    assert.strictEqual(after.rectInstanceof, before.rectInstanceof, 'DOMRect brand changed');
+    assert.strictEqual(after.length, before.length, 'DOMRectList length changed');
+    assert.strictEqual(after.item0, before.item0, 'DOMRectList.item must return a DOMRect');
+    assert.strictEqual(after.arrayLength, before.arrayLength, 'DOMRectList Array.from changed');
+    assert.strictEqual(after.spreadLength, before.spreadLength, 'DOMRectList spread changed');
+  });
+
+  check('battery manager keeps the native prototype shape and applies the profile values', () => {
+    const before = baseline.battery || {};
+    const after = injected.battery || {};
+    assert.ok(!before.error && !after.error, `battery probe failed: ${before.error || after.error}`);
+    assert.deepStrictEqual(after.own, before.own, 'the injected manager gained own properties that a stock manager does not have');
+    assert.deepStrictEqual(after.protoNames, before.protoNames, 'the BatteryManager prototype surface changed');
+    assert.deepStrictEqual(after.descriptors, before.descriptors, 'BatteryManager accessor descriptors changed');
+    assert.strictEqual(after.tag, before.tag, 'BatteryManager brand changed');
+    assert.strictEqual(after.instanceofBatteryManager, before.instanceofBatteryManager, 'BatteryManager instanceof changed');
+    assert.strictEqual(after.listenerOk, true, 'the returned manager must remain a usable EventTarget');
+    const expected = injected.expectedBattery;
+    assert.ok(expected, 'the injected run did not carry a battery payload');
+    assert.strictEqual(after.values.charging, Boolean(expected.charging), 'charging value mismatch');
+    // JSON transport turns Infinity into null, so both sides are compared in that same normal form.
+    assert.strictEqual(after.values.chargingTime, expected.chargingTime == null ? null : Number(expected.chargingTime), 'chargingTime value mismatch');
+    assert.strictEqual(after.values.dischargingTime, expected.dischargingTime == null ? null : Number(expected.dischargingTime), 'dischargingTime value mismatch');
+    assert.strictEqual(after.values.level, Math.min(1, Math.max(0, Number(expected.level) || 0)), 'level value mismatch');
   });
 
   check('wrong-receiver calls behave exactly as they do without the injected layer', () => {

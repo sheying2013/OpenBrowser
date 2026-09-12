@@ -67,6 +67,10 @@ const PROBE = `(async () => {
     if (navigator.userAgentData) {
       out.uadMobile = navigator.userAgentData.mobile;
       out.uadPlatform = navigator.userAgentData.platform;
+      out.uadOwn = Object.getOwnPropertyNames(navigator.userAgentData).sort();
+      out.uadInstanceof = typeof NavigatorUAData !== 'undefined' ? navigator.userAgentData instanceof NavigatorUAData : null;
+      out.uadProtoNames = Object.getOwnPropertyNames(Object.getPrototypeOf(navigator.userAgentData)).sort();
+      out.uadToJSON = typeof navigator.userAgentData.toJSON === 'function' ? navigator.userAgentData.toJSON() : null;
       const hev = await navigator.userAgentData.getHighEntropyValues(['model', 'platformVersion', 'architecture', 'bitness', 'mobile']);
       out.hev = { model: hev.model, platformVersion: hev.platformVersion, architecture: hev.architecture, bitness: hev.bitness, mobile: hev.mobile };
     }
@@ -181,6 +185,10 @@ class Cdp {
   check('Client Hints report a mobile device', () => {
     assert.strictEqual(live.uadMobile, true, 'userAgentData.mobile');
     assert.strictEqual(live.uadPlatform, 'Android', 'userAgentData.platform');
+    assert.deepStrictEqual(live.uadOwn, [], 'userAgentData must remain a native instance with no own members');
+    assert.strictEqual(live.uadInstanceof, true, 'userAgentData must keep the NavigatorUAData brand');
+    assert.ok(live.uadProtoNames.includes('getHighEntropyValues') && live.uadProtoNames.includes('toJSON'), 'userAgentData methods must stay on the prototype');
+    assert.deepStrictEqual(live.uadToJSON, { brands: live.uadToJSON && live.uadToJSON.brands, mobile: true, platform: 'Android' }, 'userAgentData.toJSON must keep its native shape');
     assert.ok(live.hev && live.hev.model === device.model, `high entropy model: ${live.hev && live.hev.model}`);
     assert.strictEqual(live.hev.architecture, '', 'Android omits architecture');
     assert.strictEqual(live.hev.bitness, '', 'Android omits bitness');

@@ -2114,48 +2114,7 @@ function buildInjectionScript(fp) {
     if (MOBILE) {
       try { Object.defineProperty(window, 'ontouchstart', nativeAccessor('ontouchstart', { configurable: true, enumerable: true, get: () => null })); } catch (_) {}
       try { Object.defineProperty(window, 'orientation', nativeAccessor('orientation', { configurable: true, get: () => 0 })); } catch (_) {}
-      try {
-        const meta = CFG.userAgentMetadata || {};
-        const brandList = Object.freeze((meta.brands || []).map((item) => Object.freeze({
-          brand: String(item.brand),
-          version: String(item.version),
-        })));
-        const fullList = Object.freeze((meta.fullVersionList || meta.brands || []).map((item) => Object.freeze({
-          brand: String(item.brand),
-          version: String(item.version),
-        })));
-        const chPlatform = String(meta.platform || "Android");
-        const chPlatformVersion = String(meta.platformVersion || "");
-        const chModel = String(meta.model || "");
-        const chFullVersion = String(meta.uaFullVersion || meta.fullVersion || "");
-        const chMobile = Object.freeze({
-          brands: brandList,
-          mobile: true,
-          platform: chPlatform,
-          getHighEntropyValues(hints) {
-            const all = {
-              brands: brandList,
-              fullVersionList: fullList,
-              fullVersion: chFullVersion,
-              uaFullVersion: chFullVersion,
-              platform: chPlatform,
-              platformVersion: chPlatformVersion,
-              architecture: String(meta.architecture || ""),
-              model: chModel,
-              mobile: true,
-              bitness: String(meta.bitness || ""),
-              wow64: false,
-            };
-            const out = { brands: brandList, mobile: true, platform: chPlatform };
-            for (const hint of Array.isArray(hints) ? hints : []) if (hint in all) out[hint] = all[hint];
-            return Promise.resolve(out);
-          },
-          toJSON() { return { brands: brandList, mobile: true, platform: chPlatform }; },
-        });
-        if (globalThis.Navigator?.prototype) {
-          Object.defineProperty(globalThis.Navigator.prototype, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => chMobile }));
-        }
-      } catch (_) {}
+
     }
 
     try {
@@ -2704,48 +2663,84 @@ function buildInjectionScript(fp) {
           } catch (_) { return rect; }
         });
       };
-      // A DOMRectList facade must shadow every native accessor/iterator: inheriting the real
-      // prototype gives instanceof parity, but the native length getter, item() and iterator
-      // throw "Illegal invocation" on a synthetic object. Own/proto-level shims keep
-      // Array.from(), spread, for..of and item() working exactly like a real list.
-      const rectsFacadeProto = (() => {
-        const proto = typeof DOMRectList !== "undefined" ? Object.create(DOMRectList.prototype) : {};
-        Object.defineProperty(proto, "item", {
-          value: function item(index) { return this[index] || null; },
-          writable: true, configurable: true, enumerable: false,
+      // A native DOMRectList has indexed own properties and no own length; length/item/iterator live
+      // on the prototype. Keep that shape and answer synthetic lists from a WeakMap so Array.from,
+      // spread, and item() keep working without shadowing the native prototype.
+      const rectListStates = new WeakMap();
+      const patchedRectListKeys = new Set();
+      const rectListProto = typeof DOMRectList !== 'undefined' ? DOMRectList.prototype : null;
+      const ensureRectListAccessor = (key, serve) => {
+        if (!rectListProto || patchedRectListKeys.has(key)) return Boolean(rectListProto);
+        const descriptor = Object.getOwnPropertyDescriptor(rectListProto, key);
+        if (!descriptor || typeof descriptor.get !== 'function') return false;
+        const nativeGet = descriptor.get;
+        Object.defineProperty(rectListProto, key, nativeAccessor(key, {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          get() {
+            const state = rectListStates.get(this);
+            if (state) return serve(state);
+            return nativeGet.call(this);
+          },
+          set: descriptor.set,
+        }));
+        patchedRectListKeys.add(key);
+        return true;
+      };
+      const ensureRectListMethod = (key, serve) => {
+        if (!rectListProto || patchedRectListKeys.has(key)) return Boolean(rectListProto);
+        const descriptor = Object.getOwnPropertyDescriptor(rectListProto, key);
+        if (!descriptor || typeof descriptor.value !== 'function') return false;
+        const nativeMethod = descriptor.value;
+        Object.defineProperty(rectListProto, key, {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          writable: descriptor.writable,
+          value: nativeLike(function (...args) {
+            const state = rectListStates.get(this);
+            if (state) return serve(state, args);
+            return nativeMethod.apply(this, args);
+          }, nativeMethod),
         });
-        if (typeof Symbol !== "undefined" && Symbol.iterator) {
-          Object.defineProperty(proto, Symbol.iterator, {
-            value: function iterator() {
-              let i = 0;
-              const self = this;
-              return {
-                next() {
-                  return i < self.length ? { value: self[i++], done: false } : { value: undefined, done: true };
-                },
-                [Symbol.iterator]() { return this; },
-              };
-            },
-            writable: true, configurable: true, enumerable: false,
+        patchedRectListKeys.add(key);
+        return true;
+      };
+      const makeRectList = (rects) => {
+        const list = Object.create(rectListProto || Object.prototype);
+        const state = { length: rects.length, rects: rects.slice() };
+        rectListStates.set(list, state);
+        for (let i = 0; i < state.length; i += 1) {
+          Object.defineProperty(list, String(i), {
+            value: state.rects[i],
+            enumerable: true,
+            configurable: true,
+            writable: false,
           });
         }
-        return proto;
-      })();
+        ensureRectListAccessor('length', (value) => value.length);
+        ensureRectListMethod('item', (value, args) => {
+          const index = Math.trunc(Number(args[0]) || 0);
+          return index >= 0 && index < value.length ? value.rects[index] : null;
+        });
+        if (typeof Symbol !== 'undefined' && Symbol.iterator) {
+          ensureRectListMethod(Symbol.iterator, (value) => value.rects[Symbol.iterator]());
+        }
+        return list;
+      };
       const patchList = (proto, method) => {
         if (!proto || !proto[method]) return;
         replaceMethod(proto, method, (original) => function() {
           const list = original.apply(this, arguments);
           if (!list) return list;
           try {
-            const rects = Object.create(rectsFacadeProto);
+            const rects = [];
             for (let i = 0; i < list.length; i += 1) {
               const rect = list[i];
-              rects[i] = DOMRect.fromRect
+              rects.push(DOMRect.fromRect
                 ? DOMRect.fromRect({ x: rect.x + noisePx, y: rect.y + noisePx, width: rect.width + noiseSize, height: rect.height + noiseSize })
-                : rect;
+                : rect);
             }
-            Object.defineProperty(rects, "length", { value: list.length, writable: false, configurable: true, enumerable: false });
-            return rects;
+            return makeRectList(rects);
           } catch (_) { return list; }
         });
       };
@@ -2976,21 +2971,62 @@ function buildInjectionScript(fp) {
   if (CFG.mediaDevices && CFG.mediaDevices.mode && CFG.mediaDevices.mode !== 'real' && Array.isArray(CFG.mediaDevices.devices)) {
     try {
       const devProto = typeof MediaDeviceInfo !== "undefined" ? MediaDeviceInfo.prototype : Object.prototype;
+      const deviceStates = new WeakMap();
+      const patchedDeviceKeys = new Set();
+      let deviceToJSONPatched = false;
+      // A native device carries no own members: its four fields and toJSON live on the prototype.
+      // Keep that shape and answer only the synthetic instances from a WeakMap; every other receiver
+      // is forwarded to the original accessor so its brand checks stay intact.
+      const patchDeviceAccessor = (key) => {
+        if (!devProto || patchedDeviceKeys.has(key)) return true;
+        const descriptor = Object.getOwnPropertyDescriptor(devProto, key);
+        if (!descriptor || typeof descriptor.get !== 'function') return false;
+        const nativeGet = descriptor.get;
+        Object.defineProperty(devProto, key, {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          get: nativeLike(function deviceValue() {
+            const state = deviceStates.get(this);
+            if (state) return state[key];
+            return nativeGet.call(this);
+          }, nativeGet, 'get ' + key, 0),
+          set: descriptor.set,
+        });
+        patchedDeviceKeys.add(key);
+        return true;
+      };
+      const patchDeviceToJSON = () => {
+        if (deviceToJSONPatched || !devProto) return;
+        const descriptor = Object.getOwnPropertyDescriptor(devProto, 'toJSON');
+        if (!descriptor || typeof descriptor.value !== 'function') return;
+        const nativeToJSON = descriptor.value;
+        Object.defineProperty(devProto, 'toJSON', {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          writable: descriptor.writable,
+          value: nativeLike(function toJSON() {
+            const state = deviceStates.get(this);
+            if (state) return { deviceId: state.deviceId, kind: state.kind, label: state.label, groupId: state.groupId };
+            return nativeToJSON.apply(this, arguments);
+          }, nativeToJSON, 'toJSON', nativeToJSON.length),
+        });
+        deviceToJSONPatched = true;
+      };
       const makeDevice = (kind, label, deviceId, groupId) => {
         const item = Object.create(devProto);
-        const props = {
-          deviceId: String(deviceId || ""),
-          kind: String(kind || ""),
-          label: String(label || ""),
-          groupId: String(groupId || ""),
+        const state = {
+          deviceId: String(deviceId || ''),
+          kind: String(kind || ''),
+          label: String(label || ''),
+          groupId: String(groupId || ''),
         };
-        for (const [k, v] of Object.entries(props)) {
-          Object.defineProperty(item, k, { value: v, enumerable: false, writable: false, configurable: true });
+        deviceStates.set(item, state);
+        for (const key of Object.keys(state)) {
+          if (!patchDeviceAccessor(key)) {
+            Object.defineProperty(item, key, { value: state[key], enumerable: false, writable: false, configurable: true });
+          }
         }
-        item.toJSON = function toJSON() {
-          return { deviceId: item.deviceId, kind: item.kind, label: item.label, groupId: item.groupId };
-        };
-        Object.defineProperty(item, 'toJSON', { enumerable: false, writable: true, configurable: true });
+        patchDeviceToJSON();
         return item;
       };
       const devices = CFG.mediaDevices.devices.map((d) => makeDevice(d.kind, d.label, d.deviceId, d.groupId));
@@ -3040,17 +3076,42 @@ function buildInjectionScript(fp) {
   } else if (CFG.speech && CFG.speech.mode === 'noise' && Array.isArray(CFG.speech.voices)) {
     try {
       const voiceProto = typeof SpeechSynthesisVoice !== "undefined" ? SpeechSynthesisVoice.prototype : Object.prototype;
+      const voiceStates = new WeakMap();
+      const patchedVoiceKeys = new Set();
+      // Native voices keep their fields on the prototype as well. Use the same synthetic-instance
+      // WeakMap pattern so the table cannot be distinguished by an own-property scan.
+      const patchVoiceAccessor = (key) => {
+        if (!voiceProto || patchedVoiceKeys.has(key)) return true;
+        const descriptor = Object.getOwnPropertyDescriptor(voiceProto, key);
+        if (!descriptor || typeof descriptor.get !== 'function') return false;
+        const nativeGet = descriptor.get;
+        Object.defineProperty(voiceProto, key, {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          get: nativeLike(function voiceValue() {
+            const state = voiceStates.get(this);
+            if (state) return state[key];
+            return nativeGet.call(this);
+          }, nativeGet, 'get ' + key, 0),
+          set: descriptor.set,
+        });
+        patchedVoiceKeys.add(key);
+        return true;
+      };
       const voices = CFG.speech.voices.map((v) => {
         const voice = Object.create(voiceProto);
-        const props = {
-          name: String(v.name || ""),
-          lang: String(v.lang || "en-US"),
+        const state = {
+          name: String(v.name || ''),
+          lang: String(v.lang || 'en-US'),
           default: Boolean(v.default),
           localService: v.localService !== false,
-          voiceURI: String(v.voiceURI || v.name || ""),
+          voiceURI: String(v.voiceURI || v.name || ''),
         };
-        for (const [k, val] of Object.entries(props)) {
-          Object.defineProperty(voice, k, { value: val, enumerable: false, writable: false, configurable: true });
+        voiceStates.set(voice, state);
+        for (const key of Object.keys(state)) {
+          if (!patchVoiceAccessor(key)) {
+            Object.defineProperty(voice, key, { value: state[key], enumerable: false, writable: false, configurable: true });
+          }
         }
         return voice;
       });
@@ -3101,31 +3162,50 @@ function buildInjectionScript(fp) {
   } else if (CFG.battery && CFG.battery.mode === 'noise' && CFG.battery.value && !CFG.battery.value.blocked) {
     try {
       const snap = CFG.battery.value;
-      const battProto = typeof BatteryManager !== "undefined" ? BatteryManager.prototype : (typeof EventTarget !== "undefined" ? EventTarget.prototype : Object.prototype);
-      const makeManager = () => {
-        const manager = Object.create(battProto);
-        const props = {
-          charging: Boolean(snap.charging),
-          chargingTime: snap.chargingTime == null ? Infinity : Number(snap.chargingTime),
-          dischargingTime: snap.dischargingTime == null ? Infinity : Number(snap.dischargingTime),
-          level: Math.min(1, Math.max(0, Number(snap.level) || 0)),
-          onchargingchange: null,
-          onchargingtimechange: null,
-          ondischargingtimechange: null,
-          onlevelchange: null,
-        };
-        for (const [k, val] of Object.entries(props)) {
-          Object.defineProperty(manager, k, { value: val, enumerable: false, writable: false, configurable: true });
-        }
-        return manager;
+      const state = {
+        charging: Boolean(snap.charging),
+        chargingTime: snap.chargingTime == null ? Infinity : Number(snap.chargingTime),
+        dischargingTime: snap.dischargingTime == null ? Infinity : Number(snap.dischargingTime),
+        level: Math.min(1, Math.max(0, Number(snap.level) || 0)),
       };
-      const spoofed = function getBattery() { return Promise.resolve(makeManager()); };
+      const battProto = typeof BatteryManager !== 'undefined' ? BatteryManager.prototype : null;
+      const spoofedStates = new WeakMap();
+      const patchedKeys = new Set();
+      // A real manager keeps all four values on the prototype; defining them on the instance is an
+      // own-property shape that no stock build has. Install the replacement accessors on the native
+      // prototype and delegate every receiver we did not issue back to the original getter.
+      const patchBatteryAccessor = (key) => {
+        if (!battProto || patchedKeys.has(key)) return;
+        const descriptor = Object.getOwnPropertyDescriptor(battProto, key);
+        if (!descriptor || typeof descriptor.get !== 'function') return;
+        const nativeGet = descriptor.get;
+        const wrappedGet = nativeLike(function batteryValue() {
+          const value = spoofedStates.get(this);
+          if (value && Object.prototype.hasOwnProperty.call(value, key)) return value[key];
+          return nativeGet.call(this);
+        }, nativeGet, 'get ' + key, 0);
+        Object.defineProperty(battProto, key, {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          get: wrappedGet,
+          set: descriptor.set,
+        });
+        patchedKeys.add(key);
+      };
+      const serveBattery = (original) => function getBattery() {
+        return Promise.resolve(original.call(this)).then((manager) => {
+          if (!manager) return manager;
+          spoofedStates.set(manager, state);
+          for (const key of Object.keys(state)) patchBatteryAccessor(key);
+          return manager;
+        });
+      };
       const navProto = typeof Navigator !== "undefined" ? Navigator.prototype : null;
       const isNavigatorReceiver = (receiver) => receiver === navigator;
       if (navProto && navProto.getBattery) {
-        replaceMethod(navProto, 'getBattery', (original) => guardReceiver(original, isNavigatorReceiver, spoofed));
+        replaceMethod(navProto, 'getBattery', (original) => guardReceiver(original, isNavigatorReceiver, serveBattery(original)));
       } else if (navigator.getBattery) {
-        replaceMethod(navigator, 'getBattery', (original) => guardReceiver(original, isNavigatorReceiver, spoofed));
+        replaceMethod(navigator, 'getBattery', (original) => guardReceiver(original, isNavigatorReceiver, serveBattery(original)));
       }
     } catch (_) {}
   }
@@ -3156,76 +3236,69 @@ function buildInjectionScript(fp) {
           return null;
         });
       } else if (gpuMode === 'webgl' && gpuInfo && requestTarget) {
-        const adapterInfo = new WeakMap();
-
-        const makeAdapterInfo = () => {
-          const proto = typeof GPUAdapterInfo !== 'undefined' ? GPUAdapterInfo.prototype : Object.prototype;
-          const info = Object.create(proto);
-          for (const [key, value] of Object.entries(gpuInfo)) {
-            try {
-              Object.defineProperty(info, key, {
-                configurable: true,
-                enumerable: true,
-                writable: false,
-                value: value,
-              });
-            } catch (_) {}
-          }
-          try {
-            Object.defineProperty(info, 'toJSON', {
-              configurable: true,
-              enumerable: false,
-              writable: true,
-              value: function toJSON() {
-                const out = {};
-                for (const key of ['vendor', 'architecture', 'device', 'description']) {
-                  try { if (key in info) out[key] = info[key]; } catch (_) {}
-                }
-                return out;
-              },
-            });
-          } catch (_) {}
-          return info;
+        const infoOverrides = new WeakMap();
+        const adapterInfos = new WeakMap();
+        const patchedInfoKeys = new Set();
+        const patchInfoAccessor = (key) => {
+          if (patchedInfoKeys.has(key) || typeof GPUAdapterInfo === 'undefined' || !GPUAdapterInfo.prototype) return false;
+          const descriptor = Object.getOwnPropertyDescriptor(GPUAdapterInfo.prototype, key);
+          if (!descriptor || typeof descriptor.get !== 'function') return false;
+          const nativeGet = descriptor.get;
+          Object.defineProperty(GPUAdapterInfo.prototype, key, {
+            configurable: descriptor.configurable,
+            enumerable: descriptor.enumerable,
+            get: nativeLike(function adapterInfoValue() {
+              const value = infoOverrides.get(this);
+              if (value && Object.prototype.hasOwnProperty.call(value, key)) return value[key];
+              return nativeGet.call(this);
+            }, nativeGet, 'get ' + key, 0),
+            set: descriptor.set,
+          });
+          patchedInfoKeys.add(key);
+          return true;
         };
-
-        replaceMethod(requestTarget, 'requestAdapter', (originalRequestAdapter) => async function requestAdapter(...args) {
-          const adapter = await originalRequestAdapter.apply(this, args);
-          if (!adapter) return adapter;
-          const info = makeAdapterInfo();
-          adapterInfo.set(adapter, info);
-          // Prefer an own accessor so a single adapter can carry a stable object even when the
-          // platform marks the prototype accessor non-configurable.
-          try {
-            Object.defineProperty(adapter, 'info', {
-              configurable: true,
-              enumerable: true,
-              get: () => info,
-            });
-          } catch (_) {}
-          return adapter;
-        });
+        const prepareInfo = (adapter) => {
+          let info = null;
+          try { info = adapter && adapter.info; } catch (_) {}
+          if (!info || typeof info !== 'object') return;
+          infoOverrides.set(info, gpuInfo);
+          for (const key of Object.keys(gpuInfo)) patchInfoAccessor(key);
+          adapterInfos.set(adapter, info);
+        };
 
         const adapterProto = typeof GPUAdapter !== 'undefined' ? GPUAdapter.prototype : null;
         if (adapterProto) {
           const infoDescriptor = Object.getOwnPropertyDescriptor(adapterProto, 'info');
           if (infoDescriptor && typeof infoDescriptor.get === 'function') {
-            try {
-              Object.defineProperty(adapterProto, 'info', {
-                configurable: true,
-                enumerable: infoDescriptor.enumerable === true,
-                get: function info() {
-                  const spoofed = adapterInfo.get(this);
-                  return spoofed || infoDescriptor.get.call(this);
-                },
-              });
-            } catch (_) {}
-          }
-          if (typeof adapterProto.requestAdapterInfo === 'function') {
-            replaceMethod(adapterProto, 'requestAdapterInfo', (originalRequestAdapterInfo) => async function requestAdapterInfo(...args) {
-              const spoofed = adapterInfo.get(this);
-              return spoofed || originalRequestAdapterInfo.apply(this, args);
+            const nativeInfoGet = infoDescriptor.get;
+            Object.defineProperty(adapterProto, 'info', {
+              configurable: infoDescriptor.configurable,
+              enumerable: infoDescriptor.enumerable,
+              get: nativeLike(function info() {
+                const spoofed = adapterInfos.get(this);
+                return spoofed || nativeInfoGet.call(this);
+              }, nativeInfoGet, 'get info', 0),
+              set: infoDescriptor.set,
             });
           }
+        }
+
+        replaceMethod(requestTarget, 'requestAdapter', (originalRequestAdapter) => async function requestAdapter(...args) {
+          const adapter = await originalRequestAdapter.apply(this, args);
+          if (!adapter) return adapter;
+          prepareInfo(adapter);
+          return adapter;
+        });
+
+        if (adapterProto && typeof adapterProto.requestAdapterInfo === 'function') {
+          replaceMethod(adapterProto, 'requestAdapterInfo', (originalRequestAdapterInfo) => async function requestAdapterInfo(...args) {
+            const info = await originalRequestAdapterInfo.apply(this, args);
+            if (!info || typeof info !== 'object') return info;
+            infoOverrides.set(info, gpuInfo);
+            for (const key of Object.keys(gpuInfo)) patchInfoAccessor(key);
+            adapterInfos.set(this, info);
+            return info;
+          });
         }
       }
     } catch (_) {}
@@ -3431,34 +3504,111 @@ function buildWorkerInjectionScript(fp) {
       const metadata = CFG.userAgentMetadata || {};
       const brands = Object.freeze((metadata.brands || []).map((item) => Object.freeze({ brand: String(item.brand), version: String(item.version) })));
       const fullVersionList = Object.freeze((metadata.fullVersionList || brands).map((item) => Object.freeze({ brand: String(item.brand), version: String(item.version) })));
-      const uaData = Object.freeze({
+      const uaDataState = {
         brands,
-        mobile: Boolean(metadata.mobile),
+        fullVersionList,
+        fullVersion: String(metadata.fullVersion || metadata.uaFullVersion || ''),
         platform: String(metadata.platform || ''),
-        getHighEntropyValues(hints) {
-          const values = {
-            brands,
-            fullVersionList,
-            fullVersion: String(metadata.fullVersion || metadata.uaFullVersion || ''),
-            uaFullVersion: String(metadata.uaFullVersion || metadata.fullVersion || ''),
-            platform: String(metadata.platform || ''),
-            platformVersion: String(metadata.platformVersion || ''),
-            architecture: String(metadata.architecture || ''),
-            model: String(metadata.model || ''),
-            mobile: Boolean(metadata.mobile),
-            bitness: String(metadata.bitness ?? '64'),
-            wow64: Boolean(metadata.wow64),
-          };
-          const out = { brands, mobile: values.mobile, platform: values.platform };
-          for (const hint of Array.isArray(hints) ? hints : []) if (hint in values) out[hint] = values[hint];
-          return Promise.resolve(out);
-        },
-        toJSON() { return { brands, mobile: Boolean(metadata.mobile), platform: String(metadata.platform || '') }; },
-      });
+        platformVersion: String(metadata.platformVersion || ''),
+        architecture: String(metadata.architecture || ''),
+        model: String(metadata.model || ''),
+        mobile: Boolean(metadata.mobile),
+        bitness: String(metadata.bitness ?? '64'),
+        wow64: Boolean(metadata.wow64),
+      };
+      const uaDataStates = new WeakMap();
+      const uaProto = globalThis.NavigatorUAData && globalThis.NavigatorUAData.prototype;
+      const patchedUaAccessors = new Set();
+      const patchedUaMethods = new Set();
+      const ensureUaAccessor = (key) => {
+        if (!uaProto || patchedUaAccessors.has(key)) return Boolean(uaProto);
+        const descriptor = Object.getOwnPropertyDescriptor(uaProto, key);
+        if (!descriptor || typeof descriptor.get !== 'function') return false;
+        const nativeGet = descriptor.get;
+        try {
+          Object.defineProperty(uaProto, key, nativeAccessor(key, {
+            configurable: descriptor.configurable,
+            enumerable: descriptor.enumerable,
+            get() {
+              const state = uaDataStates.get(this);
+              if (state) return state[key];
+              return nativeGet.call(this);
+            },
+            set: descriptor.set,
+          }));
+        } catch (_) { return false; }
+        patchedUaAccessors.add(key);
+        return true;
+      };
+      const ensureUaMethod = (key, serve) => {
+        if (!uaProto || patchedUaMethods.has(key)) return Boolean(uaProto);
+        const descriptor = Object.getOwnPropertyDescriptor(uaProto, key);
+        if (!descriptor || typeof descriptor.value !== 'function') return false;
+        const nativeMethod = descriptor.value;
+        try {
+          Object.defineProperty(uaProto, key, {
+            configurable: descriptor.configurable,
+            enumerable: descriptor.enumerable,
+            writable: descriptor.writable,
+            value: nativeLike(function (...args) {
+              const state = uaDataStates.get(this);
+              if (state) return serve.apply(this, args);
+              return nativeMethod.apply(this, args);
+            }, nativeMethod, key, nativeMethod.length),
+          });
+        } catch (_) { return false; }
+        patchedUaMethods.add(key);
+        return true;
+      };
+      const highEntropyValue = (state, hints) => {
+        const all = {
+          brands: state.brands,
+          fullVersionList: state.fullVersionList,
+          fullVersion: state.fullVersion,
+          uaFullVersion: state.fullVersion,
+          platform: state.platform,
+          platformVersion: state.platformVersion,
+          architecture: state.architecture,
+          model: state.model,
+          mobile: state.mobile,
+          bitness: state.bitness,
+          wow64: state.wow64,
+        };
+        const out = { brands: state.brands, mobile: state.mobile, platform: state.platform };
+        for (const hint of Array.isArray(hints) ? hints : []) if (hint in all) out[hint] = all[hint];
+        return out;
+      };
+      const makeUaData = () => {
+        const value = Object.create(uaProto || Object.prototype);
+        uaDataStates.set(value, uaDataState);
+        for (const key of ['brands', 'mobile', 'platform']) {
+          if (!ensureUaAccessor(key)) {
+            Object.defineProperty(value, key, { configurable: true, enumerable: true, value: uaDataState[key] });
+          }
+        }
+        if (!ensureUaMethod('getHighEntropyValues', function getHighEntropyValues(hints) {
+          return Promise.resolve(highEntropyValue(uaDataStates.get(this), hints));
+        })) {
+          Object.defineProperty(value, 'getHighEntropyValues', {
+            configurable: true, enumerable: true, writable: true,
+            value: function getHighEntropyValues(hints) { return Promise.resolve(highEntropyValue(uaDataState, hints)); },
+          });
+        }
+        if (!ensureUaMethod('toJSON', function toJSON() {
+          const state = uaDataStates.get(this) || uaDataState;
+          return { brands: state.brands, mobile: state.mobile, platform: state.platform };
+        })) {
+          Object.defineProperty(value, 'toJSON', {
+            configurable: true, enumerable: true, writable: true,
+            value: function toJSON() { return { brands: uaDataState.brands, mobile: uaDataState.mobile, platform: uaDataState.platform }; },
+          });
+        }
+        return value;
+      };
+      const uaData = makeUaData();
       try { Object.defineProperty(navProto, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => uaData })); } catch (_) {}
-      // Only a phone profile replaces the page-side object: a desktop browser reports the real
-      // architecture through the same API, and Chromium fills in the host value whenever the
-      // override leaves the field empty, which is exactly the leak a phone identity cannot have.
+      // Only a phone profile can reach the page-side replacement path. Desktop profiles keep the
+      // native object and only have its prototype members rewritten.
       try {
         const pageNavProto = MOBILE ? globalThis.Navigator?.prototype : null;
         if (pageNavProto) {
@@ -3468,7 +3618,6 @@ function buildWorkerInjectionScript(fp) {
     }
   } catch (_) {}
 
-  // --- worker timezone spoofing ---
   if (CFG.timezone) {
     try {
       const targetTz = String(CFG.timezone).trim();
