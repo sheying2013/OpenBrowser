@@ -41,23 +41,27 @@ const SURFACE_PROBE = `(() => {
     seenProto.add(p);
     let names = []; try { names = Object.getOwnPropertyNames(p); } catch (_) { return; }
     const fns = [];
+    // Descriptor attributes are part of the observable surface: a replacement installed with a
+    // different enumerability than the real build shows up in Object.keys() and descriptor reads.
+    const attrs = (d) => (d.writable ? 'w' : '-') + (d.enumerable ? 'e' : '-') + (d.configurable ? 'c' : '-');
     for (const k of names) {
       let d = null; try { d = Object.getOwnPropertyDescriptor(p, k); } catch (_) { continue; }
       if (!d) continue;
+      const flag = attrs(d);
       if (typeof d.value === 'function') {
         fns.push([k, d.value]);
         let nm = '', ln = -1, hp = null;
         try { nm = d.value.name; } catch (_) {}
         try { ln = d.value.length; } catch (_) {}
         try { hp = Object.prototype.hasOwnProperty.call(d.value, 'prototype'); } catch (_) {}
-        out.keys.push(pn + '.' + k + '#name=' + nm + '#len=' + ln + '#proto=' + hp);
+        out.keys.push(pn + '.' + k + '#' + flag + '#name=' + nm + '#len=' + ln + '#proto=' + hp);
       } else if (typeof d.get === 'function' || typeof d.set === 'function') {
         const g = d.get, s = d.set;
-        out.keys.push(pn + '%' + k + '%get=' + (typeof g === 'function' ? (g.name + '/' + g.length) : '-') +
+        out.keys.push(pn + '%' + k + '#' + flag + '%get=' + (typeof g === 'function' ? (g.name + '/' + g.length) : '-') +
           '%set=' + (typeof s === 'function' ? (s.name + '/' + s.length) : '-'));
       } else {
         // Constants and other plain data properties are part of the surface too.
-        out.keys.push(pn + '!' + k + '!' + typeof d.value);
+        out.keys.push(pn + '!' + k + '#' + flag + '!' + typeof d.value);
       }
     }
     for (let i = 0; i < fns.length; i += 1) {
@@ -73,6 +77,67 @@ const SURFACE_PROBE = `(() => {
   scanProto('globalThis', globalThis);
   out.keys.sort(); out.aliases.sort();
   out.protos = seenProto.size;
+  // Live instances are part of the surface too: shadowing a prototype member with an own property
+  // on the instance (or the reverse) is visible through hasOwnProperty/Object.getOwnPropertyNames.
+  const shapeOf = (obj, key) => {
+    let d = null; try { d = Object.getOwnPropertyDescriptor(obj, key); } catch (_) { return 'err'; }
+    if (!d) return 'absent';
+    const flag = (d.writable ? 'w' : '-') + (d.enumerable ? 'e' : '-') + (d.configurable ? 'c' : '-');
+    if (typeof d.value === 'function') return 'fn:' + flag + ':' + d.value.name + '/' + d.value.length;
+    if (typeof d.value !== 'undefined') return typeof d.value + ':' + flag;
+    return 'acc:' + flag + ':get=' + (typeof d.get === 'function' ? (d.get.name + '/' + d.get.length) : '-') +
+      ':set=' + (typeof d.set === 'function' ? (d.set.name + '/' + d.set.length) : '-');
+  };
+  const snapInstance = (label, obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    const rec = { tag: Object.prototype.toString.call(obj), own: {}, symbols: [], chain: [] };
+    let names = []; try { names = Object.getOwnPropertyNames(obj); } catch (_) {}
+    for (const k of names) rec.own[k] = shapeOf(obj, k);
+    let syms = []; try { syms = Object.getOwnPropertySymbols(obj); } catch (_) {}
+    rec.symbols = syms.map(String).sort();
+    let cur = obj, guard = 0;
+    while (cur && guard < 6) { rec.chain.push(Object.prototype.toString.call(cur)); cur = Object.getPrototypeOf(cur); guard += 1; }
+    out.instances[label] = rec;
+  };
+  out.instances = {};
+  for (const [label, getter] of [
+    ['navigator', () => navigator],
+    ['screen', () => screen],
+    ['document', () => document],
+    ['location', () => location],
+    ['history', () => history],
+    ['performance', () => performance],
+    ['speechSynthesis', () => speechSynthesis],
+    ['mediaDevices', () => navigator.mediaDevices],
+    ['userAgentData', () => navigator.userAgentData],
+    ['screenOrientation', () => screen.orientation],
+    ['visualViewport', () => window.visualViewport],
+    ['documentElement', () => document.documentElement],
+    ['navigatorProto', () => Object.getPrototypeOf(navigator)],
+    ['canvas', () => document.createElement('canvas')],
+    ['canvasContext', () => document.createElement('canvas').getContext('2d')],
+    ['webgl', () => document.createElement('canvas').getContext('webgl')],
+    ['audioContext', () => new (window.AudioContext || window.webkitAudioContext)()],
+    ['audioAnalyser', () => new (window.AudioContext || window.webkitAudioContext)().createAnalyser()],
+    ['rtcPeerConnection', () => new RTCPeerConnection()],
+    ['storage', () => localStorage],
+    ['plugins', () => navigator.plugins],
+    ['mimeTypes', () => navigator.mimeTypes],
+  ]) {
+    try { snapInstance(label, getter()); } catch (_) {}
+  }
+  try {
+    const ua = {};
+    if (typeof NavigatorUAData !== 'undefined') {
+      for (const k of ['getHighEntropyValues', 'toJSON', 'brands', 'mobile', 'platform']) {
+        const d = Object.getOwnPropertyDescriptor(NavigatorUAData.prototype, k);
+        ua[k] = d ? { value: typeof d.value, enumerable: d.enumerable, configurable: d.configurable,
+          writable: 'writable' in d ? d.writable : undefined, name: d.value ? d.value.name : (d.get ? d.get.name : undefined) } : null;
+      }
+      ua.ownOnInstance = (() => { try { return Object.getOwnPropertyNames(navigator.userAgentData).sort(); } catch (_) { return null; } })();
+    }
+    out.uaData = ua;
+  } catch (e) { out.uaData = { err: String(e) }; }
   try {
     const rf = Object.getOwnPropertyDescriptor(Element.prototype, 'requestFullscreen');
     const wf = Object.getOwnPropertyDescriptor(Element.prototype, 'webkitRequestFullscreen');
@@ -240,6 +305,46 @@ const check = (name, fn) => {
     assert.strictEqual(f.webkitLength, 0, 'legacy entry point arity must match the real build');
     assert.deepStrictEqual(injected.fullscreen, baseline.fullscreen,
       'the fullscreen surface must match the same build without the injected layer');
+  });
+
+  check('client-hint members keep their native descriptor shape', () => {
+    const a = injected.uaData || {};
+    const b = baseline.uaData || {};
+    assert.ok(!a.err, `client-hint probe failed: ${a.err}`);
+    assert.deepStrictEqual(a, b, 'the client-hint surface must match the same build without the injected layer');
+    for (const k of ['getHighEntropyValues', 'toJSON']) {
+      assert.strictEqual(a[k].enumerable, true,
+        `${k} is enumerable on the prototype in a real build, so it must stay enumerable here`);
+      assert.strictEqual(a[k].configurable, true, `${k} must stay configurable`);
+      assert.strictEqual(a[k].writable, true, `${k} must stay writable`);
+    }
+    assert.deepStrictEqual(a.ownOnInstance, [],
+      'the userAgentData instance carries no own members in a real build');
+  });
+
+  check('live instances keep the same own-property shape', () => {
+    const base = baseline.instances || {};
+    const inj = injected.instances || {};
+    const labels = new Set([...Object.keys(base), ...Object.keys(inj)]);
+    assert.ok(labels.size >= 15, `instance snapshot covered too few objects: ${labels.size}`);
+    const drift = [];
+    for (const label of labels) {
+      const before = JSON.stringify(base[label]);
+      const after = JSON.stringify(inj[label]);
+      if (before === after) continue;
+      const a = base[label] || {}, b = inj[label] || {};
+      const keys = new Set([...Object.keys(a.own || {}), ...Object.keys(b.own || {})]);
+      for (const k of keys) {
+        if ((a.own || {})[k] !== (b.own || {})[k]) {
+          drift.push(`${label}.${k}: native=${(a.own || {})[k] || 'absent'} injected=${(b.own || {})[k] || 'absent'}`);
+        }
+      }
+      if (JSON.stringify(a.symbols) !== JSON.stringify(b.symbols)) drift.push(`${label}: symbol keys differ`);
+      if (JSON.stringify(a.chain) !== JSON.stringify(b.chain)) drift.push(`${label}: prototype chain differs`);
+      if (a.tag !== b.tag) drift.push(`${label}: toStringTag ${a.tag} -> ${b.tag}`);
+    }
+    assert.deepStrictEqual(drift, [],
+      `instances gained or lost own members versus the same build without injection: ${drift.join('; ')}`);
   });
 
   const failed = results.filter((r) => !r.ok);

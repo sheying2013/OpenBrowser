@@ -2304,18 +2304,60 @@ function buildInjectionScript(fp) {
         }
       }
     } catch (_) {}
+    // These live on the prototype in a real build. Shadowing them on the instance added own
+    // properties that a real document/viewport never carries, so the replacements are installed on
+    // the prototype and keep the original enumerability.
     try {
       const viewport = window.visualViewport;
-      if (viewport) {
-        const initialVisualWidth = Number(viewport.width) || initialInnerWidth;
-        const initialVisualHeight = Number(viewport.height) || initialInnerHeight;
-        Object.defineProperty(viewport, 'width', nativeAccessor('width', { configurable: true, get: () => liveViewportSize('width', initialVisualWidth) }));
-        Object.defineProperty(viewport, 'height', nativeAccessor('height', { configurable: true, get: () => liveViewportSize('height', initialVisualHeight) }));
+      const viewportProto = viewport ? Object.getPrototypeOf(viewport) : null;
+      if (viewportProto) {
+        const baseSizes = new WeakMap();
+        const baselineFor = (instance, key, nativeDesc, fallback) => {
+          let record = baseSizes.get(instance);
+          if (!record) { record = {}; baseSizes.set(instance, record); }
+          if (record[key] === undefined) {
+            let value = fallback;
+            try {
+              if (nativeDesc && typeof nativeDesc.get === 'function') {
+                const native = Number(nativeDesc.get.call(instance));
+                if (Number.isFinite(native) && native > 0) value = native;
+              }
+            } catch (_) {}
+            record[key] = value;
+          }
+          return record[key];
+        };
+        const widthDesc = rawVisualWidthDesc || Object.getOwnPropertyDescriptor(viewportProto, 'width');
+        const heightDesc = rawVisualHeightDesc || Object.getOwnPropertyDescriptor(viewportProto, 'height');
+        if (widthDesc && (typeof widthDesc.get === 'function' || typeof widthDesc.value === 'function')) {
+          Object.defineProperty(viewportProto, 'width', nativeAccessor('width', {
+            configurable: true,
+            enumerable: widthDesc.enumerable,
+            get() { return liveViewportSize('width', baselineFor(this, 'w', widthDesc, initialInnerWidth)); }
+          }));
+        }
+        if (heightDesc && (typeof heightDesc.get === 'function' || typeof heightDesc.value === 'function')) {
+          Object.defineProperty(viewportProto, 'height', nativeAccessor('height', {
+            configurable: true,
+            enumerable: heightDesc.enumerable,
+            get() { return liveViewportSize('height', baselineFor(this, 'h', heightDesc, initialInnerHeight)); }
+          }));
+        }
       }
     } catch (_) {}
     try {
-      Object.defineProperty(document, 'fullscreenEnabled', nativeAccessor('fullscreenEnabled', { configurable: true, get: () => true }));
-      Object.defineProperty(document, 'webkitFullscreenEnabled', nativeAccessor('webkitFullscreenEnabled', { configurable: true, get: () => true }));
+      const docProto = (typeof Document !== 'undefined' && Document.prototype) || Object.getPrototypeOf(document);
+      const forceDocFlag = (key) => {
+        const existing = docProto ? Object.getOwnPropertyDescriptor(docProto, key) : null;
+        if (!existing) return; // never invent an entry point the build does not expose
+        Object.defineProperty(docProto, key, nativeAccessor(key, {
+          configurable: true,
+          enumerable: existing.enumerable,
+          get: () => true
+        }));
+      };
+      forceDocFlag('fullscreenEnabled');
+      forceDocFlag('webkitFullscreenEnabled');
     } catch (_) {}
     try {
       // The two entry points are separate functions in a real build - distinct objects, each named

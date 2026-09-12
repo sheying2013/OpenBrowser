@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.18'
+        default: 'v1.0.19'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,19 +42,19 @@ env:
 
     ### 中文
 
-    - **全屏入口对象别名（真实缺陷）**：`Element.prototype.requestFullscreen` 与 `Element.prototype.webkitRequestFullscreen` 此前被装成**同一个函数对象**，而真实构建里它们是两个不同对象，且后者自带名字 `webkitRequestFullscreen`。注入后 `requestFullscreen === webkitRequestFullscreen` 返回 `true`、legacy 入口的 `name` 变成 `requestFullscreen` —— 一行相等判断或一次 `.name` 读取就能判定环境被改写。现已改为各自独立的替换函数，`name` / `length` / `prototype` 与真实构建逐项一致。
-    - **新增常驻回归：静态表面差分**。新增 `selftest:surfacediff`，遍历页面可达的全部原型（本次 951 个原型、约 9.9k 个表面项），与**同一二进制未注入基线**逐项对照，锁定四件事：不新增属性、不丢失属性、不新增函数对象别名、`name`/`length`/`prototype` 元数据一致。该用例已用变异验证：把旧的共享对象写法还原回去，三项断言立刻失败且退出码为 1。
-    - **CI 侧同步加护栏**：隔离回归中新增静态断言，禁止再把同一个替换函数挂到两个入口上。
-    - **顺带确认（无差异）**：注入层不泄漏源码 —— 对 Navigator / Screen / Canvas / WebGL / MediaDevices / SpeechSynthesis / Date / Performance / AudioContext / RTCPeerConnection / Element / Document 等原型上的 **1,164 个函数**逐一执行 `Function.prototype.toString`，全部返回 `[native code]`。
-    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.18**。
+    - **Client Hints 成员可枚举性（真实缺陷）**：`NavigatorUAData.prototype.getHighEntropyValues` 与 `toJSON` 此前被写成 `enumerable: false`，而真实构建里这两个接口操作是 `enumerable: true / configurable: true / writable: true`。差别直接暴露在 `Object.keys(NavigatorUAData.prototype)` 与描述符读取上。已按真实形态修正（真实 Chrome、原生内核、注入后三方取证结果现在逐项一致：`Object.keys` 均列出全部 5 个成员，实例无自有属性）。
+    - **实例上的影子属性（真实缺陷，两处）**：`document.fullscreenEnabled` / `document.webkitFullscreenEnabled` 与 `visualViewport.width` / `height` 此前被定义成**实例自有属性**，而真实构建里它们都在**原型**上（`Document.prototype` / `VisualViewport.prototype`）。`hasOwnProperty` 或 `Object.getOwnPropertyNames(document)` 一读就能看出差别。现已改到原型上定义、保留原生可枚举性，取值行为不变（视口尺寸实测仍为 756×469，与窗口一致）。
+    - **静态表面差分回归扩容**：`selftest:surfacediff` 在原有「键集合 / 函数对象别名 / name·length·prototype」之上，新增**描述符属性**（writable·enumerable·configurable）与 **22 个活动实例的自有属性形态 + Symbol 键 + 原型链**对比，仍以同一二进制未注入为基线。已两次变异验证：还原旧的共享对象写法、或还原实例影子写法，均立刻失败并退出码 1。
+    - **修正一条写死错误期望的旧断言**：隐身回归里原本要求 Client Hints 成员「非枚举」，与真实构建相反；已改为锁定原生描述符形态。
+    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.19**。
 
     ### English
 
-    - **Fullscreen entry-point aliasing (real defect)**: `Element.prototype.requestFullscreen` and `Element.prototype.webkitRequestFullscreen` were installed as the *same function object*, while a genuine build keeps them distinct and names the legacy one `webkitRequestFullscreen`. Under injection `requestFullscreen === webkitRequestFullscreen` returned `true` and the legacy entry point carried the standard name - a single equality test or `.name` read exposed the rewrite. Each entry point now receives its own replacement with matching `name`, `length` and `prototype`.
-    - **New standing regression: static-surface diff.** The new `selftest:surfacediff` walks every prototype reachable from the page (951 prototypes, ~9.9k surface entries in this run) and compares it against the *same binary without the injected layer*, pinning four properties: no added property, no removed property, no new function-object alias, and matching `name`/`length`/`prototype` metadata. The case was mutation-tested: restoring the shared-object version fails three assertions and exits non-zero.
-    - **CI guard**: the isolation suite now fails statically if one replacement is again mounted on two entry points.
-    - **Also confirmed clean**: the injected layer leaks no source - `Function.prototype.toString` on **1,164 functions** across the Navigator, Screen, Canvas, WebGL, MediaDevices, SpeechSynthesis, Date, Performance, AudioContext, RTCPeerConnection, Element and Document prototypes returns `[native code]` for every one.
-    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.18**.
+    - **Client Hints member enumerability (real defect)**: `NavigatorUAData.prototype.getHighEntropyValues` and `toJSON` were installed with `enumerable: false`, while a genuine build exposes both interface operations as `enumerable: true / configurable: true / writable: true`. The gap was readable straight through `Object.keys(NavigatorUAData.prototype)` and descriptor inspection. Both now match the native shape - a three-way check (local Chrome, the bundled kernel, and the kernel with injection) reports identical descriptors, all five members listed by `Object.keys`, and no own members on the instance.
+    - **Shadowed instance properties (real defect, two sites)**: `document.fullscreenEnabled` / `document.webkitFullscreenEnabled` and `visualViewport.width` / `height` were installed as **own properties of the instance**, while a genuine build keeps them on the prototype (`Document.prototype` / `VisualViewport.prototype`). A single `hasOwnProperty` or `Object.getOwnPropertyNames(document)` read exposed that. They are now defined on the prototype with their native enumerability, and the reported values are unchanged (viewport still measures 756x469, matching the window).
+    - **Static-surface regression widened**: `selftest:surfacediff` now also compares **descriptor attributes** (writable, enumerable, configurable) and the **own-property shape of 22 live instances plus their symbol keys and prototype chains**, still against the same binary without the injected layer. Mutation-tested twice: restoring the shared-object version or the instance-shadow version each fails immediately with a non-zero exit.
+    - **A stale assertion that encoded the wrong expectation was corrected**: the stealth regression used to demand that the Client Hints members be non-enumerable, the opposite of a real build. It now pins the native descriptor shape.
+    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.19**.
 
     ### 下载 / Downloads
 

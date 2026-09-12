@@ -123,11 +123,17 @@ ok('NavigatorUAData.prototype.brands getter stringifies as native', /\[native co
 const jsonVal = vm.runInContext("navigator.userAgentData.toJSON()", ctx);
 ok('userAgentData.toJSON returns brands/mobile/platform', jsonVal && Array.isArray(jsonVal.brands) && typeof jsonVal.platform === 'string');
 
+// Interface operations are enumerable, configurable and writable on the prototype in a real build
+// (verified against a local Chrome and the bundled kernel: Object.keys(NavigatorUAData.prototype)
+// lists all five members). Marking them non-enumerable changed what a page sees through Object.keys
+// and descriptor reads, so the expected shape is the native one.
 const toJSONDesc = vm.runInContext("Object.getOwnPropertyDescriptor(NavigatorUAData.prototype, 'toJSON')", ctx);
-ok('NavigatorUAData.prototype.toJSON is non-enumerable', toJSONDesc.enumerable === false);
+ok('NavigatorUAData.prototype.toJSON keeps the native descriptor shape',
+  toJSONDesc.enumerable === true && toJSONDesc.configurable === true && toJSONDesc.writable === true);
 
 const getHighEntropyValuesDesc = vm.runInContext("Object.getOwnPropertyDescriptor(NavigatorUAData.prototype, 'getHighEntropyValues')", ctx);
-ok('NavigatorUAData.prototype.getHighEntropyValues is non-enumerable', getHighEntropyValuesDesc.enumerable === false);
+ok('NavigatorUAData.prototype.getHighEntropyValues keeps the native descriptor shape',
+  getHighEntropyValuesDesc.enumerable === true && getHighEntropyValuesDesc.configurable === true && getHighEntropyValuesDesc.writable === true);
 
 // 2. AudioBuffer checks
 ctx.buf = vm.runInContext("new AudioBuffer()", ctx);

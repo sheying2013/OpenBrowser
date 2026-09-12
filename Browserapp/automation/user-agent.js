@@ -446,7 +446,9 @@ function buildUaInjectionScript(uaProfile) {
         }
       }.getHighEntropyValues;
       nativeSource.set(geh, "function getHighEntropyValues() { [native code] }");
-      Object.defineProperty(targetProto, "getHighEntropyValues", { configurable: true, writable: true, enumerable: false, value: geh });
+      // Interface operations are enumerable on the prototype in a real build; making them
+      // non-enumerable changed what Object.keys()/descriptor reads report for this surface.
+      Object.defineProperty(targetProto, "getHighEntropyValues", { configurable: true, writable: true, enumerable: true, value: geh });
       const tj = {
         toJSON() {
           if (!(this instanceof NavigatorUAData) && Object.prototype.toString.call(this) !== "[object NavigatorUAData]") {
@@ -456,7 +458,7 @@ function buildUaInjectionScript(uaProfile) {
         }
       }.toJSON;
       nativeSource.set(tj, "function toJSON() { [native code] }");
-      Object.defineProperty(targetProto, "toJSON", { configurable: true, writable: true, enumerable: false, value: tj });
+      Object.defineProperty(targetProto, "toJSON", { configurable: true, writable: true, enumerable: true, value: tj });
 
       const existing = (() => { try { return navigator.userAgentData; } catch (_) { return null; } })();
       if (existing) {
@@ -505,7 +507,7 @@ function buildUaInjectionScript(uaProfile) {
         }
       }.getHighEntropyValues;
       nativeSource.set(geh, "function getHighEntropyValues() { [native code] }");
-      Object.defineProperty(uaData, "getHighEntropyValues", { configurable: true, writable: true, enumerable: false, value: geh });
+      Object.defineProperty(uaData, "getHighEntropyValues", { configurable: true, writable: true, enumerable: true, value: geh });
       const tj = {
         toJSON() {
           if (this !== uaData) {
@@ -515,7 +517,7 @@ function buildUaInjectionScript(uaProfile) {
         }
       }.toJSON;
       nativeSource.set(tj, "function toJSON() { [native code] }");
-      Object.defineProperty(uaData, "toJSON", { configurable: true, writable: true, enumerable: false, value: tj });
+      Object.defineProperty(uaData, "toJSON", { configurable: true, writable: true, enumerable: true, value: tj });
       define(Navigator.prototype, "userAgentData", () => uaData);
       try { delete navigator.userAgentData; } catch (_) {}
     }
