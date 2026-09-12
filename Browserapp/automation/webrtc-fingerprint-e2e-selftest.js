@@ -44,12 +44,40 @@ const check = (name, fn) => {
 const skip = (name) => { results.push({ name, ok: true }); console.log(`  SKIP  ${name}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// A reflexive candidate only exists when a STUN server answers, and that candidate is the one that
+// carries the machine address a second time in its base-address field. The test therefore answers
+// binding requests itself, on the loopback address, so it never depends on outside infrastructure.
+const dgram = require('dgram');
+const STUN_MAGIC = 0x2112A442;
+const startStun = () => new Promise((resolve) => {
+  const socket = dgram.createSocket('udp4');
+  socket.on('message', (message, from) => {
+    if (message.length < 20 || message.readUInt16BE(0) !== 0x0001 || message.readUInt32BE(4) !== STUN_MAGIC) return;
+    if (!from.address.includes('.')) return;
+    const body = Buffer.alloc(12);
+    body.writeUInt16BE(0x0020, 0);
+    body.writeUInt16BE(8, 2);
+    body.writeUInt8(1, 5);
+    body.writeUInt16BE(from.port ^ (STUN_MAGIC >> 16), 6);
+    const mapped = Buffer.from(from.address.split('.').map(Number));
+    const mask = Buffer.from([(STUN_MAGIC >>> 24) & 0xff, (STUN_MAGIC >>> 16) & 0xff, (STUN_MAGIC >>> 8) & 0xff, STUN_MAGIC & 0xff]);
+    for (let i = 0; i < 4; i += 1) body[8 + i] = mapped[i] ^ mask[i];
+    const head = Buffer.alloc(20);
+    head.writeUInt16BE(0x0101, 0);
+    head.writeUInt16BE(body.length, 2);
+    head.writeUInt32BE(STUN_MAGIC, 4);
+    message.copy(head, 8, 8, 20);
+    socket.send(Buffer.concat([head, body]), from.port, from.address, () => {});
+  });
+  socket.bind(0, '127.0.0.1', () => resolve({ port: socket.address().port, close: () => { try { socket.close(); } catch (_) {} } }));
+});
+
 // Gather with the modern no-argument setLocalDescription: it is the path a detector would take.
 const PROBE = `(async () => {
   const out = { candidates: [], errs: [] };
   const ownOf = (value) => { try { return Object.getOwnPropertyNames(value).sort(); } catch (_) { return null; } };
   try {
-    const pc = new RTCPeerConnection({ iceServers: [] });
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: '__STUN_URL__' }] });
     // An m-line is required or ICE has nothing to gather and the SDP stays empty.
     pc.createDataChannel('probe');
     const events = [];
@@ -125,10 +153,57 @@ const PROBE = `(async () => {
       spread: addresses(Array.from(stats).map((pair) => pair[1])),
       get: first ? [stats.get(first.id).address] : [],
       entryOwn: first ? ownOf(first) : null,
+      // The entry picked first can be a different candidate type in each pass, so the shape is
+      // compared per candidate type instead of by position.
+      entryOwnByType: locals.reduce((acc, entry) => {
+        const key = String(entry.candidateType) + '/' + String(entry.protocol || 'udp');
+        if (entry && !acc[key]) acc[key] = ownOf(entry);
+        return acc;
+      }, {}),
       iteratorTag: Object.prototype.toString.call(stats.values()),
       nextKeys: Object.getOwnPropertyNames(stats.values().next()).join(','),
       getFresh: first ? stats.get(first.id) !== stats.get(first.id) : null,
+      related: collected.filter((entry) => entry && entry.type === 'local-candidate')
+        .map((entry) => [entry.candidateType, String(entry.relatedAddress || '')]),
     };
+
+    // RTCIceTransport answers out of gathering alone - no connection, no event listener - and hands
+    // the same candidates out a second time.
+    const iceTransport = pc.sctp && pc.sctp.transport && pc.sctp.transport.iceTransport;
+    if (iceTransport && typeof iceTransport.getLocalCandidates === 'function') {
+      const firstList = iceTransport.getLocalCandidates();
+      const secondList = iceTransport.getLocalCandidates();
+      const pair = typeof iceTransport.getSelectedCandidatePair === 'function' ? iceTransport.getSelectedCandidatePair() : null;
+      out.transport = {
+        local: firstList.map((candidate) => candidate.candidate),
+        freshArray: firstList !== secondList,
+        stableObjects: firstList[0] === secondList[0],
+        brand: firstList.every((candidate) => candidate instanceof RTCIceCandidate),
+        pairLocal: pair && pair.local ? pair.local.candidate : null,
+      };
+    } else {
+      out.transport = null;
+    }
+
+    // Comparing what went into a description against what comes back out is the cheapest rewrite
+    // detector a page has, in either direction.
+    const remotePc = new RTCPeerConnection();
+    remotePc.createDataChannel('echo');
+    const remoteOffer = await remotePc.createOffer();
+    const syntheticRemote = remoteOffer.sdp.replace(/c=IN IP4 [^\\r\\n]+/, 'c=IN IP4 10.11.12.13');
+    await remotePc.setRemoteDescription({ type: 'offer', sdp: syntheticRemote });
+    const remoteBack = remotePc.remoteDescription && remotePc.remoteDescription.sdp;
+    out.remoteEcho = { same: remoteBack === syntheticRemote, kept: String(remoteBack).includes('10.11.12.13') };
+
+    const localPc = new RTCPeerConnection();
+    localPc.createDataChannel('echo');
+    const localOffer = await localPc.createOffer();
+    const syntheticLocal = localOffer.sdp.replace(/c=IN IP4 [^\\r\\n]+/, 'c=IN IP4 10.11.12.14');
+    await localPc.setLocalDescription({ type: 'offer', sdp: syntheticLocal });
+    const localBack = localPc.localDescription && localPc.localDescription.sdp;
+    out.localEcho = { same: localBack === syntheticLocal, kept: String(localBack).includes('10.11.12.14') };
+    remotePc.close();
+    localPc.close();
     pc.close();
   } catch (e) { out.errs.push(String(e && e.name) + ': ' + String(e && e.message).slice(0, 160)); }
   return JSON.stringify(out);
@@ -180,6 +255,8 @@ const hostAddresses = () => Object.values(os.networkInterfaces())
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}/`;
 
+  const stun = await startStun();
+  const probe = PROBE.replace('__STUN_URL__', 'stun:127.0.0.1:' + stun.port);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob-webrtc-'));
   const child = spawn(runtime, [
     '--headless=new',
@@ -206,6 +283,7 @@ const hostAddresses = () => Object.values(os.networkInterfaces())
     try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
     try { execSync(`pkill -f "user-data-dir=${dir}" 2>/dev/null || true`); } catch (_) {}
     try { server.close(); } catch (_) {}
+    stun.close();
   };
   if (!port) {
     stop();
@@ -224,7 +302,7 @@ const hostAddresses = () => Object.values(os.networkInterfaces())
   const sid = attached.result.sessionId;
   await sleep(1200);
 
-  const raw = await cdp.evalValue(PROBE, sid);
+  const raw = await cdp.evalValue(probe, sid);
 
   const profile = {
     id: 'webrtc-e2e', kernelVersion: '148.0.7778.165', os: 'Windows',
@@ -238,7 +316,7 @@ const hostAddresses = () => Object.values(os.networkInterfaces())
     profile,
     { applyKey: 'webrtc-e2e' },
   );
-  const injected = await cdp.evalValue(PROBE, sid);
+  const injected = await cdp.evalValue(probe, sid);
 
   try { ws.close(); } catch (_) {}
   stop();
@@ -341,9 +419,56 @@ const hostAddresses = () => Object.values(os.networkInterfaces())
   check('the statistics report keeps its native shape', () => {
     assert.strictEqual(injected.stats.iteratorTag, raw.stats.iteratorTag, 'iterator tag');
     assert.strictEqual(injected.stats.nextKeys, raw.stats.nextKeys, 'iterator result keys');
-    assert.deepStrictEqual(injected.stats.entryOwn, raw.stats.entryOwn, 'entry own properties');
+    // Only the kinds of candidate both passes actually gathered can be compared - a blocked UDP path
+    // would leave one pass without a shape at all - but at least two have to line up.
+    const shared = Object.keys(raw.stats.entryOwnByType).filter((key) => injected.stats.entryOwnByType[key]);
+    assert.ok(shared.length >= 2, 'expected at least two candidate kinds in both passes: ' + shared.join(','));
+    for (const key of shared) {
+      assert.deepStrictEqual(injected.stats.entryOwnByType[key], raw.stats.entryOwnByType[key], 'entry own properties for ' + key);
+    }
     assert.strictEqual(injected.stats.getFresh, raw.stats.getFresh, 'get() must return a fresh object');
     assert.ok(injected.stats.size > 0 && raw.stats.size > 0, 'reports must not be empty');
+  });
+
+  // The base address a reflexive candidate was observed from travels beside the candidate address.
+  const relatedOf = (value) => (value.related || []).map((row) => String(row[1] || '')).filter(Boolean);
+  if (privateOf(relatedOf(raw.stats).join(' ')).length) {
+    check('the base address beside a candidate is masked in the statistics', () => {
+      assert.deepStrictEqual(privateOf(relatedOf(injected.stats).join(' ')), [], 'relatedAddress leaked: ' + relatedOf(injected.stats).join(' '));
+    });
+    check('the raw statistics expose that base address (test is sensitive)', () => { assert.ok(true); });
+  } else {
+    skip('no reflexive candidate exposed a base address in this environment (sensitivity unproven)');
+  }
+
+  // RTCIceTransport is a second door onto the same candidate list, reachable without a connection.
+  const transportText = (value) => value ? (value.local || []).join(' ') + ' ' + String(value.pairLocal || '') : '';
+  if (injected.transport && raw.transport && raw.transport.local.length) {
+    if (privateOf(transportText(raw.transport)).length) {
+      check('the transport candidate list no longer carries a machine address', () => {
+        assert.deepStrictEqual(privateOf(transportText(injected.transport)), [], 'transport leaked: ' + transportText(injected.transport));
+      });
+      check('the raw transport list exposes the machine address (test is sensitive)', () => { assert.ok(true); });
+    } else {
+      skip('the raw transport list exposed no machine address in this environment (sensitivity unproven)');
+    }
+    check('the transport list keeps the engine shape', () => {
+      assert.strictEqual(injected.transport.freshArray, raw.transport.freshArray, 'a fresh array per call');
+      assert.strictEqual(injected.transport.stableObjects, raw.transport.stableObjects, 'stable candidate objects');
+      assert.strictEqual(injected.transport.brand, true, 'candidates stay RTCIceCandidate instances');
+    });
+  } else {
+    skip('the runtime exposes no RTCIceTransport candidate list (transport surface unproven)');
+  }
+
+  check('a remote description the page set comes back byte-identical', () => {
+    assert.strictEqual(raw.remoteEcho.same, true, 'the raw engine returns what was set');
+    assert.strictEqual(injected.remoteEcho.same, true, 'the read-back must be exactly what the page set');
+    assert.strictEqual(injected.remoteEcho.kept, true, 'the synthetic address must survive the read-back');
+  });
+  check('a local description the page supplied comes back byte-identical', () => {
+    assert.strictEqual(injected.localEcho.same, true, 'the read-back must be exactly what the page supplied');
+    assert.strictEqual(injected.localEcho.kept, true, 'the synthetic address must survive the read-back');
   });
 
   const failed = results.filter((r) => !r.ok);

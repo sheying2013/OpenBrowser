@@ -19,12 +19,16 @@ const EXIT_IP = '203.0.113.9';
 const PRIVATE_V4 = '192.168.1.20';
 const PUBLIC_V4 = '198.51.100.7';
 const PUBLIC_RELAY = '198.51.100.8';
+const PUBLIC_HOST = '198.51.100.9';
 
 const HOST_V4 = `a=candidate:1 1 udp 2113937151 ${PRIVATE_V4} 55555 typ host generation 0 ufrag abcd network-cost 999`;
 const HOST_V6 = 'a=candidate:2 1 udp 2113939711 fe80::c8f:1%en0 55556 typ host generation 0 ufrag abcd network-cost 999';
 const HOST_MDNS = 'a=candidate:3 1 udp 2113932031 8b3f9d1c-1234.local 55557 typ host generation 0 ufrag abcd network-cost 999';
 const SRFLX = `a=candidate:4 1 udp 1685987071 ${PUBLIC_V4} 55558 typ srflx raddr ${PRIVATE_V4} rport 55555 generation 0 ufrag abcd network-cost 999`;
 const RELAY = `a=candidate:5 1 udp 41885439 ${PUBLIC_RELAY} 55559 typ relay raddr 0.0.0.0 rport 0 generation 0 ufrag abcd network-cost 999`;
+// A machine with a routable address of its own hands out a public host candidate, which the private
+// -address-only policy used to leave on screen.
+const HOST_PUBLIC = `a=candidate:6 1 udp 2113937151 ${PUBLIC_HOST} 55560 typ host generation 0 ufrag abcd network-cost 999`;
 
 const STUBS = `
 globalThis.window = globalThis;
@@ -45,9 +49,12 @@ const SDP = ${JSON.stringify([
   HOST_V4,
   HOST_V6,
   HOST_MDNS,
+  HOST_PUBLIC,
   SRFLX,
   RELAY,
   'a=end-of-candidates',
+  'm=video 9 UDP/TLS/RTP/SAVPF 96',
+  'c=IN IP4 ' + PUBLIC_RELAY,
 ].join(String.fromCharCode(13, 10)))};
 
 class RTCSessionDescription {
@@ -99,6 +106,39 @@ Object.defineProperties(RTCPeerConnectionIceEvent.prototype, {
   candidate: { configurable: true, enumerable: true, get() { return iceEventSlots.get(this).candidate; } },
   url: { configurable: true, enumerable: true, get() { return iceEventSlots.get(this).url; } },
 });
+// RTCPeerConnection.sctp.transport.iceTransport hands the candidate list out again, and gathering
+// alone fills it - no connection and no event listener needed - so the stub models it too.
+const iceTransportSlots = new WeakMap();
+class RTCIceTransport {
+  getLocalCandidates() { return (iceTransportSlots.get(this) || { local: [] }).local; }
+  getRemoteCandidates() { return (iceTransportSlots.get(this) || { remote: [] }).remote; }
+  getSelectedCandidatePair() { return (iceTransportSlots.get(this) || { pair: null }).pair; }
+}
+// The report the engine builds carries the machine address twice: as the candidate address and as
+// the base address the candidate was observed from.
+class RTCStatsReport {
+  constructor(entries) { this._entries = entries || []; }
+  get size() { return this._entries.length; }
+  get(id) { return this._entries.filter((entry) => entry && entry.id === id)[0]; }
+  forEach(callback, thisArg) { for (const entry of this._entries) callback.call(thisArg, entry, entry.id, this); }
+  values() { return this._entries[Symbol.iterator](); }
+  entries() { return this._entries.map((entry) => [entry.id, entry]).values(); }
+  keys() { return this._entries.map((entry) => entry.id).values(); }
+  [Symbol.iterator]() { return this.entries(); }
+}
+globalThis.__statsEntries = [
+  { id: 'L1', type: 'local-candidate', candidateType: 'srflx', address: '${PUBLIC_V4}', ip: '${PUBLIC_V4}', port: 55558, protocol: 'udp', foundation: '4', priority: 1685987071, relatedAddress: '${PRIVATE_V4}', relatedPort: 55555, timestamp: 1 },
+  { id: 'L2', type: 'local-candidate', candidateType: 'relay', address: '${PUBLIC_RELAY}', ip: '${PUBLIC_RELAY}', port: 55559, protocol: 'udp', foundation: '5', priority: 41885439, relatedAddress: '${PRIVATE_V4}', relatedPort: 55561, timestamp: 2 },
+  { id: 'R1', type: 'remote-candidate', candidateType: 'host', address: '203.0.113.77', ip: '203.0.113.77', port: 40000, protocol: 'udp', timestamp: 3 },
+];
+globalThis.__iceTransport = (() => {
+  const transport = Object.create(RTCIceTransport.prototype);
+  const localHost = new RTCIceCandidate({ candidate: 'candidate:1 1 udp 2113937151 ${PRIVATE_V4} 55555 typ host generation 0 ufrag abcd network-cost 999', sdpMid: '', sdpMLineIndex: 0, usernameFragment: 'abcd' });
+  const localRelay = new RTCIceCandidate({ candidate: 'candidate:5 1 udp 41885439 ${PUBLIC_RELAY} 55559 typ relay raddr ${PRIVATE_V4} rport 55561 generation 0 ufrag abcd network-cost 999', sdpMid: '', sdpMLineIndex: 0, usernameFragment: 'abcd' });
+  const remoteHost = new RTCIceCandidate({ candidate: 'candidate:7 1 udp 2113937151 203.0.113.77 40000 typ host generation 0 ufrag abcd network-cost 999', sdpMid: '', sdpMLineIndex: 0, usernameFragment: 'abcd' });
+  iceTransportSlots.set(transport, { local: [localHost, localRelay], remote: [remoteHost], pair: { local: localHost, remote: remoteHost } });
+  return transport;
+})();
 globalThis.__iceEventProtoShape = Object.getOwnPropertyNames(RTCPeerConnectionIceEvent.prototype).sort();
 globalThis.__iceEventCandidateGetter = Object.getOwnPropertyDescriptor(RTCPeerConnectionIceEvent.prototype, 'candidate').get;
 function RTCPeerConnection() { this._local = null; this._remote = null; this._onice = null; this._listeners = new Map(); }
@@ -117,6 +157,7 @@ Object.defineProperty(RTCPeerConnection.prototype, 'currentLocalDescription', {
 Object.defineProperty(RTCPeerConnection.prototype, 'pendingLocalDescription', {
   configurable: true, enumerable: true, get() { return this._local; },
 });
+RTCPeerConnection.prototype.getStats = async function getStats() { return new RTCStatsReport(globalThis.__statsEntries); };
 RTCPeerConnection.prototype.setRemoteDescription = async function setRemoteDescription(desc) {
   const src = desc || {};
   this._remote = new RTCSessionDescription({ type: src.type, sdp: src.sdp });
@@ -172,6 +213,8 @@ const makeNativeGetter = (key, getValue) => {
 // visible to any page that enumerates the interface, and no page would see it in a stock build.
 globalThis.__protoShapes = {
   pc: Object.getOwnPropertyNames(RTCPeerConnection.prototype).sort(),
+  iceTransport: Object.getOwnPropertyNames(RTCIceTransport.prototype).sort(),
+  statsReport: Object.getOwnPropertyNames(RTCStatsReport.prototype).sort(),
   candidate: Object.getOwnPropertyNames(RTCIceCandidate.prototype).sort(),
   iceEvent: Object.getOwnPropertyNames(RTCPeerConnectionIceEvent.prototype).sort(),
   sessionDescription: Object.getOwnPropertyNames(RTCSessionDescription.prototype).sort(),
@@ -232,10 +275,50 @@ const RUNNER = `(async () => {
   // Identity relationships the engine exposes must survive the description wrapper.
   out.localVsCurrent = pc.localDescription === pc.currentLocalDescription;
   out.localVsPending = pc.localDescription === pc.pendingLocalDescription;
-  await pc.setRemoteDescription({ type: 'answer', sdp: 'v=0' });
+  const syntheticRemote = 'v=0' + String.fromCharCode(13, 10) + 'c=IN IP4 10.11.12.13';
+  await pc.setRemoteDescription({ type: 'answer', sdp: syntheticRemote });
   out.remoteDistinct = pc.remoteDescription !== pc.localDescription;
   out.remoteSelf = pc.remoteDescription === pc.remoteDescription;
   out.remoteVsCurrent = pc.remoteDescription === pc.currentRemoteDescription;
+  out.remoteEcho = pc.remoteDescription && pc.remoteDescription.sdp;
+
+  // A description the page supplies has to come back byte for byte: comparing what went in against
+  // what comes out is the cheapest rewrite detector a page has.
+  const syntheticLocal = 'v=0' + String.fromCharCode(13, 10) + 'c=IN IP4 10.11.12.14';
+  const ownPc = new RTCPeerConnection({ iceServers: [] });
+  await ownPc.setLocalDescription({ type: 'offer', sdp: syntheticLocal });
+  out.localEcho = ownPc.localDescription && ownPc.localDescription.sdp;
+
+  // getStats(): the candidate address and the base address beside it.
+  const report = await pc.getStats();
+  const locals = (list) => list.filter((entry) => entry && entry.type === 'local-candidate')
+    .map((entry) => [entry.candidateType, entry.address, entry.relatedAddress]);
+  const viaForEach = [];
+  report.forEach((entry) => { if (entry && entry.type === 'local-candidate') viaForEach.push([entry.candidateType, entry.address, entry.relatedAddress]); });
+  out.stats = {
+    get: locals([report.get('L1'), report.get('L2')]),
+    forEach: viaForEach,
+    values: locals(Array.from(report.values())),
+    entries: locals(Array.from(report.entries()).map((pair) => pair[1])),
+    spread: locals(Array.from(report).map((pair) => pair[1])),
+    remote: (() => { const entry = report.get('R1'); return entry ? [entry.type, entry.address] : null; })(),
+  };
+
+  // RTCIceTransport answers from gathering alone, so the page never has to build a connection.
+  const transport = globalThis.__iceTransport;
+  const firstList = transport.getLocalCandidates();
+  const secondList = transport.getLocalCandidates();
+  const pair = transport.getSelectedCandidatePair();
+  out.transport = {
+    addresses: firstList.map((candidate) => candidate.candidate),
+    arrayFresh: firstList !== secondList,
+    objectStable: firstList[0] === secondList[0],
+    brand: firstList.every((candidate) => candidate instanceof RTCIceCandidate),
+    remote: transport.getRemoteCandidates().map((candidate) => candidate.candidate),
+    pairLocal: pair ? pair.local.candidate : null,
+    pairRemote: pair ? pair.remote.candidate : null,
+    pairProto: pair ? Object.getPrototypeOf(pair) === Object.prototype : null,
+  };
 
   // A page that builds its own candidate and event must get exactly what it handed in back.
   const ownCandidate = new RTCIceCandidate({ candidate: 'candidate:9 1 udp 1 192.168.1.5 5000 typ host', sdpMid: '0', sdpMLineIndex: 0 });
@@ -247,6 +330,8 @@ const RUNNER = `(async () => {
   // Nothing may be shadowed onto the prototypes the block rewrites.
   out.protoShapes = {
     pc: Object.getOwnPropertyNames(RTCPeerConnection.prototype).sort(),
+    iceTransport: Object.getOwnPropertyNames(RTCIceTransport.prototype).sort(),
+    statsReport: Object.getOwnPropertyNames(RTCStatsReport.prototype).sort(),
     candidate: Object.getOwnPropertyNames(RTCIceCandidate.prototype).sort(),
     iceEvent: Object.getOwnPropertyNames(RTCPeerConnectionIceEvent.prototype).sort(),
     sessionDescription: Object.getOwnPropertyNames(RTCSessionDescription.prototype).sort(),
@@ -299,7 +384,17 @@ function runBlock(fingerprint) {
     result.offerSdp.includes('c=IN IP4 ' + EXIT_IP) && !result.offerSdp.includes('c=IN IP4 ' + PRIVATE_V4));
   ok('the connection line is rewritten in the no-argument and argument forms too',
     result.noArgSdp.includes('c=IN IP4 ' + EXIT_IP) && result.argFormSdp.includes('c=IN IP4 ' + EXIT_IP));
-  ok('public candidates keep their own address', result.offerSdp.includes(PUBLIC_V4) && result.offerSdp.includes(PUBLIC_RELAY));
+  ok('a public reflexive candidate is rewritten to the profile address',
+    !result.offerSdp.includes(PUBLIC_V4) && result.offerSdp.includes(EXIT_IP));
+  ok('a public host candidate is rewritten as well', !result.offerSdp.includes(PUBLIC_HOST));
+  ok('a relay candidate keeps its address because it names the TURN server',
+    result.offerSdp.includes('candidate:5 1 udp 41885439 ' + PUBLIC_RELAY + ' 55559 typ relay'));
+  ok('the base address of a relay candidate is masked too',
+    result.offerSdp.includes('typ relay raddr 0.0.0.0 rport 0'));
+  ok('a connection line matching a relay address is left alone',
+    result.offerSdp.includes('c=IN IP4 ' + PUBLIC_RELAY));
+  ok('the engine placeholder connection line is left alone',
+    result.offerSdp.includes('c=IN IP4 0.0.0.0'));
   ok('the no-argument setLocalDescription path is covered', leaks(result.noArgSdp).length === 0 && result.noArgSdp.includes(EXIT_IP));
   ok('a rewritten description still passes instanceof', result.noArgBrand === true);
   ok('reading a description twice returns the same object', result.identityStable === true);
@@ -323,10 +418,43 @@ function runBlock(fingerprint) {
   ok('a page-built candidate is never rewritten', result.pageCandidateUntouched === true);
   ok('a page-built candidate carries no own members', result.pageCandidateOwnProps === 0);
   ok('no prototype gains an own property the stock build does not have',
-    ['pc', 'candidate', 'iceEvent', 'sessionDescription'].every((key) =>
+    ['pc', 'candidate', 'iceEvent', 'sessionDescription', 'iceTransport', 'statsReport'].every((key) =>
       JSON.stringify(result.protoShapes[key]) === JSON.stringify(context.__protoShapes[key])));
   ok('the handler assignment stays readable', result.handlerKept === 'function');
   ok('unrelated listen types are passed through untouched', result.otherSeen.length === 0);
+
+  // Rewriting what the page itself supplied would be detectable in three lines, and hiding a remote
+  // description protects nothing: the peer's address is not this machine's.
+  ok('a remote description the page set comes back exactly as it was set',
+    result.remoteEcho === 'v=0' + String.fromCharCode(13, 10) + 'c=IN IP4 10.11.12.13', String(result.remoteEcho));
+  ok('a local description the page supplied comes back exactly as it was set',
+    result.localEcho === 'v=0' + String.fromCharCode(13, 10) + 'c=IN IP4 10.11.12.14', String(result.localEcho));
+
+  const statsLeak = (rows) => rows.filter((row) => String(row[1]).includes(PRIVATE_V4) || String(row[2]).includes(PRIVATE_V4));
+  ok('the statistics report carries no machine address on any read path',
+    ['get', 'forEach', 'values', 'entries', 'spread'].every((key) => statsLeak(result.stats[key]).length === 0),
+    JSON.stringify(result.stats));
+  ok('the statistics report carries the profile address', result.stats.get[0][1] === EXIT_IP);
+  ok('the base address beside a reflexive candidate is masked', result.stats.get[0][2] === '0.0.0.0');
+  ok('the base address beside a relay candidate is masked too', result.stats.get[1][2] === '0.0.0.0');
+  ok('a relay candidate keeps its address in the statistics', result.stats.get[1][1] === PUBLIC_RELAY);
+  ok('a remote candidate entry is never rewritten',
+    result.stats.remote && result.stats.remote[0] === 'remote-candidate' && result.stats.remote[1] === '203.0.113.77', JSON.stringify(result.stats.remote));
+
+  ok('RTCIceTransport.getLocalCandidates hands out rewritten candidates',
+    result.transport.addresses.length === 2
+    && result.transport.addresses.every((line) => !line.includes(PRIVATE_V4))
+    && result.transport.addresses[0].includes(EXIT_IP) && result.transport.addresses[0].includes('typ host'),
+    JSON.stringify(result.transport.addresses));
+  ok('a relay candidate keeps its address in the transport list',
+    result.transport.addresses[1].includes(PUBLIC_RELAY) && result.transport.addresses[1].includes('raddr 0.0.0.0'));
+  ok('the transport list stays a fresh array of stable candidate objects',
+    result.transport.arrayFresh === true && result.transport.objectStable === true);
+  ok('transport candidates are real RTCIceCandidate instances', result.transport.brand === true);
+  ok('a remote transport candidate is never rewritten', result.transport.remote[0].includes('203.0.113.77'));
+  ok('the selected pair keeps its remote half native', result.transport.pairRemote.includes('203.0.113.77'));
+  ok('the selected pair local half is rewritten', result.transport.pairLocal.includes(EXIT_IP));
+  ok('the selected pair keeps the engine object shape', result.transport.pairProto === true);
 
   // disabled mode: the constructor itself must refuse, so no page can even build a connection.
   const disabledFp = buildFingerprint({
