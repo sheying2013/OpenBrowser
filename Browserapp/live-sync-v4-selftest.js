@@ -10,7 +10,7 @@ async function current(port) { const tabs = (await cdp.tabs(port)).filter((tab) 
 
 async function main() {
   const dataRoot = path.join(__dirname, '..', 'live-sync-v4-selftest-data'); await fs.rm(dataRoot, { recursive: true, force: true }); await fs.mkdir(dataRoot, { recursive: true });
-  const page = `<!doctype html><meta charset="utf-8"><style>body{height:2200px;margin:0;padding:30px;font:18px sans-serif}button,input{font:inherit;margin:10px;padding:12px}</style><input id="message"><button id="counter" onclick="this.dataset.count=String(Number(this.dataset.count||0)+1);this.textContent='count:'+this.dataset.count">count:0</button><input id="special"><div style="margin-top:1500px">bottom</div>`;
+  const page = `<!doctype html><meta charset="utf-8"><style>body{height:2200px;margin:0;padding:30px;font:18px sans-serif}button,input{font:inherit;margin:10px;padding:12px}</style><input id="message"><button id="counter" onclick="this.dataset.count=String(Number(this.dataset.count||0)+1);this.textContent='count:'+this.dataset.count">count:0</button><input id="special"><div style="margin-top:1500px">bottom</div><script>window.__trustedEvents=[];for(const type of ['beforeinput','input','change'])document.addEventListener(type,event=>__trustedEvents.push({type:event.type,trusted:event.isTrusted,id:event.target.id||'',value:event.target.value===undefined?'':String(event.target.value)}),true);<\/script>`;
   const server = http.createServer((_request, response) => { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); response.end(page); }); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)); const url = `http://127.0.0.1:${server.address().port}/`;
   const app = { getPath(name) { if (name === 'userData') return dataRoot; throw new Error(name); } }; const engine = new BrowserEngine(app); let sync;
   const profiles = [{ id: 'v4-master', name: 'V4 Master', browser: 'Microsoft Edge', proxy: 'Direct' }, { id: 'v4-slave', name: 'V4 Slave', browser: 'Microsoft Edge', proxy: 'Direct' }];
@@ -22,8 +22,10 @@ async function main() {
     await evalTab(masterTab, `document.querySelector('#counter').click(); true`);
     await evalTab(masterTab, `scrollTo(0,800); true`); await sleep(750);
     const masterResult = await evalTab(masterTab, `({count:counter.dataset.count||'0',scrollY:Math.round(scrollY)})`); process.stderr.write('MASTER ' + JSON.stringify(masterResult) + '\n');
-    const first = await evalTab(slaveTab, `({value:message.value,count:counter.dataset.count||'0',scrollY:Math.round(scrollY)})`);
+    const first = await evalTab(slaveTab, `({value:message.value,count:counter.dataset.count||'0',scrollY:Math.round(scrollY),events:__trustedEvents})`);
     if (first.value !== 'KEYBOARD_SYNC' || first.count !== '1' || Math.abs(first.scrollY - 800) > 5) throw new Error('First-tab sync failed: ' + JSON.stringify(first));
+    if (!first.events.some((event) => event.type === 'input' && event.trusted === true && event.value === 'KEYBOARD_SYNC')) throw new Error('Slave input event was not trusted: ' + JSON.stringify(first.events));
+    if (!first.events.some((event) => event.type === 'change' && event.trusted === true && event.value === 'KEYBOARD_SYNC')) throw new Error('Slave change event was not trusted: ' + JSON.stringify(first.events));
 
     await Promise.all([cdp.newTab(master.port, url), cdp.newTab(slave.port, url)]); await sleep(1300);
     const masterTabs = (await cdp.tabs(master.port)).filter((tab) => tab.url === url); const slaveTabs = (await cdp.tabs(slave.port)).filter((tab) => tab.url === url); masterTab = masterTabs[0]; slaveTab = slaveTabs[0];

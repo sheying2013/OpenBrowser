@@ -2704,6 +2704,7 @@ function useSystemEditorDefaults() {
 
 function editorOsToUaKey(osLabel) {
   const s = String(osLabel || '');
+  if (/android/i.test(s)) return 'android';
   if (/mac/i.test(s)) return 'macos';
   if (/linux/i.test(s)) return 'linux';
   return 'windows';
@@ -2716,6 +2717,7 @@ async function applyBuiltUa(payload) {
   // sync OS selector with generated UA platform
   if (ua.os === 'macos') editorSet('#editor-os', 'macOS');
   else if (ua.os === 'linux') editorSet('#editor-os', 'Linux');
+  else if (ua.os === 'android') editorSet('#editor-os', 'Android');
   else if (ua.os === 'windows') editorSet('#editor-os', 'Windows');
   if (ua.chromeMajor) editorSet('#editor-ua-chrome-major', String(ua.chromeMajor));
   await showUaMetaPreview(ua);

@@ -2,6 +2,13 @@
 
 const cdp = require('../cdp');
 const { applyTrustedChange } = require('./trusted-input');
+const humanInput = require('./human-input');
+const {
+  getDownloadFileName,
+  getFileNameFromContentDisposition,
+  classifyTargetFileFailure,
+  getDownloadFailureMessage,
+} = require('./download-naming');
 const fs = require('fs/promises');
 const fssync = require('fs');
 const path = require('path');
@@ -12,11 +19,24 @@ const {
   RPA_PLUS_ACTIONS,
   isRegistered,
 } = require('./protocol/rpa-registry');
+const { TaskScheduler } = require('./task-scheduler');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const OUTPUT_DIRECTORY = path.join(process.cwd(), 'rpa-output');
+// Launching a browser environment is heavy (disk, CPU, memory). A plan that
+// covers many profiles must not boot every kernel at the same instant, so the
+// launches go through a small queue. Steps themselves still interleave.
+const DEFAULT_OPEN_CONCURRENCY = 2;
+
+function resolveOpenConcurrency(value = process.env.OPENBROWSER_RPA_OPEN_CONCURRENCY) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) return DEFAULT_OPEN_CONCURRENCY;
+  return Math.min(n, 16);
+}
 const RPA_DIAGNOSTIC_LIMIT = 512 * 1024;
-const CDP_AUTOMATION_BLOCKED = 'Browser automation requires a paid Donut Browser plan.';
+// The kernel refuses CDP automation with this sentence; only its stable prefix
+// is matched, so the check does not depend on the product name inside it.
+const CDP_AUTOMATION_BLOCKED = 'Browser automation requires a paid';
 // Result payloads carry the extracted values: strings are capped at
 // RPA_RESULT_CHAR_LIMIT per value; structure is kept whole. Task logs keep the
 // original full-content behavior — store growth is bounded by task-history
@@ -159,6 +179,21 @@ function findUnsupportedSteps(steps, path = []) {
   return unsupported;
 }
 
+/**
+ * Resolve the per-character delay window for text entry.
+ *
+ * Human-paced entry uses a short, tight band; a plain run is still jittered so
+ * that repeated entries never share an identical rhythm. Explicit bounds from
+ * the step always win.
+ */
+function inputDelayRange(params, human) {
+  const min = Number(params.minDelay);
+  const max = Number(params.maxDelay);
+  const lo = Number.isFinite(min) && min >= 0 ? min : (human ? 30 : 60);
+  const hi = Number.isFinite(max) && max >= lo ? max : Math.max(lo, human ? 120 : 220);
+  return [lo, hi];
+}
+
 function randomBetween(min, max) {
   return randomNum(min, max);
 }
@@ -289,16 +324,20 @@ function resolveConditionValue(input, variables = {}) {
 
 /**
  * CDP-based RPA step runner for OpenBrowser.
- * Independent reimplementation (puppeteer-core / CDP steps + plan/task store).
+ * Steps drive the DevTools protocol; plans and task history live in the local store.
  */
 class RpaEngine {
-  constructor({ engine, store, emit = () => {}, userDataPath = null, rpaLogPath = null } = {}) {
+  constructor({ engine, store, emit = () => {}, userDataPath = null, rpaLogPath = null, openConcurrency } = {}) {
     this.engine = engine;
     this.store = store;
     this.emit = emit;
     this.rpaLogPath = rpaLogPath || defaultRpaLogPath(userDataPath);
     this.running = new Map();
     this.profileStarts = new Map();
+    this.openScheduler = new TaskScheduler({
+      name: 'rpa-open',
+      concurrency: resolveOpenConcurrency(openConcurrency),
+    });
     this.cancelled = new Set();
   }
 
@@ -506,8 +545,8 @@ class RpaEngine {
     let startPromise = this.profileStarts.get(id);
     if (!startPromise) {
       if (log) await log('profile is not running; starting before RPA: ' + id);
-      startPromise = Promise.resolve()
-        .then(() => this.engine.start(profile))
+      startPromise = this.openScheduler
+        .schedule(() => this.engine.start(profile), undefined, { stepName: 'open' })
         .finally(() => this.profileStarts.delete(id));
       this.profileStarts.set(id, startPromise);
     } else if (log) {
@@ -612,15 +651,16 @@ class RpaEngine {
               await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 8 });
               await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 8 });
             }
-            const human = params.human || params.intervals;
-            if (human) {
-              for (const ch of inputText) {
-                await cdp.call(ws, 'Input.insertText', { text: ch });
-                await sleep(randomBetween(params.minDelay || 30, params.maxDelay || 120));
-              }
-            } else {
-              await cdp.call(ws, 'Input.insertText', { text: inputText });
-            }
+            // Every character is dispatched as a real key event sequence
+            // (keydown/keyup with a Shift bracket where the layout needs one)
+            // rather than written straight into the element. Pass `human` to
+            // add slip-and-correct behaviour on top of the key timing.
+            const humanTyping = Boolean(params.human || params.intervals);
+            await humanInput.typeText(cdp, ws, inputText, {
+              human: humanTyping,
+              delayRange: inputDelayRange(params, humanTyping),
+              typoConfig: params.typoConfig,
+            });
           });
         } catch (error) {
           if (optional && isMissingElementError(error)) {
@@ -630,7 +670,14 @@ class RpaEngine {
           throw error;
         }
       } else {
-        await cdp.insertText(port, inputText);
+        const focused = await cdp.focusedEditableTab(port);
+        if (!focused) throw new Error('No focused text input was found in the visible tab');
+        const humanTyping = Boolean(params.human || params.intervals);
+        await humanInput.typeText(cdp, focused.tab.webSocketDebuggerUrl, inputText, {
+          human: humanTyping,
+          delayRange: inputDelayRange(params, humanTyping),
+          typoConfig: params.typoConfig,
+        });
       }
       return;
     }
@@ -1154,15 +1201,34 @@ class RpaEngine {
     if (type === 'downloadfile') {
       const url = text(params.url);
       if (!url) throw new Error('downloadFile requires url');
-      const target = this.outputPath(text(params.path || 'downloads'), path.extname(new URL(url, 'https://localhost').pathname) || '.bin');
+      const explicitName = text(params.path);
       const payload = await this.withPage(port, async (ws) => {
-        const expression = `(async () => { const response = await fetch(${JSON.stringify(url)}, { credentials: 'include' }); if (!response.ok) throw new Error('HTTP ' + response.status); const bytes = new Uint8Array(await response.arrayBuffer()); let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary); })()`;
+        // The response headers travel back with the bytes so the server can
+        // name the file; `fetch` follows redirects, so this is the final name.
+        const expression = `(async () => { const response = await fetch(${JSON.stringify(url)}, { credentials: 'include' }); if (!response.ok) throw new Error('HTTP ' + response.status); const bytes = new Uint8Array(await response.arrayBuffer()); let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte); return { body: btoa(binary), disposition: response.headers.get('content-disposition') || '' }; })()`;
         const result = await cdp.call(ws, 'Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, 60000);
         if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || 'downloadFile failed');
         return result.result?.value;
       });
+      const body = payload && typeof payload === 'object' ? payload.body : payload;
+      const disposition = payload && typeof payload === 'object' ? payload.disposition : '';
+      let urlExtension = '.bin';
+      try { urlExtension = path.extname(new URL(url, 'https://localhost').pathname) || '.bin'; } catch (_) { urlExtension = '.bin'; }
+      // An explicit path is a deliberate override and stays byte-for-byte the
+      // caller's choice; without one the server-supplied name wins over the
+      // URL, which beats a fixed placeholder that silently overwrote.
+      const resolvedName = explicitName
+        ? explicitName
+        : getDownloadFileName(url, getFileNameFromContentDisposition(disposition) || '', `download-${Date.now()}`);
+      const target = this.outputPath(resolvedName, urlExtension);
       await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, Buffer.from(String(payload || ''), 'base64'));
+      try {
+        await fs.writeFile(target, Buffer.from(String(body || ''), 'base64'));
+      } catch (error) {
+        // A locked destination (a spreadsheet still open elsewhere) is the
+        // common failure here and deserves its own explanation.
+        throw new Error(getDownloadFailureMessage(classifyTargetFileFailure(error), path.basename(target)));
+      }
       return;
     }
 
@@ -1710,4 +1776,6 @@ module.exports = {
   BreakLoopSignal,
   resolveElementTarget,
   resolveSerial,
+  resolveOpenConcurrency,
+  DEFAULT_OPEN_CONCURRENCY,
 };

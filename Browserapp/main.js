@@ -20,9 +20,17 @@ try {
   }
 } catch (_) {}
 
+const { compareVersions } = require('./automation/version-compare');
+const { planGridFor, minHeightFor } = require('./automation/window-arrangement');
+const { attachShellNavigationGuard } = require('./automation/shell-guard');
+const { fetchStoreEntries } = require('./automation/store-fetch');
+const { createCoalescedWriter } = require('./automation/coalesced-writer');
+const { deepEqual } = require('./automation/object-utils');
 const { startAutomation } = require('./automation');
 const cloudSync = require('./automation/cloud-sync');
 const { validateDataRootIsolationSecure, ensureDataRootIsolationSecure, assertProfileId } = require('./automation/isolation');
+const { createCrashHandler, buildHelperProcessGoneReport } = require('./automation/crash-report');
+const { writeBrowserStartupDiagnostic } = require('./engine/diagnostics');
 
 const appDataRoot = app.getPath('appData');
 const userDataRoot = path.join(appDataRoot, 'openbrowser');
@@ -72,33 +80,6 @@ function updatePlatformKey() {
 
 function updateAssetName() {
   return UPDATE_ASSETS[updatePlatformKey()] || null;
-}
-
-function compareVersions(left, right) {
-  const parse = (value) => {
-    const match = String(value || '').trim().replace(/^v/i, '').match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?/);
-    if (!match) return null;
-    return { numbers: [match[1], match[2], match[3]].map((part) => Number(part || 0)), pre: match[4] ? match[4].split('.') : [] };
-  };
-  const a = parse(left); const b = parse(right);
-  if (!a || !b) return 0;
-  for (let index = 0; index < 3; index += 1) {
-    if (a.numbers[index] !== b.numbers[index]) return a.numbers[index] > b.numbers[index] ? 1 : -1;
-  }
-  if (!a.pre.length && !b.pre.length) return 0;
-  if (!a.pre.length) return 1;
-  if (!b.pre.length) return -1;
-  const length = Math.max(a.pre.length, b.pre.length);
-  for (let index = 0; index < length; index += 1) {
-    if (a.pre[index] == null) return -1;
-    if (b.pre[index] == null) return 1;
-    if (a.pre[index] === b.pre[index]) continue;
-    const aNumber = /^\d+$/.test(a.pre[index]); const bNumber = /^\d+$/.test(b.pre[index]);
-    if (aNumber && bNumber) return Number(a.pre[index]) > Number(b.pre[index]) ? 1 : -1;
-    if (aNumber !== bNumber) return aNumber ? -1 : 1;
-    return a.pre[index] > b.pre[index] ? 1 : -1;
-  }
-  return 0;
 }
 
 function updateUrlIsAllowed(value, assetName) {
@@ -581,6 +562,33 @@ async function loadLocalSettings() {
   }
 }
 
+// Snapshot of what the file currently holds, so an unchanged cache does not
+// rewrite it. Cloned rather than referenced: later edits mutate nested objects.
+let persistedSettingsSnapshot = null;
+
+/** Write the settings file from the in-memory cache. */
+async function writeLocalSettingsFile() {
+  await fsp.mkdir(path.dirname(localSettingsFile), { recursive: true });
+  const temporary = localSettingsFile + '.tmp';
+  const serialized = JSON.stringify({ version: 2, ...localSettingsCache }, null, 2);
+  await fsp.writeFile(temporary, serialized, 'utf8');
+  await fsp.rm(localSettingsFile, { force: true });
+  await fsp.rename(temporary, localSettingsFile);
+  persistedSettingsSnapshot = JSON.parse(JSON.stringify(localSettingsCache));
+}
+
+// The cache holds the whole settings object, so a burst of changes only needs
+// the last one on disk. Going through one writer also stops concurrent callers
+// from racing on the same temporary file.
+const localSettingsWriter = createCoalescedWriter({
+  write: writeLocalSettingsFile,
+  // Saving the same settings twice is common (panel switches, repeated toggles)
+  // and the disk already holds that state, so skip the write entirely.
+  shouldWrite: () => persistedSettingsSnapshot === null
+    || !deepEqual(localSettingsCache, persistedSettingsSnapshot),
+  onError: (error) => console.warn('OpenBrowser settings write failed:', error.message),
+});
+
 async function saveLocalSettings(value) {
   localSettingsCache = {
     profileDataRoot: normalizeProfileDataRoot(value.profileDataRoot || localSettingsCache.profileDataRoot),
@@ -588,11 +596,7 @@ async function saveLocalSettings(value) {
     uiGroups: Array.isArray(value.uiGroups) ? value.uiGroups : (localSettingsCache.uiGroups || []),
     closeAction: normalizeCloseAction(value.closeAction || localSettingsCache.closeAction),
   };
-  await fsp.mkdir(path.dirname(localSettingsFile), { recursive: true });
-  const temporary = localSettingsFile + '.tmp';
-  await fsp.writeFile(temporary, JSON.stringify({ version: 2, ...localSettingsCache }, null, 2), 'utf8');
-  await fsp.rm(localSettingsFile, { force: true });
-  await fsp.rename(temporary, localSettingsFile);
+  return localSettingsWriter.request();
 }
 
 async function updateProfileDataRoot(value) {
@@ -983,6 +987,9 @@ async function tile(ids, cascade = false) {
   if (!entries.length) throw new Error('No selected browser has a CDP session');
   const work = pickWorkArea();
   // Pause geometry mirroring while we rearrange so live-sync does not fight tile layout.
+  let cols = 1;
+  let rows = 1;
+  let overcrowded = false;
   liveSync?.pauseGeometrySync?.(3500, cascade ? 'manual-cascade' : 'manual-tile');
   if (liveSync) liveSync.lastWindowSync = Date.now();
   if (cascade) {
@@ -1004,10 +1011,24 @@ async function tile(ids, cascade = false) {
       return cdp.setWindowBounds(item.port, clampBoundsToWorkArea(raw, work));
     }));
   } else {
-    // Prefer side-by-side for 2 windows; otherwise use a near-square grid.
+    // Choose the grid by fitting the work area, not by taking the square root
+    // of the count. A near-square grid can come out shorter than a window is
+    // allowed to be; the minimum size is then enforced anyway and the rows
+    // collapse into each other. The planner searches every column count and
+    // keeps the roomiest one that still satisfies both minimums, and reports
+    // when nothing does instead of silently building an overlapping layout.
     const count = entries.length;
-    const cols = count === 2 ? 2 : Math.ceil(Math.sqrt(count));
-    const rows = Math.ceil(count / cols);
+    const grid = planGridFor({
+      totalWindows: count,
+      workArea: work,
+      // Match the floor the bounds clamp actually enforces, raised to the
+      // taller platform minimum where one exists.
+      minWidth: 320,
+      minHeight: Math.max(240, minHeightFor(process.platform)),
+    });
+    cols = grid.cols;
+    rows = grid.rows;
+    overcrowded = grid.overcrowded;
     const baseWidth = Math.floor(work.width / cols);
     const baseHeight = Math.floor(work.height / rows);
     await Promise.all(entries.map(({ item }, index) => {
@@ -1026,7 +1047,16 @@ async function tile(ids, cascade = false) {
     }));
   }
   liveSync?.pauseGeometrySync?.(5000, cascade ? 'manual-cascade-settle' : 'manual-tile-settle');
-  return { success: true, count: entries.length, mode: cascade ? 'cascade' : 'tile', platform: process.platform, workArea: work };
+  return {
+    success: true,
+    count: entries.length,
+    mode: cascade ? 'cascade' : 'tile',
+    platform: process.platform,
+    workArea: work,
+    // True when the selected layout cannot give every window its minimum
+    // size, so callers can warn instead of presenting an unusable result.
+    overcrowded: cascade ? undefined : overcrowded,
+  };
 }
 
 function isEnvironmentStartUrl(value) {
@@ -1284,15 +1314,6 @@ function extensionIconSource(manifest) {
   return null;
 }
 
-function runArchiveCommand(command, args) {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, { encoding: null, maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) reject(new Error(String(stderr || error.message).trim()));
-      else resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout));
-    });
-  });
-}
-
 async function fetchChromeStoreMetadata(storeId) {
   const safeId = validChromeStoreId(storeId);
   if (!safeId) return null;
@@ -1323,31 +1344,30 @@ async function fetchChromeStoreMetadata(storeId) {
   try {
     const query = new URLSearchParams({ response: 'redirect', prodversion: '150.0.0.0', acceptformat: 'crx2,crx3', x: `id=${safeId}&installsource=ondemand&uc` });
     const buffer = await fetchStorePackage(`https://clients2.google.com/service/update2/crx?${query}`);
-    const { crxDetails } = require('./store-extension');
-    const zip = crxDetails(buffer).zip;
-    const tempDir = path.join(cacheDir, `.metadata-${safeId}-${process.pid}-${Date.now()}`);
-    const zipFile = `${tempDir}.zip`;
-    try {
-      await fsp.mkdir(cacheDir, { recursive: true });
-      await fsp.writeFile(zipFile, zip);
-      const tar = process.platform === 'win32' ? 'tar.exe' : 'tar';
-      const manifest = JSON.parse((await runArchiveCommand(tar, ['-xOf', zipFile, 'manifest.json'])).toString('utf8'));
-      metadata = {
-        name: typeof manifest.name === 'string' ? manifest.name : '',
-        description: typeof manifest.description === 'string' ? manifest.description : '',
-        icon_url: null,
-      };
-      const iconPath = extensionIconSource(manifest)?.replace(/^[/\\]+/, '');
-      if (iconPath && !iconPath.split('/').includes('..')) {
-        const image = await runArchiveCommand(tar, ['-xOf', zipFile, iconPath]);
-        if (image.length && image.length <= 2 * 1024 * 1024) {
-          await fsp.writeFile(cacheFile, image);
-          metadata.icon_url = bufferToDataUrl(image);
-        }
+    const { parseCrx, readManifest, readFile } = require('./automation/crx-reader');
+    const parsed = parseCrx(buffer);
+    // The signing key decides the extension id. A package whose signed id does
+    // not match the entry we asked for must not supply this entry's metadata.
+    if (parsed.extensionId && parsed.extensionId !== safeId) {
+      throw new Error(`CRX 签名 ID ${parsed.extensionId} 与商店 ID ${safeId} 不一致`);
+    }
+    // Read straight out of the package: no temp archive on disk, and no
+    // dependency on an external unpacker being installed.
+    const manifest = readManifest(parsed.zipBuffer);
+    metadata = {
+      name: typeof manifest.name === 'string' ? manifest.name : '',
+      description: typeof manifest.description === 'string' ? manifest.description : '',
+      icon_url: null,
+    };
+    const iconPath = extensionIconSource(manifest)?.replace(/^[/\\]+/, '');
+    if (iconPath && !iconPath.split('/').includes('..')) {
+      let image = null;
+      try { image = readFile(parsed.zipBuffer, iconPath); } catch (_) { image = null; }
+      if (image && image.length && image.length <= 2 * 1024 * 1024) {
+        await fsp.mkdir(cacheDir, { recursive: true });
+        await fsp.writeFile(cacheFile, image);
+        metadata.icon_url = bufferToDataUrl(image);
       }
-    } finally {
-      await fsp.rm(zipFile, { force: true }).catch(() => {});
-      await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }
   } catch (_) {
     // CRX download often blocked; fall through to store page scrape
@@ -1553,7 +1573,11 @@ async function createWindow() {
     win.focus();
   });
   win.setMenu(null);
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // The shell renders local files only: block navigation away from them and
+  // keep child windows denied (a child would inherit this window's preload).
+  attachShellNavigationGuard(win.webContents, {
+    onBlocked: ({ url, reason }) => console.warn('[shell] blocked navigation:', url, reason),
+  });
   await win.loadFile('index.html');
   if (!win.isVisible()) win.show();
   if (win.isMinimized()) win.restore();
@@ -1625,6 +1649,11 @@ app.whenReady().then(async () => {
     }
   });
   engine.ensureKernelBootstrap().catch((error) => console.error('OpenBrowser kernel bootstrap failed:', error.message));
+  // Background: a kernel tree that no longer matches its install record is
+  // reported through kernel-progress instead of failing later without a cause.
+  engine.kernelIntegrityCheck?.().then((summary) => {
+    if (summary && summary.status === 'mismatch') console.warn('[kernel] integrity mismatch', summary);
+  }).catch((error) => console.warn('[kernel] integrity check skipped:', error.message));
   startShortcutBridge();
   registerTextShortcuts();
 
@@ -1942,8 +1971,17 @@ app.whenReady().then(async () => {
         osList: payload.os ? [payload.os] : undefined,
       });
     }
-    const osMap = { Windows: 'windows', windows: 'windows', macOS: 'macos', macos: 'macos', Mac: 'macos', Linux: 'linux', linux: 'linux' };
+    const osMap = { Windows: 'windows', windows: 'windows', macOS: 'macos', macos: 'macos', Mac: 'macos', Linux: 'linux', linux: 'linux', Android: 'android', android: 'android' };
     const os = osMap[payload.os] || payload.os || parseOsFromUa(payload.userAgent || '') || undefined;
+    if (os === 'android') {
+      const { mobilePersona } = require('./automation/mobile-personas');
+      const deviceSeed = payload.deviceSeed !== undefined
+        ? Number(payload.deviceSeed)
+        : crypto.randomBytes(4).readUInt32BE(0);
+      return mobilePersona(deviceSeed, 'android', {
+        chromeMajor: Number(payload.chromeMajor) || undefined,
+      }).uaProfile;
+    }
     return buildUaProfile({
       userAgent: payload.userAgent || '',
       os,
@@ -2042,14 +2080,13 @@ app.whenReady().then(async () => {
     return automation.appCenter.list(filter || {});
   });
   registerTrustedIpc('automation:app-center-icons', async (_event, storeIds) => {
-    const ids = [...new Set((Array.isArray(storeIds) ? storeIds : []).map(validChromeStoreId).filter(Boolean))].slice(0, 50);
-    const entries = await Promise.all(ids.map(async (id) => [id, await fetchChromeStoreIcon(id)]));
-    return Object.fromEntries(entries.filter(([, iconUrl]) => iconUrl));
+    const ids = [...new Set((Array.isArray(storeIds) ? storeIds : []).map(validChromeStoreId).filter(Boolean))];
+    // Bounded fan-out: the panel may ask for dozens of entries at once.
+    return fetchStoreEntries(ids, (id) => fetchChromeStoreIcon(id));
   });
   registerTrustedIpc('automation:app-center-metadata', async (_event, storeIds) => {
-    const ids = [...new Set((Array.isArray(storeIds) ? storeIds : []).map(validChromeStoreId).filter(Boolean))].slice(0, 50);
-    const entries = await Promise.all(ids.map(async (id) => [id, await fetchChromeStoreMetadata(id).catch(() => null)]));
-    return Object.fromEntries(entries.filter(([, metadata]) => metadata));
+    const ids = [...new Set((Array.isArray(storeIds) ? storeIds : []).map(validChromeStoreId).filter(Boolean))];
+    return fetchStoreEntries(ids, (id) => fetchChromeStoreMetadata(id));
   });
   registerTrustedIpc('automation:rpa-status', () => automation?.rpaEngine?.getStatus?.() || { running: [], count: 0 });
   registerTrustedIpc('automation:rpa-plans', () => automation?.rpaStore?.listPlans?.() || []);
@@ -2259,6 +2296,9 @@ function beginQuitCleanup() {
   quitCleanupPromise = Promise.resolve()
     .then(async () => { stopResult = await stopAllForQuit(); })
     .then(() => engine?.flushPersistence?.())
+    // A settings change made moments before quitting may still be inside the
+    // quiet period; write it out before the process goes away.
+    .then(() => localSettingsWriter.flushNow())
     .then(() => {
       try { liveSync?.stop?.(); } catch (error) {
         console.warn('OpenBrowser quit live-sync cleanup failed:', error?.message || error);
@@ -2291,6 +2331,36 @@ function beginQuitCleanup() {
     .finally(() => app.quit());
   return quitCleanupPromise;
 }
+
+// A renderer or helper process that dies takes its page down with it, and the
+// report is the only durable record of which page and which reason. It lands in
+// the same diagnosis log as startup failures so one file tells the whole story.
+// Neither handler may throw: they run while the runtime is already handling a
+// failure, and a diagnosis path that itself fails would hide the original fault.
+function recordCrash(record) {
+  try {
+    writeBrowserStartupDiagnostic(app.getPath('userData'), record).catch(() => {});
+  } catch (_) {
+    /* diagnosis must never break the runtime */
+  }
+}
+
+app.on('render-process-gone', createCrashHandler({
+  log: (line, report) => recordCrash({ type: 'renderer-crash', line, report }),
+}));
+
+app.on('child-process-gone', (event, details) => {
+  try {
+    const report = buildHelperProcessGoneReport({
+      details,
+      processInfo: process,
+      appInfo: { version: app.getVersion() },
+    });
+    recordCrash({ type: 'helper-crash', line: 'helper-process-gone ' + JSON.stringify(report), report });
+  } catch (_) {
+    /* diagnosis must never break the runtime */
+  }
+});
 
 app.on('before-quit', (event) => {
   if (quitting) return;

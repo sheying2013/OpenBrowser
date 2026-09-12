@@ -64,6 +64,11 @@ async function refreshApiMcpPage() {
           ? 'MCP 配置会从本机 key 文件读取鉴权；如迁移到另一台电脑，请同时迁移该文件或改填 API Key。'
           : '未取到 API Key：请先从上方 API Key 框复制，再手动填入下方配置；否则 MCP 会返回 401。');
     }
+    // A busy default port makes the API move; say so instead of letting the
+    // user wonder why the generated config no longer mentions the default.
+    if (keyNote && info?.portFallback) {
+      keyNote.textContent += ' ' + tx('默认端口已被占用，本地 API 已自动改用实际端口；下方配置与命令均按实际端口生成。');
+    }
     const common = {
       mcpServers: {
         'openbrowser-local-api': {

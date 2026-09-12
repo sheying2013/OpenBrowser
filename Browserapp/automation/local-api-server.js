@@ -4,8 +4,10 @@ const http = require('http');
 const crypto = require('crypto');
 const { URL } = require('url');
 const { cleanApiKey, isApiKeyPlaceholder, resolveApiKey } = require('./api-key');
+const { resolveAvailablePort } = require('./port-utils');
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const DEFAULT_API_PORT = 50325;
 
 function responseHeaders(origin = '', extra = {}) {
   const headers = {
@@ -403,8 +405,13 @@ function proxySummary(profile, proxyStore, explicitProxyId = undefined) {
 class LocalApiServer {
   constructor(options = {}) {
     this.host = options.host || '127.0.0.1';
-    const configuredPort = options.port === undefined ? 50325 : Number(options.port);
-    this.requestedPort = Number.isFinite(configuredPort) && configuredPort >= 0 ? configuredPort : 50325;
+    const configuredPort = options.port === undefined ? DEFAULT_API_PORT : Number(options.port);
+    const usable = Number.isInteger(configuredPort) && configuredPort >= 0 && configuredPort <= 65535;
+    this.requestedPort = usable ? configuredPort : DEFAULT_API_PORT;
+    // A busy port must not take the whole automation stack down with it, so by
+    // default we fall back to an OS-assigned one and report the real port back.
+    this.allowPortFallback = options.allowPortFallback !== false;
+    this.portFallback = null;
     this.port = this.requestedPort;
     this.userDataPath = options.userDataPath || '';
     const cleanedKey = cleanApiKey(options.apiKey);
@@ -477,29 +484,91 @@ class LocalApiServer {
   async start() {
     if (this.server) return this.info();
     this.server = http.createServer((req, res) => this.handle(req, res));
-    await new Promise((resolve, reject) => {
-      this.server.once('error', reject);
-      this.server.listen(this.requestedPort, this.host, () => {
-        const address = this.server.address();
-        if (address && typeof address === 'object' && Number.isFinite(address.port)) this.port = address.port;
-        this.startedAt = Date.now();
-        resolve();
-      });
-    });
+    const preferred = await this.preferredListenPort();
+    try {
+      await this.listenOn(preferred);
+    } catch (error) {
+      // Someone may have taken the port between the probe and the bind.
+      const retryable = error && error.code === 'EADDRINUSE' && this.allowPortFallback && preferred !== 0;
+      if (!retryable) {
+        await this.releaseServer();
+        throw error;
+      }
+      this.portFallback = { requested: this.requestedPort, port: 0, reason: 'EADDRINUSE' };
+      await this.listenOn(0);
+      this.portFallback.port = this.port;
+    }
+    if (this.portFallback) {
+      console.warn(`[local-api] port ${this.portFallback.requested} is unavailable (${this.portFallback.reason}); listening on ${this.port}`);
+    }
+    this.startedAt = Date.now();
     return this.info();
+  }
+
+  /**
+   * Decide which port to bind. The preferred one is kept while it is reachable,
+   * otherwise the helper hands back an OS-assigned port.
+   */
+  async preferredListenPort() {
+    // 0 already means "let the OS decide", so there is nothing to fall back from.
+    if (this.requestedPort === 0 || !this.allowPortFallback) return this.requestedPort;
+    try {
+      const resolved = await resolveAvailablePort(this.requestedPort, { host: this.host });
+      if (resolved !== this.requestedPort) {
+        this.portFallback = { requested: this.requestedPort, port: resolved, reason: 'in-use' };
+      }
+      return resolved;
+    } catch (_) {
+      // A failed probe is not a reason to refuse to start; the bind itself will
+      // report a genuinely unusable port.
+      return this.requestedPort;
+    }
+  }
+
+  listenOn(port) {
+    return new Promise((resolve, reject) => {
+      const server = this.server;
+      const onError = (error) => { server.removeListener('listening', onListening); reject(error); };
+      const onListening = () => {
+        server.removeListener('error', onError);
+        const address = server.address();
+        if (address && typeof address === 'object' && Number.isFinite(address.port)) this.port = address.port;
+        resolve();
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(port, this.host);
+    });
+  }
+
+  async releaseServer() {
+    const server = this.server;
+    this.server = null;
+    if (!server) return;
+    await new Promise((resolve) => {
+      try { server.close(() => resolve()); } catch (_) { resolve(); }
+    });
   }
 
   async stop() {
     if (!this.server) return;
     const server = this.server;
     this.server = null;
-    await new Promise((resolve) => server.close(() => resolve()));
+    this.portFallback = null;
+    await new Promise((resolve) => {
+      server.close(() => resolve());
+      // Idle keep-alive sockets keep close() waiting forever, which would hang
+      // the quit path while an MCP client is still attached.
+      server.closeAllConnections?.();
+    });
   }
 
   info() {
     return {
       host: this.host,
       port: this.port,
+      requestedPort: this.requestedPort,
+      portFallback: this.portFallback,
       url: `http://${this.host}:${this.port}/`,
       startedAt: this.startedAt,
       apiKeyRequired: Boolean(this.apiKey),

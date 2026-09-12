@@ -11,6 +11,8 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 
+const { fontsForOs } = require('./device-personas');
+
 const SOURCE_OPENBROWSER = 'openbrowser-148';
 
 function isOpenBrowser148(browser = {}) {
@@ -76,6 +78,10 @@ function brandsForInit(fp) {
 }
 
 function webgpuFromFp(fp) {
+  // "real" must remain the absence of a native override, and "blocked" must let the page see no
+  // adapter. Only "webgl" asks the kernel to publish a synthetic adapter identity, so do not write
+  // webgpu_parameter for the other two modes.
+  if (String(fp?.webgpu?.mode || 'real') !== 'webgl') return null;
   const gpu = fp.webgpu?.gpu || fp.webgl?.gpu || null;
   if (!gpu || typeof gpu !== 'object') return null;
   return {
@@ -168,6 +174,7 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
     accept_languages: accept,
     is_webrtc_enable: webrtcMode !== 'disabled',
     webrtc_policy: webrtcPolicy,
+    is_canvas_finger_printing_enable: canvasMode === 'noise',
     is_webgl_finger_printing_enable: webglMode === 'noise',
     is_audio_finger_printing_enable: audioMode === 'noise',
     is_clientrects_finger_printing_enable: clientRectsMode === 'noise',
@@ -270,6 +277,13 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
   // Preserve existing check_url lists when merging; only patch enable/metrics.
   fields._canvasConsistencyPatch = consistencyFromFp(fp, 'canvas');
   fields._webglConsistencyPatch = consistencyFromFp(fp, 'webgl');
+  const skipHosts = canvasSkipHostsFromFp(fp);
+  if (skipHosts.length) fields._canvasSkipHosts = skipHosts;
+  // The switch and its list travel together: a switch with nothing to answer from leaves the
+  // native layer undefined, while a list without the switch could activate a build that reads the
+  // list on its own.
+  const fontList = fontFingerprinting ? fontListFromFp(fp) : [];
+  if (fontList.length) fields.font_list = fontList;
 
   // cmd_line identity (kernel also reads these)
   fields._cmdLinePatch = {
@@ -290,7 +304,13 @@ function applySafetyFields(init) {
   if (!init.proxy || typeof init.proxy !== 'object') init.proxy = {};
   init.async_proxy_data = 0;
   init.async_proxy_data_wait_page = '';
+  // Keep the unknown DOM-trust mutation off. Automation paths use native Input.* events
+  // instead of rewriting isTrusted, which is non-configurable on real event instances.
   init.is_garble_dom_event_trusted = false;
+  // A watermark burns the machine id / window name into every screenshot, which is the opposite
+  // of what an isolated profile is for, so it is forced off instead of inherited from a payload.
+  init.is_watermark_with_machine_id = false;
+  init.is_watermark_with_window_name = false;
   init.is_hubstudio = false;
   init.black_white_list = { black_list: [], exception_list: [], tips: '', type: 1 };
   init.local_port = { type: 0, black_list: [], white_list: [] };
@@ -347,12 +367,61 @@ function mergeConsistency(existing, patch) {
 }
 
 /**
+ * Font families the kernel may hand out for this profile.
+ *
+ * The kernel exposes a font switch and a font list; enabling the switch without a list leaves the
+ * native layer with nothing to answer from, so the list always accompanies the switch. It follows
+ * the same platform the UA and Client Hints claim, which keeps the font surface on the same side
+ * as every other OS signal.
+ */
+function fontListFromFp(fp) {
+  const personaList = fp && fp.fonts && Array.isArray(fp.fonts.list) ? fp.fonts.list : null;
+  const list = personaList && personaList.length
+    ? personaList
+    : fontsForOs((fp && fp.uaProfile && fp.uaProfile.os) || (fp && fp.platform) || 'windows');
+  const seen = new Set();
+  const out = [];
+  for (const raw of Array.isArray(list) ? list : []) {
+    const family = String(raw || '').trim();
+    if (!family || seen.has(family.toLowerCase())) continue;
+    seen.add(family.toLowerCase());
+    out.push(family);
+  }
+  return out;
+}
+
+/**
+ * Sites the canvas layer must leave alone. The page script and the native layer have to agree on
+ * this list: if the script exempts a host but the kernel still perturbs its pixels (or the other
+ * way round) the same canvas answers differently depending on which layer produced it.
+ */
+function canvasSkipHostsFromFp(fp) {
+  const policy = (fp && fp.stability) || {};
+  const list = Array.isArray(policy.skipHosts) ? policy.skipHosts : [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    const host = String(raw || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/\/.*$/, '')
+      .replace(/^\*\./, '');
+    if (!host || seen.has(host)) continue;
+    seen.add(host);
+    out.push(host);
+  }
+  return out;
+}
+
+/**
  * Apply mapped fingerprint fields onto an init object (mutates).
  */
 function applyFingerprintFields(init, fields) {
   const skip = new Set([
     '_canvasConsistencyPatch',
     '_webglConsistencyPatch',
+    '_canvasSkipHosts',
     '_cmdLinePatch',
     '_windowName',
     '_browserTitle',
@@ -372,6 +441,9 @@ function applyFingerprintFields(init, fields) {
       init.webgl_fingerprint_keep_consistent_setting,
       fields._webglConsistencyPatch
     );
+  }
+  if (Array.isArray(fields._canvasSkipHosts)) {
+    init.canvas_fingerprint_skip_hosts = fields._canvasSkipHosts;
   }
   const cl = init.cmd_line && typeof init.cmd_line === 'object' ? { ...init.cmd_line } : {};
   if (fields._cmdLinePatch) {
@@ -470,29 +542,20 @@ async function writeOpenBrowserKernelInit(profileRoot, options = {}) {
 }
 
 /**
- * When native kernel owns canvas/webgl/audio/clientRects *image* noise, strip
- * those pixel-noise modes from the CDP inject payload so the two stacks do not
- * double-noise. Keep WebGL *metadata* spoof (vendor/renderer / metaMode) so
- * UNMASKED_* still works if Framework misses debug-renderer strings.
+ * Native pixel-noise handoff.
+ *
+ * The bundled 148 kernel only applies canvas / webgl / audio / clientRects pixel noise while the
+ * server-issued payloads (canvas_fingerprint_info / webgl_fingerprint_info) are present. Those
+ * payloads are not available to this build, and a runtime A/B with the init switches on vs off
+ * measured byte-identical canvas, WebGL, clientRects and AudioContext output, i.e. the native
+ * pixel-noise path is inert. Stripping the CDP/JS noise would leave those surfaces at the real
+ * hardware value, so the fingerprint passes through untouched.
+ *
+ * WebGL metadata (vendor / renderer / metaMode) keeps working through the CDP inject.
  */
 function fingerprintForNativeKernelInject(fp) {
   if (!fp || typeof fp !== 'object') return fp;
-  const out = { ...fp };
-  if (fp.canvas?.mode === 'noise') out.canvas = { ...fp.canvas, mode: 'real' };
-  if (fp.webgl?.mode === 'noise') {
-    const metaMode = fp.webgl.metaMode === 'real' ? 'real' : (fp.webgl.metaMode || 'noise');
-    out.webgl = {
-      ...fp.webgl,
-      // Skip JS readPixels noise (native owns image); keep meta spoof hooks.
-      mode: 'real',
-      metaMode,
-      vendor: metaMode === 'real' ? fp.webgl.vendor : (fp.webgl.vendor ?? null),
-      renderer: metaMode === 'real' ? fp.webgl.renderer : (fp.webgl.renderer ?? null),
-    };
-  }
-  if (fp.audio?.mode === 'noise') out.audio = { ...fp.audio, mode: 'real' };
-  if (fp.clientRects?.mode === 'noise') out.clientRects = { ...fp.clientRects, mode: 'real' };
-  return out;
+  return fp;
 }
 
 module.exports = {
@@ -504,6 +567,8 @@ module.exports = {
   applyFingerprintFields,
   writeOpenBrowserKernelInit,
   fingerprintForNativeKernelInject,
+  canvasSkipHostsFromFp,
+  fontListFromFp,
   loadInitObject,
   encodeInitObject,
   resolveInitTemplate,

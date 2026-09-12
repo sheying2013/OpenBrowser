@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.10'
+        default: 'v1.0.11'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,19 +42,25 @@ env:
 
     ### 中文
 
-    - **Profile 文件层一致性**：语言偏好现在同时写入 `intl.accept_languages` 与 `intl.selected_languages`，写盘后立即回读校验；内核自有偏好组不再被猜测性覆盖，避免 CDP 表面值与配置文件漂移。
-    - **窗口代际守卫**：为标签页和原生窗口号分配单调递增代际，旧窗口延迟事件在产生同步副作用前被丢弃，关闭窗口时退役全部关联键，防止窗口号复用造成错配。
-    - **原生可信输入**：同步输入和 RPA 选择框改用 Chromium 原生输入链，不再通过 `dispatchEvent` 伪造事件；普通输入、清空、失焦 change 和选择框切换保持真实事件语义。
-    - **原子状态写入加固**：状态文件遇到瞬时 `ENOENT`、`EEXIST`、`EINVAL`、`EBUSY`、`EAGAIN` 时自动重试并清理临时文件，降低并发写盘竞态。
-    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 与 GitHub Actions 发布参数统一为 **v1.0.10**。
+    - **指纹主链整体升级**：补齐 CDP 噪声恢复、Worker 作用域一致、多标签一致、注入幂等、稳定性和重新注入保护，修复跨会话漂移与中途漂移。
+    - **WebRTC / 字体 / WebGPU**：修复 WebRTC 三处改写缺口，加入字体 persona 真机回归，修正 WebGPU 模式语义并保证适配器身份与 WebGL 同源。
+    - **移动端环境**：接入 Android 机型池、移动指纹端到端回归和 WebDriver/CDP 分支所需的移动端表面参数。
+    - **端口扫描与本地面防护**：从 WebSocket 扩展到 fetch、XHR、EventSource、sendBeacon 和资源标签，阻断页面探测本机服务。
+    - **内核与启动加固**：增加内核完整性基线、安装后校验、CDP 就绪探测、init 字段审计、启动诊断、命令参数合并与崩溃报告。
+    - **网络与扩展安全**：接入 RFC 8484 DoH、CRX 包内元数据直读与签名 ID 校验、导航守卫、Shell 守卫、下载命名与失败分类。
+    - **稳定性与并发**：任务队列/调度器改为有界并发，设置落盘改为合并写，对象比较跳过无变化写盘，原子状态写入带瞬时错误重试。
+    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 与 GitHub Actions 发布参数统一为 **v1.0.11**。
 
     ### English
 
-    - **Profile-file consistency**: Language preferences now write both `intl.accept_languages` and `intl.selected_languages`, then read back and verify. Native-owned preference groups are preserved verbatim instead of being guessed.
-    - **Window-generation guard**: Tabs and native window numbers receive monotonic generations. Delayed events from retired windows are dropped before synchronization side effects, and all related keys are retired on close.
-    - **Native trusted input**: Synchronization input and RPA selects now use Chromium's native input path instead of synthetic `dispatchEvent` events, preserving real input/change semantics.
-    - **Atomic state hardening**: Transient `ENOENT`, `EEXIST`, `EINVAL`, `EBUSY`, and `EAGAIN` failures are retried with temporary-file cleanup, reducing concurrent-write races.
-    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.10**.
+    - **Fingerprint core**: Restored CDP noise, aligned Worker and multi-tab surfaces, added injection idempotency and stability guards, and fixed cross-session and mid-session drift.
+    - **WebRTC / fonts / WebGPU**: Closed three WebRTC rewrite gaps, added real-kernel font-persona regression, fixed WebGPU mode semantics, and kept adapter identity consistent with WebGL.
+    - **Mobile profiles**: Added Android device personas, mobile fingerprint end-to-end coverage, and the mobile surface parameters required by WebDriver/CDP branches.
+    - **Port-scan protection**: Extended local-service protection from WebSocket to fetch, XHR, EventSource, sendBeacon, and resource-element probes.
+    - **Kernel and startup**: Added kernel integrity baselines, post-install verification, CDP readiness, init-field auditing, startup diagnostics, command-line normalization, and crash reports.
+    - **Network and extensions**: Added RFC 8484 DoH, in-package CRX metadata and signature-ID validation, navigation/shell guards, download naming, and failure classification.
+    - **Stability and concurrency**: Bounded task queues and schedulers, coalesced settings writes, no-op write suppression, and atomic state writes with transient-error retries.
+    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.11**.
 
     ### 下载 / Downloads
 

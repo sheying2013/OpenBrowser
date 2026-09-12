@@ -66,8 +66,13 @@ async function main() {
     assert.ok(renderer.includes("platform: { type: 'other', startUrl }"), 'create flow must persist startup URL');
     assert.ok(main.includes("engine.checkProxy(profile, { persist: true })"), 'manual exit checks must persist in engine state');
     assert.ok(fs.readFileSync(path.join(__dirname, 'engine.js'), 'utf8').includes('if (options.persist) await this.persist()'), 'manual exit check must await durable persistence');
-    assert.ok(fingerprint.includes("Emulation.clearDeviceMetricsOverride"), 'desktop viewport must remain resize-responsive');
-    assert.ok(!fingerprint.includes("softOverride('Emulation.setDeviceMetricsOverride'"), 'desktop viewport must not be fixed by device metrics');
+    // A phone profile pins the layout viewport to the device panel; a desktop profile must never,
+    // because a fixed override leaves the renderer at its initial size after a resize.
+    const tabInject = fingerprint.slice(fingerprint.indexOf('async function applyFingerprintToTab'));
+    const mobileBranchAt = tabInject.indexOf('if (fp.mobile && fp.screen)');
+    const metricsAt = tabInject.indexOf("softOverride('Emulation.setDeviceMetricsOverride'", 0);
+    assert.ok(tabInject.includes('Emulation.clearDeviceMetricsOverride'), 'desktop viewport must remain resize-responsive');
+    assert.ok(metricsAt > -1 && mobileBranchAt > -1 && metricsAt > mobileBranchAt, 'device metrics may only be pinned inside the phone-profile branch');
     assert.ok(fingerprint.includes("Object.defineProperty(window, 'innerWidth'"), 'native fixed viewport must be bridged to the live DOM viewport');
     assert.ok(liveSync.includes('this.nativePopupActive'), 'window geometry sync must pause for native popups');
     assert.ok(liveSync.includes('hasVisibleExtensionSurface'), 'window geometry sync must inspect extension popup visibility');

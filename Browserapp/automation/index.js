@@ -60,8 +60,10 @@ async function startAutomation(context = {}) {
     getSyncState,
     setSelection,
     tile,
-    getSettings: () => liveSync.getSettings(),
-    updateSettings: (value) => liveSync.updateSettings(value),
+    // Read-only accessors are reached from the health endpoint, so they must
+    // tolerate a stack mounted without the sync controller.
+    getSettings: () => (liveSync?.getSettings?.() ?? {}),
+    updateSettings: (value) => (liveSync?.updateSettings?.(value) ?? null),
   });
 
   const appCenter = new AppCenter({ engine });

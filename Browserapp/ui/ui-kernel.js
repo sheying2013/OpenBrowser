@@ -22,9 +22,9 @@ const app = window.OpenBrowserApp || window;
 const ui = app.ui || { profiles: [] };
 const save = app.save || (() => {});
 
-// ========== Independent browser kernel — Donut Wayfern channel ==========
+// ========== Independent browser kernel channels ==========
 function kernelSourceLabel(source) {
-  if (source === 'donut-wayfern') return 'Donut Wayfern';
+  if (source === 'donut-wayfern') return '独立内核';
   if (source === 'chrome-stable') return 'Google Chrome Stable';
   if (source === 'chrome-for-testing') return 'Chrome for Testing';
   if (source === 'custom') return '自定义';

@@ -77,8 +77,8 @@ function main() {
   assert.ok(fp.webgl.vendor, 'seeded webgl vendor');
 
   const stripped = fingerprintForNativeKernelInject(fp);
-  assert.strictEqual(stripped.canvas.mode, 'real');
-  assert.strictEqual(stripped.webgl.mode, 'real');
+  assert.strictEqual(stripped.canvas.mode, 'noise');
+  assert.strictEqual(stripped.webgl.mode, 'noise');
   assert.notStrictEqual(stripped.webgl.metaMode, 'real');
   assert.ok(stripped.webgl.vendor || stripped.webgl.renderer);
 

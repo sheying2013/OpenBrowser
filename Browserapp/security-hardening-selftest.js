@@ -80,7 +80,7 @@ function main() {
   assert.ok(kinSrc.includes('const enable = noiseOn;'), 'consistency enable must follow noise mode only');
 
   const stripped = fingerprintForNativeKernelInject(fpNoiseOff);
-  assert.strictEqual(stripped.canvas.mode, 'real');
+  assert.strictEqual(stripped.canvas.mode, 'noise');
   assert.strictEqual(fpNoiseOff.canvas.mode, 'noise');
 
   // --- RPA path sandbox ---

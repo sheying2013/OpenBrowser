@@ -28,7 +28,9 @@ class WindowSyncBridge {
   }
 
   status() {
-    const state = this.getSyncState() || {};
+    // Same tolerance as the rest of this surface: an unwired getter must not
+    // take down the health endpoint with it.
+    const state = (this.getSyncState ? this.getSyncState() : null) || {};
     const settings = this.getSettings ? this.getSettings() : {};
     const operate = Array.isArray(settings.operate)
       ? settings.operate

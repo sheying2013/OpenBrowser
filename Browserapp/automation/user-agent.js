@@ -285,7 +285,7 @@ function cdpUserAgentOverride(uaProfile, acceptLanguage = '') {
       architecture: meta.architecture,
       model: meta.model || '',
       mobile: Boolean(meta.mobile),
-      bitness: meta.bitness || '64',
+      bitness: meta.bitness ?? '64',
       wow64: Boolean(meta.wow64),
     },
   };

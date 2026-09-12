@@ -3,7 +3,7 @@
 // PR #7 smoke: profile create/delete endpoints on the Local API.
 // Drives the REAL LocalApiServer.route() with a REAL BrowserEngine (mock app.getPath only).
 // Does not launch Electron or a real browser — verifies the request-handling path:
-// id validation, number auto-increment, proxy/ThirdPartySuite proxy_config merge, privacy field
+// id validation, number auto-increment, client proxy_config merge, privacy field
 // preservation through engine.sanitizeProfile, syncProfiles persistence, and delete.
 
 const path = require('path');
@@ -40,7 +40,7 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  PASS  ' + nam
   ok('proxy Direct', engine.profiles.get(id1).proxy === 'Direct');
   ok('number starts at 1', engine.profiles.get(id1).number === 1);
 
-  // ---- create 2: ThirdPartySuite proxy_config + privacy ----
+  // ---- create 2: client-style proxy_config + privacy ----
   r = await route('POST', '/api/profiles/create', {
     name: 'Env Two', language: 'ja-JP',
     user_proxy_config: { proxy_type: 'http', proxy_host: '1.2.3.4', proxy_port: '8080', proxy_user: 'u', proxy_password: 'p' },
@@ -82,8 +82,8 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  PASS  ' + nam
   r = await route('POST', '/api/v1/user/delete', { user_id: 'bad id!' });
   ok('delete invalid id clean 400', r && r.code === 400);
 
-  // ---- privacy edge: ThirdPartySuite timezoneMode (string) maps ----
-  // (real ThirdPartySuite sends "custom" + timezone string; verify both forms survive)
+  // ---- privacy edge: client-style timezoneMode (string) maps ----
+  // (real clients send "custom" + timezone string; verify both forms survive)
   r = await route('POST', '/api/v1/user/create', {
     name: 'TZ Custom', privacy: { timezoneMode: 'custom', timezone: 'Asia/Tokyo' },
   });

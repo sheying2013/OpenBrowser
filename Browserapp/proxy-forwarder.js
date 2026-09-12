@@ -1,4 +1,5 @@
 const net = require('net');
+const { normalizeLatitude, normalizeLongitude } = require('./automation/input-validation');
 const tls = require('tls');
 
 const IP_LOOKUP_CHANNELS = Object.freeze(['ip-api', 'ip2location', 'ifconfig-me']);
@@ -779,8 +780,8 @@ function normalizeIpApiResult(value) {
     city: String(value.city || ''),
     zip: String(value.zip || ''),
     timezone: String(value.timezone || ''),
-    latitude: Number.isFinite(Number(value.lat)) ? Number(value.lat) : null,
-    longitude: Number.isFinite(Number(value.lon)) ? Number(value.lon) : null,
+    latitude: normalizeLatitude(value.lat),
+    longitude: normalizeLongitude(value.lon),
     isp: String(value.isp || ''),
     organization: String(value.org || ''),
     asn: String(value.as || '').split(/\s+/, 1)[0],
@@ -811,8 +812,8 @@ function normalizeIpPureResult(value) {
     countryCode: String(value.countryCode || '').toUpperCase(),
     city: String(value.city || ''),
     timezone: String(value.timezone || ''),
-    latitude: Number.isFinite(Number(value.latitude)) ? Number(value.latitude) : null,
-    longitude: Number.isFinite(Number(value.longitude)) ? Number(value.longitude) : null,
+    latitude: normalizeLatitude(value.latitude),
+    longitude: normalizeLongitude(value.longitude),
     postalCode: String(value.postalCode || ''),
     geoRole: 'risk',
     checkedAt: new Date().toISOString(),
@@ -915,12 +916,8 @@ function normalizeIpInfoResult(value) {
     city,
     zip: String(value.postal || value.zip || ''),
     timezone: String(value.timezone || ''),
-    latitude: Number.isFinite(Number(value.latitude ?? value.loc?.split?.(',')?.[0]))
-      ? Number(value.latitude ?? value.loc.split(',')[0])
-      : null,
-    longitude: Number.isFinite(Number(value.longitude ?? value.loc?.split?.(',')?.[1]))
-      ? Number(value.longitude ?? value.loc.split(',')[1])
-      : null,
+    latitude: normalizeLatitude(value.latitude ?? value.loc?.split?.(',')?.[0]),
+    longitude: normalizeLongitude(value.longitude ?? value.loc?.split?.(',')?.[1]),
     isp: org,
     organization: org,
     asn: asnMatch ? asnMatch[0].toUpperCase() : '',
@@ -1317,8 +1314,8 @@ function normalizeIpWhoResult(value) {
     city: String(value.city || ''),
     zip: String(value.postal || value.zip || ''),
     timezone: tz,
-    latitude: Number.isFinite(Number(value.latitude ?? value.lat)) ? Number(value.latitude ?? value.lat) : null,
-    longitude: Number.isFinite(Number(value.longitude ?? value.lon)) ? Number(value.longitude ?? value.lon) : null,
+    latitude: normalizeLatitude(value.latitude ?? value.lat),
+    longitude: normalizeLongitude(value.longitude ?? value.lon),
     isp: String(value.connection?.isp || value.isp || ''),
     organization: String(value.connection?.org || value.org || ''),
     asn: String(value.connection?.asn || value.asn || value.as || '').toString().split(/\s+/, 1)[0],

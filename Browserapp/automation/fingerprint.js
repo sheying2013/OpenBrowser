@@ -18,7 +18,9 @@
  */
 
 const crypto = require('crypto');
+const { mergeFlags, LIST_VALUE_FLAGS } = require('./command-line-flags');
 const { pickPersona, fontsForOs, exclusiveFontsForOtherOs } = require('./device-personas');
+const { mobilePersona, supportsRuntimePersona } = require('./mobile-personas');
 const {
   buildUaProfile,
   randomUaForSeed,
@@ -731,7 +733,7 @@ function buildFingerprint(profile = {}) {
     }
   }
 
-  const uaOs = desktopOs(uaProfile.os) || desktopOs(parseOsFromUa(uaProfile.userAgent)) || 'windows';
+  let uaOs = desktopOs(uaProfile.os) || desktopOs(parseOsFromUa(uaProfile.userAgent)) || 'windows';
   const personaRequested = String(fpIn.deviceProfile ?? privacy.deviceProfile ?? '').toLowerCase() === 'persona';
   const webglOptions = webglPresetsForOs(uaOs, { legacy: !personaRequested });
   let webglPreset = webglOptions[u32(seed, 8) % webglOptions.length];
@@ -755,6 +757,32 @@ function buildFingerprint(profile = {}) {
       renderer: devicePersona.webgl.renderer,
       gpu: devicePersona.webgl.gpu || webglPreset.gpu,
     };
+  }
+
+  // --- mobile device persona ------------------------------------------------
+  // A phone is one device, not five independent numbers: the UA model, viewport, pixel ratio,
+  // core count and GPU all come out of the same pool record, and only that single record is
+  // sampled. The operating system has to be asked for explicitly because a desktop kernel
+  // cannot fall into a phone identity by accident.
+  const mobileRequested = [fpIn.os, clientHintsIn.os, profile.os, uaProfile.os]
+    .map((value) => String(value || '').toLowerCase())
+    .find((value) => value === 'android' || value === 'ios');
+  let mobileDevice = null;
+  if (mobileRequested && supportsRuntimePersona(mobileRequested)) {
+    mobileDevice = mobilePersona(u32(seed, 52), mobileRequested, { chromeMajor: kernelMajor || undefined });
+    uaOs = mobileDevice.os;
+    if (!hasCoresOverride) cores = mobileDevice.cores;
+    if (!hasMemoryOverride) memory = mobileDevice.deviceMemory;
+    colorDepth = mobileDevice.colorDepth;
+    devicePixelRatio = mobileDevice.dpr;
+    webglPreset = {
+      ...webglPreset,
+      vendor: mobileDevice.gpu.vendor,
+      renderer: mobileDevice.gpu.renderer,
+      gpu: mobileDevice.gpu.family ? { vendor: mobileDevice.gpu.family, architecture: '' } : webglPreset.gpu,
+    };
+    // A pinned UA still wins, but the rest of the phone identity follows the sampled device.
+    if (!uaOverride) uaProfile = mobileDevice.uaProfile;
   }
   const inferGpuFromRenderer = (rendererStr) => {
     const s = String(rendererStr || '').toLowerCase();
@@ -807,9 +835,18 @@ function buildFingerprint(profile = {}) {
 
   // A persona carries its own panel size; without it the reported screen follows the window,
   // which is what makes "screen smaller than the viewport" style inconsistencies show up.
-  const screenWidth = Math.max(640, Math.round(Number(fpIn.screenWidth) || devicePersona?.screen?.width || width));
-  const screenHeight = Math.max(480, Math.round(Number(fpIn.screenHeight) || devicePersona?.screen?.height || height));
-  const taskbarHeight = Math.max(0, Math.round(Number(fpIn.taskbarHeight) || (uaOs === 'macos' || uaOs === 'macos_arm' ? 25 : 40)));
+  // Phones report the full display, and their floor is far below the desktop minimum the window
+  // sync assumes, so the panel comes from the persona without the desktop clamp.
+  const mobileScreen = mobileDevice ? mobileDevice.screen : null;
+  const screenWidth = mobileScreen
+    ? Math.round(Number(fpIn.screenWidth) || mobileScreen.width)
+    : Math.max(640, Math.round(Number(fpIn.screenWidth) || devicePersona?.screen?.width || width));
+  const screenHeight = mobileScreen
+    ? Math.round(Number(fpIn.screenHeight) || mobileScreen.height)
+    : Math.max(480, Math.round(Number(fpIn.screenHeight) || devicePersona?.screen?.height || height));
+  const taskbarHeight = mobileScreen
+    ? 0
+    : Math.max(0, Math.round(Number(fpIn.taskbarHeight) || (uaOs === 'macos' || uaOs === 'macos_arm' ? 25 : 40)));
   const availLeft = Math.round(Number(fpIn.availLeft) || 0);
   const availTop = Math.round(Number(fpIn.availTop) || 0);
   const availWidth = Math.min(screenWidth, Math.max(1, Math.round(Number(fpIn.availWidth) || screenWidth)));
@@ -890,7 +927,11 @@ function buildFingerprint(profile = {}) {
     : (webglMetaMode === 'blocked' ? '' : (fpIn.webglRenderer || webglPreset.renderer));
   const rLow = String(webglRenderer || '').toLowerCase();
   let resolvedVendor = fpIn.webglVendor || webglPreset.vendor;
-  if (!fpIn.webglVendor && webglRenderer) {
+  if (!fpIn.webglVendor && mobileDevice) {
+    // Adreno / Mali / PowerVR renderers carry no desktop keyword, so the pool vendor is the only
+    // truthful answer here.
+    resolvedVendor = mobileDevice.gpu.vendor;
+  } else if (!fpIn.webglVendor && webglRenderer) {
     if (rLow.includes('nvidia') || rLow.includes('geforce')) resolvedVendor = 'Google Inc. (NVIDIA)';
     else if (rLow.includes('intel') || rLow.includes('arc') || rLow.includes('iris') || rLow.includes('uhd')) resolvedVendor = 'Google Inc. (Intel)';
     else if (rLow.includes('amd') || rLow.includes('radeon')) resolvedVendor = 'Google Inc. (AMD)';
@@ -1000,7 +1041,25 @@ function buildFingerprint(profile = {}) {
         foreign: exclusiveFontsForOtherOs(uaOs),
       }
       : null,
-    maxTouchPoints: Number(fpIn.maxTouchPoints) >= 0 ? Number(fpIn.maxTouchPoints) : 0,
+    maxTouchPoints: mobileDevice
+      ? mobileDevice.maxTouchPoints
+      : (Number(fpIn.maxTouchPoints) >= 0 ? Number(fpIn.maxTouchPoints) : 0),
+    mobile: Boolean(mobileDevice),
+    touch: Boolean(mobileDevice),
+    mobileDevice: mobileDevice
+      ? {
+        name: mobileDevice.name,
+        model: mobileDevice.model,
+        os: mobileDevice.os,
+        osVersion: mobileDevice.osVersion,
+        cores: mobileDevice.cores,
+        viewport: { ...mobileDevice.viewport },
+        screen: { ...mobileDevice.screen },
+        panel: { ...mobileDevice.panel },
+        dpr: mobileDevice.dpr,
+        gpu: { vendor: mobileDevice.gpu.vendor, renderer: mobileDevice.gpu.renderer, family: mobileDevice.gpu.family },
+      }
+      : null,
     vendor: fpIn.vendor || 'Google Inc.',
     doNotTrack: privacy.dnt ? '1' : null,
     // Static noise identity vs dynamic exit-IP layer
@@ -1013,7 +1072,9 @@ function buildFingerprint(profile = {}) {
       webglMark: Number.isFinite(Number(fpIn.webglId)) ? Number(fpIn.webglId) : webglId,
       audioFp: Number.isFinite(Number(fpIn.audioId)) ? Number(fpIn.audioId) : audioId,
       clientRectFp: Number.isFinite(Number(fpIn.clientRectsId)) ? Number(fpIn.clientRectsId) : clientRectsId,
-      maxTouchPoints: Number(fpIn.maxTouchPoints) >= 0 ? Number(fpIn.maxTouchPoints) : 0,
+      maxTouchPoints: mobileDevice
+        ? mobileDevice.maxTouchPoints
+        : (Number(fpIn.maxTouchPoints) >= 0 ? Number(fpIn.maxTouchPoints) : 0),
       mediaDevices,
       mediaLabels: mediaLabelTemplates,
       battery,
@@ -1045,9 +1106,15 @@ function buildFingerprint(profile = {}) {
  */
 function fingerprintConsistencyIssues(fp) {
   const issues = [];
-  const uaOs = desktopOs(fp?.uaProfile?.os) || desktopOs(parseOsFromUa(fp?.userAgent)) || 'windows';
-  const expectedPlatform = OS_PRESETS[uaOs]?.platformNav || OS_PRESETS.windows.platformNav;
-  const expectedChPlatform = expectedClientHintPlatform(uaOs);
+  const parsedOs = parseOsFromUa(fp?.userAgent);
+  const mobileOs = (parsedOs === 'android' || parsedOs === 'ios') ? parsedOs : null;
+  const uaOs = mobileOs
+    ? mobileOs
+    : (desktopOs(fp?.uaProfile?.os) || desktopOs(parsedOs) || 'windows');
+  const expectedPlatform = mobileOs
+    ? (mobileOs === 'ios' ? 'iPhone' : 'Linux armv8l')
+    : (OS_PRESETS[uaOs]?.platformNav || OS_PRESETS.windows.platformNav);
+  const expectedChPlatform = mobileOs === 'android' ? 'Android' : (mobileOs === 'ios' ? 'iOS' : expectedClientHintPlatform(uaOs));
   const renderer = String(fp?.webgl?.renderer || '');
   const vendor = String(fp?.webgl?.vendor || '');
 
@@ -1066,6 +1133,15 @@ function fingerprintConsistencyIssues(fp) {
   }
   if (uaOs === 'linux' && (/Direct3D|D3D11|Apple M[0-9]/i.test(renderer) || !/Mesa|RADV|OpenGL/i.test(renderer))) {
     add('webgl-ua-mismatch', 'WebGL renderer does not look like a Linux renderer.');
+  }
+  if (mobileOs && /Direct3D|D3D11|Apple M[0-9]|Mesa|RADV/i.test(renderer)) {
+    add('webgl-ua-mismatch', 'WebGL renderer does not look like a mobile GPU.');
+  }
+  if (fp?.mobile && !(Number(fp?.maxTouchPoints) > 0)) {
+    add('mobile-touch-missing', 'A mobile profile must expose touch points.', 'error');
+  }
+  if (fp?.mobile && fp?.mobileDevice && Number(fp.mobileDevice.screen?.width) !== Number(fp?.screen?.width)) {
+    add('mobile-screen-mismatch', 'The reported screen must be the panel of the sampled device.');
   }
   const screen = fp?.screen || {};
   if (!(Number(screen.width) > 0 && Number(screen.height) > 0 && Number(screen.availWidth) > 0 && Number(screen.availHeight) > 0)) {
@@ -1125,6 +1201,10 @@ function buildInjectionScript(fp) {
     speech: fp.speech || null,
     fonts: fp.fonts || null,
     maxTouchPoints: fp.maxTouchPoints,
+    mobile: Boolean(fp.mobile),
+    mobileDevice: fp.mobileDevice || null,
+    // The injected navigator.patches read this; without it the page reported empty brands / model.
+    userAgentMetadata: fp.userAgentMetadata || fp.uaProfile?.metadata || null,
     vendor: fp.vendor || fp.uaProfile?.vendor || 'Google Inc.',
     doNotTrack: fp.doNotTrack,
     seed: fp.seed,
@@ -1151,6 +1231,9 @@ function buildInjectionScript(fp) {
 (() => {
   try {
   const CFG = ${json};
+  // Phone identity flag, shared by the window metrics and the navigator patch below.
+  const MOBILE = Boolean(CFG.mobile);
+
   const seedNum = parseInt(String(CFG.seed || '1').slice(0, 8), 16) || 1;
   const noise = (n) => {
     let x = Math.sin((n + 1) * seedNum) * 10000;
@@ -1957,11 +2040,14 @@ function buildInjectionScript(fp) {
       return fallback;
     };
 
+    // A phone has no desktop title bar or window chrome: outerWidth/outerHeight track the layout
+    // viewport, the touch surface has to exist as own properties rather than only through
+    // navigator.maxTouchPoints, and screen.* stays the panel instead of growing with the window.
     const dynamicScreen = {
-      width: () => (baseScreenWidth ? Math.max(baseScreenWidth, liveViewportSize('width', baseScreenWidth)) : liveViewportSize('width', 1920)),
-      height: () => (baseScreenHeight ? Math.max(baseScreenHeight, liveViewportSize('height', baseScreenHeight)) : liveViewportSize('height', 1080)),
-      availWidth: () => (baseAvailWidth ? Math.max(baseAvailWidth, liveViewportSize('width', baseAvailWidth)) : liveViewportSize('width', 1920)),
-      availHeight: () => (baseAvailHeight ? Math.max(baseAvailHeight, liveViewportSize('height', baseAvailHeight)) : liveViewportSize('height', 1040)),
+      width: () => (MOBILE && baseScreenWidth ? baseScreenWidth : (baseScreenWidth ? Math.max(baseScreenWidth, liveViewportSize('width', baseScreenWidth)) : liveViewportSize('width', 1920))),
+      height: () => (MOBILE && baseScreenHeight ? baseScreenHeight : (baseScreenHeight ? Math.max(baseScreenHeight, liveViewportSize('height', baseScreenHeight)) : liveViewportSize('height', 1080))),
+      availWidth: () => (MOBILE && baseAvailWidth ? baseAvailWidth : (baseAvailWidth ? Math.max(baseAvailWidth, liveViewportSize('width', baseAvailWidth)) : liveViewportSize('width', 1920))),
+      availHeight: () => (MOBILE && baseAvailHeight ? baseAvailHeight : (baseAvailHeight ? Math.max(baseAvailHeight, liveViewportSize('height', baseAvailHeight)) : liveViewportSize('height', 1040))),
       availLeft: () => s.availLeft ?? 0,
       availTop: () => s.availTop ?? 0,
       colorDepth: () => s.colorDepth ?? 24,
@@ -1992,14 +2078,60 @@ function buildInjectionScript(fp) {
     };
     const getOuterHeight = () => {
       const h = liveViewportSize('height', initialInnerHeight);
-      return isFullscreen() ? h : (h + 88);
+      return (MOBILE || isFullscreen()) ? h : (h + 88);
     };
     const getOuterWidth = () => {
       const w = liveViewportSize('width', initialInnerWidth);
-      return isFullscreen() ? w : (w + 16);
+      return (MOBILE || isFullscreen()) ? w : (w + 16);
     };
     try { Object.defineProperty(window, 'outerWidth', nativeAccessor('outerWidth', { configurable: true, get: getOuterWidth })); } catch (_) {}
     try { Object.defineProperty(window, 'outerHeight', nativeAccessor('outerHeight', { configurable: true, get: getOuterHeight })); } catch (_) {}
+    if (MOBILE) {
+      try { Object.defineProperty(window, 'ontouchstart', nativeAccessor('ontouchstart', { configurable: true, enumerable: true, get: () => null })); } catch (_) {}
+      try { Object.defineProperty(window, 'orientation', nativeAccessor('orientation', { configurable: true, get: () => 0 })); } catch (_) {}
+      try {
+        const meta = CFG.userAgentMetadata || {};
+        const brandList = Object.freeze((meta.brands || []).map((item) => Object.freeze({
+          brand: String(item.brand),
+          version: String(item.version),
+        })));
+        const fullList = Object.freeze((meta.fullVersionList || meta.brands || []).map((item) => Object.freeze({
+          brand: String(item.brand),
+          version: String(item.version),
+        })));
+        const chPlatform = String(meta.platform || "Android");
+        const chPlatformVersion = String(meta.platformVersion || "");
+        const chModel = String(meta.model || "");
+        const chFullVersion = String(meta.uaFullVersion || meta.fullVersion || "");
+        const chMobile = Object.freeze({
+          brands: brandList,
+          mobile: true,
+          platform: chPlatform,
+          getHighEntropyValues(hints) {
+            const all = {
+              brands: brandList,
+              fullVersionList: fullList,
+              fullVersion: chFullVersion,
+              uaFullVersion: chFullVersion,
+              platform: chPlatform,
+              platformVersion: chPlatformVersion,
+              architecture: String(meta.architecture || ""),
+              model: chModel,
+              mobile: true,
+              bitness: String(meta.bitness || ""),
+              wow64: false,
+            };
+            const out = { brands: brandList, mobile: true, platform: chPlatform };
+            for (const hint of Array.isArray(hints) ? hints : []) if (hint in all) out[hint] = all[hint];
+            return Promise.resolve(out);
+          },
+          toJSON() { return { brands: brandList, mobile: true, platform: chPlatform }; },
+        });
+        if (globalThis.Navigator?.prototype) {
+          Object.defineProperty(globalThis.Navigator.prototype, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => chMobile }));
+        }
+      } catch (_) {}
+    }
 
     try {
       if (typeof window.matchMedia === "function") {
@@ -2483,7 +2615,14 @@ function buildInjectionScript(fp) {
   if (CFG.clientRects && CFG.clientRects.mode === 'noise') {
     try {
       const mark = Number(CFG.clientRects.mark) || 1;
-      const noisePx = ((mark % 7) - 3) * 0.0001;
+      // A zero offset would silently disable this whole surface for that profile (the host value
+      // would pass through untouched), so the derived step is never allowed to collapse to 0.
+      const rawStep = (mark % 7) - 3;
+      const noisePx = (rawStep === 0 ? 1 : rawStep) * 0.0001;
+      // Font-metric fingerprinting reads width/height, so those carry their own deterministic
+      // sub-pixel delta instead of being handed back untouched.
+      const sizeStep = (mark % 5) - 2;
+      const noiseSize = (sizeStep === 0 ? 1 : sizeStep) * 0.0001;
       const patch = (proto, method) => {
         if (!proto || !proto[method]) return;
         replaceMethod(proto, method, (original) => function() {
@@ -2491,26 +2630,52 @@ function buildInjectionScript(fp) {
           if (!rect) return rect;
           try {
             const x = rect.x + noisePx, y = rect.y + noisePx;
-            return DOMRect.fromRect ? DOMRect.fromRect({ x, y, width: rect.width, height: rect.height }) : rect;
+            const width = rect.width + noiseSize, height = rect.height + noiseSize;
+            return DOMRect.fromRect ? DOMRect.fromRect({ x, y, width, height }) : rect;
           } catch (_) { return rect; }
         });
       };
+      // A DOMRectList facade must shadow every native accessor/iterator: inheriting the real
+      // prototype gives instanceof parity, but the native length getter, item() and iterator
+      // throw "Illegal invocation" on a synthetic object. Own/proto-level shims keep
+      // Array.from(), spread, for..of and item() working exactly like a real list.
+      const rectsFacadeProto = (() => {
+        const proto = typeof DOMRectList !== "undefined" ? Object.create(DOMRectList.prototype) : {};
+        Object.defineProperty(proto, "item", {
+          value: function item(index) { return this[index] || null; },
+          writable: true, configurable: true, enumerable: false,
+        });
+        if (typeof Symbol !== "undefined" && Symbol.iterator) {
+          Object.defineProperty(proto, Symbol.iterator, {
+            value: function iterator() {
+              let i = 0;
+              const self = this;
+              return {
+                next() {
+                  return i < self.length ? { value: self[i++], done: false } : { value: undefined, done: true };
+                },
+                [Symbol.iterator]() { return this; },
+              };
+            },
+            writable: true, configurable: true, enumerable: false,
+          });
+        }
+        return proto;
+      })();
       const patchList = (proto, method) => {
         if (!proto || !proto[method]) return;
         replaceMethod(proto, method, (original) => function() {
           const list = original.apply(this, arguments);
           if (!list) return list;
           try {
-            const protoTarget = typeof DOMRectList !== "undefined" ? DOMRectList.prototype : Object.prototype;
-            const rects = Object.create(protoTarget);
+            const rects = Object.create(rectsFacadeProto);
             for (let i = 0; i < list.length; i += 1) {
               const rect = list[i];
               rects[i] = DOMRect.fromRect
-                ? DOMRect.fromRect({ x: rect.x + noisePx, y: rect.y + noisePx, width: rect.width, height: rect.height })
+                ? DOMRect.fromRect({ x: rect.x + noisePx, y: rect.y + noisePx, width: rect.width + noiseSize, height: rect.height + noiseSize })
                 : rect;
             }
-            rects.length = list.length;
-            rects.item = function(index) { return this[index] || null; };
+            Object.defineProperty(rects, "length", { value: list.length, writable: false, configurable: true, enumerable: false });
             return rects;
           } catch (_) { return list; }
         });
@@ -2534,21 +2699,101 @@ function buildInjectionScript(fp) {
       if (globalThis.webkitRTCPeerConnection) window.webkitRTCPeerConnection = blocked;
     } catch (_) {}
   } else if (CFG.webrtc === 'proxy' && CFG.webrtcAddress) {
+    // NOTE: the bundled 148 kernel refuses to construct a peer connection at all ("detached
+    // documents"), for every webrtc_policy value. This layer therefore only ever runs on a stock
+    // Chromium kernel, which is exactly why it has to be correct there.
     try {
       const targetIp = String(CFG.webrtcAddress || '');
+      const IPV4 = /^\\d{1,3}(\\.\\d{1,3}){3}$/;
+      const isPrivateIpv4 = (value) => (
+        /^10\\./.test(value)
+        || /^192\\.168\\./.test(value)
+        || /^172\\.(1[6-9]|2\\d|3[01])\\./.test(value)
+        || /^169\\.254\\./.test(value)
+        || /^127\\./.test(value)
+      );
+      // Only the machine's own addresses may be replaced: private IPv4, any IPv6 literal
+      // (link-local, ULA or global) and the mDNS .local name Chrome uses for host candidates all
+      // identify the host. A public candidate already carries the exit address and must survive.
+      // The previous version rewrote every "typ host" line with a regex that only understood
+      // IPv4, so IPv6 and .local candidates went out untouched.
+      const isOwnAddress = (value) => {
+        const addr = String(value || '');
+        if (!addr) return false;
+        if (/\\.local$/i.test(addr)) return true;
+        if (IPV4.test(addr)) return isPrivateIpv4(addr);
+        if (addr.includes(':')) return true;
+        return false;
+      };
+      const rewriteCandidateLine = (line) => {
+        if (typeof line !== 'string' || !targetIp) return line;
+        // The ICE event hands out "candidate:..." while the SDP line carries "a=candidate:...",
+        // so the prefix is optional and has to be preserved on the way out.
+        const m = line.match(/^(a=)?candidate:(\\S+) (\\d+) (\\S+) (\\d+) (\\S+) (\\d+) typ (\\S+)([\\s\\S]*)$/);
+        if (!m) return line;
+        let changed = false;
+        let addr = m[6];
+        if (isOwnAddress(addr)) { addr = targetIp; changed = true; }
+        // raddr on a reflexive candidate names the base address it was observed from, which is
+        // the same local address in a different field.
+        const tail = m[9].replace(/ raddr (\\S+)/, (whole, base) => {
+          if (!isOwnAddress(base)) return whole;
+          changed = true;
+          return ' raddr 0.0.0.0';
+        });
+        if (!changed) return line;
+        return (m[1] || '') + 'candidate:' + m[2] + ' ' + m[3] + ' ' + m[4] + ' ' + m[5] + ' ' + addr
+          + ' ' + m[7] + ' typ ' + m[8] + tail;
+      };
       const rewriteSdp = (desc) => {
         if (!desc || typeof desc.sdp !== 'string' || !targetIp) return desc;
         try {
           const nl = String.fromCharCode(10);
-          const lines = desc.sdp.split(nl);
-          const mapped = lines.map((line) => {
-            if (line.includes('typ host')) {
-              return line.replace(/([0-9]{1,3}\.){3}[0-9]{1,3}/, targetIp);
-            }
-            return line;
+          let changed = false;
+          const mapped = desc.sdp.split(nl).map((line) => {
+            const next = rewriteCandidateLine(line);
+            if (next !== line) changed = true;
+            return next;
           });
+          if (!changed) return desc;
           return Object.assign({}, desc, { sdp: mapped.join(nl) });
         } catch (_) { return desc; }
+      };
+      // Descriptions the page reads have to stay brand-checkable, or instanceof becomes a tell.
+      const rewriteDescription = (desc) => {
+        const next = rewriteSdp(desc);
+        if (next === desc) return desc;
+        try { return new RTCSessionDescription({ type: next.type, sdp: next.sdp }); } catch (_) { return next; }
+      };
+      const rewriteCandidate = (candidate) => {
+        if (!candidate || typeof candidate.candidate !== 'string') return candidate;
+        const line = rewriteCandidateLine(candidate.candidate);
+        if (line === candidate.candidate) return candidate;
+        try {
+          return new RTCIceCandidate({
+            candidate: line,
+            sdpMid: candidate.sdpMid,
+            sdpMLineIndex: candidate.sdpMLineIndex,
+            usernameFragment: candidate.usernameFragment,
+          });
+        } catch (_) { return candidate; }
+      };
+      const rewriteIceEvent = (event) => {
+        try {
+          if (!event || !event.candidate) return event;
+          const candidate = rewriteCandidate(event.candidate);
+          if (candidate === event.candidate) return event;
+          if (typeof RTCPeerConnectionIceEvent === 'function') {
+            const rebuilt = new RTCPeerConnectionIceEvent('icecandidate', { candidate: candidate, url: event.url || '' });
+            if (rebuilt && rebuilt.candidate) return rebuilt;
+          }
+          const shim = Object.create(Object.getPrototypeOf(event));
+          const own = { candidate: candidate, type: event.type, target: event.target, currentTarget: event.currentTarget };
+          for (const key of Object.keys(own)) {
+            try { Object.defineProperty(shim, key, { value: own[key], enumerable: true, configurable: true }); } catch (_) {}
+          }
+          return shim;
+        } catch (_) { return event; }
       };
       const pcProto = globalThis.RTCPeerConnection && RTCPeerConnection.prototype;
       if (pcProto) {
@@ -2564,9 +2809,96 @@ function buildInjectionScript(fp) {
         }
         if (pcProto.setLocalDescription) {
           replaceMethod(pcProto, 'setLocalDescription', (orig) => async function setLocalDescription(desc, ...args) {
-            return orig.call(this, rewriteSdp(desc), ...args);
+            // setLocalDescription() with no argument is the documented modern form: the engine
+            // builds and applies the offer itself, so there is no argument to rewrite and the
+            // stored description is covered by the getters below instead.
+            return orig.call(this, desc === undefined ? desc : rewriteSdp(desc), ...args);
           });
         }
+        // Every path funnels through the description getters: the rewritten argument form, the
+        // no-argument form and a page that built its own SDP. Reading is the only place that
+        // covers all three, so the raw stored SDP never reaches the page.
+        const descriptionCache = new WeakMap();
+        for (const key of ['localDescription', 'currentLocalDescription', 'pendingLocalDescription',
+          'remoteDescription', 'currentRemoteDescription', 'pendingRemoteDescription']) {
+          try {
+            const descriptor = Object.getOwnPropertyDescriptor(pcProto, key);
+            if (!descriptor || typeof descriptor.get !== 'function' || descriptor.configurable === false) continue;
+            Object.defineProperty(pcProto, key, {
+              configurable: true,
+              enumerable: descriptor.enumerable,
+              get() {
+                const raw = descriptor.get.call(this);
+                if (!raw) return raw;
+                let cache = descriptionCache.get(this);
+                if (!cache) { cache = new Map(); descriptionCache.set(this, cache); }
+                const hit = cache.get(key);
+                if (hit && hit.raw === raw) return hit.wrapped;
+                const wrapped = rewriteDescription(raw);
+                cache.set(key, { raw: raw, wrapped: wrapped });
+                return wrapped;
+              },
+            });
+          } catch (_) {}
+        }
+        // Gathered candidates also reach the page one by one through the handler or a listener.
+        try {
+          const handlerState = new WeakMap();
+          const descriptor = Object.getOwnPropertyDescriptor(pcProto, 'onicecandidate');
+          if (descriptor && typeof descriptor.set === 'function') {
+            Object.defineProperty(pcProto, 'onicecandidate', {
+              configurable: true,
+              enumerable: descriptor.enumerable,
+              get() {
+                const state = handlerState.get(this);
+                return state ? state.user || null : null;
+              },
+              set(fn) {
+                const state = handlerState.get(this) || {};
+                state.user = typeof fn === 'function' ? fn : null;
+                handlerState.set(this, state);
+                if (typeof fn !== 'function') { descriptor.set.call(this, null); return; }
+                descriptor.set.call(this, function onicecandidate(event) {
+                  return fn.call(this, rewriteIceEvent(event));
+                });
+              },
+            });
+          }
+        } catch (_) {}
+        try {
+          const listenerWrappers = new WeakMap();
+          const captureOf = (options) => (options === true
+            || (options && typeof options === 'object' && options.capture) ? 'capture' : 'bubble');
+          if (pcProto.addEventListener) {
+            replaceMethod(pcProto, 'addEventListener', (orig) => function addEventListener(type, listener, options) {
+              if (String(type) !== 'icecandidate' || typeof listener !== 'function') {
+                return orig.call(this, type, listener, options);
+              }
+              let perTarget = listenerWrappers.get(this);
+              if (!perTarget) { perTarget = new WeakMap(); listenerWrappers.set(this, perTarget); }
+              let perListener = perTarget.get(listener);
+              if (!perListener) { perListener = new Map(); perTarget.set(listener, perListener); }
+              const key = captureOf(options);
+              let wrapper = perListener.get(key);
+              if (!wrapper) {
+                wrapper = function wrapped(event) { return listener.call(this, rewriteIceEvent(event)); };
+                perListener.set(key, wrapper);
+              }
+              return orig.call(this, type, wrapper, options);
+            });
+          }
+          if (pcProto.removeEventListener) {
+            replaceMethod(pcProto, 'removeEventListener', (orig) => function removeEventListener(type, listener, options) {
+              if (String(type) === 'icecandidate' && typeof listener === 'function') {
+                const perTarget = listenerWrappers.get(this);
+                const perListener = perTarget && perTarget.get(listener);
+                const wrapper = perListener && perListener.get(captureOf(options));
+                if (wrapper) return orig.call(this, type, wrapper, options);
+              }
+              return orig.call(this, type, listener, options);
+            });
+          }
+        } catch (_) {}
       }
     } catch (_) {}
   }
@@ -2685,36 +3017,107 @@ function buildInjectionScript(fp) {
     } catch (_) {}
   }
 
-  // --- WebGPU adapter info when gpu vendor/architecture is configured ---
-  if (CFG.webgl && CFG.webgl.gpu && (CFG.webgl.gpu.vendor || CFG.webgl.gpu.architecture) && typeof navigator !== "undefined" && navigator.gpu) {
+  // --- WebGPU adapter info ---
+  // Modes mirror the profile contract:
+  //   real    : do not touch the kernel's adapter or its info
+  //   blocked : keep navigator.gpu present but make requestAdapter resolve to no adapter
+  //   webgl   : expose an adapter whose info matches the configured WebGL/GPU identity
+  if (CFG.webgpu && typeof navigator !== "undefined" && navigator.gpu) {
     try {
-      const gpuInfo = {
-        vendor: String(CFG.webgl.gpu.vendor || ''),
-        architecture: String(CFG.webgl.gpu.architecture || ''),
-        device: '',
-        description: '',
-      };
+      const gpuMode = String(CFG.webgpu.mode || 'real');
       const gpuProto = typeof GPU !== 'undefined' ? GPU.prototype : null;
-      const targetGpu = (gpuProto && gpuProto.requestAdapter) ? gpuProto : navigator.gpu;
-      replaceMethod(targetGpu, 'requestAdapter', (originalRequestAdapter) => async function requestAdapter(...args) {
-        const adapter = await originalRequestAdapter.apply(this, args);
-        if (!adapter) return adapter;
-        try {
-          const proto = typeof GPUAdapterInfo !== "undefined" ? GPUAdapterInfo.prototype : Object.prototype;
-          const adapterInfoObj = Object.create(proto);
-          Object.assign(adapterInfoObj, gpuInfo);
-          Object.defineProperty(adapter, 'info', nativeAccessor('info', { configurable: true, enumerable: true, get: () => adapterInfoObj }));
-          if (typeof adapter.requestAdapterInfo === 'function') {
-            const origRAI = adapter.requestAdapterInfo;
-            adapter.requestAdapterInfo = nativeLike(async function requestAdapterInfo() {
-              return adapterInfoObj;
-            }, origRAI);
+      const requestTarget = (gpuProto && typeof gpuProto.requestAdapter === 'function')
+        ? gpuProto
+        : navigator.gpu;
+      const gpuInfo = CFG.webgpu.gpu && (CFG.webgpu.gpu.vendor || CFG.webgpu.gpu.architecture)
+        ? {
+          vendor: String(CFG.webgpu.gpu.vendor || ''),
+          architecture: String(CFG.webgpu.gpu.architecture || ''),
+          device: String(CFG.webgpu.gpu.device || ''),
+          description: String(CFG.webgpu.gpu.description || CFG.webgpu.gpu.architecture || ''),
+        }
+        : null;
+
+      if (gpuMode === 'blocked' && requestTarget) {
+        replaceMethod(requestTarget, 'requestAdapter', () => async function requestAdapter() {
+          return null;
+        });
+      } else if (gpuMode === 'webgl' && gpuInfo && requestTarget) {
+        const adapterInfo = new WeakMap();
+
+        const makeAdapterInfo = () => {
+          const proto = typeof GPUAdapterInfo !== 'undefined' ? GPUAdapterInfo.prototype : Object.prototype;
+          const info = Object.create(proto);
+          for (const [key, value] of Object.entries(gpuInfo)) {
+            try {
+              Object.defineProperty(info, key, {
+                configurable: true,
+                enumerable: true,
+                writable: false,
+                value: value,
+              });
+            } catch (_) {}
           }
-        } catch (_) {}
-        return adapter;
-      });
+          try {
+            Object.defineProperty(info, 'toJSON', {
+              configurable: true,
+              enumerable: false,
+              writable: true,
+              value: function toJSON() {
+                const out = {};
+                for (const key of ['vendor', 'architecture', 'device', 'description']) {
+                  try { if (key in info) out[key] = info[key]; } catch (_) {}
+                }
+                return out;
+              },
+            });
+          } catch (_) {}
+          return info;
+        };
+
+        replaceMethod(requestTarget, 'requestAdapter', (originalRequestAdapter) => async function requestAdapter(...args) {
+          const adapter = await originalRequestAdapter.apply(this, args);
+          if (!adapter) return adapter;
+          const info = makeAdapterInfo();
+          adapterInfo.set(adapter, info);
+          // Prefer an own accessor so a single adapter can carry a stable object even when the
+          // platform marks the prototype accessor non-configurable.
+          try {
+            Object.defineProperty(adapter, 'info', {
+              configurable: true,
+              enumerable: true,
+              get: () => info,
+            });
+          } catch (_) {}
+          return adapter;
+        });
+
+        const adapterProto = typeof GPUAdapter !== 'undefined' ? GPUAdapter.prototype : null;
+        if (adapterProto) {
+          const infoDescriptor = Object.getOwnPropertyDescriptor(adapterProto, 'info');
+          if (infoDescriptor && typeof infoDescriptor.get === 'function') {
+            try {
+              Object.defineProperty(adapterProto, 'info', {
+                configurable: true,
+                enumerable: infoDescriptor.enumerable === true,
+                get: function info() {
+                  const spoofed = adapterInfo.get(this);
+                  return spoofed || infoDescriptor.get.call(this);
+                },
+              });
+            } catch (_) {}
+          }
+          if (typeof adapterProto.requestAdapterInfo === 'function') {
+            replaceMethod(adapterProto, 'requestAdapterInfo', (originalRequestAdapterInfo) => async function requestAdapterInfo(...args) {
+              const spoofed = adapterInfo.get(this);
+              return spoofed || originalRequestAdapterInfo.apply(this, args);
+            });
+          }
+        }
+      }
     } catch (_) {}
   }
+
 } catch (_) {}
 })();`;
 }
@@ -2756,6 +3159,7 @@ function buildWorkerInjectionScript(fp) {
   });
   return `(() => {
   const CFG = ${json};
+
   const seedNum = parseInt(String(CFG.seed || '1').slice(0, 8), 16) || 1;
   const noise = (n) => { const x = Math.sin((n + 1) * seedNum) * 10000; return x - Math.floor(x); };
   const square = Math.max(2, Number(CFG.stability?.square) || 8);
@@ -2929,7 +3333,7 @@ function buildWorkerInjectionScript(fp) {
             architecture: String(metadata.architecture || ''),
             model: String(metadata.model || ''),
             mobile: Boolean(metadata.mobile),
-            bitness: String(metadata.bitness || '64'),
+            bitness: String(metadata.bitness ?? '64'),
             wow64: Boolean(metadata.wow64),
           };
           const out = { brands, mobile: values.mobile, platform: values.platform };
@@ -2939,6 +3343,15 @@ function buildWorkerInjectionScript(fp) {
         toJSON() { return { brands, mobile: Boolean(metadata.mobile), platform: String(metadata.platform || '') }; },
       });
       try { Object.defineProperty(navProto, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => uaData })); } catch (_) {}
+      // Only a phone profile replaces the page-side object: a desktop browser reports the real
+      // architecture through the same API, and Chromium fills in the host value whenever the
+      // override leaves the field empty, which is exactly the leak a phone identity cannot have.
+      try {
+        const pageNavProto = MOBILE ? globalThis.Navigator?.prototype : null;
+        if (pageNavProto) {
+          Object.defineProperty(pageNavProto, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => uaData }));
+        }
+      } catch (_) {}
     }
   } catch (_) {}
 
@@ -3310,32 +3723,16 @@ function buildWorkerInjectionScript(fp) {
 }
 
 function chromeArgsForFingerprint(fp, profile = {}) {
-  const args = [];
+  let args = [];
   // Critical: without this, Chromium/CDP sets navigator.webdriver = true
   args.push('--disable-blink-features=AutomationControlled');
   // Never enable automation switch (some launchers add it by default)
   if (fp.userAgent) args.push(`--user-agent=${fp.userAgent}`);
   // TLS extension permutation by Chrome major from UA
   if (fp.uaProfile) {
-    for (const flag of chromeArgsForUa(fp.uaProfile)) {
-      // merge enable/disable-features carefully below
-      if (flag.startsWith('--enable-features=') || flag.startsWith('--disable-features=')) {
-        const key = flag.split('=')[0];
-        const val = flag.slice(key.length + 1);
-        const existing = args.findIndex((a) => a.startsWith(key + '='));
-        if (existing >= 0) {
-          const cur = args[existing].slice(key.length + 1).split(',').filter(Boolean);
-          for (const part of val.split(',')) {
-            if (part && !cur.includes(part)) cur.push(part);
-          }
-          args[existing] = key + '=' + cur.join(',');
-        } else {
-          args.push(flag);
-        }
-      } else if (!args.includes(flag)) {
-        args.push(flag);
-      }
-    }
+    // Feature flags are list-valued: merging has to append and de-duplicate
+    // rather than let one occurrence replace the other.
+    args = mergeFlags(args, chromeArgsForUa(fp.uaProfile), { listFlags: LIST_VALUE_FLAGS });
   }
   if (fp.screen?.width && fp.screen?.height) {
     args.push(`--window-size=${fp.screen.width},${fp.screen.height}`);
@@ -3387,7 +3784,17 @@ function chromeArgsForFingerprint(fp, profile = {}) {
   return args;
 }
 
-async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile = {}) {
+// Bookkeeping for the per-target inject. The runtime drives the same document-start script from
+// several places (pre-start, post-start, watch sweeps, reload recovery, worker attach). Registering
+// one identical source twice makes Chromium run it twice on every later navigation, and evaluating
+// it twice on a live document stacks a second layer of noise on the readers, which shifts canvas /
+// clientRects while the profile is already in use. Tracking what each target already carries keeps
+// the later passes true no-ops without leaving anything the page itself could detect.
+const TARGET_INJECT_STATE = new Map();
+const MAX_TRACKED_TARGETS = 256;
+const injectSourceKey = (source) => crypto.createHash('sha1').update(source).digest('hex').slice(0, 16);
+
+async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile = {}, options = {}) {
   const privacy = profile.privacy || {};
   const timezone = privacy.timezoneMode === 'custom'
     ? privacy.timezone
@@ -3416,6 +3823,19 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     if (webSocketDebuggerUrl == null) return cdpCall(method, params);
     return cdpCall(webSocketDebuggerUrl, method, params);
   };
+
+  const source = buildInjectionScript(fp);
+  const fpKey = injectSourceKey(source);
+  const injectTargetKey = typeof options.applyKey === 'string' && options.applyKey
+    ? options.applyKey
+    : (typeof webSocketDebuggerUrl === 'string' && webSocketDebuggerUrl ? webSocketDebuggerUrl : '');
+  const forceInject = options.force === true;
+  const injectState = injectTargetKey ? TARGET_INJECT_STATE.get(injectTargetKey) : null;
+  const sameConfig = Boolean(injectState && injectState.fpKey === fpKey);
+  const alreadyPatched = Boolean(sameConfig && injectState.documentStartOk && injectState.evaluated);
+  // Nothing left to do for this target: the live document already carries this exact config and the
+  // document-start registration covers every later navigation.
+  if (alreadyPatched && !forceInject) return;
 
   // Page domain must be enabled or addScriptToEvaluateOnNewDocument is a no-op on some hosts.
   await invoke('Page.enable', {}).catch(() => {});
@@ -3455,7 +3875,32 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
   // Desktop windows must retain Chromium's live viewport. A fixed device-metrics
   // override leaves the renderer at the fingerprint's initial size after resize,
   // producing a large blank region. screen.* remains spoofed by the document script.
-  if (fp.screen) await softOverride('Emulation.clearDeviceMetricsOverride', {});
+  // A phone profile is the exception: there the layout viewport IS the device panel, and pinning
+  // it is what makes innerWidth, screen.*, the pixel ratio and pointer type agree inside a
+  // desktop window. Emulated touch goes with it, or a phone that cannot answer touch probes is
+  // immediately suspicious.
+  if (fp.mobile && fp.screen) {
+    const viewport = fp.mobileDevice?.viewport || {};
+    const mobileWidth = Math.round(Number(viewport.width) || Number(fp.screen.width) || 360);
+    const mobileHeight = Math.round(Number(viewport.height) || Number(fp.screen.height) || 640);
+    await softOverride('Emulation.setDeviceMetricsOverride', {
+      width: mobileWidth,
+      height: mobileHeight,
+      deviceScaleFactor: Number(fp.screen.devicePixelRatio) || 3,
+      mobile: true,
+      screenWidth: Math.round(Number(fp.screen.width) || mobileWidth),
+      screenHeight: Math.round(Number(fp.screen.height) || mobileHeight),
+      screenOrientation: { type: 'portraitPrimary', angle: 0 },
+      positionX: 0,
+      positionY: 0,
+    });
+    await softOverride('Emulation.setTouchEmulationEnabled', {
+      enabled: true,
+      maxTouchPoints: Number(fp.maxTouchPoints) || 5,
+    });
+  } else if (fp.screen) {
+    await softOverride('Emulation.clearDeviceMetricsOverride', {});
+  }
   if (timezone) {
     await softOverride('Emulation.setTimezoneOverride', { timezoneId: timezone });
   }
@@ -3470,58 +3915,80 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     await softOverride('Emulation.setLocaleOverride', { locale: fp.languages[0] });
   }
 
-  const source = buildInjectionScript(fp);
   // Register for future documents first (start page navigation depends on this).
   // Must not silently drop registration failures — otherwise navigation paints host FP.
-  let documentStartOk = false;
-  try {
-    await invoke('Page.addScriptToEvaluateOnNewDocument', { source });
-    documentStartOk = true;
-  } catch (error) {
-    const msg = String(error && error.message || error || '');
-    if (!/already|duplicate|exists/i.test(msg)) {
-      // Retry once after re-enabling Page domain.
-      await invoke('Page.enable', {}).catch(() => {});
-      try {
-        await invoke('Page.addScriptToEvaluateOnNewDocument', { source });
-        documentStartOk = true;
-      } catch (retryError) {
-        const retryMsg = String(retryError && retryError.message || retryError || '');
-        if (!/already|duplicate|exists/i.test(retryMsg)) {
-          // Soft: still try Runtime.evaluate on current document.
-          documentStartOk = false;
-        } else {
-          documentStartOk = true;
-        }
-      }
-    } else {
+  let documentStartOk = Boolean(sameConfig && injectState.documentStartOk);
+  let scriptIdentifier = injectState && injectState.identifier ? injectState.identifier : null;
+  if (!documentStartOk) {
+    if (scriptIdentifier) {
+      // The config changed under a live registration: drop the stale script so the next navigation
+      // cannot run both the previous and the current inject back to back.
+      await invoke('Page.removeScriptToEvaluateOnNewDocument', { identifier: scriptIdentifier }).catch(() => {});
+      scriptIdentifier = null;
+    }
+    try {
+      const added = await invoke('Page.addScriptToEvaluateOnNewDocument', { source });
+      scriptIdentifier = added?.identifier || added?.result?.identifier || scriptIdentifier;
       documentStartOk = true;
+    } catch (error) {
+      const msg = String(error && error.message || error || '');
+      if (!/already|duplicate|exists/i.test(msg)) {
+        // Retry once after re-enabling Page domain.
+        await invoke('Page.enable', {}).catch(() => {});
+        try {
+          const added = await invoke('Page.addScriptToEvaluateOnNewDocument', { source });
+          scriptIdentifier = added?.identifier || added?.result?.identifier || scriptIdentifier;
+          documentStartOk = true;
+        } catch (retryError) {
+          const retryMsg = String(retryError && retryError.message || retryError || '');
+          if (!/already|duplicate|exists/i.test(retryMsg)) {
+            // Soft: still try Runtime.evaluate on current document.
+            documentStartOk = false;
+          } else {
+            documentStartOk = true;
+          }
+        }
+      } else {
+        documentStartOk = true;
+      }
     }
   }
   // Already-open documents: best-effort patch. Never abort startup if evaluate throws
   // (Chromium often reports "Uncaught" for redefine races; document-start still applies on next nav).
+  let evaluatedOk = false;
   try {
     const evaluated = await invoke('Runtime.evaluate', {
       expression: source,
       returnByValue: false,
       awaitPromise: false,
     });
-    if (evaluated && evaluated.exceptionDetails) {
+    const exceptionDetails = evaluated && (evaluated.exceptionDetails || evaluated.result?.exceptionDetails);
+    if (exceptionDetails) {
       // leave a soft signal for callers that inspect return value; do not throw
-      const text = evaluated.exceptionDetails.text
-        || evaluated.exceptionDetails.exception?.description
+      const text = exceptionDetails.text
+        || exceptionDetails.exception?.description
         || 'Uncaught';
       const err = new Error(text);
       err.softInject = true;
-      err.exceptionDetails = evaluated.exceptionDetails;
+      err.exceptionDetails = exceptionDetails;
       err.documentStartOk = documentStartOk;
       // Soft path: swallow so keepDefaultTab can still open the welcome page.
+    } else {
+      evaluatedOk = true;
     }
   } catch (error) {
     const msg = String(error && error.message || error || '');
     if (!/Uncaught|already in effect|cannot be overridden/i.test(msg)) {
       // unexpected CDP transport errors still surface
       throw error;
+    }
+  }
+  if (injectTargetKey) {
+    TARGET_INJECT_STATE.set(injectTargetKey, { fpKey, identifier: scriptIdentifier, documentStartOk, evaluated: evaluatedOk });
+    if (TARGET_INJECT_STATE.size > MAX_TRACKED_TARGETS) {
+      // Bounded: keep the most recent targets so a long-running host cannot grow this forever.
+      const oldest = TARGET_INJECT_STATE.keys().next().value;
+      TARGET_INJECT_STATE.delete(oldest);
     }
   }
 }

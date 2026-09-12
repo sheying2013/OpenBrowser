@@ -49,7 +49,7 @@
         </a>
         <span class="app-version-wrap" id="app-version-wrap" role="status" title="正在检查版本…">
           <span class="version-traffic-light" id="version-traffic-light" data-state="checking" aria-hidden="true"></span>
-          <span class="app-version" id="app-version">v1.0.10</span>
+          <span class="app-version" id="app-version">v1.0.11</span>
         </span>
       </div>
     </aside>
@@ -204,7 +204,7 @@
                 <label>备注<textarea id="editor-note" rows="3" maxlength="2000" placeholder="浏览器窗口备注"></textarea></label>
                 <div class="form-two" hidden>
                   <label>浏览器<select id="editor-browser"><option>Google Chrome</option></select></label>
-                  <label>操作系统<select id="editor-os"><option value="Windows">Windows</option><option value="macOS">macOS</option><option value="Linux">Linux</option></select></label>
+                  <label>操作系统<select id="editor-os"><option value="Windows">Windows</option><option value="macOS">macOS</option><option value="Linux">Linux</option><option value="Android">Android</option></select></label>
                   <label><span data-i18n="common.language">语言</span><select id="editor-language">
                     <option value="en-US">English (US)</option>
                     <option value="zh-CN">中文（简体）</option>
@@ -1314,6 +1314,7 @@
               <option value="Windows" selected>Windows</option>
               <option value="macOS">macOS</option>
               <option value="Linux">Linux</option>
+              <option value="Android">Android</option>
             </select>
           </label>
           <label>窗口分辨率
@@ -1364,7 +1365,7 @@
     <label>打开指定网页（可选）<input id="batch-pref-start-url" type="text" inputmode="url" placeholder="留空表示保持原设置" autocomplete="off" spellcheck="false"></label>
     <label class="assign-item"><input id="batch-pref-clear-start-url" type="checkbox"> 清空选中环境的启动网页</label>
     <div class="form-two">
-      <label>系统画像<select id="batch-pref-os"><option value="">保持不变</option><option value="Windows">Windows</option><option value="macOS">macOS</option><option value="Linux">Linux</option></select></label>
+      <label>系统画像<select id="batch-pref-os"><option value="">保持不变</option><option value="Windows">Windows</option><option value="macOS">macOS</option><option value="Linux">Linux</option><option value="Android">Android</option></select></label>
       <label>窗口尺寸<select id="batch-pref-resolution"><option value="">保持不变</option><option value="1280x820">1280 × 820</option><option value="1440x900">1440 × 900</option><option value="1600x1000">1600 × 1000</option><option value="1920x1080">1920 × 1080</option></select></label>
     </div>
     <div class="form-two">

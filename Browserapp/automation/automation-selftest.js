@@ -307,7 +307,7 @@ async function main() {
   const paidGateEngine = createFakeEngine();
   paidGateEngine.profiles.set('p4', { id: 'p4', name: 'Env 4', number: 4 });
   paidGateEngine.start = async () => {
-    throw new Error('Browser exited before CDP was ready (code 1) [browserOutput=Browser automation requires a paid Donut Browser plan.]');
+    throw new Error('Browser exited before CDP was ready (code 1) [browserOutput=Browser automation requires a paid subscription plan.]');
   };
   const paidGateRpa = new RpaEngine({ engine: paidGateEngine, store: paidGateStore, emit: () => {}, rpaLogPath });
   const paidGateTask = await paidGateStore.createTask({ profile_id: 'p4', process_name: 'paid-gate', steps: [{ type: 'noop' }] });

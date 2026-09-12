@@ -23,7 +23,7 @@ check('profile engine label keeps the full version in the tooltip only', () => {
   const source = read('renderer.js');
   assert.match(source, /const fullVersion = versionMatch \? versionMatch\[1\] : '130'/);
   assert.match(source, /const displayVersion = String\(fullVersion\)\.split\('\.'\)\[0\] \|\| fullVersion/);
-  assert.match(source, /element\(\'strong\', '', `\$\{engineName\} \$\{displayVersion\}`\)/);
+  assert.match(source, /element\('strong', '', `\$\{engineName\} \$\{displayVersion\}`\)/);
   assert.match(source, /wrap\.title = `\$\{engineName\} \$\{fullVersion\} · \$\{kernelSub\}`/);
 });
 
@@ -42,6 +42,7 @@ check('action buttons create real SVG nodes synchronously', () => {
   const source = read('renderer.js');
   assert.ok(source.includes('window.lucide?.createElement'), 'Lucide createElement must be used for real SVG nodes');
   assert.ok(source.includes('button.append(iconEl)'), 'icon node must be attached to the action button immediately');
+  assert.ok(source.includes('if (iconEl.tagName === \'I\''), 'placeholder icon fallback must still schedule a refresh');
   const lucide = read('assets/vendor/lucide.min.js');
   assert.ok(lucide.includes('createElement'), 'bundled Lucide runtime must expose createElement');
   assert.ok(lucide.includes('createIcons'), 'bundled Lucide runtime must expose createIcons');

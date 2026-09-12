@@ -8,6 +8,8 @@
  * Custom user-selected Chromium binaries remain allowed.
  */
 
+const { Downloader } = require('./downloader');
+const { compareVersions } = require('./version-compare');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
@@ -15,10 +17,10 @@ const os = require('os');
 const https = require('https');
 const http = require('http');
 const { execFile, spawn } = require('child_process');
-const { createWriteStream } = require('fs');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const { isSystemBrowserExecutable } = require('./isolation');
+const { ensureManifest, readManifest, verifyManifest, MANIFEST_FILENAME } = require('./asset-integrity');
 
 /** Optional remote kernel feed URL (unused when integrated seeds are present). */
 const WAYFERN_META = 'https://donutbrowser.com/wayfern.json';
@@ -44,6 +46,9 @@ const MAX_META_BYTES = 2 * 1024 * 1024;
 const MAX_KERNEL_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_REDIRECTS = 6;
 const MAX_ARCHIVE_ENTRIES = 100000;
+// A full browser tree is a few thousand files; the cap only guards against a
+// pathological tree, and a truncated listing still cannot hide a missing file.
+const MAX_INTEGRITY_ENTRIES = 60000;
 const KERNEL_HOSTS = new Set([
   'donutbrowser.com',
   'download.wayfern.com',
@@ -295,7 +300,7 @@ function findOpenBrowserKernelBinary(kernelsRoot, extraRoots = []) {
 
 function kernelDisplayName(source) {
   if (source === SOURCE_OPENBROWSER) return 'OpenBrowser 148';
-  if (source === SOURCE_WAYFERN) return 'Independent kernel';
+  if (source === SOURCE_WAYFERN) return '独立内核';
   if (source === SOURCE_CHROME_STABLE) return 'Google Chrome Stable';
   if (source === SOURCE_CUSTOM) return 'Custom Chromium';
   if (source === SOURCE_CFT) return 'Chrome for Testing';
@@ -495,17 +500,6 @@ async function ensureKernelReadyForLaunch(candidate = {}, versionOutput = '') {
   }
 }
 
-function compareVersions(a, b) {
-  const pa = String(a || '').replace(/^v/i, '').split(/[^\d]+/).map((n) => Number.parseInt(n, 10) || 0);
-  const pb = String(b || '').replace(/^v/i, '').split(/[^\d]+/).map((n) => Number.parseInt(n, 10) || 0);
-  const len = Math.max(pa.length, pb.length);
-  for (let i = 0; i < len; i += 1) {
-    const d = (pa[i] || 0) - (pb[i] || 0);
-    if (d !== 0) return d > 0 ? 1 : -1;
-  }
-  return 0;
-}
-
 function fetchJson(url, redirects = 0) {
   if (redirects > MAX_REDIRECTS) return Promise.reject(new Error('Kernel metadata redirected too many times'));
   const parsed = trustedKernelUrl(url);
@@ -551,64 +545,45 @@ function fetchJson(url, redirects = 0) {
   });
 }
 
+/**
+ * Fetch a kernel archive.
+ *
+ * Behaviour that matters for a payload this size, and that a bare
+ * `https.get` does not give:
+ *   - the transfer resumes from a leftover partial file when the server
+ *     supports range requests, so a dropped connection does not restart a
+ *     multi-hundred-megabyte download;
+ *   - the archive lands in a sibling partial file and is only moved into place
+ *     once it is complete, so an interrupted run never leaves a truncated file
+ *     where the extractor expects a whole one;
+ *   - the byte ceiling is enforced on the announced length *and* while the
+ *     body streams, because a chunked response announces nothing;
+ *   - `trustedKernelUrl` vets every hop, not just the first, so a redirect
+ *     cannot move the transfer off the allowed hosts.
+ *
+ * @returns {Promise<{path:string, bytes:number}>}
+ */
 function downloadFile(url, dest, onProgress) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let activeOutput = null;
-    const succeed = (value) => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-    const fail = (error) => {
-      if (settled) return;
-      settled = true;
-      if (activeOutput && !activeOutput.destroyed) activeOutput.destroy();
-      fsp.rm(dest, { force: true }).catch(() => {}).finally(() => reject(error));
-    };
-    const doGet = (value, redirects = 0) => {
-      if (settled) return;
-      if (redirects > MAX_REDIRECTS) return fail(new Error('Kernel download redirected too many times'));
-      let parsed;
-      try { parsed = trustedKernelUrl(value); } catch (error) { return fail(error); }
-      const req = https.get(parsed, { headers: { 'User-Agent': 'OpenBrowser/1.0 (kernel)' }, timeout: 60000 }, (res) => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          res.resume();
-          return doGet(new URL(res.headers.location, parsed).toString(), redirects + 1);
-        }
-        if (res.statusCode !== 200) {
-          res.resume();
-          return fail(new Error('Download HTTP ' + res.statusCode));
-        }
-        const total = Number(res.headers['content-length']) || 0;
-        if (total > MAX_KERNEL_BYTES) { res.resume(); return fail(new Error('Kernel archive exceeds 2 GiB')); }
-        let received = 0;
-        try { fs.rmSync(dest, { force: true }); } catch (_) {}
-        const out = createWriteStream(dest, { flags: 'w', mode: 0o600 });
-        activeOutput = out;
-        res.on('data', (chunk) => {
-          if (settled) return;
-          received += chunk.length;
-          if (received > MAX_KERNEL_BYTES) {
-            const error = new Error('Kernel archive exceeds 2 GiB');
-            res.destroy(error);
-            req.destroy(error);
-            fail(error);
-            return;
-          }
-          if (onProgress && total) onProgress({ received, total, percent: Math.floor((received / total) * 100) });
-        });
-        res.pipe(out);
-        out.on('finish', () => out.close(() => succeed({ path: dest, bytes: received })));
-        out.on('error', fail);
-        res.on('error', fail);
-      });
-      req.on('timeout', () => req.destroy(new Error('Kernel download timed out')));
-      req.on('error', fail);
-    };
-    doGet(url);
+  const downloader = new Downloader(url, {
+    destPath: dest,
+    resume: true,
+    retries: 2,
+    timeoutMs: 60000,
+    headers: { 'User-Agent': 'OpenBrowser/1.0 (kernel)' },
+    maxBytes: MAX_KERNEL_BYTES,
+    validateUrl: (target) => { trustedKernelUrl(target); },
   });
+
+  if (typeof onProgress === 'function') {
+    downloader.on('progress', ({ received, total }) => {
+      if (!total) return;
+      onProgress({ received, total, percent: Math.floor((received / total) * 100) });
+    });
+  }
+
+  return downloader.start().then((result) => ({ path: result.path, bytes: result.bytes }));
 }
+
 
 function requestJson(url, timeout = 5000) {
   return new Promise((resolve, reject) => {
@@ -998,6 +973,8 @@ class BrowserKernelManager {
     this.metaFile = path.join(this.kernelsRoot, 'kernel-meta.json');
     this.onProgress = options.onProgress || (() => {});
     this.installPromise = null;
+    // Result of the most recent install-tree check; surfaced through status().
+    this.integritySummary = null;
     // Optional extra roots (e.g. process.resourcesPath) for bundled mac x64 kernel seed
     this.resourceRoots = Array.isArray(options.resourceRoots)
       ? options.resourceRoots.filter(Boolean)
@@ -1032,6 +1009,123 @@ class BrowserKernelManager {
   async saveMeta() {
     await fsp.mkdir(this.kernelsRoot, { recursive: true });
     await fsp.writeFile(this.metaFile, JSON.stringify(this.meta, null, 2), 'utf8');
+  }
+
+  /**
+   * Resolve the tree the integrity record covers.
+   *
+   * Only a tree this manager installed is covered, and only when it still sits
+   * inside the data root: an arbitrary path carried in the metadata must never
+   * make the manager describe somebody else's directory.
+   */
+  kernelIntegrityRoot() {
+    const recorded = String(this.meta.installRoot || '');
+    if (!recorded) return null;
+    const root = path.resolve(recorded);
+    const base = path.resolve(this.kernelsRoot);
+    const inside = root === base || root.startsWith(base + path.sep);
+    if (!inside || root === base) return null;
+    return root;
+  }
+
+  /**
+   * Record the freshly installed tree so a later run can tell whether files
+   * disappeared or were truncated.
+   *
+   * Sizes are compared rather than timestamps: the tree may legitimately be
+   * copied into place by an installer, which rewrites every mtime.
+   * Bookkeeping must never fail an install, so every error is swallowed.
+   */
+  async recordInstallBaseline(root) {
+    const target = path.resolve(String(root || ''));
+    const base = path.resolve(this.kernelsRoot);
+    if (!target || (target !== base && !target.startsWith(base + path.sep))) {
+      this.integritySummary = { status: 'skipped', reason: 'outside-data-root', checkedAt: new Date().toISOString() };
+      return this.integritySummary;
+    }
+    try {
+      const result = await ensureManifest(target, {
+        exclude: [MANIFEST_FILENAME],
+        maxEntries: MAX_INTEGRITY_ENTRIES,
+        checkMtime: false,
+      });
+      this.meta.installRoot = target;
+      await this.saveMeta();
+      // A fresh baseline has no report; read back how many files it covered
+      // so the status line can say something concrete.
+      let files = result.report?.checked ?? null;
+      if (files === null) {
+        try {
+          const recorded = await readManifest(target);
+          files = Array.isArray(recorded?.files) ? recorded.files.length : null;
+        } catch (_) { files = null; }
+      }
+      this.integritySummary = {
+        status: result.status === 'created' ? 'baselined' : result.status,
+        files,
+        checkedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      this.integritySummary = {
+        status: 'skipped',
+        reason: String(error?.message || error),
+        checkedAt: new Date().toISOString(),
+      };
+    }
+    return this.integritySummary;
+  }
+
+  /**
+   * Compare the installed tree against its recorded baseline.
+   *
+   * Reports a truncated or removed file as a warning instead of letting the
+   * launch fail later with a message that says nothing about the cause.
+   */
+  async checkInstalledKernelIntegrity() {
+    const root = this.kernelIntegrityRoot();
+    const checkedAt = new Date().toISOString();
+    if (!root) {
+      this.integritySummary = { status: 'unbaselined', checkedAt };
+      return this.integritySummary;
+    }
+    let manifest = null;
+    try {
+      manifest = await readManifest(root);
+    } catch (_) {
+      manifest = null;
+    }
+    if (!manifest) {
+      this.integritySummary = { status: 'unbaselined', root, checkedAt };
+      return this.integritySummary;
+    }
+    let report;
+    try {
+      report = await verifyManifest(root, manifest, { checkMtime: false, maxEntries: MAX_INTEGRITY_ENTRIES });
+    } catch (error) {
+      this.integritySummary = { status: 'error', reason: String(error?.message || error), root, checkedAt };
+      return this.integritySummary;
+    }
+    this.integritySummary = {
+      status: report.ok ? 'ok' : 'mismatch',
+      root,
+      checked: report.checked,
+      missing: report.missing.length,
+      changed: report.changed.length,
+      missingPaths: report.missing.slice(0, 5),
+      changedPaths: report.changed.slice(0, 5),
+      checkedAt,
+    };
+    if (!report.ok) {
+      this.onProgress({
+        phase: 'integrity',
+        code: 'KERNEL_INTEGRITY_MISMATCH',
+        level: 'warning',
+        message: `内核文件与安装记录不一致：缺失 ${report.missing.length} 个、被改动 ${report.changed.length} 个文件。建议重新安装内核。`,
+        missing: this.integritySummary.missingPaths,
+        changed: this.integritySummary.changedPaths,
+      });
+    }
+    return this.integritySummary;
   }
 
   resolveInstalled() {
@@ -1244,6 +1338,7 @@ class BrowserKernelManager {
       installed: Boolean(installed),
       kernel: installed,
       meta: this.meta,
+      integrity: this.integritySummary,
       autoDownload: true,
       channel: openBrowserDefault
         ? {
@@ -1494,6 +1589,8 @@ class BrowserKernelManager {
     this.meta.remoteVersion = version;
     await this.saveMeta();
 
+    await this.recordInstallBaseline(work);
+
     await fsp.rm(archivePath, { force: true }).catch(() => {});
 
     this.onProgress({ phase: 'done', message: '独立内核就绪', version, binary: trustedBinary });
@@ -1551,6 +1648,8 @@ class BrowserKernelManager {
     this.meta.remoteVersion = version;
     await this.saveMeta();
     await fsp.rm(archivePath, { force: true }).catch(() => {});
+    await this.recordInstallBaseline(work);
+
     await fsp.rm(path.join(this.kernelsRoot, 'chrome-for-testing'), { recursive: true, force: true }).catch(() => {});
 
     this.onProgress({ phase: 'done', message: 'Google Chrome Stable 已就绪', version, binary });
@@ -1596,6 +1695,8 @@ class BrowserKernelManager {
     this.meta.downloadUrl = url;
     this.meta.remoteVersion = version;
     await this.saveMeta();
+    await this.recordInstallBaseline(work);
+
     await fsp.rm(zipPath, { force: true }).catch(() => {});
 
     this.onProgress({ phase: 'done', message: 'Chrome for Testing 就绪', version, binary });
@@ -1674,6 +1775,10 @@ class BrowserKernelManager {
     this.meta.updatedAt = new Date().toISOString();
     this.meta.platform = donutPlatformKey();
     this.meta.downloadUrl = null;
+    // The chosen binary is not a tree this manager installed, so any earlier
+    // install record no longer describes what will actually run.
+    this.meta.installRoot = null;
+    this.integritySummary = null;
     await this.saveMeta();
     return { ...this.resolveInstalled(), validation: probe };
   }

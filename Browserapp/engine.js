@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 const cdp = require('./cdp');
+const { mergeFlags, appendFlagValue, LIST_VALUE_FLAGS } = require('./automation/command-line-flags');
 const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
 const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
@@ -25,6 +26,19 @@ const {
   fingerprintForNativeKernelInject,
 } = require('./automation/kernel-init-sync');
 const { fpLog, summarizeFp, LIVE_PROBE_EXPRESSION, logPath: fingerprintLogPath } = require('./automation/fingerprint-debug-log');
+const { buildPortScanProtectionScript } = require('./automation/port-scan-protection');
+const { sanitizeUrlForLog } = require('./automation/log-sanitizer');
+
+// Stable identity of the document-start config. Two inject payloads built from the same
+// fingerprint serialise identically, so this is what decides whether a live tab still matches
+// what the runtime intends to apply.
+const fingerprintConfigHash = (fp) => {
+  try {
+    return crypto.createHash('sha1').update(JSON.stringify(fp || {})).digest('hex').slice(0, 16);
+  } catch (_) {
+    return '';
+  }
+};
 
 const KERNEL_POLICY_VERSION = 4;
 // Chromium's Windows renderer/GPU helpers can outlive the browser process by
@@ -312,6 +326,18 @@ class BrowserEngine {
 
   kernelStatus() {
     return this.kernelManager.status();
+  }
+
+  /**
+   * Compare the installed kernel tree against the record written at install
+   * time. Runs in the background on purpose: a missing or truncated file is
+   * worth reporting, but never worth delaying startup for.
+   */
+  kernelIntegrityCheck() {
+    if (typeof this.kernelManager.checkInstalledKernelIntegrity !== 'function') {
+      return Promise.resolve({ status: 'unsupported' });
+    }
+    return this.kernelManager.checkInstalledKernelIntegrity();
   }
 
   async ensureKernelBootstrap() {
@@ -770,8 +796,14 @@ class BrowserEngine {
       exitLongitude: profile.exitLongitude ?? network.longitude,
     };
     const fp = fingerprint || buildFingerprint(enriched);
+    const fpHash = fingerprintConfigHash(fp);
     // Track which CDP page targets already received inject (new tabs must not skip FP)
     const applied = options.appliedTargetIds instanceof Set ? options.appliedTargetIds : new Set();
+    // Only a recorded hash may invalidate the cache: callers that never tracked one keep the
+    // previous behaviour, while a real config change forces every live tab to be re-applied.
+    const configChanged = Boolean(options.appliedFingerprintHash)
+      && options.appliedFingerprintHash !== fpHash;
+    if (configChanged) applied.clear();
     const blocked = [];
     if (profile.advanced.blockVideo) blocked.push('*.mp4', '*.webm', '*.m3u8', '*.mov', '*.avi');
     const customBlock = String(profile.advanced.blockUrls || '')
@@ -784,48 +816,14 @@ class BrowserEngine {
     // Speech voices: fingerprint injection (speech.mode blocked/noise/real)
     let portScanScript = null;
     if (profile.privacy.portScanProtect) {
-      const allow = String(profile.privacy.portScanAllow || '')
-        .split(/[,\s]+/)
-        .map((s) => Number(s))
-        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535);
-      portScanScript = `(() => {
-        const allow = new Set(${JSON.stringify(allow)});
-        const isLocal = (h) => !h || h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.local');
-        const Orig = globalThis.WebSocket;
-        if (Orig) {
-          const OrigProto = Orig.prototype;
-          const origToString = Function.prototype.toString;
-          const Wrapped = function WebSocket(url, protocols) {
-            try {
-              const u = new URL(url, location.href);
-              const port = Number(u.port || (u.protocol === 'wss:' ? 443 : 80));
-              if (isLocal(u.hostname) && !allow.has(port) && port !== 80 && port !== 443) {
-                throw new DOMException("Failed to construct 'WebSocket': An insecure or blocked port was specified.", 'SecurityError');
-              }
-            } catch (e) { if (e instanceof DOMException) throw e; }
-            return protocols !== undefined ? new Orig(url, protocols) : new Orig(url);
-          };
-          Wrapped.prototype = OrigProto;
-          try { Object.defineProperty(Wrapped, 'name', { configurable: true, value: 'WebSocket' }); } catch (_) {}
-          try { Object.defineProperty(Wrapped, 'length', { configurable: true, value: 1 }); } catch (_) {}
-          try {
-            // Chain onto whatever toString is already installed (the fingerprint layer installs
-            // its own); replacing it outright would drop the disguises registered before us and
-            // leave the survivor stringifying as readable source.
-            const prev = Function.prototype.toString;
-            const patched = function toString() {
-              if (this === Wrapped) return 'function WebSocket() { [native code] }';
-              if (this === patched) return 'function toString() { [native code] }';
-              return prev.call(this);
-            };
-            Object.defineProperty(Function.prototype, 'toString', { configurable: true, writable: true, value: patched });
-          } catch (_) {}
-          globalThis.WebSocket = Wrapped;
-        }
-      })();`;
+      portScanScript = buildPortScanProtectionScript(profile.privacy.portScanAllow);
     }
 
-    const force = options.force === true;
+    // Re-injecting a document that already carries this exact config stacks a second layer of
+    // noise on the readers, which moves canvas / clientRects while the profile is already in use,
+    // so a pass only covers tabs that are unmarked or that carry a different config. Recovery of
+    // a single suspect tab goes through applyFingerprintToTab directly instead.
+    const force = configChanged;
     // Steady state: the watch loop calls this every ~2.4s per running profile. When every
     // live tab already carries the inject there is nothing to do, and logging begin/skip/end
     // each time would burn disk and append tab URLs to the diagnostic log forever.
@@ -837,6 +835,7 @@ class BrowserEngine {
       }
       if (options.trackOn) {
         options.trackOn.fpAppliedTargets = applied;
+        options.trackOn.fpAppliedHash = fpHash;
         options.trackOn.fingerprint = fp;
       }
       return fp;
@@ -884,7 +883,7 @@ class BrowserEngine {
           phase,
           profileId: profile.id,
           tabId: tab.id,
-          url: String(tab.url || '').slice(0, 240),
+          url: sanitizeUrlForLog(tab.url).slice(0, 240),
           intended: summarizeFp(fp),
           live,
           mismatch,
@@ -898,7 +897,7 @@ class BrowserEngine {
             mismatch,
           });
           try {
-            await applyFingerprintToTab(cdp.call, tab.webSocketDebuggerUrl, fp, enriched);
+            await applyFingerprintToTab(cdp.call, tab.webSocketDebuggerUrl, fp, enriched, { force: true });
             const probe2 = await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', {
               expression: LIVE_PROBE_EXPRESSION,
               returnByValue: true,
@@ -933,7 +932,7 @@ class BrowserEngine {
           phase,
           profileId: profile.id,
           tabId: tab.id,
-          url: String(tab.url || '').slice(0, 240),
+          url: sanitizeUrlForLog(tab.url).slice(0, 240),
           error: String(error.message || error),
         });
         // Soft-fail per tab: keep trying other tabs / later phases instead of aborting start.
@@ -959,6 +958,7 @@ class BrowserEngine {
     }
     if (options.trackOn) {
       options.trackOn.fpAppliedTargets = applied;
+      options.trackOn.fpAppliedHash = fpHash;
       options.trackOn.fingerprint = fp;
     }
     await fpLog('inject.end', { phase, profileId: profile.id, applied: applied.size, port });
@@ -980,15 +980,22 @@ class BrowserEngine {
       : baseFp;
     // session-scoped CDP calls for targets attached with flatten:true
     const sessionCall = async (method, params = {}, timeout = 8000) => connection.command(method, params, { sessionId, timeout });
-    await applyFingerprintToTab(sessionCall, null, injectFp, enriched);
+    await applyFingerprintToTab(sessionCall, null, injectFp, enriched, {
+      applyKey: `session:${targetInfo?.targetId || sessionId}`
+    });
     if (!item.fpAppliedTargets) item.fpAppliedTargets = new Set();
     if (targetInfo?.targetId) item.fpAppliedTargets.add(targetInfo.targetId);
+    item.fpAppliedHash = fingerprintConfigHash(injectFp);
     item.fingerprint = baseFp;
     return injectFp;
   }
 
   async startWorkerFingerprintInjection(item, fingerprint) {
-    const source = buildWorkerInjectionScript(fingerprint);
+    const workerPrivacy = (item.profile && item.profile.privacy) || {};
+    const portScanSource = workerPrivacy.portScanProtect
+      ? '\n' + buildPortScanProtectionScript(workerPrivacy.portScanAllow)
+      : '';
+    const source = buildWorkerInjectionScript(fingerprint) + portScanSource;
     const browserWs = await cdp.browserSocket(item.port);
     const workerTypes = new Set(['worker', 'shared_worker', 'service_worker']);
     const internalUrl = /^(chrome|chrome-extension|edge|edge-extension|devtools):/i;
@@ -1293,10 +1300,10 @@ class BrowserEngine {
       await sleep(100);
     }
     await this.applyRuntimeSettings(port, profile, injectFp, {
-      appliedTargetIds: new Set(),
+      appliedTargetIds: item?.fpAppliedTargets instanceof Set ? item.fpAppliedTargets : new Set(),
+      appliedFingerprintHash: item?.fpAppliedHash,
       trackOn: item,
       phase: 'post-startpage',
-      force: true,
     });
     // Short settle before the first repaint request; the retry below covers a slower boot.
     await sleep(120);
@@ -1363,16 +1370,16 @@ class BrowserEngine {
     // Hard recovery: re-register document-start script and reload start page.
     await fpLog('probe.reload-startpage', { profileId: profile.id, reason: { hostLikeWebgl, hostLikeCores } });
     try {
-      await applyFingerprintToTab(cdp.call, page.webSocketDebuggerUrl, injectFp, profile);
+      await applyFingerprintToTab(cdp.call, page.webSocketDebuggerUrl, injectFp, profile, { force: true });
       await cdp.call(page.webSocketDebuggerUrl, 'Page.enable', {}).catch(() => {});
       if (startUrl) await cdp.call(page.webSocketDebuggerUrl, 'Page.navigate', { url: startUrl });
       else await cdp.call(page.webSocketDebuggerUrl, 'Page.reload', { ignoreCache: true });
       await sleep(600);
       await this.applyRuntimeSettings(port, profile, injectFp, {
-        appliedTargetIds: new Set(),
+        appliedTargetIds: item?.fpAppliedTargets instanceof Set ? item.fpAppliedTargets : new Set(),
+        appliedFingerprintHash: item?.fpAppliedHash,
         trackOn: item,
         phase: 'post-reload',
-        force: true,
       });
       const tabs2 = await cdp.tabs(port).catch(() => []);
       const page2 = tabs2.find((t) => this.isStartPageUrl(t.url)) || tabs2[0];
@@ -1610,6 +1617,7 @@ class BrowserEngine {
               : item.fingerprint;
             this.applyRuntimeSettings(item.port, item.profile, reFp, {
               appliedTargetIds: item.fpAppliedTargets || new Set(),
+              appliedFingerprintHash: item.fpAppliedHash,
               trackOn: item,
               phase: 'watch-ensure',
             }).catch((error) => {
@@ -2356,7 +2364,7 @@ class BrowserEngine {
       startupResources.proxyForwarder = proxyForwarder;
     }
     this.emitStartProgress(profile.id, 'configure', 48, '正在配置启动参数…');
-    const args = [
+    let args = [
       `--user-data-dir=${root}`,
       `--disk-cache-dir=${path.join(root, 'OpenBrowserCache')}`,
       `--crash-dumps-dir=${path.join(root, 'OpenBrowserCrashReports')}`,
@@ -2377,24 +2385,9 @@ class BrowserEngine {
       '--remote-allow-origins=http://127.0.0.1,http://localhost',
     ];
     // Fingerprint chrome flags (UA / webrtc / webgl / lang / window-size)
-    for (const flag of chromeArgsForFingerprint(fingerprint, profile)) {
-      if (flag.startsWith('--enable-features=') || flag.startsWith('--disable-features=')) {
-        const key = flag.split('=')[0];
-        const val = flag.slice(key.length + 1);
-        const existing = args.findIndex((a) => a.startsWith(key + '='));
-        if (existing >= 0) {
-          const cur = args[existing].slice(key.length + 1).split(',').filter(Boolean);
-          for (const part of val.split(',')) {
-            if (part && !cur.includes(part)) cur.push(part);
-          }
-          args[existing] = key + '=' + cur.join(',');
-        } else {
-          args.push(flag);
-        }
-      } else if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) {
-        args.push(flag);
-      }
-    }
+    args = mergeFlags(args, chromeArgsForFingerprint(fingerprint, profile), {
+      listFlags: LIST_VALUE_FLAGS,
+    });
     // openbrowser-148: write profile/init.json so Framework native FP matches buildFingerprint
     let runtimeFingerprint = fingerprint;
     kernelWindowName = null;
@@ -2504,9 +2497,9 @@ class BrowserEngine {
       args.push('--renderer-process-limit=4');
     }
     if (disabledFeatures.length) {
-      const existing = args.findIndex((a) => a.startsWith('--disable-features='));
-      if (existing >= 0) args[existing] = args[existing] + ',' + [...new Set(disabledFeatures)].join(',');
-      else args.push(`--disable-features=${[...new Set(disabledFeatures)].join(',')}`);
+      // Appending without de-duplicating would repeat names already present
+      // from either the base list or the fingerprint merge above.
+      args = appendFlagValue(args, 'disable-features', disabledFeatures.join(','));
     }
     // Per-env marker extension: software logo + environment number (1, 2, …)
     const envNumber = normalizeEnvNumber(profile.number || profile.name || profile.id || '1');
@@ -2771,6 +2764,7 @@ class BrowserEngine {
       try {
         item.fingerprint = await this.applyRuntimeSettings(item.port, profile, injectFp, {
           appliedTargetIds: item.fpAppliedTargets,
+          appliedFingerprintHash: item.fpAppliedHash,
           trackOn: item,
           phase: 'pre-startpage',
         }) || fingerprint;

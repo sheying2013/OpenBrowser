@@ -149,6 +149,9 @@ async function main() {
     https.get = (_url, _options, callback) => {
       const req = new EventEmitter();
       req.destroy = (error) => { if (error) req.emit('error', error); };
+      // A real ClientRequest exposes setTimeout; the double has to as well or
+      // the downloader's timeout handling cannot be exercised here.
+      req.setTimeout = () => req;
       process.nextTick(() => {
         const res = new PassThrough();
         res.statusCode = 200;

@@ -83,7 +83,7 @@ async function fpLog(event, payload = {}) {
       if (err && (err.code === 'EACCES' || err.code === 'EPERM')) {
         try {
           await fsp.unlink(primary).catch(() => {});
-          await fsp.writeFile(primary, line, { encoding: 'utf8', mode: 0o644 });
+          await fsp.writeFile(primary, line, { encoding: 'utf8', mode: 0o600 });
           return;
         } catch (_) { /* fall through */ }
       }
