@@ -115,8 +115,11 @@ function buildFullVersionList(major, fullVersion) {
     if (b.brand === 'Chromium' || b.brand === 'Google Chrome') {
       return { brand: b.brand, version: full };
     }
-    // grease keeps short version
-    return { brand: b.brand, version: b.version };
+    // Chrome keeps the major-only version in the reduced list but always reports a four-part
+    // version in the full list ("Not_A Brand/8.0.0.0", verified against both a real Chrome and
+    // the bundled kernel's native userAgentData). Emitting the short form here made
+    // getHighEntropyValues().fullVersionList differ from what any real build returns.
+    return { brand: b.brand, version: `${b.version}.0.0.0` };
   });
 }
 

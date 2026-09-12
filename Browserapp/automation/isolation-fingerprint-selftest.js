@@ -104,6 +104,18 @@ async function main() {
   assert.ok(customUa.userAgentMetadata.brands.some((b) => b.brand === 'Chromium' || b.brand === 'Google Chrome'));
   const cdp = cdpUserAgentOverride(customUa.uaProfile, 'en-US');
   assert.ok(cdp.userAgentMetadata.fullVersionList?.length >= 2);
+  {
+    // A real Chrome reports the grease brand with a four-part version in the full list while the
+    // reduced list keeps the major only; emitting the short form in both was a format no real
+    // build produces and showed up through getHighEntropyValues().
+    const greaseFull = cdp.userAgentMetadata.fullVersionList.find((item) => !/^(Chromium|Google Chrome)$/.test(item.brand));
+    const greaseShort = cdp.userAgentMetadata.brands.find((item) => !/^(Chromium|Google Chrome)$/.test(item.brand));
+    assert.ok(greaseFull && /^\d+\.\d+\.\d+\.\d+$/.test(greaseFull.version),
+      `grease full version must be four-part, got ${greaseFull && greaseFull.version}`);
+    assert.ok(greaseShort && /^\d+$/.test(greaseShort.version),
+      `grease reduced version must stay major-only, got ${greaseShort && greaseShort.version}`);
+    assert.strictEqual(greaseFull.version, `${greaseShort.version}.0.0.0`);
+  }
   assert.strictEqual(cdp.platform, 'Win32');
   pass('custom UA builds Client Hints / CDP metadata');
 

@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.15'
+        default: 'v1.0.16'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,15 +42,15 @@ env:
 
     ### 中文
 
-    - **macOS WebGL 渲染器格式修正**：macOS 预设中有三条仍在使用 Chrome 111 之前的形态（如 `ANGLE (Apple, Apple M1, OpenGL 4.1)`）。Chrome 自 111 起在 macOS 全面改用 ANGLE 的 Metal 后端，当前版本真实输出为 `ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)`（已用本机 Chrome 实测确认）。旧形态与 UA 声称的 Chrome 版本自相矛盾，是可被直接判定的特征；现改为 Metal 形态，并保留每条预设原本对应的 GPU。
-    - **回归加固**：新增断言要求未启用 persona 的 macOS profile 同样报告 Metal 形态；golden fixture 记录该一次性修正及其理由（与 deviceMemory 从 16 修正为 8 的既有先例一致）。
-    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.15**。
+    - **Client Hints 完整版本格式修正**：`navigator.userAgentData.getHighEntropyValues(['fullVersionList'])` 里的 GREASE 品牌（如 `Not_A Brand`）此前返回短版本 `8`，而真实 Chrome 在完整列表中一律返回四段式 `8.0.0.0`（已用本机真实 Chrome 与捆绑内核的原生输出双重确认）。现在完整列表使用四段式、精简 `brands` 列表仍保持主版本号，两者与真实实现完全一致。
+    - **回归加固**：新增断言同时锁定“精简列表主版本号 + 完整列表四段式”两种格式；真机上验证注入后 `brands`/`fullVersionList`/`uaFullVersion` 与内核原生（真实 Chrome 148）逐字段一致。
+    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.16**。
 
     ### English
 
-    - **macOS WebGL renderer format corrected**: three macOS presets still used the pre-111 form (`ANGLE (Apple, Apple M1, OpenGL 4.1)`). Chrome moved macOS to the ANGLE Metal backend in 111, and a current build reports `ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)` (verified against a local Chrome build). The old form contradicted the Chrome version the UA claims and could be checked directly; the presets now use the Metal form while keeping the GPU each one named.
-    - **Regression coverage**: an assertion now requires non-persona macOS profiles to report the Metal form as well, and the golden fixture records this one-time correction and its rationale (matching the existing precedent for navigator.deviceMemory 16 -> 8).
-    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.15**.
+    - **Client Hints full-version format fixed**: the GREASE brand (for example `Not_A Brand`) was reported with the short version `8` inside `navigator.userAgentData.getHighEntropyValues(['fullVersionList'])`, while a real Chrome always returns the four-part `8.0.0.0` there (confirmed against both a local Chrome build and the bundled kernel's native output). The full list now uses the four-part form while the reduced `brands` list keeps the major only, matching the real implementation.
+    - **Regression coverage**: an assertion now pins both formats, and an on-device check confirms `brands`, `fullVersionList` and `uaFullVersion` match the kernel's native (real Chrome 148) output field by field.
+    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.16**.
 
     ### 下载 / Downloads
 
