@@ -193,6 +193,29 @@ async function main() {
   assert.notStrictEqual(md1[0].label, md3[0].label);
   assert.ok(md1.some((d) => d.kind === 'audioinput'));
   assert.ok(md1.some((d) => d.kind === 'videoinput' && /Integrated Camera/.test(d.label)));
+
+  // Identifiers must be unique per profile and shaped like Chrome's per-origin salted hex ids.
+  const seenIds = new Set();
+  for (let i = 0; i < 200; i += 1) {
+    const devices = createMediaDevicesFromSeed(`env-${String(i).padStart(3, '0')}`);
+    for (const d of devices) {
+      assert.ok(/^[0-9a-f]{64}$/.test(d.deviceId), `deviceId must be 64 lowercase hex, got ${d.deviceId}`);
+      assert.ok(!/^ob-/.test(d.deviceId), 'deviceId must not carry a product marker');
+      assert.ok(!seenIds.has(d.deviceId), `deviceId collides across profiles: ${d.deviceId}`);
+      seenIds.add(d.deviceId);
+    }
+    assert.ok(/^[0-9a-f]{64}$/.test(devices[0].groupId), 'groupId must be 64 lowercase hex');
+  }
+  pass('media device identifiers are unique per profile and Chrome-shaped');
+
+  // A shared id prefix must not collapse the derived identifiers (regression for env-001/env-002).
+  const prefixA = createMediaDevicesFromSeed('env-001');
+  const prefixB = createMediaDevicesFromSeed('env-002');
+  assert.notStrictEqual(prefixA[0].deviceId, prefixB[0].deviceId, 'audio-input ids must differ');
+  assert.notStrictEqual(prefixA[1].deviceId, prefixB[1].deviceId, 'video-input ids must differ');
+  assert.notStrictEqual(prefixA[2].deviceId, prefixB[2].deviceId, 'audio-output ids must differ');
+  assert.notStrictEqual(prefixA[0].groupId, prefixB[0].groupId, 'group ids must differ');
+  pass('shared profile-id prefixes no longer collide media devices');
   assert.ok(Array.isArray(a1.mediaDevices.devices) && a1.mediaDevices.devices.length >= 3);
   assert.ok(a1.webgl.fpPayload.UNMASKED_VENDOR_WEBGL);
   assert.ok(a1.webgl.fpPayload.UNMASKED_RENDERER_WEBGL);
@@ -203,6 +226,22 @@ async function main() {
   assert.ok(Math.abs(clientRectMarkFromSeed('abc')) <= 10000);
   const voices = createSpeechVoicesFromSeed('env-aaa', ['zh-CN'], 'noise');
   assert.ok(Array.isArray(voices) && voices.length >= 18);
+  assert.ok(voices.every((v) => v.voiceURI === v.name),
+    'voiceURI must be the plain voice name, matching what a real Chrome reports');
+  assert.ok(voices.every((v) => !/^ob-|openbrowser/i.test(v.voiceURI)),
+    'voiceURI must not carry a product marker');
+
+  // No page-readable surface may carry a product marker: a single branded string in the injected
+  // payload is enough for any site to identify the browser.
+  const markerFp = buildFingerprint({
+    id: 'env-marker', name: 'env-marker', kernelVersion: '148.0.7778.165', os: 'macos',
+    privacy: { speech: 'noise' },
+  });
+  const markerScript = buildInjectionScript(markerFp);
+  for (const marker of [/ob-ai-/, /ob-vi-/, /ob-ao-/, /ob-voice/, /ob-g-/, /openbrowser/i]) {
+    assert.ok(!marker.test(markerScript), `injected payload must not expose ${marker}`);
+  }
+  pass('no page-readable surface carries a product marker');
   assert.ok(voices.some((v) => v.default === true));
   assert.ok(voices.some((v) => String(v.lang || '').startsWith('zh')));
   const deviceA = createDeviceNameFromSeed('env-aaa', { mode: 'noise' });

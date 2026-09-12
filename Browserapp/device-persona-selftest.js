@@ -303,9 +303,14 @@ const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.
   // A voiceURI scheme no real browser emits would identify the product by itself.
   ok('persona voiceURIs carry no synthetic scheme', win.concat(mac, linux).every((v) => !/^[a-z-]+:\/\//i.test(v.voiceURI)));
 
-  // Existing (non-persona) profiles must keep the exact values they already had.
+  // Non-persona profiles expose the same page-readable surface, so they must clear the
+  // product scheme as well: a synthetic URI is readable from getVoices() by any page, and
+  // keeping it for backwards compatibility would keep the browser identifiable.
   const legacy = voicesOf(WIN_UA, false);
-  ok('non-persona profiles keep their previous voice URIs', legacy.length > 0 && legacy.every((v) => v.voiceURI.startsWith('ob-voice://')));
+  ok('non-persona profiles also carry no synthetic voice URI scheme',
+    legacy.length > 0 && legacy.every((v) => !/^[a-z-]+:\/\//i.test(v.voiceURI)));
+  ok('non-persona voice URIs equal the voice name, as a real Chrome reports',
+    legacy.length > 0 && legacy.every((v) => v.voiceURI === v.name));
 }
 
 // --- 7. pickPersona is deterministic and bounded ---

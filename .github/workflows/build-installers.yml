@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.12'
+        default: 'v1.0.13'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,15 +42,19 @@ env:
 
     ### 中文
 
-    - **指纹双层一致性修复**：内核的 WebGL 豁免列表此前未随站点例外一起下发，只有 Canvas 生效，导致同一站点在页面脚本里被豁免、在内核 WebGL 路径里仍被处理。现在页面脚本、内核 Canvas、内核 WebGL 共用同一份规范化列表，并新增回归断言锁定三者一致。
-    - **发行流水线幂等加固**：大文件上传在网络抖动后重试时，会与服务端已存在的同名资产冲突并让整个平台任务失败。发布脚本现在先清理同名资产再上传，失败最多重试 5 次并逐步退避，四个平台可独立重跑而不再互相影响。
-    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.12**。
+    - **媒体设备标识符泄漏修复**：设备 ID 此前用“前缀累加和”派生，只取决于种子前两个字符，导致 `env-001`/`env-002`/`env-003` 这类共享前缀的 profile 得到完全相同的音频输入 `deviceId`，可被跨 profile 关联；同时 ID 自带产品前缀，等于自我暴露。现改为整串种子的 SHA-256，输出 64 位小写十六进制，与真实 Chrome 形状一致，且逐 profile 唯一、同一 profile 重启稳定。
+    - **媒体设备权限面与真实 Chrome 对齐**：此前未授予摄像头/麦克风权限时就直接返回设备 ID、分组 ID 与标签；真实 Chrome 在该阶段只返回按类型的空条目（`deviceId`/`groupId`/`label` 全为空），授权后才给出标识符与标签。现在按权限状态返回，无权限时不再泄漏任何标识符。
+    - **语音指纹产品标记清除**：语音噪声模式下 `speechSynthesis.getVoices()` 的 `voiceURI` 是 `ob-voice://…`，任何页面都能读取并据此识别。实测真实 Chrome 的 `voiceURI` 等于语音名称，现统一为名称本身。
+    - **回归加固**：新增媒体设备端到端测试（未授权面、授权面、重启稳定性、跨 profile 隔离，共 5 项）与“页面可读表面不得出现产品标记”的断言，自测总数增至 94 项。
+    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.13**。
 
     ### English
 
-    - **Fingerprint two-layer consistency**: the native WebGL exempt list was not shipped together with the site-exception policy, so only Canvas honoured it; a host exempted by the page script was still processed on the native WebGL path. The page script, native Canvas and native WebGL now share one normalised list, with regression assertions locking all three together.
-    - **Idempotent release pipeline**: when a large upload was retried after a network stall it collided with the asset already stored on the server and failed the whole platform job. The publish script now clears a same-named asset before uploading, retries up to five times with backoff, and lets each of the four platforms re-run independently.
-    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.12**.
+    - **Media device identifier leak fixed**: device ids were derived from a running character sum that depended only on the first two characters of the seed, so profiles sharing an id prefix (`env-001`/`env-002`/`env-003`) published the *same* audio-input `deviceId` and could be linked across profiles; the value also carried a product prefix. Identifiers are now derived from a SHA-256 of the whole seed, emitting 64 lowercase hex characters like real Chrome, unique per profile and stable across restarts.
+    - **Media device permission surface aligned with Chrome**: the injected layer used to hand out device ids, group ids and labels before any capture permission was granted. Real Chrome returns one empty entry per kind at that stage and only publishes identifiers and labels after a grant. The surface is now permission-gated, so no identifier is exposed without permission.
+    - **Speech fingerprint marker removed**: in noise mode `speechSynthesis.getVoices()` reported `ob-voice://…` as `voiceURI`, readable by any page. A real Chrome reports the voice name as the URI; the plain name is now used everywhere.
+    - **Regression coverage**: added a media-device end-to-end suite (withheld surface, granted surface, restart stability, cross-profile isolation) plus an assertion that no page-readable surface carries a product marker - 94 self-tests in total.
+    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.13**.
 
     ### 下载 / Downloads
 

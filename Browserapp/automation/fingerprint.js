@@ -408,38 +408,36 @@ function createBatteryFromSeed(seedInput, override = null) {
 function createMediaDevicesFromSeed(seedInput, options = {}) {
   const raw = String(seedInput || 'default');
   let acc = 0;
-  let hex = '';
-  for (let i = 0; i < raw.length; i += 1) {
-    acc += raw.charCodeAt(i);
-    hex += acc.toString(16);
-  }
-  let head = hex.slice(0, 4);
-  let tail = hex.slice(-4);
-  const pad = ['c', 'd', 'e', 'f'];
-  if (head.length < 4) {
-    for (let i = 0; i < 4 - head.length; i += 1) {
-      head += pad[i];
-      tail += pad[pad.length - 1 - i];
-    }
-  }
+  for (let i = 0; i < raw.length; i += 1) acc += raw.charCodeAt(i);
   const tpl = MEDIA_DEVICE_TEMPLATES[acc % MEDIA_DEVICE_TEMPLATES.length] || MEDIA_DEVICE_TEMPLATES[0];
+  // Chrome hands out 64-character lowercase hex identifiers, salted per origin, and never brands
+  // them with a product prefix. Derive each identifier from the whole profile seed so two
+  // profiles cannot share one: the previous running-sum derivation only depended on the first two
+  // characters, so env-001/env-002/env-003 all published the same audio-input deviceId and could
+  // be linked across environments.
+  const digestHex = (salt) => crypto.createHash('sha256').update(raw + '|' + salt).digest('hex');
+  const audioInputId = digestHex('audioinput');
+  const videoInputId = digestHex('videoinput');
+  const audioOutputId = digestHex('audiooutput');
+  const groupId = digestHex('group');
+  const usbTag = digestHex('usb').slice(0, 4) + ':' + digestHex('usb').slice(4, 8);
   const emptyLabels = options.emptyLabels === true;
   const labelOverride = options.labels && typeof options.labels === 'object' ? options.labels : null;
   const inputLabel = emptyLabels ? '' : String(labelOverride?.audioinput || labelOverride?.input || tpl.input);
-  const videoLabel = emptyLabels ? '' : String(labelOverride?.videoinput || labelOverride?.video || `Integrated Camera (${head}:${tail})`);
+  const videoLabel = emptyLabels ? '' : String(labelOverride?.videoinput || labelOverride?.video || `Integrated Camera (${usbTag})`);
   const outputLabel = emptyLabels ? '' : String(labelOverride?.audiooutput || labelOverride?.output || tpl.output);
   const devices = [
-    { kind: 'audioinput', label: inputLabel, deviceId: `ob-ai-${head}`, groupId: `ob-g-${tail}` },
-    { kind: 'videoinput', label: videoLabel, deviceId: `ob-vi-${tail}`, groupId: `ob-g-${tail}` },
-    { kind: 'audiooutput', label: outputLabel, deviceId: `ob-ao-${head}${tail.slice(0, 2)}`, groupId: `ob-g-${tail}` },
+    { kind: 'audioinput', label: inputLabel, deviceId: audioInputId, groupId },
+    { kind: 'videoinput', label: videoLabel, deviceId: videoInputId, groupId },
+    { kind: 'audiooutput', label: outputLabel, deviceId: audioOutputId, groupId },
   ];
   if (Array.isArray(options.extra) && options.extra.length) {
     for (const item of options.extra.slice(0, 8)) {
       if (item && item.kind) devices.push({
         kind: String(item.kind),
         label: String(item.label || ''),
-        deviceId: String(item.deviceId || `ob-x-${devices.length}`),
-        groupId: String(item.groupId || `ob-g-${tail}`),
+        deviceId: String(item.deviceId || digestHex('extra' + devices.length)),
+        groupId: String(item.groupId || groupId),
       });
     }
   }
@@ -511,10 +509,12 @@ function createSpeechVoicesFromSeed(seedInput, languages = ['en-US'], mode = 'no
       lang: base.lang,
       default: false,
       localService: !/^Google\s/i.test(base.name),
-      // Chrome reports the voice name as the URI; the old scheme here was a string no real
-      // browser emits, which made it a product-identifying marker on its own. Only applied
-      // in OS-aware mode so previously generated profiles keep the value they already had.
-      voiceURI: options.os ? base.name : `ob-voice://${encodeURIComponent(base.name)}/${base.lang}`,
+      // Chrome reports the voice name itself as the URI - verified against a real Chrome, where
+      // every macOS voice exposes voiceURI === name. The previous scheme emitted a
+      // product-branded URI for persona-less profiles, which any page could read straight out of
+      // speechSynthesis.getVoices() and use to identify the browser, so the plain name is now
+      // always used.
+      voiceURI: base.name,
     });
   }
   let def = picked.find((v) => v.lang === primary)
@@ -2907,13 +2907,13 @@ function buildInjectionScript(fp) {
   if (CFG.mediaDevices && CFG.mediaDevices.mode && CFG.mediaDevices.mode !== 'real' && Array.isArray(CFG.mediaDevices.devices)) {
     try {
       const devProto = typeof MediaDeviceInfo !== "undefined" ? MediaDeviceInfo.prototype : Object.prototype;
-      const devices = CFG.mediaDevices.devices.map((d) => {
+      const makeDevice = (kind, label, deviceId, groupId) => {
         const item = Object.create(devProto);
         const props = {
-          deviceId: String(d.deviceId || ""),
-          kind: String(d.kind || ""),
-          label: "", // Empty label in compliance with W3C privacy spec
-          groupId: String(d.groupId || ""),
+          deviceId: String(deviceId || ""),
+          kind: String(kind || ""),
+          label: String(label || ""),
+          groupId: String(groupId || ""),
         };
         for (const [k, v] of Object.entries(props)) {
           Object.defineProperty(item, k, { value: v, enumerable: false, writable: false, configurable: true });
@@ -2923,15 +2923,35 @@ function buildInjectionScript(fp) {
         };
         Object.defineProperty(item, 'toJSON', { enumerable: false, writable: true, configurable: true });
         return item;
-      });
+      };
+      const devices = CFG.mediaDevices.devices.map((d) => makeDevice(d.kind, d.label, d.deviceId, d.groupId));
+      // Chrome only publishes identifiers and labels once the user has granted a capture
+      // permission; before that the same three entries come back with every field empty. Handing
+      // out ids up front both diverged from the real surface and made the synthetic identifiers
+      // readable without any permission prompt.
+      const withheldDevices = CFG.mediaDevices.devices.map((d) => makeDevice(d.kind, "", "", ""));
+      const enumerateForPermission = async () => {
+        let granted = false;
+        try {
+          const perms = navigator.permissions;
+          if (perms && typeof perms.query === 'function') {
+            const [cam, mic] = await Promise.all([
+              Promise.resolve().then(() => perms.query({ name: 'camera' })).catch(() => null),
+              Promise.resolve().then(() => perms.query({ name: 'microphone' })).catch(() => null),
+            ]);
+            granted = Boolean((cam && cam.state === 'granted') || (mic && mic.state === 'granted'));
+          }
+        } catch (_) {}
+        return (granted ? devices : withheldDevices).slice();
+      };
       const mdProto = typeof MediaDevices !== 'undefined' ? MediaDevices.prototype : null;
       if (mdProto && mdProto.enumerateDevices) {
         replaceMethod(mdProto, 'enumerateDevices', () => async function enumerateDevices() {
-          return devices.slice();
+          return enumerateForPermission();
         });
       } else if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
         replaceMethod(navigator.mediaDevices, 'enumerateDevices', () => async function enumerateDevices() {
-          return devices.slice();
+          return enumerateForPermission();
         });
       }
     } catch (_) {}
