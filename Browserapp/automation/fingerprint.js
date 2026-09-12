@@ -2768,9 +2768,10 @@ function buildInjectionScript(fp) {
       if (globalThis.webkitRTCPeerConnection) window.webkitRTCPeerConnection = blocked;
     } catch (_) {}
   } else if (CFG.webrtc === 'proxy' && CFG.webrtcAddress) {
-    // NOTE: the bundled 148 kernel refuses to construct a peer connection at all ("detached
-    // documents"), for every webrtc_policy value. This layer therefore only ever runs on a stock
-    // Chromium kernel, which is exactly why it has to be correct there.
+    // NOTE: the bundled 148 kernel refuses to construct a peer connection at all (NotSupportedError,
+    // for every webrtc_policy value), so this layer is only ever observed through a stock Chromium
+    // kernel. Its prototype surface is still reachable on the bundled kernel - a page can inspect the
+    // accessors without constructing anything - which is why the shapes below have to be exact.
     try {
       const targetIp = String(CFG.webrtcAddress || '');
       const IPV4 = /^\\d{1,3}(\\.\\d{1,3}){3}$/;
@@ -2814,13 +2815,23 @@ function buildInjectionScript(fp) {
         return (m[1] || '') + 'candidate:' + m[2] + ' ' + m[3] + ' ' + m[4] + ' ' + m[5] + ' ' + addr
           + ' ' + m[7] + ' typ ' + m[8] + tail;
       };
+      // The media connection line names the address the agent would use by default. It is not a
+      // candidate, but it carries the same host address and survives every candidate rewrite, so it
+      // has to be mapped the same way.
+      const rewriteConnectionLine = (line) => {
+        if (typeof line !== 'string' || !targetIp) return line;
+        const m = line.match(/^(c=IN IP[46] )([^\\s]+)([\\s]*)$/);
+        if (!m || !isOwnAddress(m[2])) return line;
+        return 'c=IN IP4 ' + targetIp + m[3];
+      };
       const rewriteSdp = (desc) => {
         if (!desc || typeof desc.sdp !== 'string' || !targetIp) return desc;
         try {
           const nl = String.fromCharCode(10);
           let changed = false;
           const mapped = desc.sdp.split(nl).map((line) => {
-            const next = rewriteCandidateLine(line);
+            const candidate = rewriteCandidateLine(line);
+            const next = candidate === line ? rewriteConnectionLine(line) : candidate;
             if (next !== line) changed = true;
             return next;
           });
@@ -2834,36 +2845,57 @@ function buildInjectionScript(fp) {
         if (next === desc) return desc;
         try { return new RTCSessionDescription({ type: next.type, sdp: next.sdp }); } catch (_) { return next; }
       };
-      const rewriteCandidate = (candidate) => {
-        if (!candidate || typeof candidate.candidate !== 'string') return candidate;
-        const line = rewriteCandidateLine(candidate.candidate);
-        if (line === candidate.candidate) return candidate;
+      // Candidates reach the page as engine objects. Rebuilding the event that delivered one would
+      // hand the page a script-constructed event instead of the engine's own - isTrusted false,
+      // target/currentTarget null and eventPhase 0 are far stronger tells than the address the
+      // rebuild was hiding. The rewrite therefore happens on the candidate the event carries: the
+      // event object stays the one the engine dispatched, and only the candidate it hands out is
+      // replaced, with the engine's own constructor so the brand check still passes.
+      const eventCandidates = new WeakMap();
+      const iceEventDescriptor = (() => {
         try {
-          return new RTCIceCandidate({
-            candidate: line,
-            sdpMid: candidate.sdpMid,
-            sdpMLineIndex: candidate.sdpMLineIndex,
-            usernameFragment: candidate.usernameFragment,
+          const proto = typeof RTCPeerConnectionIceEvent !== 'undefined' ? RTCPeerConnectionIceEvent.prototype : null;
+          const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'candidate') : null;
+          return descriptor && typeof descriptor.get === 'function' ? { proto: proto, descriptor: descriptor } : null;
+        } catch (_) { return null; }
+      })();
+      if (iceEventDescriptor && iceEventDescriptor.descriptor.configurable !== false) {
+        const proto = iceEventDescriptor.proto;
+        const descriptor = iceEventDescriptor.descriptor;
+        const nativeGet = descriptor.get;
+        try {
+          Object.defineProperty(proto, 'candidate', {
+            configurable: descriptor.configurable,
+            enumerable: descriptor.enumerable,
+            get: nativeLike(function candidate() {
+              const original = nativeGet.call(this);
+              if (!original || typeof original !== 'object') return original;
+              // Only an event the engine dispatched carries a candidate produced by the ICE agent.
+              // A page-built event has to keep handing back exactly the object it was given, or the
+              // accessor itself becomes the tell.
+              if (!this || this.isTrusted !== true) return original;
+              let cached;
+              try { cached = eventCandidates.get(this); } catch (_) { return original; }
+              if (cached !== undefined) return cached;
+              let rebuilt = null;
+              try {
+                const raw = original.candidate;
+                const line = rewriteCandidateLine(raw);
+                if (line !== raw) {
+                  rebuilt = new RTCIceCandidate({
+                    candidate: line,
+                    sdpMid: original.sdpMid,
+                    sdpMLineIndex: original.sdpMLineIndex,
+                    usernameFragment: original.usernameFragment,
+                  });
+                }
+              } catch (_) { rebuilt = null; }
+              try { eventCandidates.set(this, rebuilt || original); } catch (_) {}
+              return rebuilt || original;
+            }, nativeGet, 'get candidate', 0),
           });
-        } catch (_) { return candidate; }
-      };
-      const rewriteIceEvent = (event) => {
-        try {
-          if (!event || !event.candidate) return event;
-          const candidate = rewriteCandidate(event.candidate);
-          if (candidate === event.candidate) return event;
-          if (typeof RTCPeerConnectionIceEvent === 'function') {
-            const rebuilt = new RTCPeerConnectionIceEvent('icecandidate', { candidate: candidate, url: event.url || '' });
-            if (rebuilt && rebuilt.candidate) return rebuilt;
-          }
-          const shim = Object.create(Object.getPrototypeOf(event));
-          const own = { candidate: candidate, type: event.type, target: event.target, currentTarget: event.currentTarget };
-          for (const key of Object.keys(own)) {
-            try { Object.defineProperty(shim, key, { value: own[key], enumerable: true, configurable: true }); } catch (_) {}
-          }
-          return shim;
-        } catch (_) { return event; }
-      };
+        } catch (_) {}
+      }
       const pcProto = globalThis.RTCPeerConnection && RTCPeerConnection.prototype;
       if (pcProto) {
         if (pcProto.createOffer) {
@@ -2885,89 +2917,173 @@ function buildInjectionScript(fp) {
           });
         }
         // Every path funnels through the description getters: the rewritten argument form, the
-        // no-argument form and a page that built its own SDP. Reading is the only place that
-        // covers all three, so the raw stored SDP never reaches the page.
+        // no-argument form and a page that built its own SDP. Reading is the only place that covers
+        // all three, so the raw stored SDP never reaches the page. One wrapper is cached per stored
+        // description, which keeps the engine's own identity relationships intact - while gathering,
+        // localDescription and pendingLocalDescription are the same object and must stay that way.
         const descriptionCache = new WeakMap();
         for (const key of ['localDescription', 'currentLocalDescription', 'pendingLocalDescription',
           'remoteDescription', 'currentRemoteDescription', 'pendingRemoteDescription']) {
           try {
             const descriptor = Object.getOwnPropertyDescriptor(pcProto, key);
             if (!descriptor || typeof descriptor.get !== 'function' || descriptor.configurable === false) continue;
+            const nativeGet = descriptor.get;
             Object.defineProperty(pcProto, key, {
               configurable: true,
               enumerable: descriptor.enumerable,
-              get() {
-                const raw = descriptor.get.call(this);
-                if (!raw) return raw;
-                let cache = descriptionCache.get(this);
-                if (!cache) { cache = new Map(); descriptionCache.set(this, cache); }
-                const hit = cache.get(key);
-                if (hit && hit.raw === raw) return hit.wrapped;
+              get: makeNativeGetter(key, function () {
+                const raw = nativeGet.call(this);
+                if (!raw || typeof raw !== 'object') return raw;
+                let hit = null;
+                try { hit = descriptionCache.get(raw); } catch (_) { hit = null; }
+                if (hit) return hit;
                 const wrapped = rewriteDescription(raw);
-                cache.set(key, { raw: raw, wrapped: wrapped });
+                try { descriptionCache.set(raw, wrapped); } catch (_) {}
                 return wrapped;
-              },
+              }),
             });
           } catch (_) {}
         }
-        // Gathered candidates also reach the page one by one through the handler or a listener.
+        // Local candidate statistics carry the same host addresses the SDP rewrite removes, so a
+        // detector that gathers without ever reading a candidate event would still see the machine.
+        // The report itself stays the engine's object - brand, toString tag and size are untouched -
+        // and only the entries it hands out are replaced, through a per-report map.
+        const statsEntries = new WeakMap();
+        const statsIteratorReports = new WeakMap();
+        let statsProto = null;
+        let statsNativeForEach = null;
         try {
-          const handlerState = new WeakMap();
-          const descriptor = Object.getOwnPropertyDescriptor(pcProto, 'onicecandidate');
-          if (descriptor && typeof descriptor.set === 'function') {
-            Object.defineProperty(pcProto, 'onicecandidate', {
-              configurable: true,
+          statsProto = typeof RTCStatsReport !== 'undefined' ? RTCStatsReport.prototype : null;
+          const forEachDescriptor = statsProto ? Object.getOwnPropertyDescriptor(statsProto, 'forEach') : null;
+          statsNativeForEach = forEachDescriptor && typeof forEachDescriptor.value === 'function'
+            ? forEachDescriptor.value : null;
+        } catch (_) { statsProto = null; }
+        const rewriteStatsEntry = (entry) => {
+          try {
+            if (!entry || entry.type !== 'local-candidate') return entry;
+            const address = String(entry.address || entry.ip || '');
+            if (!address || !isOwnAddress(address)) return entry;
+            const copy = {};
+            for (const key of Object.keys(entry)) copy[key] = entry[key];
+            if ('address' in copy) copy.address = targetIp;
+            if ('ip' in copy) copy.ip = targetIp;
+            // The engine derives a candidate foundation from its address, so the entry has to carry
+            // the foundation that belongs to the address the page is being shown.
+            try {
+              const probe = new RTCIceCandidate({
+                candidate: 'candidate:' + String(entry.foundation || '1') + ' 1 udp '
+                  + String(entry.priority || 0) + ' ' + targetIp + ' ' + String(entry.port || 0)
+                  + ' typ ' + String(entry.candidateType || 'host'),
+              });
+              if (probe && probe.foundation) copy.foundation = probe.foundation;
+            } catch (_) {}
+            return copy;
+          } catch (_) { return entry; }
+        };
+        const statsEntryFor = (map, value) => {
+          if (!map || !map.size) return value;
+          try {
+            if (Array.isArray(value)) {
+              const entry = map.get(value[0]);
+              return entry ? [value[0], Object.assign({}, entry)] : value;
+            }
+            const id = value && value.id;
+            if (id === undefined) return value;
+            const entry = map.get(id);
+            return entry ? Object.assign({}, entry) : value;
+          } catch (_) { return value; }
+        };
+        const statsReplacements = new Map();
+        const patchStatsMethod = (key, factory) => {
+          try {
+            if (!statsProto) return;
+            const descriptor = Object.getOwnPropertyDescriptor(statsProto, key);
+            if (!descriptor || typeof descriptor.value !== 'function' || descriptor.configurable === false) return;
+            const native = descriptor.value;
+            let replacement = statsReplacements.get(native);
+            if (!replacement) {
+              replacement = nativeLike(factory(native), native, native.name, native.length);
+              statsReplacements.set(native, replacement);
+            }
+            Object.defineProperty(statsProto, key, {
+              configurable: descriptor.configurable,
               enumerable: descriptor.enumerable,
-              get() {
-                const state = handlerState.get(this);
-                return state ? state.user || null : null;
-              },
-              set(fn) {
-                const state = handlerState.get(this) || {};
-                state.user = typeof fn === 'function' ? fn : null;
-                handlerState.set(this, state);
-                if (typeof fn !== 'function') { descriptor.set.call(this, null); return; }
-                descriptor.set.call(this, function onicecandidate(event) {
-                  return fn.call(this, rewriteIceEvent(event));
-                });
-              },
+              writable: descriptor.writable,
+              value: replacement,
             });
-          }
-        } catch (_) {}
+          } catch (_) {}
+        };
+        let iteratorNextPatched = false;
+        const wrapStatsIterator = (native) => function values() {
+          const iterator = native.call(this);
+          try {
+            const map = statsEntries.get(this);
+            if (map && map.size && iterator && typeof iterator === 'object') {
+              statsIteratorReports.set(iterator, map);
+              if (!iteratorNextPatched) {
+                const iteratorProto = Object.getPrototypeOf(iterator);
+                const nextDescriptor = iteratorProto ? Object.getOwnPropertyDescriptor(iteratorProto, 'next') : null;
+                if (nextDescriptor && typeof nextDescriptor.value === 'function' && nextDescriptor.configurable !== false) {
+                  const nativeNext = nextDescriptor.value;
+                  iteratorNextPatched = true;
+                  Object.defineProperty(iteratorProto, 'next', {
+                    configurable: nextDescriptor.configurable,
+                    enumerable: nextDescriptor.enumerable,
+                    writable: nextDescriptor.writable,
+                    value: nativeLike(function next() {
+                      const result = nativeNext.call(this);
+                      try {
+                        const reportMap = statsIteratorReports.get(this);
+                        if (!reportMap || !reportMap.size || !result || typeof result !== 'object' || result.done) return result;
+                        const substituted = statsEntryFor(reportMap, result.value);
+                        if (substituted === result.value) return result;
+                        const copy = {};
+                        for (const field of Object.keys(result)) copy[field] = field === 'value' ? substituted : result[field];
+                        return copy;
+                      } catch (_) { return result; }
+                    }, nativeNext, nativeNext.name, nativeNext.length),
+                  });
+                }
+              }
+            }
+          } catch (_) {}
+          return iterator;
+        };
+        patchStatsMethod('get', (native) => function get(id) {
+          const map = statsEntries.get(this);
+          const entry = map && map.size ? map.get(id) : null;
+          return entry ? Object.assign({}, entry) : native.call(this, id);
+        });
+        patchStatsMethod('forEach', (native) => function forEach(callback, thisArg) {
+          const map = statsEntries.get(this);
+          if (typeof callback !== 'function' || !map || !map.size) return native.call(this, callback, thisArg);
+          return native.call(this, function (value, key, report) {
+            return callback.call(thisArg, statsEntryFor(map, value), key, report);
+          }, thisArg);
+        });
+        patchStatsMethod('values', wrapStatsIterator);
+        patchStatsMethod('entries', wrapStatsIterator);
         try {
-          const listenerWrappers = new WeakMap();
-          const captureOf = (options) => (options === true
-            || (options && typeof options === 'object' && options.capture) ? 'capture' : 'bubble');
-          if (pcProto.addEventListener) {
-            replaceMethod(pcProto, 'addEventListener', (orig) => function addEventListener(type, listener, options) {
-              if (String(type) !== 'icecandidate' || typeof listener !== 'function') {
-                return orig.call(this, type, listener, options);
-              }
-              let perTarget = listenerWrappers.get(this);
-              if (!perTarget) { perTarget = new WeakMap(); listenerWrappers.set(this, perTarget); }
-              let perListener = perTarget.get(listener);
-              if (!perListener) { perListener = new Map(); perTarget.set(listener, perListener); }
-              const key = captureOf(options);
-              let wrapper = perListener.get(key);
-              if (!wrapper) {
-                wrapper = function wrapped(event) { return listener.call(this, rewriteIceEvent(event)); };
-                perListener.set(key, wrapper);
-              }
-              return orig.call(this, type, wrapper, options);
-            });
-          }
-          if (pcProto.removeEventListener) {
-            replaceMethod(pcProto, 'removeEventListener', (orig) => function removeEventListener(type, listener, options) {
-              if (String(type) === 'icecandidate' && typeof listener === 'function') {
-                const perTarget = listenerWrappers.get(this);
-                const perListener = perTarget && perTarget.get(listener);
-                const wrapper = perListener && perListener.get(captureOf(options));
-                if (wrapper) return orig.call(this, type, wrapper, options);
-              }
-              return orig.call(this, type, listener, options);
-            });
+          if (statsProto && Object.getOwnPropertyDescriptor(statsProto, Symbol.iterator)) {
+            patchStatsMethod(Symbol.iterator, wrapStatsIterator);
           }
         } catch (_) {}
+        if (pcProto.getStats) {
+          replaceMethod(pcProto, 'getStats', (orig) => async function getStats(...args) {
+            const report = await orig.apply(this, args);
+            try {
+              if (report && typeof report === 'object' && statsNativeForEach) {
+                const map = new Map();
+                statsNativeForEach.call(report, (entry) => {
+                  const rewritten = rewriteStatsEntry(entry);
+                  if (rewritten !== entry && entry && entry.id !== undefined) map.set(entry.id, rewritten);
+                });
+                if (map.size) statsEntries.set(report, map);
+              }
+            } catch (_) {}
+            return report;
+          });
+        }
       }
     } catch (_) {}
   }

@@ -36,6 +36,7 @@ const SDP = ${JSON.stringify([
   'o=- 4611731400430051336 2 IN IP4 127.0.0.1',
   's=-',
   't=0 0',
+  'c=IN IP4 ' + PRIVATE_V4,
   'a=group:BUNDLE 0',
   'm=audio 9 UDP/TLS/RTP/SAVPF 111',
   'c=IN IP4 0.0.0.0',
@@ -47,25 +48,60 @@ const SDP = ${JSON.stringify([
   SRFLX,
   RELAY,
   'a=end-of-candidates',
-].join(String.fromCharCode(10)))};
+].join(String.fromCharCode(13, 10)))};
 
 class RTCSessionDescription {
   constructor(init) { this.type = init.type; this.sdp = init.sdp; }
   toJSON() { return { type: this.type, sdp: this.sdp }; }
 }
+// The stub models the engine's shape rather than a convenient one: a candidate keeps its fields in
+// a slot behind prototype accessors and an event exposes its candidate the same way. A stub with own
+// data properties would let a rewrite that shadows instance members pass unnoticed.
+const candidateSlots = new WeakMap();
+const iceEventSlots = new WeakMap();
 class RTCIceCandidate {
   constructor(init) {
-    this.candidate = init.candidate;
-    this.sdpMid = init.sdpMid;
-    this.sdpMLineIndex = init.sdpMLineIndex;
-    this.usernameFragment = init.usernameFragment;
+    const src = init || {};
+    candidateSlots.set(this, {
+      candidate: src.candidate === undefined ? '' : String(src.candidate),
+      sdpMid: src.sdpMid === undefined ? null : src.sdpMid,
+      sdpMLineIndex: src.sdpMLineIndex === undefined ? null : src.sdpMLineIndex,
+      usernameFragment: src.usernameFragment === undefined ? null : src.usernameFragment,
+    });
   }
-  toJSON() { return { candidate: this.candidate, sdpMid: this.sdpMid, sdpMLineIndex: this.sdpMLineIndex }; }
+  toJSON() {
+    const slot = candidateSlots.get(this);
+    return { candidate: slot.candidate, sdpMid: slot.sdpMid, sdpMLineIndex: slot.sdpMLineIndex, usernameFragment: slot.usernameFragment };
+  }
 }
+Object.defineProperties(RTCIceCandidate.prototype, {
+  candidate: { configurable: true, enumerable: true, get() { return candidateSlots.get(this).candidate; } },
+  address: { configurable: true, enumerable: true, get() { return (candidateSlots.get(this).candidate.split(' ')[4] || ''); } },
+  port: { configurable: true, enumerable: true, get() { return Number(candidateSlots.get(this).candidate.split(' ')[5]) || 0; } },
+  protocol: { configurable: true, enumerable: true, get() { return candidateSlots.get(this).candidate.split(' ')[2] || ''; } },
+  sdpMid: { configurable: true, enumerable: true, get() { return candidateSlots.get(this).sdpMid; } },
+  sdpMLineIndex: { configurable: true, enumerable: true, get() { return candidateSlots.get(this).sdpMLineIndex; } },
+  usernameFragment: { configurable: true, enumerable: true, get() { return candidateSlots.get(this).usernameFragment; } },
+});
 class RTCPeerConnectionIceEvent {
-  constructor(type, init) { this.type = type; this.candidate = (init && init.candidate) || null; this.url = (init && init.url) || ''; }
+  constructor(type, init) {
+    // A page-built event is untrusted; the engine flips this before dispatching its own.
+    Object.defineProperty(this, 'isTrusted', { value: false, writable: true, enumerable: false, configurable: false });
+    iceEventSlots.set(this, {
+      type: type,
+      candidate: (init && init.candidate) || null,
+      url: (init && init.url) || '',
+    });
+  }
 }
-function RTCPeerConnection() { this._local = null; this._onice = null; this._listeners = new Map(); }
+Object.defineProperties(RTCPeerConnectionIceEvent.prototype, {
+  type: { configurable: true, enumerable: true, get() { return iceEventSlots.get(this).type; } },
+  candidate: { configurable: true, enumerable: true, get() { return iceEventSlots.get(this).candidate; } },
+  url: { configurable: true, enumerable: true, get() { return iceEventSlots.get(this).url; } },
+});
+globalThis.__iceEventProtoShape = Object.getOwnPropertyNames(RTCPeerConnectionIceEvent.prototype).sort();
+globalThis.__iceEventCandidateGetter = Object.getOwnPropertyDescriptor(RTCPeerConnectionIceEvent.prototype, 'candidate').get;
+function RTCPeerConnection() { this._local = null; this._remote = null; this._onice = null; this._listeners = new Map(); }
 RTCPeerConnection.prototype.createOffer = async function createOffer() { return { type: 'offer', sdp: SDP }; };
 RTCPeerConnection.prototype.createAnswer = async function createAnswer() { return { type: 'answer', sdp: SDP }; };
 RTCPeerConnection.prototype.setLocalDescription = async function setLocalDescription(desc) {
@@ -79,8 +115,17 @@ Object.defineProperty(RTCPeerConnection.prototype, 'currentLocalDescription', {
   configurable: true, enumerable: true, get() { return this._local; },
 });
 Object.defineProperty(RTCPeerConnection.prototype, 'pendingLocalDescription', {
-  configurable: true, enumerable: true, get() { return null; },
+  configurable: true, enumerable: true, get() { return this._local; },
 });
+RTCPeerConnection.prototype.setRemoteDescription = async function setRemoteDescription(desc) {
+  const src = desc || {};
+  this._remote = new RTCSessionDescription({ type: src.type, sdp: src.sdp });
+};
+for (const key of ['remoteDescription', 'currentRemoteDescription', 'pendingRemoteDescription']) {
+  Object.defineProperty(RTCPeerConnection.prototype, key, {
+    configurable: true, enumerable: true, get() { return this._remote; },
+  });
+}
 Object.defineProperty(RTCPeerConnection.prototype, 'onicecandidate', {
   configurable: true, enumerable: true,
   get() { return this._onice; },
@@ -94,9 +139,12 @@ RTCPeerConnection.prototype.addEventListener = function addEventListener(type, l
 RTCPeerConnection.prototype.removeEventListener = function removeEventListener(type, listener) {
   this._listeners.set(type, (this._listeners.get(type) || []).filter((fn) => fn !== listener));
 };
+globalThis.__dispatchedIceEvents = [];
 RTCPeerConnection.prototype.emitCandidate = function emitCandidate(line) {
   const candidate = new RTCIceCandidate({ candidate: line, sdpMid: '0', sdpMLineIndex: 0 });
   const event = new RTCPeerConnectionIceEvent('icecandidate', { candidate: candidate });
+  event.isTrusted = true;
+  globalThis.__dispatchedIceEvents.push(event);
   if (typeof this._onice === 'function') this._onice(event);
   for (const fn of (this._listeners.get('icecandidate') || []).slice()) fn(event);
 };
@@ -105,7 +153,29 @@ const replaceMethod = (proto, key, factory) => {
   const original = proto[key];
   Object.defineProperty(proto, key, { configurable: true, writable: true, value: factory(original) });
 };
-const nativeLike = (wrapper) => wrapper;
+const nativeLike = (wrapper, original, nameOverride, lengthOverride) => {
+  if (typeof wrapper !== 'function') return wrapper;
+  const name = nameOverride !== undefined ? nameOverride : (original ? original.name : wrapper.name);
+  const length = lengthOverride !== undefined ? lengthOverride : (original ? original.length : wrapper.length);
+  try { Object.defineProperty(wrapper, 'name', { configurable: true, value: name }); } catch (_) {}
+  try { Object.defineProperty(wrapper, 'length', { configurable: true, value: length }); } catch (_) {}
+  return wrapper;
+};
+const makeNativeGetter = (key, getValue) => {
+  const holder = { get [key]() { return getValue.call(this); } };
+  const getter = Object.getOwnPropertyDescriptor(holder, key).get;
+  try { Object.defineProperty(getter, 'name', { configurable: true, value: 'get ' + key }); } catch (_) {}
+  try { Object.defineProperty(getter, 'length', { configurable: true, value: 0 }); } catch (_) {}
+  return getter;
+};
+// What the block may replace, it may not add to: a new own property on one of these prototypes is
+// visible to any page that enumerates the interface, and no page would see it in a stock build.
+globalThis.__protoShapes = {
+  pc: Object.getOwnPropertyNames(RTCPeerConnection.prototype).sort(),
+  candidate: Object.getOwnPropertyNames(RTCIceCandidate.prototype).sort(),
+  iceEvent: Object.getOwnPropertyNames(RTCPeerConnectionIceEvent.prototype).sort(),
+  sessionDescription: Object.getOwnPropertyNames(RTCSessionDescription.prototype).sort(),
+};
 `;
 
 const RUNNER = `(async () => {
@@ -119,7 +189,13 @@ const RUNNER = `(async () => {
   out.identityStable = pc.localDescription === pc.localDescription;
 
   const handlerSeen = [];
-  pc.onicecandidate = (event) => handlerSeen.push(event.candidate && event.candidate.candidate);
+  const handlerEvents = [];
+  const handlerCandidateObjects = [];
+  pc.onicecandidate = (event) => {
+    handlerEvents.push(event);
+    if (event.candidate) handlerCandidateObjects.push(event.candidate);
+    handlerSeen.push(event.candidate && event.candidate.candidate);
+  };
   out.handlerKept = typeof pc.onicecandidate;
   pc.emitCandidate(${JSON.stringify(HOST_V4.replace(/^a=/, ''))});
 
@@ -140,6 +216,41 @@ const RUNNER = `(async () => {
   const pc2 = new RTCPeerConnection({ iceServers: [] });
   await pc2.setLocalDescription(await pc2.createOffer());
   out.argFormSdp = pc2.localDescription && pc2.localDescription.sdp;
+
+  // The event the listener received has to be the object the engine dispatched: a rebuilt event
+  // would report isTrusted false, a null target and eventPhase 0.
+  out.eventIdentityKept = handlerEvents[0] === globalThis.__dispatchedIceEvents[0];
+  out.eventTrusted = handlerEvents[0] && handlerEvents[0].isTrusted;
+  out.eventOwnProps = handlerEvents[0] ? Object.getOwnPropertyNames(handlerEvents[0]).sort() : null;
+  out.eventProtoProps = handlerEvents[0] ? Object.getOwnPropertyNames(Object.getPrototypeOf(handlerEvents[0])).sort() : null;
+  out.eventProtoUntouched = JSON.stringify(out.eventProtoProps) === JSON.stringify(globalThis.__iceEventProtoShape);
+  const currentGetter = Object.getOwnPropertyDescriptor(RTCPeerConnectionIceEvent.prototype, 'candidate').get;
+  out.eventCandidateGetterShape = currentGetter ? (currentGetter.name + '/' + currentGetter.length) : null;
+  out.eventCandidateGetterSame = currentGetter === globalThis.__iceEventCandidateGetter;
+  out.handlerSeesCandidateObject = handlerCandidateObjects.map((c) => c instanceof RTCIceCandidate);
+
+  // Identity relationships the engine exposes must survive the description wrapper.
+  out.localVsCurrent = pc.localDescription === pc.currentLocalDescription;
+  out.localVsPending = pc.localDescription === pc.pendingLocalDescription;
+  await pc.setRemoteDescription({ type: 'answer', sdp: 'v=0' });
+  out.remoteDistinct = pc.remoteDescription !== pc.localDescription;
+  out.remoteSelf = pc.remoteDescription === pc.remoteDescription;
+  out.remoteVsCurrent = pc.remoteDescription === pc.currentRemoteDescription;
+
+  // A page that builds its own candidate and event must get exactly what it handed in back.
+  const ownCandidate = new RTCIceCandidate({ candidate: 'candidate:9 1 udp 1 192.168.1.5 5000 typ host', sdpMid: '0', sdpMLineIndex: 0 });
+  const ownEvent = new RTCPeerConnectionIceEvent('icecandidate', { candidate: ownCandidate });
+  out.pageEventUntouched = ownEvent.candidate === ownCandidate;
+  out.pageCandidateUntouched = ownCandidate.candidate.indexOf('192.168.1.5') >= 0;
+  out.pageCandidateOwnProps = Object.getOwnPropertyNames(ownCandidate).length;
+
+  // Nothing may be shadowed onto the prototypes the block rewrites.
+  out.protoShapes = {
+    pc: Object.getOwnPropertyNames(RTCPeerConnection.prototype).sort(),
+    candidate: Object.getOwnPropertyNames(RTCIceCandidate.prototype).sort(),
+    iceEvent: Object.getOwnPropertyNames(RTCPeerConnectionIceEvent.prototype).sort(),
+    sessionDescription: Object.getOwnPropertyNames(RTCSessionDescription.prototype).sort(),
+  };
   return JSON.stringify(out);
 })()`;
 
@@ -159,6 +270,17 @@ function runBlock(fingerprint) {
   return context;
 }
 
+// A block that never runs still has to be valid script: a syntax error would take the whole page
+// layer down, and a branch that is skipped in this suite would hide it.
+(function parses() {
+  const fp = buildFingerprint({
+    id: 'webrtc-selftest-parse', kernelVersion: '148.0.7778.165', os: 'Windows',
+    privacy: { webrtc: 'proxy', webrtcAddress: EXIT_IP },
+  });
+  const source = buildInjectionScript(fp);
+  try { new vm.Script(source); } catch (error) { throw new Error('generated page script does not parse: ' + error.message); }
+})();
+
 (async () => {
   const proxyFp = buildFingerprint({
     id: 'webrtc-selftest', kernelVersion: '148.0.7778.165', os: 'Windows',
@@ -170,8 +292,13 @@ function runBlock(fingerprint) {
 
   const leaks = (sdp) => [PRIVATE_V4, 'fe80:', '.local'].filter((needle) => String(sdp || '').includes(needle));
 
+  ok('the fixture models the engine CRLF line endings', result.offerSdp.indexOf(String.fromCharCode(13, 10)) > 0);
   ok('createOffer SDP no longer carries a local address', leaks(result.offerSdp).length === 0 && result.offerSdp.includes(EXIT_IP));
   ok('the private base address is masked in raddr', /raddr 0\.0\.0\.0/.test(result.offerSdp) && !result.offerSdp.includes(`raddr ${PRIVATE_V4}`));
+  ok('the connection line carries the profile address instead of the host',
+    result.offerSdp.includes('c=IN IP4 ' + EXIT_IP) && !result.offerSdp.includes('c=IN IP4 ' + PRIVATE_V4));
+  ok('the connection line is rewritten in the no-argument and argument forms too',
+    result.noArgSdp.includes('c=IN IP4 ' + EXIT_IP) && result.argFormSdp.includes('c=IN IP4 ' + EXIT_IP));
   ok('public candidates keep their own address', result.offerSdp.includes(PUBLIC_V4) && result.offerSdp.includes(PUBLIC_RELAY));
   ok('the no-argument setLocalDescription path is covered', leaks(result.noArgSdp).length === 0 && result.noArgSdp.includes(EXIT_IP));
   ok('a rewritten description still passes instanceof', result.noArgBrand === true);
@@ -182,6 +309,22 @@ function runBlock(fingerprint) {
   && result.handlerSeen[0].startsWith('candidate:'), 'the event form must keep its own prefix');
   ok('the addEventListener path sees a rewritten candidate', leaks(result.listenerSeen[0]).length === 0 && result.listenerSeen[0].includes(EXIT_IP));
   ok('a removed icecandidate listener stops receiving events', result.listenerSeen.length === 1);
+  ok('the handler receives the event object the engine dispatched', result.eventIdentityKept === true);
+  ok('the delivered event is still trusted', result.eventTrusted === true);
+  ok('the delivered event keeps the engine own-property shape', JSON.stringify(result.eventOwnProps) === JSON.stringify(['isTrusted']));
+  ok('the delivered event keeps the engine prototype shape', result.eventProtoUntouched === true);
+  ok('the candidate accessor keeps the native getter name and arity', result.eventCandidateGetterShape === 'get candidate/0');
+  ok('candidates are real RTCIceCandidate instances', result.handlerSeesCandidateObject.every((flag) => flag === true));
+  ok('localDescription and currentLocalDescription stay the same object', result.localVsCurrent === true);
+  ok('localDescription and pendingLocalDescription stay the same object', result.localVsPending === true);
+  ok('different stored descriptions do not collapse into one wrapper', result.remoteDistinct === true);
+  ok('remote description identity stays stable across reads', result.remoteSelf === true && result.remoteVsCurrent === true);
+  ok('a page-built event hands back the candidate it was given', result.pageEventUntouched === true);
+  ok('a page-built candidate is never rewritten', result.pageCandidateUntouched === true);
+  ok('a page-built candidate carries no own members', result.pageCandidateOwnProps === 0);
+  ok('no prototype gains an own property the stock build does not have',
+    ['pc', 'candidate', 'iceEvent', 'sessionDescription'].every((key) =>
+      JSON.stringify(result.protoShapes[key]) === JSON.stringify(context.__protoShapes[key])));
   ok('the handler assignment stays readable', result.handlerKept === 'function');
   ok('unrelated listen types are passed through untouched', result.otherSeen.length === 0);
 

@@ -397,10 +397,12 @@ class Cdp {
 function profileFor(id) {
   // Speech and battery spoofing are switched on so the receiver guards on those entry points are
   // actually exercised; a profile that leaves them at their defaults would make those assertions
-  // vacuous.
+  // vacuous. The WebRTC address is set for the same reason: the proxy rewrite only installs when a
+  // replacement address is configured, and without it the whole block - including the prototype
+  // accessors it rewrites - would be skipped and never compared against the stock build.
   return { id, name: id, kernelVersion: '148.0.7778.165', os: 'macos', canvas: 'noise', webgl: 'noise',
     audio: 'noise', clientRects: 'noise', webrtc: 'proxy', cores: 8, memory: 8,
-    privacy: { speech: 'noise', battery: 'noise', webgpu: 'webgl' } };
+    privacy: { speech: 'noise', battery: 'noise', webgpu: 'webgl', webrtcAddress: '203.0.113.9' } };
 }
 
 function stop(child, dir) {
