@@ -367,6 +367,7 @@ function normalizeProfileSettings(profile) {
         audiooutput: String(privacy.mediaLabels.audiooutput || privacy.mediaLabels.output || '').slice(0, 200),
       } : { audioinput: '', videoinput: '', audiooutput: '' },
       battery: String(privacy.battery || 'noise'),
+      bluetooth: ['real', 'blocked'].includes(String(privacy.bluetooth || '')) ? String(privacy.bluetooth) : 'real',
       clientRects: String(privacy.clientRects || 'noise'),
       speech: String(privacy.speech || 'noise'),
       deviceNameMode: String(privacy.deviceNameMode || 'noise'),
@@ -2085,6 +2086,7 @@ function editorDraft(strict = true) {
       audiooutput: ($('#editor-media-label-output')?.value || '').trim().slice(0, 200),
     },
     battery: $('#editor-battery')?.value || 'noise',
+    bluetooth: $('#editor-bluetooth')?.value || 'real',
     clientRects: $('#editor-client-rects')?.value || 'noise',
     speech: $('#editor-speech')?.value || 'noise',
     deviceNameMode: $('#editor-device-name-mode')?.value || 'noise',
@@ -2333,7 +2335,7 @@ function renderEditorSummary() {
   const labels = {
     webrtc: { proxy: tx('仅代理连接'), disabled: tx('禁用非代理 UDP'), real: tx('真实网络') }, timezoneMode: { ip: '基于出口 IP', real: '系统真实', custom: privacy.timezone || '自定义' },
     geoMode: { ip: '基于出口 IP', disabled: '禁止访问', custom: '自定义坐标' }, canvas: { real: '真实', blocked: '禁止读取' }, webgl: { real: '真实', blocked: '禁用' },
-    audio: { real: '真实', muted: '静音输出' }, media: { real: '按网站询问', blocked: '禁止访问' }, speech: { real: '真实', blocked: '禁用' }
+    audio: { real: '真实', muted: '静音输出' }, media: { real: '按网站询问', blocked: '禁止访问' }, speech: { real: '真实', blocked: '禁用' }, bluetooth: { real: '真实', blocked: '关闭' }
   };
   const values = [
     [tx('浏览器'), 'Google Chrome'], [tx('分组'), groupNameOf(draft)], ['User-Agent', draft.userAgent || 'Chrome 默认'], [tx('网络'), maskProxy(draft.proxy)], ['WebRTC', labels.webrtc[privacy.webrtc]],
@@ -2341,6 +2343,7 @@ function renderEditorSummary() {
     [tx('分辨率'), draft.width + ' × ' + draft.height], [tx('字体'), privacy.fontMode === 'custom' ? privacy.fontSize + 'px' : '默认'], ['Canvas', labels.canvas[privacy.canvas]],
     ['WebGL', labels.webgl[privacy.webgl]], ['WebGPU', privacy.webgpu === 'blocked' ? '禁用' : (privacy.webgpu === 'webgl' ? '基于 WebGL' : '真实')], ['AudioContext', labels.audio[privacy.audio]], [tx('媒体设备'), labels.media[privacy.media]],
     [tx('电池'), privacy.battery === 'blocked' ? '关闭' : (privacy.battery === 'real' ? '真实' : '随机')],
+    [tx('蓝牙'), labels.bluetooth[privacy.bluetooth || 'real']],
     [tx('站点稳定性'), privacy.stabilityMode === 'force' ? '强制' : (privacy.stabilityMode === 'off' ? '关闭' : '自动')],
     [tx('代理未就绪'), draft.proxyMeta?.notReadyPolicy === 'direct' ? '回退直连' : (draft.proxyMeta?.notReadyPolicy === 'continue' ? '继续' : '阻断')],
     [tx('TLS 配置'), draft.proxyMeta?.tlsProfile || 'auto'],
@@ -2517,6 +2520,7 @@ function openProfileEditor(id) {
   editorSet('#editor-media', privacy.media);
   editorSet('#editor-media-devices', privacy.mediaDevices || '');
   editorSet('#editor-battery', privacy.battery || 'noise');
+  editorSet('#editor-bluetooth', privacy.bluetooth || 'real');
   editorSet('#editor-media-label-audio', privacy.mediaLabels?.audioinput || privacy.mediaLabels?.input || '');
   editorSet('#editor-media-label-video', privacy.mediaLabels?.videoinput || privacy.mediaLabels?.video || '');
   editorSet('#editor-media-label-output', privacy.mediaLabels?.audiooutput || privacy.mediaLabels?.output || '');
@@ -2697,7 +2701,7 @@ async function refreshEditorProxy() {
 function useSystemEditorDefaults() {
   editorSet('#editor-user-agent', ''); editorSet('#editor-timezone-mode', 'real'); editorSet('#editor-timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || ''); editorSet('#editor-geo-mode', 'disabled'); editorSet('#editor-ui-language', 'system');
   editorSet('#editor-resolution', 'custom'); editorSet('#editor-width', Math.max(640, screen.availWidth || 1280)); editorSet('#editor-height', Math.max(480, screen.availHeight || 820));
-  editorSet('#editor-webrtc', 'real'); editorSet('#editor-canvas', 'real'); editorSet('#editor-webgl', 'real'); editorSet('#editor-webgpu', 'real'); editorSet('#editor-audio', 'real'); editorSet('#editor-media', 'real'); editorSet('#editor-speech', 'real');
+  editorSet('#editor-webrtc', 'real'); editorSet('#editor-canvas', 'real'); editorSet('#editor-webgl', 'real'); editorSet('#editor-webgpu', 'real'); editorSet('#editor-audio', 'real'); editorSet('#editor-media', 'real'); editorSet('#editor-speech', 'real'); editorSet('#editor-bluetooth', 'real');
   updateEditorVisibility(); renderEditorSummary(); toast(tx('已读取本机安全默认值'));
   refreshUaMetaPreview().catch(() => {});
 }

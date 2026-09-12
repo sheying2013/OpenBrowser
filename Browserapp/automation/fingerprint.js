@@ -689,6 +689,7 @@ function buildFingerprint(profile = {}) {
   const speechMode = mode('speech', ['real', 'noise', 'blocked'], privacy.speech === 'blocked' ? 'blocked' : (privacy.speech === 'noise' ? 'noise' : 'real'));
   const batteryMode = mode('battery', ['real', 'noise', 'blocked'], privacy.battery === 'blocked' ? 'blocked' : (privacy.battery === 'real' ? 'real' : 'noise'));
   const webgpuMode = mode('webgpu', ['real', 'blocked', 'webgl'], privacy.webgpu === 'blocked' ? 'blocked' : (privacy.webgpu === 'webgl' ? 'webgl' : 'real'));
+  const bluetoothMode = mode('bluetooth', ['real', 'blocked'], privacy.bluetooth === 'blocked' ? 'blocked' : 'real');
   const stability = resolveStabilityPolicy(privacy, {
     host: fpIn.stabilityHost || privacy.stabilityHost || profile.stabilityHost || '',
     mode: fpIn.stabilityMode || privacy.stabilityMode,
@@ -1027,6 +1028,9 @@ function buildFingerprint(profile = {}) {
       mode: webgpuMode,
       gpu: webglGpu,
     },
+    bluetooth: {
+      mode: bluetoothMode,
+    },
     mediaDevices: {
       mode: mediaDevicesMode,
       devices: mediaDevices,
@@ -1204,6 +1208,7 @@ function buildInjectionScript(fp) {
     webrtcAddress: fp.webrtcAddress || null,
     battery: fp.battery || null,
     webgpu: fp.webgpu || null,
+    bluetooth: fp.bluetooth || null,
     mediaDevices: fp.mediaDevices || null,
     speech: fp.speech || null,
     fonts: fp.fonts || null,
@@ -3206,6 +3211,27 @@ function buildInjectionScript(fp) {
         replaceMethod(navProto, 'getBattery', (original) => guardReceiver(original, isNavigatorReceiver, serveBattery(original)));
       } else if (navigator.getBattery) {
         replaceMethod(navigator, 'getBattery', (original) => guardReceiver(original, isNavigatorReceiver, serveBattery(original)));
+      }
+    } catch (_) {}
+  }
+
+  // --- bluetooth adapter ---
+  // Keep the native interface and prototype shape, but answer as a machine without an adapter.
+  // Hiding the whole interface would itself diverge from a desktop Chrome secure context.
+  if (CFG.bluetooth && CFG.bluetooth.mode === 'blocked') {
+    try {
+      const receiver = navigator.bluetooth;
+      const btProto = typeof Bluetooth !== 'undefined' ? Bluetooth.prototype : null;
+      const isBluetoothReceiver = (value) => value === receiver;
+      if (receiver && btProto && typeof btProto.getAvailability === 'function') {
+        replaceMethod(btProto, 'getAvailability', (original) => guardReceiver(original, isBluetoothReceiver, function getAvailability() {
+          return Promise.resolve(false);
+        }));
+      }
+      if (receiver && btProto && typeof btProto.requestDevice === 'function') {
+        replaceMethod(btProto, 'requestDevice', (original) => guardReceiver(original, isBluetoothReceiver, function requestDevice() {
+          return Promise.reject(new DOMException('Bluetooth adapter not available.', 'NotFoundError'));
+        }));
       }
     } catch (_) {}
   }

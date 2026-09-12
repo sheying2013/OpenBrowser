@@ -1923,6 +1923,8 @@
     "打开网页仅支持 HTTP 或 HTTPS 地址": "Only HTTP or HTTPS URLs are supported",
     "基于 WebGL": "WebGL-based",
     "电池": "Battery",
+    "蓝牙适配器": "Bluetooth adapter",
+    "蓝牙": "Bluetooth",
     "站点稳定性": "Site stability",
     "强制": "Force",
     "阻断": "Block",

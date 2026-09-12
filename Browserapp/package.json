@@ -55,6 +55,7 @@
     "selftest:rpa-ui": "node ui/ui-rpa-selftest.js",
     "selftest:profile-list": "node profile-list-selftest.js",
     "selftest:stealth": "node fingerprint-stealth-selftest.js",
+    "selftest:bluetooth": "node automation/bluetooth-adapter-e2e-selftest.js",
     "selftest:socks5": "node socks5-auth-complete-selftest.js",
     "selftest:doh": "node automation/doh-resolver-selftest.js",
     "selftest:typing": "node automation/human-typing-selftest.js",

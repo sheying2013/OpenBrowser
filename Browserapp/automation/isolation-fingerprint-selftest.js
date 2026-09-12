@@ -363,13 +363,15 @@ async function main() {
   const blocked = buildFingerprint({
     id: 'env-block',
     name: 'X',
-    privacy: { canvas: 'blocked', webgl: 'blocked', webrtc: 'disabled', audio: 'muted' },
+    privacy: { canvas: 'blocked', webgl: 'blocked', webrtc: 'disabled', audio: 'muted', bluetooth: 'blocked' },
   });
   assert.strictEqual(blocked.canvas.mode, 'blocked');
   assert.strictEqual(blocked.webgl.mode, 'blocked');
   assert.strictEqual(blocked.webrtc, 'disabled');
+  assert.strictEqual(blocked.bluetooth.mode, 'blocked');
   const blockedScript = buildInjectionScript(blocked);
   assert.ok(blockedScript.includes('Canvas reading is disabled') || blockedScript.includes('blocked'));
+  assert.ok(blockedScript.includes('Bluetooth adapter not available.'), 'blocked Bluetooth must reject requestDevice like a machine without an adapter');
   pass('blocked/disabled modes');
 
   // isolation roots
