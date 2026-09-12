@@ -60,7 +60,9 @@ const WORKER_SRC = `self.onmessage = async () => {
       };
     } else uad = { missing: true };
   } catch (e) { uad = { error: String(e && e.name || e) }; }
+  const navProto = Object.getPrototypeOf(navigator);
   self.postMessage({ uad, hash: h >>> 0, cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory,
+    navOwn: Object.getOwnPropertyNames(navProto).sort(), vendorIn: 'vendor' in navigator,
     ua: navigator.userAgent, platform: navigator.platform, langs: (navigator.languages || []).join(','),
     glVendor, glRenderer });
 };`;
@@ -158,7 +160,9 @@ function stop(child, dir) {
   const pageSession = att.result.sessionId;
   await cdp.send('Page.enable', {}, pageSession);
   await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, pageSession);
+  const pageBefore = JSON.parse(await cdp.eval("(function () {\n    const proto = Object.getPrototypeOf(navigator);\n    return JSON.stringify({\n      secure: isSecureContext,\n      uadIn: 'userAgentData' in navigator,\n      protoUad: !!Object.getOwnPropertyDescriptor(proto, 'userAgentData'),\n      cores: navigator.hardwareConcurrency,\n      platform: navigator.platform,\n    });\n  })()", pageSession) || 'null');
   await cdp.send('Runtime.evaluate', { expression: mainInject, returnByValue: true }, pageSession);
+  const pageAfter = JSON.parse(await cdp.eval("(function () {\n    const proto = Object.getPrototypeOf(navigator);\n    return JSON.stringify({\n      secure: isSecureContext,\n      uadIn: 'userAgentData' in navigator,\n      protoUad: !!Object.getOwnPropertyDescriptor(proto, 'userAgentData'),\n      cores: navigator.hardwareConcurrency,\n      platform: navigator.platform,\n    });\n  })()", pageSession) || 'null');
 
   const createExpr = `(function () {
     const src = ${JSON.stringify(WORKER_SRC)};
@@ -214,12 +218,31 @@ function stop(child, dir) {
       assert.strictEqual(w.glRenderer, fp.webgl.renderer, 'worker UNMASKED_RENDERER_WEBGL must match the profile');
     }
   });
+  check('injecting the page does not add a client-hint member the build hides', () => {
+    assert.ok(pageBefore && pageAfter, 'page probe must run in both states');
+    assert.strictEqual(pageAfter.uadIn, pageBefore.uadIn, 'navigator.userAgentData presence');
+    assert.strictEqual(pageAfter.protoUad, pageBefore.protoUad, 'Navigator.prototype.userAgentData presence');
+    assert.notStrictEqual(pageAfter.cores, pageBefore.cores, 'the injection must still have applied');
+  });
+  check('the injected worker keeps the stock WorkerNavigator member list', () => {
+    assert.ok(baseline && baseline.value && injected && injected.value, 'both worker passes must report');
+    assert.deepStrictEqual(injected.value.navOwn, baseline.value.navOwn, 'WorkerNavigator member list');
+    assert.strictEqual(injected.value.vendorIn, baseline.value.vendorIn, 'vendor presence');
+  });
   check('worker navigator carries the profile identity, not the host', () => {
     const w = injected.value;
     assert.strictEqual(w.platform, fp.platform, `worker platform ${w.platform} !== ${fp.platform}`);
     assert.strictEqual(w.ua, fp.userAgent, 'worker userAgent must match the profile');
     assert.strictEqual(Number(w.cores), Number(fp.hardwareConcurrency), `worker cores ${w.cores} !== ${fp.hardwareConcurrency}`);
-    assert.ok(w.uad && !w.uad.error && !w.uad.missing, 'worker userAgentData must be available');
+    const baselineHasHints = Boolean(baseline.value.uad && !baseline.value.uad.error && !baseline.value.uad.missing);
+    const injectedHasHints = Boolean(w.uad && !w.uad.error && !w.uad.missing);
+    // Client hints are secure-context gated: whatever this document exposes, the injected worker has
+    // to expose the same. Adding the member where the build hides it is a one-line tell.
+    assert.strictEqual(injectedHasHints, baselineHasHints, 'worker client-hint visibility must match the un-injected worker');
+    if (!baselineHasHints) {
+      assert.strictEqual(w.uad.missing, true, 'the injected worker must not add userAgentData');
+      return;
+    }
     assert.deepStrictEqual(w.uad.own, [], 'worker userAgentData must not gain own members');
     assert.strictEqual(w.uad.instanceofNative, true, 'worker userAgentData must keep the NavigatorUAData brand');
     assert.ok(w.uad.protoNames.includes('getHighEntropyValues') && w.uad.protoNames.includes('toJSON'), 'worker userAgentData methods must stay on the prototype');

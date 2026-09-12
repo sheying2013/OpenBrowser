@@ -88,6 +88,7 @@
     "selftest:kint": "node automation/kernel-integrity-selftest.js",
     "selftest:cdpnoise": "node automation/cdp-noise-e2e-selftest.js",
     "selftest:workerfp": "node automation/worker-fingerprint-e2e-selftest.js",
+    "selftest:workerscope": "node automation/worker-scope-family-e2e-selftest.js",
     "selftest:stabilitye2e": "node automation/fingerprint-stability-e2e-selftest.js",
     "selftest:multitab": "node automation/multitab-fingerprint-e2e-selftest.js",
     "selftest:reinject": "node automation/fingerprint-reinject-guard-selftest.js",

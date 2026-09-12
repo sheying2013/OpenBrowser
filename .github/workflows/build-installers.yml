@@ -331,6 +331,7 @@ jobs:
           npm run selftest:popupe2e
           npm run selftest:mobilefp
           npm run selftest:workerfp
+          npm run selftest:workerscope
           npm run selftest:bluetooth
       - run: npm run package:portable
       - name: Verify package
@@ -406,6 +407,7 @@ jobs:
           npm run selftest:popupe2e
           npm run selftest:mobilefp
           npm run selftest:workerfp
+          npm run selftest:workerscope
           npm run selftest:bluetooth
       - run: npm run package:portable
       - name: Verify package

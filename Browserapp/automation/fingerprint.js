@@ -3641,6 +3641,11 @@ function buildWorkerInjectionScript(fp) {
       if (CFG.hardwareConcurrency != null) navValues.hardwareConcurrency = CFG.hardwareConcurrency;
       if (CFG.deviceMemory != null) navValues.deviceMemory = CFG.deviceMemory;
       for (const [key, value] of Object.entries(navValues)) {
+        // Only members the build already exposes may be answered. WorkerNavigator does not carry
+        // every Navigator member - vendor, for one, is window-only in this engine - and adding one
+        // here leaves the worker with an own prototype member no stock build has, which is a single
+        // getOwnPropertyNames() call away from identifying the profile.
+        if (!(key in navProto)) continue;
         try { Object.defineProperty(navProto, key, nativeAccessor(key, { configurable: true, enumerable: true, get: () => value })); } catch (_) {}
       }
       const metadata = CFG.userAgentMetadata || {};
@@ -3748,13 +3753,21 @@ function buildWorkerInjectionScript(fp) {
         return value;
       };
       const uaData = makeUaData();
-      try { Object.defineProperty(navProto, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => uaData })); } catch (_) {}
+      try {
+        // The member is secure-context gated, so a worker that does not have it here (an insecure
+        // origin, an opaque document) must keep not having it.
+        if ('userAgentData' in navProto) {
+          Object.defineProperty(navProto, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => uaData }));
+        }
+      } catch (_) {}
       // Only a phone profile can reach the page-side replacement path. Desktop profiles keep the
       // native object and only have its prototype members rewritten.
       try {
         const pageNavProto = MOBILE ? globalThis.Navigator?.prototype : null;
         if (pageNavProto) {
-          Object.defineProperty(pageNavProto, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => uaData }));
+          if ('userAgentData' in pageNavProto) {
+            Object.defineProperty(pageNavProto, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => uaData }));
+          }
         }
       } catch (_) {}
     }

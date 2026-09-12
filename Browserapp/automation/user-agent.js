@@ -379,6 +379,15 @@ function buildUaInjectionScript(uaProfile) {
       try { Object.defineProperty(obj, key, { configurable: true, get: nativeGetter }); return true; } catch (__) { return false; }
     }
   };
+  // Client hints are secure-context gated: a build that hides navigator.userAgentData here has to
+  // keep hiding it. Installing the member on an insecure origin is a one-line tell, and the interface
+  // prototype can still be rewritten in place because those members already exist.
+  const contextExposesClientHints = () => {
+    try {
+      if (typeof Navigator !== "undefined" && Navigator.prototype && ("userAgentData" in Navigator.prototype)) return true;
+      return typeof navigator !== "undefined" && navigator.userAgentData != null;
+    } catch (_) { return false; }
+  };
   try {
     define(Navigator.prototype, "userAgent", () => U.userAgent);
     define(Navigator.prototype, "appVersion", () => U.appVersion);
@@ -481,7 +490,7 @@ function buildUaInjectionScript(uaProfile) {
           delete existing.getHighEntropyValues;
           delete existing.toJSON;
         } catch (_) {}
-      } else {
+      } else if (contextExposesClientHints()) {
         const uaData = Object.create(targetProto);
         define(Navigator.prototype, "userAgentData", () => uaData);
         try { delete navigator.userAgentData; } catch (_) {}
@@ -530,8 +539,10 @@ function buildUaInjectionScript(uaProfile) {
       }.toJSON;
       nativeSource.set(tj, "function toJSON() { [native code] }");
       Object.defineProperty(uaData, "toJSON", { configurable: true, writable: true, enumerable: true, value: tj });
-      define(Navigator.prototype, "userAgentData", () => uaData);
-      try { delete navigator.userAgentData; } catch (_) {}
+      if (contextExposesClientHints()) {
+        define(Navigator.prototype, "userAgentData", () => uaData);
+        try { delete navigator.userAgentData; } catch (_) {}
+      }
     }
   } catch (_) {}
 })();`;

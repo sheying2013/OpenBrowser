@@ -14,6 +14,7 @@
 const assert = require('assert');
 const { spawn, execSync } = require('child_process');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 
@@ -160,10 +161,22 @@ class Cdp {
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error('ws connect failed')); });
   const cdp = new Cdp(ws);
+  // Client hints are secure-context gated: on about:blank the build exposes no navigator.userAgentData
+  // at all, so the persona has to be read from a trustworthy origin for those assertions to mean
+  // anything.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><head></head><body>mobile persona probe</body></html>');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  await cdp.call(page.webSocketDebuggerUrl, 'Page.enable', {});
+  await cdp.call(page.webSocketDebuggerUrl, 'Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
+  await sleep(1200);
   const host = await cdp.evalValue(PROBE);
   await applyFingerprintToTab(cdp.call.bind(cdp), page.webSocketDebuggerUrl, fp, profile);
   const live = await cdp.evalValue(PROBE);
   try { ws.close(); } catch (_) {}
+  try { server.close(); } catch (_) {}
   stop();
 
   check('probe returns values before and after the inject', () => {
