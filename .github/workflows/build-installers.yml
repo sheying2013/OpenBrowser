@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.14'
+        default: 'v1.0.15'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,15 +42,15 @@ env:
 
     ### 中文
 
-    - **语音指纹跨系统家族修复**：未启用设备 persona 的旧 profile 之前按语言挑选语音，会把 macOS 与 Windows 独有语音混在同一份列表中——真实机器不可能同时具备（本机实测 macOS Chrome 210 个语音里 0 个 Microsoft 语音，这类“跨系统家族”正是语音检测项要抓的特征）。现在所有 profile 都按所声称的操作系统收窄语音表：Windows 不再出现 Apple 语音，macOS 不再出现 Microsoft 语音，Linux 只保留 Chrome 自带的 Google 语音。
-    - **运行时标记扫描回归**：媒体设备端到端测试新增一项断言，遍历导航器、屏幕、插件、mimeTypes、语音、WebGL 与 Intl 等页面可读表面，确认输出中不再出现任何产品标记，端到端用例由 5 项增至 6 项。
-    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.14**。
+    - **macOS WebGL 渲染器格式修正**：macOS 预设中有三条仍在使用 Chrome 111 之前的形态（如 `ANGLE (Apple, Apple M1, OpenGL 4.1)`）。Chrome 自 111 起在 macOS 全面改用 ANGLE 的 Metal 后端，当前版本真实输出为 `ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)`（已用本机 Chrome 实测确认）。旧形态与 UA 声称的 Chrome 版本自相矛盾，是可被直接判定的特征；现改为 Metal 形态，并保留每条预设原本对应的 GPU。
+    - **回归加固**：新增断言要求未启用 persona 的 macOS profile 同样报告 Metal 形态；golden fixture 记录该一次性修正及其理由（与 deviceMemory 从 16 修正为 8 的既有先例一致）。
+    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.15**。
 
     ### English
 
-    - **Cross-OS voice family fixed**: profiles without a device persona used to pick voices purely by language, mixing macOS-only and Windows-only voices into one list - a combination no real machine can produce (a local check of macOS Chrome found 210 voices and zero Microsoft ones, and that cross-family mix is exactly what voice-based OS checks look for). Every profile now narrows the voice table to its claimed OS: Windows never reports Apple voices, macOS never reports Microsoft voices, and Linux keeps only Chrome's bundled Google voices.
-    - **Runtime marker sweep**: the media-device end-to-end suite now walks the page-readable surfaces (navigator, screen, plugins, mimeTypes, voices, WebGL, Intl) and asserts that no product marker appears anywhere in the output; six end-to-end cases in total.
-    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.14**.
+    - **macOS WebGL renderer format corrected**: three macOS presets still used the pre-111 form (`ANGLE (Apple, Apple M1, OpenGL 4.1)`). Chrome moved macOS to the ANGLE Metal backend in 111, and a current build reports `ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)` (verified against a local Chrome build). The old form contradicted the Chrome version the UA claims and could be checked directly; the presets now use the Metal form while keeping the GPU each one named.
+    - **Regression coverage**: an assertion now requires non-persona macOS profiles to report the Metal form as well, and the golden fixture records this one-time correction and its rationale (matching the existing precedent for navigator.deviceMemory 16 -> 8).
+    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.15**.
 
     ### 下载 / Downloads
 

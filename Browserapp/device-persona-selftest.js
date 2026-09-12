@@ -19,9 +19,14 @@ const { PERSONAS_BY_OS, pickPersona, isCoherent, personasForOs } = require('./au
 // Captured from the build before personas existed. Any drift here means an existing
 // profile's fingerprint moved without opting in.
 //
-// One deliberate exception: mac-user's deviceMemory moved 16 -> 8. navigator.deviceMemory is
-// quantised by the spec to 0.25/0.5/1/2/4/8, so 16 was a reading no real Chrome can produce and
-// identified the browser as spoofed on its own. Correcting it is worth the one-time move.
+// Two deliberate exceptions, both readings no real Chrome can produce:
+//   - mac-user's deviceMemory moved 16 -> 8. navigator.deviceMemory is quantised by the spec to
+//     0.25/0.5/1/2/4/8, so 16 identified the browser as spoofed on its own.
+//   - mac-user's webglRenderer moved from the pre-111 "OpenGL 4.1" form to the ANGLE Metal form
+//     ("ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"). Chrome switched
+//     macOS to the Metal backend in 111; a real Chrome on macOS reports the Metal form (verified
+//     here against Chrome 152), so the old string contradicted the Chrome version the UA claims.
+// Correcting such a reading is worth the one-time move.
 const GOLDEN = {
   "legacy-a": {
     "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
@@ -142,7 +147,7 @@ const GOLDEN = {
       "devicePixelRatio": 1.5
     },
     "webglVendor": "Google Inc. (Apple)",
-    "webglRenderer": "ANGLE (Apple, Apple M2, OpenGL 4.1)",
+    "webglRenderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)",
     "languages": [
       "en-US"
     ],
@@ -209,6 +214,13 @@ const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.
   const mac = buildFingerprint(base('persona-mac', { userAgent: MAC_UA, privacy: { deviceProfile: 'persona' } }));
   ok('opted-in macOS profile uses a Metal GPU string', /Metal/.test(mac.webgl.renderer));
   ok('opted-in macOS profile is Retina (dpr >= 2)', mac.screen.devicePixelRatio >= 2);
+
+  // The legacy (non-persona) path has to match the same real-world format: Chrome moved macOS to
+  // the ANGLE Metal backend in 111, so any macOS profile claiming a current version must report
+  // the Metal form rather than the pre-111 "OpenGL 4.1" one.
+  const legacyMac = buildFingerprint(base('legacy-mac-gl', { userAgent: MAC_UA }));
+  ok('non-persona macOS profile reports the ANGLE Metal renderer form',
+    /ANGLE Metal Renderer:/.test(legacyMac.webgl.renderer) && /Unspecified Version\)$/.test(legacyMac.webgl.renderer));
 }
 
 // --- 4. impossible pairings the old independent sampling could produce are gone ---
