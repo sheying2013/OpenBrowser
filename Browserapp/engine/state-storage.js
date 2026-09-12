@@ -4,27 +4,41 @@ const fsp = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
 
+const TRANSIENT_WRITE_ERRORS = new Set(["ENOENT", "EEXIST", "EINVAL", "EBUSY", "EAGAIN"]);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function writeRawAtomically(filePath, value, mode = 0o600) {
   const directory = path.dirname(filePath);
-  await fsp.mkdir(directory, { recursive: true });
-  const temporary = `${filePath}.tmp-${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
-  let handle = null;
-  try {
-    handle = await fsp.open(temporary, "wx", mode);
-    await handle.writeFile(value, "utf8");
-    await handle.sync();
-    await handle.close();
-    handle = null;
-    await fsp.rename(temporary, filePath);
+  let lastError = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await fsp.mkdir(directory, { recursive: true });
+    const temporary = `${filePath}.tmp-${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
+    let handle = null;
     try {
-      const directoryHandle = await fsp.open(directory, "r");
-      await directoryHandle.sync();
-      await directoryHandle.close();
-    } catch (_) {}
-  } finally {
-    if (handle) await handle.close().catch(() => {});
-    await fsp.rm(temporary, { force: true }).catch(() => {});
+      handle = await fsp.open(temporary, "wx", mode);
+      await handle.writeFile(value, "utf8");
+      await handle.sync();
+      await handle.close();
+      handle = null;
+      await fsp.rename(temporary, filePath);
+      try {
+        const directoryHandle = await fsp.open(directory, "r");
+        await directoryHandle.sync();
+        await directoryHandle.close();
+      } catch (_) {}
+      return;
+    } catch (error) {
+      lastError = error;
+      if (handle) await handle.close().catch(() => {});
+      await fsp.rm(temporary, { force: true }).catch(() => {});
+      if (!TRANSIENT_WRITE_ERRORS.has(error?.code) || attempt === 3) throw error;
+      await sleep(5 * (attempt + 1));
+    }
   }
+  throw lastError || new Error("atomic write failed");
 }
 
 async function writeJsonAtomically(filePath, value, mode = 0o600) {

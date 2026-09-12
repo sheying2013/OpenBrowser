@@ -7,6 +7,7 @@ const { LiveSyncController: LiveSyncV4, injection } = require('./live-sync-v4');
 const { planFanoutFromPayload } = require('./automation/protocol/sync-fanout');
 const { settingsToOperateList } = require('./automation/protocol/event-map');
 const { syncCapabilities } = require('./automation/protocol/cross-platform');
+const { WindowGenerationRegistry, acceptWindowEvent, extractWindowIdentity } = require('./automation/protocol/window-generation');
 
 function getElectronScreen() {
   try {
@@ -562,6 +563,8 @@ class LiveSyncController extends LiveSyncV4 {
     this.activeMasterTab = null; this.lastWindowSync = 0; this.lastHealthCheck = 0; this.nativeInputMirror = null; this.nativePopupActive = false;
     this.geometryPausedUntil = 0; this.geometryPending = new Map(); this.mirroredWindowStates = new Map();
     this.windowGuardGeneration = 0;
+    this.windowGenerations = new WindowGenerationRegistry();
+    this.windowKeyGenerations = new Map(); this.tabWindowKeys = new Map();
     this.fullscreenByTab = new Map(); this.fullscreenFrameStates = new Map(); this.fullscreenSessions = new Map(); this.fullscreenActiveSessions = new Map();
     this.fullscreenSessionInitializations = new Map();
     this.unreachableSlaves = new Set();
@@ -789,7 +792,45 @@ class LiveSyncController extends LiveSyncV4 {
     if (child && !child.killed) { try { child.kill(); } catch (_) {} }
   }
 
+  bindWindowKey(tabId, key, generation = 0) {
+    const id = String(tabId);
+    const bound = generation || this.windowGenerations.generationFor(key);
+    this.windowKeyGenerations.set(key, bound);
+    const keys = this.tabWindowKeys.get(id) || new Set();
+    keys.add(key); this.tabWindowKeys.set(id, keys);
+    return bound;
+  }
+
+  acceptWindowEvent(tabId, payload = {}, options = {}) {
+    const id = String(tabId);
+    const observed = extractWindowIdentity(payload, '');
+    const key = observed ? `tab:${id}/${observed}` : `tab:${id}`;
+    const gate = acceptWindowEvent(this.windowGenerations, key, payload, { ...options, key });
+    if (gate.accept) this.bindWindowKey(id, key, gate.generation);
+    return gate;
+  }
+
+  forgetWindow(tabId, value = null) {
+    const id = String(tabId);
+    const keys = this.tabWindowKeys.get(id) || new Set();
+    if (value?.windowKey) keys.add(value.windowKey);
+    if (!keys.size) keys.add(`tab:${id}`);
+    let forgotten = 0;
+    for (const key of keys) {
+      if (this.windowGenerations.forget(key, this.windowKeyGenerations.get(key) || value?.windowGeneration || 0)) forgotten += 1;
+      this.windowKeyGenerations.delete(key);
+    }
+    this.tabWindowKeys.delete(id);
+    return forgotten > 0;
+  }
+
   enqueueForward(tabId, payload, action = 'forward') {
+    const windowGate = this.acceptWindowEvent(tabId, payload);
+    if (!windowGate.accept) {
+      this.forwardStats.dropped += 1;
+      this.emit({ type: 'sync-window-event-dropped', tabId, reason: windowGate.reason, generation: windowGate.generation });
+      return;
+    }
     const type = payload?.type;
     const tag = String(payload?.tag || '').toLowerCase();
     const elementType = String(payload?.elementType || '').toLowerCase();
@@ -905,6 +946,7 @@ class LiveSyncController extends LiveSyncV4 {
     this.unreachableSlaves?.clear();
     this.mappingReady = false; this.activeMasterTab = null; this.geometryPausedUntil = 0; this.browserOwnedUntil = 0; this.devToolsTargetCount = 0;
     this.windowGuardGeneration += 1;
+    this.windowGenerations.clear(); this.windowKeyGenerations.clear(); this.tabWindowKeys.clear();
     for (const value of this.extensionConnections.values()) value.connection.close();
     this.extensionConnections.clear(); this.extensionMap.clear();
     super.stop();
@@ -922,6 +964,8 @@ class LiveSyncController extends LiveSyncV4 {
       return;
     }
     const value = { tab, connection, scroll: { x: 0, y: 0 } };
+    value.windowKey = `tab:${tab.id}`;
+    value.windowGeneration = this.bindWindowKey(tab.id, value.windowKey);
     this.connections.set(tab.id, value);
     try {
       await connection.command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
@@ -1171,11 +1215,11 @@ class LiveSyncController extends LiveSyncV4 {
     for (const [id, value] of this.connections) {
       if (!live.has(id) || value.connection.socket?.readyState !== 1) {
         value.connection.close(); this.connections.delete(id);
-        if (!live.has(id)) { await this.closeMappedTabs(id); this.tabMap.delete(id); this.clearFullscreenState(id, 'tab-closed'); }
+        if (!live.has(id)) { this.forgetWindow(id, value); await this.closeMappedTabs(id); this.tabMap.delete(id); this.clearFullscreenState(id, 'tab-closed'); }
       }
     }
 
-    for (const id of [...this.tabMap.keys()]) if (!live.has(id)) { await this.closeMappedTabs(id); this.tabMap.delete(id); this.clearFullscreenState(id, 'tab-closed'); }
+    for (const id of [...this.tabMap.keys()]) if (!live.has(id)) { this.forgetWindow(id, this.connections.get(id)); await this.closeMappedTabs(id); this.tabMap.delete(id); this.clearFullscreenState(id, 'tab-closed'); }
     this.masterTabs = tabs;
     const slaveLists = new Map(); const slaveExtensionLists = new Map();
     // Parallel slave target fetch (was sequential). Each slave is isolated: a closed or

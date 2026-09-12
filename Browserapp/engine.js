@@ -9,6 +9,7 @@ const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
 const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
 const { resolveProfileLanguage, localeFromCountryCode } = require('./automation/locale-from-country');
+const { applyLanguagePreferences, verifyLanguagePreferences } = require('./automation/profile-file-consistency');
 const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
 const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = require('./automation/env-icon');
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
@@ -649,14 +650,7 @@ class BrowserEngine {
     prefs.credentials_enable_service = allowPasswords;
     prefs.profile.password_manager_enabled = allowPasswords;
     prefs.signin ||= {}; prefs.signin.allowed = Boolean(profile.advanced.allowSignin);
-    prefs.intl ||= {};
-    // e.g. ja-JP,ja  so Accept-Language matches IP-derived locale
-    {
-      const lang = String(profile.language || 'en-US').trim();
-      const primary = lang.split(',')[0].trim();
-      const base = primary.split('-')[0];
-      prefs.intl.accept_languages = base && base !== primary ? `${primary},${base}` : primary;
-    }
+    applyLanguagePreferences(prefs, profile);
     prefs.webkit ||= {}; prefs.webkit.webprefs ||= {};
     if (profile.privacy.fontMode === 'custom') prefs.webkit.webprefs.default_font_size = profile.privacy.fontSize;
     else delete prefs.webkit.webprefs.default_font_size;
@@ -666,7 +660,20 @@ class BrowserEngine {
       prefs.session ||= {};
       prefs.session.restore_on_startup = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession ? 1 : 5;
     }
-    await fsp.writeFile(file, JSON.stringify(prefs), 'utf8');
+    await writeRawAtomically(file, JSON.stringify(prefs), 0o600);
+    try {
+      const persisted = JSON.parse(await fsp.readFile(file, 'utf8'));
+      const issues = verifyLanguagePreferences(persisted, profile);
+      if (issues.length && typeof this.emit === 'function') {
+        this.emit({ type: 'profile-file-sync-error', id: profile.id, key: 'language', issues });
+      }
+      return { issues };
+    } catch (error) {
+      if (typeof this.emit === 'function') {
+        this.emit({ type: 'profile-file-sync-error', id: profile.id, key: 'language', message: error.message });
+      }
+      return { issues: [{ key: 'profile.preferences', expected: 'readable', actual: error.message }] };
+    }
   }
 
   /**

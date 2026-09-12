@@ -6,5 +6,6 @@ module.exports = {
   appCenter: require('./app-center-protocol'),
   eventMap: require('./event-map'),
   fanout: require('./sync-fanout'),
+  windowGeneration: require('./window-generation'),
   platform: require('./cross-platform'),
 };

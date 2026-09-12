@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.9'
+        default: 'v1.0.10'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,17 +42,19 @@ env:
 
     ### 中文
 
-    - **修复操作区按钮空白**：环境列表和代理列表的动态按钮现在会直接创建原生 SVG 图标，不再依赖延迟刷新；启动/停止、窗口同步、编辑、克隆四个按钮在首次渲染时即可显示。
-    - **修复内核列截断**：环境表保持最小可读宽度，主题层不再把表格压回 `min-width: 0`；内核列优先显示 `Chromium 148` 这类稳定标签，完整版本号保留在悬停提示中，避免出现 `Chro...`。
-    - **布局稳定性**：窄窗口改为表格横向滚动，不再通过压缩关键列来适配，编号、分组、扩展、状态和操作列均保留可点击空间。
-    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息和 GitHub Actions 发布参数统一为 **v1.0.9**。
+    - **Profile 文件层一致性**：语言偏好现在同时写入 `intl.accept_languages` 与 `intl.selected_languages`，写盘后立即回读校验；内核自有偏好组不再被猜测性覆盖，避免 CDP 表面值与配置文件漂移。
+    - **窗口代际守卫**：为标签页和原生窗口号分配单调递增代际，旧窗口延迟事件在产生同步副作用前被丢弃，关闭窗口时退役全部关联键，防止窗口号复用造成错配。
+    - **原生可信输入**：同步输入和 RPA 选择框改用 Chromium 原生输入链，不再通过 `dispatchEvent` 伪造事件；普通输入、清空、失焦 change 和选择框切换保持真实事件语义。
+    - **原子状态写入加固**：状态文件遇到瞬时 `ENOENT`、`EEXIST`、`EINVAL`、`EBUSY`、`EAGAIN` 时自动重试并清理临时文件，降低并发写盘竞态。
+    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 与 GitHub Actions 发布参数统一为 **v1.0.10**。
 
     ### English
 
-    - **Fixed blank action buttons**: Dynamic profile and proxy rows now create real SVG icon nodes synchronously. Start/stop, window-sync, edit, and clone controls render on the first paint without waiting for a second icon pass.
-    - **Fixed engine-column truncation**: The profile grid keeps a readable minimum width, and theme overrides no longer collapse it to `min-width: 0`. The compact label shows `Chromium 148` while the full version remains in the tooltip.
-    - **Stable narrow-window layout**: Narrow windows scroll horizontally instead of squeezing critical columns; index, group, extension, status, and action columns keep usable hit targets.
-    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows file metadata, and the GitHub Actions release input are all aligned to **v1.0.9**.
+    - **Profile-file consistency**: Language preferences now write both `intl.accept_languages` and `intl.selected_languages`, then read back and verify. Native-owned preference groups are preserved verbatim instead of being guessed.
+    - **Window-generation guard**: Tabs and native window numbers receive monotonic generations. Delayed events from retired windows are dropped before synchronization side effects, and all related keys are retired on close.
+    - **Native trusted input**: Synchronization input and RPA selects now use Chromium's native input path instead of synthetic `dispatchEvent` events, preserving real input/change semantics.
+    - **Atomic state hardening**: Transient `ENOENT`, `EEXIST`, `EINVAL`, `EBUSY`, and `EAGAIN` failures are retried with temporary-file cleanup, reducing concurrent-write races.
+    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.10**.
 
     ### 下载 / Downloads
 

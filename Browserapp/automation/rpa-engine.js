@@ -1,6 +1,7 @@
 'use strict';
 
 const cdp = require('../cdp');
+const { applyTrustedChange } = require('./trusted-input');
 const fs = require('fs/promises');
 const fssync = require('fs');
 const path = require('path');
@@ -708,15 +709,13 @@ class RpaEngine {
       }
       try {
         await this.withPage(port, async (ws) => {
-          const expression = this.elementExpression(selector, target.selectorRadio, `el => {
-            if (!(el instanceof HTMLSelectElement)) return false;
-            el.value = ${JSON.stringify(selectedValue)};
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            return el.value === ${JSON.stringify(selectedValue)};
-          }`, false, target.serial);
-          const result = await cdp.call(ws, 'Runtime.evaluate', { expression, returnByValue: true });
-          if (result.result?.value !== true) throw new Error('selectElement failed: ' + selector);
+          const call = (method, params = {}) => cdp.call(ws, method, params);
+          const result = await applyTrustedChange(call, {
+            selector,
+            value: selectedValue,
+            selectedIndex: Number.isInteger(params.selectedIndex) ? params.selectedIndex : undefined,
+          });
+          if (!result.ok) throw new Error('selectElement failed: ' + selector + ' (' + (result.reason || 'unknown') + ')');
         });
       } catch (error) {
         if (optional && isMissingElementError(error)) {
