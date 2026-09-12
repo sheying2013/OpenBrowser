@@ -431,9 +431,20 @@ function buildUaInjectionScript(uaProfile) {
       Object.defineProperty(targetProto, "brands", { get: makeUaGetter("brands", () => Object.freeze(brands)), enumerable: true, configurable: true });
       Object.defineProperty(targetProto, "mobile", { get: makeUaGetter("mobile", () => Boolean(U.mobile)), enumerable: true, configurable: true });
       Object.defineProperty(targetProto, "platform", { get: makeUaGetter("platform", () => String(U.chPlatform || "")), enumerable: true, configurable: true });
+      // The native entry points stay reachable for foreign receivers, so a wrong receiver produces
+      // exactly the error/rejection the build itself produces rather than one assembled here.
+      const nativeGeh = targetProto.getHighEntropyValues;
+      const nativeToJSON = targetProto.toJSON;
+      const isUaReceiver = (receiver) => {
+        try {
+          return receiver instanceof NavigatorUAData
+            || Object.prototype.toString.call(receiver) === "[object NavigatorUAData]";
+        } catch (_) { return false; }
+      };
       const geh = {
         getHighEntropyValues(hints) {
-          if (!(this instanceof NavigatorUAData) && Object.prototype.toString.call(this) !== "[object NavigatorUAData]") {
+          if (!isUaReceiver(this)) {
+            if (typeof nativeGeh === "function") return nativeGeh.apply(this, arguments);
             return Promise.reject(new TypeError("Illegal invocation"));
           }
           const want = Array.isArray(hints) ? hints : [];
@@ -451,7 +462,8 @@ function buildUaInjectionScript(uaProfile) {
       Object.defineProperty(targetProto, "getHighEntropyValues", { configurable: true, writable: true, enumerable: true, value: geh });
       const tj = {
         toJSON() {
-          if (!(this instanceof NavigatorUAData) && Object.prototype.toString.call(this) !== "[object NavigatorUAData]") {
+          if (!isUaReceiver(this)) {
+            if (typeof nativeToJSON === "function") return nativeToJSON.apply(this, arguments);
             throw new TypeError("Illegal invocation");
           }
           return { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };

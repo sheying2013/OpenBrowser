@@ -1421,6 +1421,15 @@ function buildInjectionScript(fp) {
       });
     }
   } catch (_) {}
+  // Replacements only answer for the receiver they are meant to serve. Anything else is handed to
+  // the native implementation, so brand checks, thrown error types and rejection messages stay
+  // exactly what the build produces instead of being replaced by a hand-made error.
+  const guardReceiver = (original, isTarget, serve) => function (...args) {
+    if (typeof original === 'function' && typeof isTarget === 'function' && !isTarget(this)) {
+      return original.apply(this, args);
+    }
+    return serve.apply(this, args);
+  };
   const replaceMethod = (proto, key, factory) => {
     try {
       if (!proto || typeof proto[key] !== "function") return null;
@@ -1878,6 +1887,7 @@ function buildInjectionScript(fp) {
 
         if (AudioBuffer.prototype.copyFromChannel) {
           replaceMethod(AudioBuffer.prototype, 'copyFromChannel', (original) => function(destination, channelNumber, startInChannel) {
+            if (!this || typeof this.getChannelData !== 'function') return original.apply(this, arguments);
             const chData = this.getChannelData(Number(channelNumber) || 0);
             const start = Number(startInChannel) || 0;
             const len = Math.min(destination.length, Math.max(0, chData.length - start));
@@ -2329,18 +2339,26 @@ function buildInjectionScript(fp) {
         };
         const widthDesc = rawVisualWidthDesc || Object.getOwnPropertyDescriptor(viewportProto, 'width');
         const heightDesc = rawVisualHeightDesc || Object.getOwnPropertyDescriptor(viewportProto, 'height');
-        if (widthDesc && (typeof widthDesc.get === 'function' || typeof widthDesc.value === 'function')) {
+        // A receiver other than the viewport we serve goes back to the original accessor, which keeps
+        // the native brand check (and its TypeError) intact.
+        if (widthDesc && typeof widthDesc.get === 'function') {
           Object.defineProperty(viewportProto, 'width', nativeAccessor('width', {
             configurable: true,
             enumerable: widthDesc.enumerable,
-            get() { return liveViewportSize('width', baselineFor(this, 'w', widthDesc, initialInnerWidth)); }
+            get() {
+              if (this !== viewport) return widthDesc.get.call(this);
+              return liveViewportSize('width', baselineFor(this, 'w', widthDesc, initialInnerWidth));
+            }
           }));
         }
-        if (heightDesc && (typeof heightDesc.get === 'function' || typeof heightDesc.value === 'function')) {
+        if (heightDesc && typeof heightDesc.get === 'function') {
           Object.defineProperty(viewportProto, 'height', nativeAccessor('height', {
             configurable: true,
             enumerable: heightDesc.enumerable,
-            get() { return liveViewportSize('height', baselineFor(this, 'h', heightDesc, initialInnerHeight)); }
+            get() {
+              if (this !== viewport) return heightDesc.get.call(this);
+              return liveViewportSize('height', baselineFor(this, 'h', heightDesc, initialInnerHeight));
+            }
           }));
         }
       }
@@ -2350,10 +2368,18 @@ function buildInjectionScript(fp) {
       const forceDocFlag = (key) => {
         const existing = docProto ? Object.getOwnPropertyDescriptor(docProto, key) : null;
         if (!existing) return; // never invent an entry point the build does not expose
+        const nativeGet = typeof existing.get === 'function' ? existing.get : null;
         Object.defineProperty(docProto, key, nativeAccessor(key, {
           configurable: true,
           enumerable: existing.enumerable,
-          get: () => true
+          get() {
+            // Foreign receivers are answered by the original accessor so its brand check still fires.
+            if (this !== document) {
+              if (nativeGet) return nativeGet.call(this);
+              return false;
+            }
+            return true;
+          }
         }));
       };
       forceDocFlag('fullscreenEnabled');
@@ -2363,8 +2389,13 @@ function buildInjectionScript(fp) {
       // The two entry points are separate functions in a real build - distinct objects, each named
       // after its own property. Sharing one replacement made them identical and left the legacy one
       // carrying the standard name, which a single equality or name check gives away.
+      const isElementReceiver = (receiver) => !!receiver && typeof receiver === 'object'
+        && typeof receiver.nodeType === 'number' && receiver.nodeType === 1;
       const fullscreenFallback = (original, alternateKey) => {
         const patched = nativeLike(function (options) {
+          // A receiver that is not an element is handed to the native implementation, whose own
+          // brand check produces the native error instead of our fallback turning it into a resolve.
+          if (!isElementReceiver(this)) return original.call(this, options);
           const fallback = () => {
             try {
               const alt = this && this[alternateKey];
@@ -2998,14 +3029,13 @@ function buildInjectionScript(fp) {
         return (granted ? devices : withheldDevices).slice();
       };
       const mdProto = typeof MediaDevices !== 'undefined' ? MediaDevices.prototype : null;
+      const realMediaDevices = (() => { try { return navigator.mediaDevices || null; } catch (_) { return null; } })();
+      const isRealMediaDevices = (receiver) => receiver === realMediaDevices;
+      const serveDevices = async function enumerateDevices() { return enumerateForPermission(); };
       if (mdProto && mdProto.enumerateDevices) {
-        replaceMethod(mdProto, 'enumerateDevices', () => async function enumerateDevices() {
-          return enumerateForPermission();
-        });
+        replaceMethod(mdProto, 'enumerateDevices', (original) => guardReceiver(original, isRealMediaDevices, serveDevices));
       } else if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-        replaceMethod(navigator.mediaDevices, 'enumerateDevices', () => async function enumerateDevices() {
-          return enumerateForPermission();
-        });
+        replaceMethod(navigator.mediaDevices, 'enumerateDevices', (original) => guardReceiver(original, isRealMediaDevices, serveDevices));
       }
     } catch (_) {}
   }
@@ -3014,10 +3044,12 @@ function buildInjectionScript(fp) {
   if (CFG.speech && CFG.speech.mode === 'blocked') {
     try {
       const spProto = typeof SpeechSynthesis !== 'undefined' ? SpeechSynthesis.prototype : null;
+      const isSpeechReceiver = (receiver) => receiver === globalThis.speechSynthesis;
+      const serveEmpty = function getVoices() { return []; };
       if (spProto && spProto.getVoices) {
-        replaceMethod(spProto, 'getVoices', () => function getVoices() { return []; });
+        replaceMethod(spProto, 'getVoices', (original) => guardReceiver(original, isSpeechReceiver, serveEmpty));
       } else if (globalThis.speechSynthesis) {
-        replaceMethod(speechSynthesis, 'getVoices', () => function getVoices() { return []; });
+        replaceMethod(speechSynthesis, 'getVoices', (original) => guardReceiver(original, isSpeechReceiver, serveEmpty));
       }
     } catch (_) {}
   } else if (CFG.speech && CFG.speech.mode === 'noise' && Array.isArray(CFG.speech.voices)) {
@@ -3057,10 +3089,12 @@ function buildInjectionScript(fp) {
       } catch (_) { markVoicesReady(); }
       const readVoices = () => (voicesReady ? voices.slice() : []);
       const spProto = typeof SpeechSynthesis !== 'undefined' ? SpeechSynthesis.prototype : null;
+      const isSpeechReceiver = (receiver) => receiver === globalThis.speechSynthesis;
+      const serveVoices = function getVoices() { return readVoices(); };
       if (spProto && spProto.getVoices) {
-        replaceMethod(spProto, 'getVoices', () => function getVoices() { return readVoices(); });
+        replaceMethod(spProto, 'getVoices', (original) => guardReceiver(original, isSpeechReceiver, serveVoices));
       } else if (globalThis.speechSynthesis) {
-        replaceMethod(speechSynthesis, 'getVoices', () => function getVoices() { return readVoices(); });
+        replaceMethod(speechSynthesis, 'getVoices', (original) => guardReceiver(original, isSpeechReceiver, serveVoices));
       }
     } catch (_) {}
   }
@@ -3072,10 +3106,11 @@ function buildInjectionScript(fp) {
         return Promise.reject(new DOMException('Battery status is disabled by this profile', 'NotAllowedError'));
       };
       const navProto = typeof Navigator !== "undefined" ? Navigator.prototype : null;
+      const isNavigatorReceiver = (receiver) => receiver === navigator;
       if (navProto && navProto.getBattery) {
-        replaceMethod(navProto, 'getBattery', () => blocked);
+        replaceMethod(navProto, 'getBattery', (original) => guardReceiver(original, isNavigatorReceiver, blocked));
       } else if (navigator.getBattery) {
-        replaceMethod(navigator, 'getBattery', () => blocked);
+        replaceMethod(navigator, 'getBattery', (original) => guardReceiver(original, isNavigatorReceiver, blocked));
       }
     } catch (_) {}
   } else if (CFG.battery && CFG.battery.mode === 'noise' && CFG.battery.value && !CFG.battery.value.blocked) {
@@ -3101,10 +3136,11 @@ function buildInjectionScript(fp) {
       };
       const spoofed = function getBattery() { return Promise.resolve(makeManager()); };
       const navProto = typeof Navigator !== "undefined" ? Navigator.prototype : null;
+      const isNavigatorReceiver = (receiver) => receiver === navigator;
       if (navProto && navProto.getBattery) {
-        replaceMethod(navProto, 'getBattery', () => spoofed);
+        replaceMethod(navProto, 'getBattery', (original) => guardReceiver(original, isNavigatorReceiver, spoofed));
       } else if (navigator.getBattery) {
-        replaceMethod(navigator, 'getBattery', () => spoofed);
+        replaceMethod(navigator, 'getBattery', (original) => guardReceiver(original, isNavigatorReceiver, spoofed));
       }
     } catch (_) {}
   }

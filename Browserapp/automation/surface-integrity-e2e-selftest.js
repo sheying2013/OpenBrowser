@@ -64,6 +64,17 @@ const SURFACE_PROBE = `(() => {
         out.keys.push(pn + '!' + k + '#' + flag + '!' + typeof d.value);
       }
     }
+    // Property order is observable through Object.getOwnPropertyNames, so it is compared as-is.
+    out.keys.push(pn + '#ORDER#' + names.join(','));
+    let syms = []; try { syms = Object.getOwnPropertySymbols(p); } catch (_) {}
+    for (const sym of syms) {
+      let d = null; try { d = Object.getOwnPropertyDescriptor(p, sym); } catch (_) { continue; }
+      if (!d) continue;
+      const flag = attrs(d);
+      const kind = typeof d.value === 'function' ? ('fn:' + d.value.name + '/' + d.value.length)
+        : typeof d.get === 'function' ? ('acc:' + d.get.name + '/' + d.get.length) : ('value:' + typeof d.value);
+      out.keys.push(pn + '[' + String(sym) + ']=' + kind + ':' + flag);
+    }
     for (let i = 0; i < fns.length; i += 1) {
       for (let j = i + 1; j < fns.length; j += 1) {
         if (fns[i][1] === fns[j][1]) out.aliases.push(pn + ':' + fns[i][0] + '=' + fns[j][0]);
@@ -152,6 +163,56 @@ const SURFACE_PROBE = `(() => {
   return JSON.stringify(out);
 })()`;
 
+// Wrong-receiver behaviour is observable: a detector can call a patched method with a plain object
+// and compare what comes back. Replacements must therefore reproduce the native outcome - the same
+// synchronous throw, the same returned value shape, or the same rejection - instead of answering.
+const RECEIVER_PROBE = `(async () => {
+  const out = {};
+  const bogus = {};
+  const settle = async (label, fn, args) => {
+    if (typeof fn !== 'function') { out[label] = 'missing'; return; }
+    try {
+      const r = fn.apply(bogus, args || []);
+      if (r && typeof r.then === 'function') {
+        try { const v = await r; out[label] = 'resolved:' + (v === undefined ? 'undefined' : typeof v); }
+        catch (e) { out[label] = 'rejected:' + (e && e.name) + ':' + String(e && e.message).slice(0, 60); }
+      } else { out[label] = 'returned:' + (r === undefined ? 'undefined' : typeof r); }
+    } catch (e) { out[label] = 'threw:' + (e && e.name) + ':' + String(e && e.message).slice(0, 60); }
+  };
+  const scan = (name, ctor, allow) => {
+    let proto = null; try { proto = ctor && ctor.prototype; } catch (_) {}
+    if (!proto) return;
+    for (const key of allow) {
+      let fn = null; try { fn = proto[key]; } catch (_) {}
+      if (typeof fn === 'function') settle(name + '.' + key, fn, []);
+    }
+  };
+  scan('Date', Date, ['getTimezoneOffset', 'toString', 'toDateString', 'getHours', 'setHours']);
+  scan('AudioBuffer', window.AudioBuffer, ['getChannelData', 'copyFromChannel']);
+  scan('AnalyserNode', window.AnalyserNode, ['getFloatFrequencyData', 'getByteTimeDomainData']);
+  scan('HTMLCanvasElement', HTMLCanvasElement, ['toDataURL', 'toBlob', 'getContext']);
+  scan('CanvasRenderingContext2D', CanvasRenderingContext2D, ['getImageData']);
+  scan('OffscreenCanvas', window.OffscreenCanvas, ['convertToBlob', 'getContext']);
+  scan('WebGLRenderingContext', window.WebGLRenderingContext, ['getExtension', 'getParameter', 'readPixels', 'getSupportedExtensions']);
+  scan('RTCPeerConnection', window.RTCPeerConnection, ['createOffer', 'addEventListener', 'removeEventListener']);
+  scan('MediaDevices', window.MediaDevices, ['enumerateDevices', 'getUserMedia']);
+  scan('SpeechSynthesis', window.SpeechSynthesis, ['getVoices', 'cancel']);
+  scan('Element', window.Element, ['requestFullscreen', 'webkitRequestFullscreen', 'getBoundingClientRect']);
+  scan('Navigator', Navigator, ['getBattery']);
+  await settle('NavigatorUAData.getHighEntropyValues', window.NavigatorUAData && NavigatorUAData.prototype.getHighEntropyValues, [[]]);
+  await settle('NavigatorUAData.toJSON', window.NavigatorUAData && NavigatorUAData.prototype.toJSON, []);
+  for (const [iface, key] of [['Navigator', 'userAgent'], ['Screen', 'width'], ['Document', 'fullscreenEnabled'],
+    ['VisualViewport', 'width'], ['VisualViewport', 'height'], ['NavigatorUAData', 'brands']]) {
+    let proto = null; try { proto = window[iface] && window[iface].prototype; } catch (_) {}
+    if (!proto) continue;
+    let d = null; try { d = Object.getOwnPropertyDescriptor(proto, key); } catch (_) {}
+    if (!d || typeof d.get !== 'function') { out['get:' + iface + '.' + key] = 'no-getter'; continue; }
+    try { const v = d.get.call(bogus); out['get:' + iface + '.' + key] = 'returned:' + typeof v; }
+    catch (e) { out['get:' + iface + '.' + key] = 'threw:' + e.name + ':' + String(e.message).slice(0, 60); }
+  }
+  return JSON.stringify(out);
+})()`;
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const startLoopbackServer = () => new Promise((res) => {
@@ -183,8 +244,12 @@ class Cdp {
 }
 
 function profileFor(id) {
+  // Speech and battery spoofing are switched on so the receiver guards on those entry points are
+  // actually exercised; a profile that leaves them at their defaults would make those assertions
+  // vacuous.
   return { id, name: id, kernelVersion: '148.0.7778.165', os: 'macos', canvas: 'noise', webgl: 'noise',
-    audio: 'noise', clientRects: 'noise', webrtc: 'proxy', cores: 8, memory: 8, privacy: {} };
+    audio: 'noise', clientRects: 'noise', webrtc: 'proxy', cores: 8, memory: 8,
+    privacy: { speech: 'noise', battery: 'noise' } };
 }
 
 function stop(child, dir) {
@@ -234,9 +299,12 @@ async function measure(profileId, inject) {
           }
           await cdp.send('Page.navigate', { url }, sessionId);
           await sleep(1500);
-          const m = await cdp.send('Runtime.evaluate', { expression: SURFACE_PROBE, returnByValue: true }, sessionId);
+          const m = await cdp.send('Runtime.evaluate', { expression: SURFACE_PROBE, returnByValue: true, awaitPromise: true }, sessionId);
           const val = m && m.result && m.result.result ? m.result.result.value : null;
           try { result = JSON.parse(val); } catch (_) { result = { error: 'probe parse failed', raw: String(val).slice(0, 200) }; }
+          const m2 = await cdp.send('Runtime.evaluate', { expression: RECEIVER_PROBE, returnByValue: true, awaitPromise: true }, sessionId);
+          const val2 = m2 && m2.result && m2.result.result ? m2.result.result.value : null;
+          try { result.receivers = JSON.parse(val2); } catch (_) { result.receivers = { error: 'receiver probe parse failed' }; }
           await cdp.send('Target.closeTarget', { targetId });
         } else { result = { error: 'attach failed' }; }
         try { ws.close(); } catch (_) {}
@@ -345,6 +413,18 @@ const check = (name, fn) => {
     }
     assert.deepStrictEqual(drift, [],
       `instances gained or lost own members versus the same build without injection: ${drift.join('; ')}`);
+  });
+
+  check('wrong-receiver calls behave exactly as they do without the injected layer', () => {
+    const a = baseline.receivers || {};
+    const b = injected.receivers || {};
+    assert.ok(!a.error && !b.error, `receiver probe failed: ${a.error || b.error}`);
+    const labels = Object.keys(a);
+    assert.ok(labels.length >= 20, `receiver probe covered too few entry points: ${labels.length}`);
+    const drift = labels.filter((k) => String(a[k]) !== String(b[k]))
+      .map((k) => `${k}: native=${a[k]} injected=${b[k]}`);
+    assert.deepStrictEqual(drift, [],
+      `calling these with a foreign receiver no longer matches the native build: ${drift.join(' | ')}`);
   });
 
   const failed = results.filter((r) => !r.ok);
