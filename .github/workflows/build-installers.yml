@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.11'
+        default: 'v1.0.12'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,25 +42,15 @@ env:
 
     ### 中文
 
-    - **指纹主链整体升级**：补齐 CDP 噪声恢复、Worker 作用域一致、多标签一致、注入幂等、稳定性和重新注入保护，修复跨会话漂移与中途漂移。
-    - **WebRTC / 字体 / WebGPU**：修复 WebRTC 三处改写缺口，加入字体 persona 真机回归，修正 WebGPU 模式语义并保证适配器身份与 WebGL 同源。
-    - **移动端环境**：接入 Android 机型池、移动指纹端到端回归和 WebDriver/CDP 分支所需的移动端表面参数。
-    - **端口扫描与本地面防护**：从 WebSocket 扩展到 fetch、XHR、EventSource、sendBeacon 和资源标签，阻断页面探测本机服务。
-    - **内核与启动加固**：增加内核完整性基线、安装后校验、CDP 就绪探测、init 字段审计、启动诊断、命令参数合并与崩溃报告。
-    - **网络与扩展安全**：接入 RFC 8484 DoH、CRX 包内元数据直读与签名 ID 校验、导航守卫、Shell 守卫、下载命名与失败分类。
-    - **稳定性与并发**：任务队列/调度器改为有界并发，设置落盘改为合并写，对象比较跳过无变化写盘，原子状态写入带瞬时错误重试。
-    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 与 GitHub Actions 发布参数统一为 **v1.0.11**。
+    - **指纹双层一致性修复**：内核的 WebGL 豁免列表此前未随站点例外一起下发，只有 Canvas 生效，导致同一站点在页面脚本里被豁免、在内核 WebGL 路径里仍被处理。现在页面脚本、内核 Canvas、内核 WebGL 共用同一份规范化列表，并新增回归断言锁定三者一致。
+    - **发行流水线幂等加固**：大文件上传在网络抖动后重试时，会与服务端已存在的同名资产冲突并让整个平台任务失败。发布脚本现在先清理同名资产再上传，失败最多重试 5 次并逐步退避，四个平台可独立重跑而不再互相影响。
+    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.12**。
 
     ### English
 
-    - **Fingerprint core**: Restored CDP noise, aligned Worker and multi-tab surfaces, added injection idempotency and stability guards, and fixed cross-session and mid-session drift.
-    - **WebRTC / fonts / WebGPU**: Closed three WebRTC rewrite gaps, added real-kernel font-persona regression, fixed WebGPU mode semantics, and kept adapter identity consistent with WebGL.
-    - **Mobile profiles**: Added Android device personas, mobile fingerprint end-to-end coverage, and the mobile surface parameters required by WebDriver/CDP branches.
-    - **Port-scan protection**: Extended local-service protection from WebSocket to fetch, XHR, EventSource, sendBeacon, and resource-element probes.
-    - **Kernel and startup**: Added kernel integrity baselines, post-install verification, CDP readiness, init-field auditing, startup diagnostics, command-line normalization, and crash reports.
-    - **Network and extensions**: Added RFC 8484 DoH, in-package CRX metadata and signature-ID validation, navigation/shell guards, download naming, and failure classification.
-    - **Stability and concurrency**: Bounded task queues and schedulers, coalesced settings writes, no-op write suppression, and atomic state writes with transient-error retries.
-    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.11**.
+    - **Fingerprint two-layer consistency**: the native WebGL exempt list was not shipped together with the site-exception policy, so only Canvas honoured it; a host exempted by the page script was still processed on the native WebGL path. The page script, native Canvas and native WebGL now share one normalised list, with regression assertions locking all three together.
+    - **Idempotent release pipeline**: when a large upload was retried after a network stall it collided with the asset already stored on the server and failed the whole platform job. The publish script now clears a same-named asset before uploading, retries up to five times with backoff, and lets each of the four platforms re-run independently.
+    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.12**.
 
     ### 下载 / Downloads
 
@@ -73,7 +63,6 @@ env:
     | **Ubuntu x86_64 · 内置内核** | `OpenBrowser-Linux-x86_64-with-kernel.tar.gz` |
 
     > 标签说明：`with-kernel` = 安装包内置独立浏览器内核，运行时无需再下载内核。
-
 jobs:
   ensure-release:
     name: Ensure GitHub Release

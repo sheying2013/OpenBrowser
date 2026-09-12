@@ -278,7 +278,12 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
   fields._canvasConsistencyPatch = consistencyFromFp(fp, 'canvas');
   fields._webglConsistencyPatch = consistencyFromFp(fp, 'webgl');
   const skipHosts = canvasSkipHostsFromFp(fp);
-  if (skipHosts.length) fields._canvasSkipHosts = skipHosts;
+  if (skipHosts.length) {
+    fields._canvasSkipHosts = skipHosts;
+    // Canvas 与 WebGL 的豁免列表在内核里是两个独立字段，任何一层漏写都会让同一站点
+    // 在两条渲染路径上得到不同答案，因此两者必须同源同值。
+    fields._webglSkipHosts = skipHosts;
+  }
   // The switch and its list travel together: a switch with nothing to answer from leaves the
   // native layer undefined, while a list without the switch could activate a build that reads the
   // list on its own.
@@ -391,9 +396,9 @@ function fontListFromFp(fp) {
 }
 
 /**
- * Sites the canvas layer must leave alone. The page script and the native layer have to agree on
+ * Sites a rendering layer must leave alone. The page script and the native layer have to agree on
  * this list: if the script exempts a host but the kernel still perturbs its pixels (or the other
- * way round) the same canvas answers differently depending on which layer produced it.
+ * way round) the same surface answers differently depending on which layer produced it.
  */
 function canvasSkipHostsFromFp(fp) {
   const policy = (fp && fp.stability) || {};
@@ -422,6 +427,7 @@ function applyFingerprintFields(init, fields) {
     '_canvasConsistencyPatch',
     '_webglConsistencyPatch',
     '_canvasSkipHosts',
+    '_webglSkipHosts',
     '_cmdLinePatch',
     '_windowName',
     '_browserTitle',
@@ -444,6 +450,9 @@ function applyFingerprintFields(init, fields) {
   }
   if (Array.isArray(fields._canvasSkipHosts)) {
     init.canvas_fingerprint_skip_hosts = fields._canvasSkipHosts;
+  }
+  if (Array.isArray(fields._webglSkipHosts)) {
+    init.webgl_fingerprint_skip_hosts = fields._webglSkipHosts;
   }
   const cl = init.cmd_line && typeof init.cmd_line === 'object' ? { ...init.cmd_line } : {};
   if (fields._cmdLinePatch) {

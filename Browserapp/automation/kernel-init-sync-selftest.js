@@ -95,6 +95,10 @@ async function main() {
   // The native canvas layer and the page script must exempt the same sites.
   assert.deepStrictEqual(fields._canvasSkipHosts, fp.stability.skipHosts,
     'the mapped init skip list must mirror the stability policy');
+  assert.deepStrictEqual(fields._webglSkipHosts, fp.stability.skipHosts,
+    'the mapped init skip list must also feed the separate WebGL exempt list');
+  assert.deepStrictEqual(fields._webglSkipHosts, fields._canvasSkipHosts,
+    'canvas and webgl exempt lists must stay identical');
   assert.deepStrictEqual(
     canvasSkipHostsFromFp({ stability: { skipHosts: ['HTTPS://Example.COM/path', '*.foo.com', 'example.com', '', 42] } }),
     ['example.com', 'foo.com', '42'],
@@ -176,6 +180,12 @@ async function main() {
       'the written list must be the one the mapper produced');
     assert.deepStrictEqual(init.canvas_fingerprint_skip_hosts, fp.stability.skipHosts,
       'written init must carry the policy skip list into the native canvas layer');
+    assert.deepStrictEqual(init.webgl_fingerprint_skip_hosts, fp.stability.skipHosts,
+      'written init must carry the same policy skip list into the native webgl layer');
+    assert.deepStrictEqual(init.webgl_fingerprint_skip_hosts, init.canvas_fingerprint_skip_hosts,
+      'native canvas and webgl exempt lists must match what the page script uses');
+    assert.strictEqual(init._webglSkipHosts, undefined,
+      'internal mapping helpers must not leak into the written init');
     assert.strictEqual(init.is_watermark_with_machine_id, false,
       'a machine-id watermark must never be enabled: it burns the profile id into screenshots');
     assert.strictEqual(init.is_watermark_with_window_name, false,
