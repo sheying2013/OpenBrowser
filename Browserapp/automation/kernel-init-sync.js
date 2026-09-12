@@ -337,7 +337,26 @@ function applySafetyFields(init) {
     sa_productVer: String((init.sa_analysis && init.sa_analysis.sa_productVer) || '148.0.0.0'),
   };
   init.required_enabled_extension_id_list = [];
-  if (!init.token) init.token = 'openbrowser-token';
+  // A token object carrying account fields comes from the bundled template's origin rather than from
+  // this build, so it is replaced by the local token this build uses instead of being carried into
+  // every profile.
+  // The platform service requires a token blob of this shape at startup (a plain string aborts the
+  // process), so this build generates its own instead of carrying an inherited account-bound blob
+  // into every profile. Only account-bound blobs are replaced, which keeps the value stable once a
+  // profile has been migrated.
+  if (!init.token || typeof init.token !== 'object' || init.token.user_id) {
+    const b64 = (n) => crypto.randomBytes(n).toString('base64').replace(/=+$/, '');
+    init.token = {
+      app_token: crypto.randomBytes(12).toString('hex').slice(0, 20),
+      browser_token: b64(32),
+      user_id: '',
+      user_token: b64(64),
+    };
+  }
+  init.native_messaging = [];
+  // A bypass list whose feature switch is off is a latent direct-connection path: hosts in it would
+  // skip the proxy if any layer read the list on its own. The list is cleared with the switch.
+  init.async_proxy_data_exception_list = [];
   // Local managed profiles keep CDP / automation flags enabled in init.json.
   init.can_webdriver = true;
   init.allow_remote_debugging = true;

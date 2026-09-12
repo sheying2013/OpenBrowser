@@ -169,6 +169,18 @@ async function main() {
     assert.strictEqual(init.ipc.browser_window_name, written.windowName);
     assert.ok(String(init.cmd_line['user-agent']).includes('Windows NT'));
     assert.strictEqual(init.webrtc_policy, 3);
+    // Identity and allowlists that belong to the bundled template's origin must not reach a profile:
+    // an inherited account token blob, an inherited native-messaging allowlist, and a proxy bypass
+    // list whose feature switch is off.
+    assert.ok(init.token && typeof init.token === 'object' && init.token.browser_token && init.token.user_token,
+      'profiles must carry a token blob of the shape the platform service requires');
+    assert.ok(!init.token.user_id,
+      'profiles must not carry an account-bound token');
+    assert.deepStrictEqual(init.native_messaging, [],
+      'native-messaging allowlists tied to other builds must not be inherited');
+    assert.deepStrictEqual(init.async_proxy_data_exception_list, [],
+      'a bypass list without its feature switch would be a latent direct-connection path');
+    assert.strictEqual(init.async_proxy_data, 0);
     assert.strictEqual(init.machine, 'OB-Test-Host-01');
     assert.strictEqual(init.webrtc_fake_ip, '203.0.113.44');
     assert.strictEqual(init.webrtc_local_ip, fp.webrtcLocalIp);
@@ -200,6 +212,25 @@ async function main() {
     assert.strictEqual(written2.windowName, written.windowName);
   } finally {
     await fsp.rm(tmp, { recursive: true, force: true });
+  }
+
+  // The shipped template itself must be free of those inherited values, not just the written result.
+  {
+    const templatePath = path.join(__dirname, '../kernels/macos-x64/init_template.json');
+    if (fs.existsSync(templatePath)) {
+      const template = loadInitObject(await fsp.readFile(templatePath));
+      assert.ok(template, 'bundled init template must parse');
+      assert.ok(template.token && typeof template.token === 'object',
+        'template must carry a token blob of the shape the platform service requires');
+      assert.ok(!template.token.user_id, 'template must not carry an account-bound token');
+      assert.deepStrictEqual(template.native_messaging, [],
+        'template must not carry a native-messaging allowlist for extensions this build does not ship');
+      assert.deepStrictEqual(template.async_proxy_data_exception_list, [],
+        'template must not carry a proxy bypass list');
+      const serialized = JSON.stringify(template);
+      assert.ok(!/env-kit/i.test(serialized), 'template must not carry inherited runtime names');
+      assert.ok(!/52\.80\.142\.150/.test(serialized), 'template must not carry fixed bypass hosts');
+    }
   }
 
   console.log('kernel-init-sync-selftest: ok');
