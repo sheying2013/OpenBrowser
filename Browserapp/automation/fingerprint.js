@@ -1860,17 +1860,63 @@ function buildInjectionScript(fp) {
 
 
   // --- audio ---
-  // A rendered OfflineAudioContext buffer is a stable per-machine value, so it needs the same
-  // per-profile perturbation the canvas gets. Silent buffers are left untouched: a page that
-  // renders nothing expects exact zeros, and dithering them is itself the tell.
+  // A buffer the engine rendered from the profile graph is a stable per-machine value, so it
+  // needs the same per-profile perturbation the canvas gets. Silent buffers are left untouched:
+  // a page that renders nothing expects exact zeros, and dithering them is itself the tell.
   if (CFG.audio && CFG.audio.mode === 'noise') {
     try {
       const mark = Number(CFG.audio.mark) || 1;
+      // A buffer the page put its own samples into is the page's data, and perturbing that both
+      // corrupts the caller and hands out a one-line detector - write 0.5 with copyToChannel,
+      // read it back, compare. The exemption therefore has to be recorded where the page takes
+      // ownership of a buffer, never where the engine renders one: a rendered buffer can also be
+      // collected from the complete event, which fires before any promise continuation runs, so a
+      // marker on the promise path would cover only half the readers of the very same buffer.
+      const authoredBuffers = new WeakSet();
+      const markAuthored = (value) => {
+        try { if (value && typeof value === 'object') authoredBuffers.add(value); } catch (_) {}
+        return value;
+      };
+      // Only the prototype that declares a method is replaced: defining the same key on a
+      // subclass would add an own member that the unmodified build does not have.
+      const hookOwn = (proto, key, factory) => {
+        try {
+          if (!proto || !Object.prototype.hasOwnProperty.call(proto, key) || typeof proto[key] !== 'function') return null;
+          return replaceMethod(proto, key, factory);
+        } catch (_) { return null; }
+      };
+      const audioProtos = [];
+      for (const ctor of [globalThis.BaseAudioContext, globalThis.AudioContext, globalThis.OfflineAudioContext, globalThis.webkitAudioContext, globalThis.webkitOfflineAudioContext]) {
+        try { if (ctor && ctor.prototype && audioProtos.indexOf(ctor.prototype) === -1) audioProtos.push(ctor.prototype); } catch (_) {}
+      }
+      for (const proto of audioProtos) {
+        // Decoded samples are a pure function of the bytes the page handed over, so they are the
+        // page's data as much as a copied-in buffer is. Both hand-off styles are covered: the
+        // promise the page awaits and the callback form, which can be the only one a caller uses.
+        hookOwn(proto, 'decodeAudioData', (original) => function decodeAudioData(audioData, successCallback, errorCallback) {
+          const onDecoded = typeof successCallback === 'function'
+            ? function(successBuffer) { return successCallback(markAuthored(successBuffer)); }
+            : successCallback;
+          const result = original.call(this, audioData, onDecoded, errorCallback);
+          try { if (result && typeof result.then === 'function') result.then(markAuthored, () => {}); } catch (_) {}
+          return result;
+        });
+      }
       if (globalThis.AudioBuffer && AudioBuffer.prototype.getChannelData) {
         const processed = new WeakMap();
+        if (AudioBuffer.prototype.copyToChannel) {
+          // Writing samples in is the moment a buffer becomes the page's own data, and
+          // copyToChannel is the only path that puts exact values into one.
+          hookOwn(AudioBuffer.prototype, 'copyToChannel', (original) => function copyToChannel() {
+            const result = original.apply(this, arguments);
+            markAuthored(this);
+            return result;
+          });
+        }
         replaceMethod(AudioBuffer.prototype, 'getChannelData', (original) => function() {
           const data = original.apply(this, arguments);
           try {
+            if (authoredBuffers.has(this)) return data;
             const channel = Number(arguments[0]) || 0;
             let channels = processed.get(this);
             if (!channels) { channels = new Set(); processed.set(this, channels); }
@@ -1896,6 +1942,7 @@ function buildInjectionScript(fp) {
             // its argument validation, error type and message stay exactly as the build produces.
             try {
               if (!this || typeof this.getChannelData !== 'function') return original.apply(this, arguments);
+              if (authoredBuffers.has(this)) return original.apply(this, arguments);
               if (!destination || typeof destination.length !== 'number') return original.apply(this, arguments);
               const index = Number(channelNumber) || 0;
               const chData = this.getChannelData(index);
@@ -1948,74 +1995,62 @@ function buildInjectionScript(fp) {
   }
 
   // --- fonts ---
-  // Only the APIs that report font presence directly are answered here. Measurement-based
-  // probing (rendering text and comparing widths) is NOT intercepted: doing so means hooking
-  // the same geometry the page uses for layout, which risks visibly breaking sites. Closing
-  // that path properly belongs in the kernel's font stack, so on a stock Chromium kernel the
-  // host's real fonts can still be measured — see the notes in the development guide.
+  // Only the APIs that report a font presence directly are answered here. Measurement-based
+  // probing (rendering text and comparing widths) is NOT intercepted: doing so means hooking the
+  // same geometry the page uses for layout, which risks visibly breaking sites. The kernel-side
+  // font switch cannot cover it either - toggling it and shipping a font list changed no measured
+  // width on this build - so host metrics stay reachable from a page and closing that path
+  // belongs in the platform font stack, not in script.
+  //
+  // document.fonts.check() is deliberately left native. In this engine it answers true for
+  // every system family, present or not, because it only tracks CSS-connected font faces. An
+  // override that denied the families belonging to another platform would add three differences
+  // from an unmodified build - an own check on the FontFaceSet, a false where every stock
+  // browser answers true, and no SyntaxError for a spec that carries no size - while hiding
+  // nothing that a width probe cannot read anyway.
   if (CFG.fonts && Array.isArray(CFG.fonts.list) && CFG.fonts.list.length) {
-    const personaFonts = CFG.fonts.list.slice();
-    const personaSet = new Set(personaFonts.map((name) => String(name).toLowerCase()));
-    const foreignSet = new Set((CFG.fonts.foreign || []).map((name) => String(name).toLowerCase()));
-    // Local Font Access: enumerate the persona's set rather than the host's.
+    const personaFonts = CFG.fonts.list.map((name) => String(name));
+    // Local Font Access: enumerate the persona set rather than the host set. The entries keep
+    // the engine's FontData shape - prototype brand, inherited accessors, no own enumerable
+    // members - because a plain object is itself a tell: it stringifies, enumerates and brands
+    // differently from the FontData every other Chromium hands out.
     try {
       if (typeof globalThis.queryLocalFonts === 'function') {
         const original = globalThis.queryLocalFonts;
+        const postscriptNameOf = (family) => family.replace(/\\s+/g, '');
+        const entryFor = (template, family, blob) => new Proxy(template, {
+          get(target, prop) {
+            if (prop === 'family' || prop === 'fullName') return family;
+            if (prop === 'postscriptName') return postscriptNameOf(family);
+            if (prop === 'style') return 'Regular';
+            if (prop === 'blob') return blob;
+            // The receiver has to stay the real object: FontData members are native accessors
+            // that read internal slots, and a proxy as this throws on every one of them.
+            return Reflect.get(target, prop, target);
+          },
+        });
         const patched = nativeLike(async function queryLocalFonts(options) {
+          // The native method decides whether the call is legal at all - it rejects for a receiver
+          // that is not the window - so it is always consulted first and its rejection propagates
+          // unchanged. Its result is only ever used as the shape template, so a tolerated receiver
+          // still cannot be a way to read the host list, and the fresh payload has to be carried by
+          // the persona list instead.
+          const answered = await original.apply(this, arguments);
+          let template = answered && answered.length ? answered[0] : null;
+          if (!template) {
+            const host = await original.call(globalThis);
+            template = host && host.length ? host[0] : null;
+          }
+          if (!template) return answered;
+          const blob = typeof template.blob === 'function' ? template.blob.bind(template) : undefined;
           const wanted = options && Array.isArray(options.postscriptNames)
             ? new Set(options.postscriptNames.map((name) => String(name)))
             : null;
           return personaFonts
-            .filter((family) => !wanted || wanted.has(family.replace(/\\s+/g, '')))
-            .map((family) => Object.freeze({
-              family,
-              fullName: family,
-              postscriptName: family.replace(/\\s+/g, ''),
-              style: 'Regular',
-            }));
+            .filter((family) => !wanted || wanted.has(postscriptNameOf(family)))
+            .map((family) => entryFor(template, family, blob));
         }, original);
-        Object.defineProperty(globalThis, 'queryLocalFonts', { configurable: true, writable: true, value: patched });
-      }
-    } catch (_) {}
-    // document.fonts.check(): answer for the platform font families we model, and only when
-    // the page has not loaded a web font under that name — otherwise defer to the browser so
-    // real font-loading logic keeps working.
-    try {
-      const fontSet = document.fonts;
-      if (fontSet && typeof fontSet.check === 'function') {
-        const originalCheck = fontSet.check.bind(fontSet);
-        const rawCheck = fontSet.check;
-        const familyOf = (spec) => {
-          // The CSS 'font' shorthand always ends with the family list, preceded by the
-          // (required) font-size. Anchor on a UNIT-bearing size so a numeric font-weight
-          // (e.g. "700") is not mistaken for it, take everything after it as the family
-          // list, then return the primary family, unquoted. Handling only quoted families
-          // here leaked: every check() carries a size, so an unquoted family such as
-          // "12px Menlo" kept the size token and matched nothing, falling through to the
-          // host's real fonts — the exact contradiction this hook exists to prevent.
-          // NOTE: template literal — backslashes are doubled so \\s / \\d survive to the page.
-          const s = String(spec || '').trim();
-          const m = s.match(/(?:^|\\s)\\d*\\.?\\d+(?:px|pt|pc|em|rem|ex|ch|%|vh|vw|vmin|vmax|cm|mm|in|q)(?:\\s*\\/\\s*\\S+)?\\s+(.+)$/i);
-          const first = String(m ? m[1] : s).split(',')[0].trim();
-          return first.replace(/^["']|["']$/g, '').trim();
-        };
-        const isWebFont = (family) => {
-          try {
-            for (const face of fontSet) if (String(face.family).replace(/^["']|["']$/g, '').toLowerCase() === family) return true;
-          } catch (_) {}
-          return false;
-        };
-        const patched = nativeLike(function check(spec, text) {
-          try {
-            const family = familyOf(spec).toLowerCase();
-            if (family && !isWebFont(family)) {
-              if (foreignSet.has(family)) return false;
-              if (personaSet.has(family)) return true;
-            }
-          } catch (_) {}
-          return originalCheck(spec, text);
-        }, rawCheck);
-        Object.defineProperty(fontSet, 'check', { configurable: true, writable: true, value: patched });
+        Object.defineProperty(globalThis, 'queryLocalFonts', { configurable: true, enumerable: true, writable: true, value: patched });
       }
     } catch (_) {}
   }

@@ -74,6 +74,45 @@ const PROBE = `(async () => {
     for (let i = 4500; i < 5000; i++) s += Math.abs(d[i]);
     out.audio = Math.round(s * 1e9) % 2147483647;
   } catch (e) { out.audioErr = String(e).slice(0, 40); }
+  try {
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const offAuthored = new OAC(1, 64, 44100);
+    const authored = offAuthored.createBuffer(1, 4, 44100);
+    authored.copyToChannel(new Float32Array([0.5, 0.25, -0.75, 1]), 0);
+    const authoredView = authored.getChannelData(0);
+    const authoredCopy = new Float32Array(4);
+    authored.copyFromChannel(authoredCopy, 0);
+    const constructed = new AudioBuffer({ length: 4, sampleRate: 44100 });
+    constructed.copyToChannel(new Float32Array([0.5, 0.25, -0.75, 1]), 0);
+    out.authored = {
+      copyToChannel: [authoredView[0], authoredView[1], authoredView[2], authoredView[3]],
+      copyFromChannel: [authoredCopy[0], authoredCopy[1], authoredCopy[2], authoredCopy[3]],
+      constructed: constructed.getChannelData(0)[0],
+      exact: authoredView[0] === 0.5 && authoredView[1] === 0.25 && authoredView[2] === -0.75 && authoredView[3] === 1
+        && authoredCopy[0] === 0.5 && authoredCopy[1] === 0.25 && authoredCopy[2] === -0.75 && authoredCopy[3] === 1
+        && constructed.getChannelData(0)[0] === 0.5,
+    };
+  } catch (e) { out.authoredErr = String(e).slice(0, 60); }
+  try {
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const makeGraph = () => { const off = new OAC(1, 512, 44100); const osc = off.createOscillator(); osc.frequency.value = 440; osc.connect(off.destination); osc.start(0); return off; };
+    const head = (buffer) => { const d = buffer.getChannelData(0); return [d[0], d[1], d[2]]; };
+    const awaitedBuffer = await makeGraph().startRendering();
+    const eventCtx = makeGraph();
+    const eventBuffer = await new Promise((res) => { eventCtx.oncomplete = (e) => res(e.renderedBuffer); eventCtx.startRendering().catch(() => res(null)); });
+    const bothCtx = makeGraph();
+    let bothEventFirst = null;
+    bothCtx.oncomplete = (e) => { bothEventFirst = e.renderedBuffer.getChannelData(0)[0]; };
+    const bothBuffer = await bothCtx.startRendering();
+    out.renderedPaths = {
+      awaited: head(awaitedBuffer),
+      event: eventBuffer ? head(eventBuffer) : null,
+      bothEventFirst,
+      bothPromiseFirst: bothBuffer.getChannelData(0)[0],
+      consistent: bothEventFirst === bothBuffer.getChannelData(0)[0],
+    };
+  } catch (e) { out.renderedErr = String(e).slice(0, 60); }
+
   return JSON.stringify(out);
 })()`;
 
@@ -199,6 +238,23 @@ function stop(child, profileDir) {
     assert.strictEqual(injected.tag, '[object DOMRectList]', 'toStringTag');
     assert.strictEqual(injected.isDRL, true, 'instanceof DOMRectList');
   });
+  check('a buffer the page filled itself keeps the page samples', () => {
+    assert.ok(baseline.authored && injected.authored, `authored probe missing (${baseline.authoredErr || ''}${injected.authoredErr || ''})`);
+    assert.strictEqual(baseline.authored.exact, true, 'baseline must read back exactly what it wrote');
+    assert.strictEqual(injected.authored.exact, true, 'the injected build must read back exactly what the page wrote');
+    assert.deepStrictEqual(injected.authored.copyToChannel, baseline.authored.copyToChannel, 'copyToChannel samples');
+    assert.deepStrictEqual(injected.authored.copyFromChannel, baseline.authored.copyFromChannel, 'copyFromChannel samples');
+    assert.strictEqual(injected.authored.constructed, baseline.authored.constructed, 'constructed buffer sample');
+  });
+  check('a rendered buffer carries the mark on every delivery path', () => {
+    assert.ok(baseline.renderedPaths && injected.renderedPaths, `rendered paths probe missing (${baseline.renderedErr || ''}${injected.renderedErr || ''})`);
+    assert.ok(baseline.renderedPaths.event, 'baseline must deliver a buffer through complete');
+    assert.strictEqual(baseline.renderedPaths.consistent, true, 'baseline sensitivity control: both reads must agree');
+    assert.strictEqual(injected.renderedPaths.consistent, true, 'the complete event and the promise must agree on one buffer');
+    assert.notDeepStrictEqual(injected.renderedPaths.awaited, baseline.renderedPaths.awaited, 'the awaited buffer must be perturbed');
+    assert.notDeepStrictEqual(injected.renderedPaths.event, baseline.renderedPaths.event, 'the complete-event buffer must be perturbed');
+  });
+
   check('noise survives navigation and stays stable', () => {
     assert.ok(reloaded, 'reloaded probe');
     assert.strictEqual(reloaded.canvas, injected.canvas, 'canvas stable across reload');
