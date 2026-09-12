@@ -39,6 +39,38 @@ const PROBE = `(async () => {
   return JSON.stringify(out);
 })()`;
 
+const MARKER_PROBE = `(async () => {
+  const acc = [];
+  const push = (k, v) => { try { if (v !== undefined && v !== null) acc.push(k + '=' + String(v)); } catch (_) {} };
+  const walk = (obj, label) => {
+    if (!obj) return;
+    let keys = []; try { keys = Object.keys(obj); } catch (_) { return; }
+    for (const k of keys.slice(0, 40)) {
+      let v; try { v = obj[k]; } catch (_) { continue; }
+      if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') push(label + '.' + k, v);
+    }
+  };
+  walk(navigator, 'nav'); walk(screen, 'screen');
+  push('nav.userAgent', navigator.userAgent);
+  push('nav.platform', navigator.platform);
+  push('nav.vendor', navigator.vendor);
+  try { for (const p of navigator.plugins) { push('plugin.name', p.name); push('plugin.filename', p.filename); } } catch (_) {}
+  try { for (const m of navigator.mimeTypes) push('mime.type', m.type); } catch (_) {}
+  try { for (const v of speechSynthesis.getVoices()) { push('voice.name', v.name); push('voice.uri', v.voiceURI); } } catch (_) {}
+  try {
+    const c = document.createElement('canvas'); const gl = c.getContext('webgl');
+    if (gl) {
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      if (dbg) { push('gl.vendor', gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL)); push('gl.renderer', gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)); }
+      push('gl.VERSION', gl.getParameter(gl.VERSION));
+      push('gl.MAX_TEXTURE_SIZE', gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    }
+  } catch (_) {}
+  try { push('intl.tz', Intl.DateTimeFormat().resolvedOptions().timeZone); } catch (_) {}
+  try { push('window.name', window.name); } catch (_) {}
+  return JSON.stringify(acc);
+})()`;
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const results = [];
@@ -75,9 +107,10 @@ class Cdp {
   }
 }
 
-function profileFor(id) {
+function profileFor(id, privacyExtra) {
   return { id, name: id, kernelVersion: '148.0.7778.165', os: 'macos', canvas: 'noise', webgl: 'noise',
-    audio: 'noise', clientRects: 'noise', webrtc: 'proxy', cores: 8, memory: 8, privacy: {} };
+    audio: 'noise', clientRects: 'noise', webrtc: 'proxy', cores: 8, memory: 8,
+    privacy: Object.assign({}, privacyExtra || {}) };
 }
 
 function stop(child, dir) {
@@ -85,9 +118,9 @@ function stop(child, dir) {
   try { execSync(`pkill -f "user-data-dir=${dir}" 2>/dev/null || true`); } catch (_) {}
 }
 
-async function measure(profileId, grant) {
+async function measure(profileId, grant, probeExpr, privacyExtra) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob-media-'));
-  const profile = profileFor(profileId);
+  const profile = profileFor(profileId, privacyExtra);
   const fp = buildFingerprint(profile);
   await writeOpenBrowserKernelInit(dir, { fingerprint: fp, profile, templatePath: path.join(kernelRoot, 'init_template.json') });
   try { fs.rmSync(path.join(dir, 'DevToolsActivePort'), { force: true }); } catch (_) {}
@@ -134,7 +167,7 @@ async function measure(profileId, grant) {
         await cdp.send('Runtime.evaluate', { expression: inject, returnByValue: true }, sessionId);
         await sleep(400);
         for (let attempt = 0; attempt < 8; attempt += 1) {
-          const m = await cdp.send('Runtime.evaluate', { expression: PROBE, awaitPromise: true, returnByValue: true }, sessionId);
+          const m = await cdp.send('Runtime.evaluate', { expression: probeExpr || PROBE, awaitPromise: true, returnByValue: true }, sessionId);
           const val = m && m.result && m.result.result ? m.result.result.value : null;
           let q = null; try { q = JSON.parse(val); } catch (_) { q = { raw: val }; }
           if (q && q.err && /detached/i.test(String(q.err))) { result = q; await sleep(700); continue; }
@@ -212,6 +245,15 @@ async function measure(profileId, grant) {
     for (const id of a) assert.ok(!b.includes(id), `deviceId leaked across profiles: ${id}`);
     assert.notStrictEqual(granted.devices[0].groupId, otherProfile.devices[0].groupId,
       'groupIds must differ across profiles');
+  });
+
+  const markers = await measure('media-markers', false, MARKER_PROBE, { speech: 'noise' });
+  check('no page-readable surface carries a product marker', () => {
+    assert.ok(Array.isArray(markers), 'marker sweep must return a list');
+    assert.ok(markers.length >= 40, `marker sweep sampled too few surfaces: ${markers.length}`);
+    const markersRe = [/ob-/i, /openbrowser/i, /hubstudio/i, /\\bSB[0-9]{6,}/, /squilla/i, /wayfern/i];
+    const hits = markers.filter((entry) => markersRe.some((re) => re.test(entry)));
+    assert.deepStrictEqual(hits, [], `product markers leaked into page-readable surfaces: ${hits.join(', ')}`);
   });
 
   const failed = results.filter((r) => !r.ok);

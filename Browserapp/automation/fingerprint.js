@@ -873,9 +873,12 @@ function buildFingerprint(profile = {}) {
     stableIdentity + ':speech:' + seed.toString('hex').slice(0, 8),
     Array.isArray(fpIn.languages) ? fpIn.languages : languages,
     speechMode,
-    // Only narrow the voice table to the claimed OS for persona profiles: it changes the
-    // reported voices, and an existing profile's fingerprint must not move on upgrade.
-    { os: devicePersona ? uaOs : '' }
+    // Narrow the table to the claimed OS for every profile, not just persona ones. Mixing
+    // families is not a cosmetic difference: a macOS answer containing "Microsoft David - English
+    // (United States)" is a combination no real machine can produce, and looking for exactly that
+    // is a standard voice-based OS check. Older profiles used to report that mix, which is worth
+    // the one-time correction for the same reason navigator.deviceMemory 16 was.
+    { os: uaOs }
   );
   const deviceNameMode = mode('deviceNameMode', ['noise', 'custom', 'real'], privacy.deviceNameMode || 'noise');
   const deviceName = createDeviceNameFromSeed(

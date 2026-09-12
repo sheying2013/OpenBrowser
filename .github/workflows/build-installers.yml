@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.13'
+        default: 'v1.0.14'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,19 +42,15 @@ env:
 
     ### 中文
 
-    - **媒体设备标识符泄漏修复**：设备 ID 此前用“前缀累加和”派生，只取决于种子前两个字符，导致 `env-001`/`env-002`/`env-003` 这类共享前缀的 profile 得到完全相同的音频输入 `deviceId`，可被跨 profile 关联；同时 ID 自带产品前缀，等于自我暴露。现改为整串种子的 SHA-256，输出 64 位小写十六进制，与真实 Chrome 形状一致，且逐 profile 唯一、同一 profile 重启稳定。
-    - **媒体设备权限面与真实 Chrome 对齐**：此前未授予摄像头/麦克风权限时就直接返回设备 ID、分组 ID 与标签；真实 Chrome 在该阶段只返回按类型的空条目（`deviceId`/`groupId`/`label` 全为空），授权后才给出标识符与标签。现在按权限状态返回，无权限时不再泄漏任何标识符。
-    - **语音指纹产品标记清除**：语音噪声模式下 `speechSynthesis.getVoices()` 的 `voiceURI` 是 `ob-voice://…`，任何页面都能读取并据此识别。实测真实 Chrome 的 `voiceURI` 等于语音名称，现统一为名称本身。
-    - **回归加固**：新增媒体设备端到端测试（未授权面、授权面、重启稳定性、跨 profile 隔离，共 5 项）与“页面可读表面不得出现产品标记”的断言，自测总数增至 94 项。
-    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.13**。
+    - **语音指纹跨系统家族修复**：未启用设备 persona 的旧 profile 之前按语言挑选语音，会把 macOS 与 Windows 独有语音混在同一份列表中——真实机器不可能同时具备（本机实测 macOS Chrome 210 个语音里 0 个 Microsoft 语音，这类“跨系统家族”正是语音检测项要抓的特征）。现在所有 profile 都按所声称的操作系统收窄语音表：Windows 不再出现 Apple 语音，macOS 不再出现 Microsoft 语音，Linux 只保留 Chrome 自带的 Google 语音。
+    - **运行时标记扫描回归**：媒体设备端到端测试新增一项断言，遍历导航器、屏幕、插件、mimeTypes、语音、WebGL 与 Intl 等页面可读表面，确认输出中不再出现任何产品标记，端到端用例由 5 项增至 6 项。
+    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.14**。
 
     ### English
 
-    - **Media device identifier leak fixed**: device ids were derived from a running character sum that depended only on the first two characters of the seed, so profiles sharing an id prefix (`env-001`/`env-002`/`env-003`) published the *same* audio-input `deviceId` and could be linked across profiles; the value also carried a product prefix. Identifiers are now derived from a SHA-256 of the whole seed, emitting 64 lowercase hex characters like real Chrome, unique per profile and stable across restarts.
-    - **Media device permission surface aligned with Chrome**: the injected layer used to hand out device ids, group ids and labels before any capture permission was granted. Real Chrome returns one empty entry per kind at that stage and only publishes identifiers and labels after a grant. The surface is now permission-gated, so no identifier is exposed without permission.
-    - **Speech fingerprint marker removed**: in noise mode `speechSynthesis.getVoices()` reported `ob-voice://…` as `voiceURI`, readable by any page. A real Chrome reports the voice name as the URI; the plain name is now used everywhere.
-    - **Regression coverage**: added a media-device end-to-end suite (withheld surface, granted surface, restart stability, cross-profile isolation) plus an assertion that no page-readable surface carries a product marker - 94 self-tests in total.
-    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.13**.
+    - **Cross-OS voice family fixed**: profiles without a device persona used to pick voices purely by language, mixing macOS-only and Windows-only voices into one list - a combination no real machine can produce (a local check of macOS Chrome found 210 voices and zero Microsoft ones, and that cross-family mix is exactly what voice-based OS checks look for). Every profile now narrows the voice table to its claimed OS: Windows never reports Apple voices, macOS never reports Microsoft voices, and Linux keeps only Chrome's bundled Google voices.
+    - **Runtime marker sweep**: the media-device end-to-end suite now walks the page-readable surfaces (navigator, screen, plugins, mimeTypes, voices, WebGL, Intl) and asserts that no product marker appears anywhere in the output; six end-to-end cases in total.
+    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.14**.
 
     ### 下载 / Downloads
 

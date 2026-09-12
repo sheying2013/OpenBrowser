@@ -13,7 +13,7 @@
 // existing profile's fingerprint moved — which must never happen without opting in.
 
 const assert = require('assert');
-const { buildFingerprint } = require('./automation/fingerprint');
+const { buildFingerprint, createSpeechVoicesFromSeed } = require('./automation/fingerprint');
 const { PERSONAS_BY_OS, pickPersona, isCoherent, personasForOs } = require('./automation/device-personas');
 
 // Captured from the build before personas existed. Any drift here means an existing
@@ -311,6 +311,15 @@ const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.
     legacy.length > 0 && legacy.every((v) => !/^[a-z-]+:\/\//i.test(v.voiceURI)));
   ok('non-persona voice URIs equal the voice name, as a real Chrome reports',
     legacy.length > 0 && legacy.every((v) => v.voiceURI === v.name));
+  ok('non-persona Windows profile never reports Apple voices', !legacy.some(isApple));
+  const legacyMac = voicesOf(MAC_UA, false);
+  ok('non-persona macOS profile never reports Microsoft voices',
+    legacyMac.length > 0 && !legacyMac.some(isMicrosoft));
+  ok('non-persona Linux profile reports only the bundled Google voices',
+    (() => {
+      const linuxVoices = createSpeechVoicesFromSeed('legacy-linux', ['en-US'], 'noise', { os: 'linux' });
+      return linuxVoices.length > 0 && linuxVoices.every(isGoogle);
+    })());
 }
 
 // --- 7. pickPersona is deterministic and bounded ---
