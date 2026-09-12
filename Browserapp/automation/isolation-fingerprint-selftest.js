@@ -291,6 +291,16 @@ async function main() {
   const speechNoise = buildFingerprint({ id: 'env-speech-noise', language: 'en-US', privacy: { speech: 'noise' } });
   const speechScript = buildInjectionScript(speechNoise);
   assert.ok(speechScript.includes('getVoices'));
+  // The engine publishes the table asynchronously, so the injected one must not come back from the
+  // page's first synchronous call: it starts withheld and is released on the engine's readiness
+  // signal, with a bounded fallback so a build that never reports readiness cannot hide the table.
+  assert.ok(speechScript.includes('voicesReady = false'), 'voice table must start withheld');
+  assert.ok(speechScript.includes("addEventListener('voiceschanged'"),
+    'voice table must be released on the engine readiness signal');
+  assert.ok(speechScript.includes('readVoices'), 'voice reads must go through the gate');
+  assert.ok(speechScript.includes('setTimeout(markVoicesReady'), 'a bounded fallback must release the table');
+  assert.ok(!/getVoices'\s*,\s*\(\)\s*=>\s*function getVoices\(\)\s*\{\s*return voices\.slice\(\)/.test(speechScript),
+    'the table must never be returned synchronously');
   pass('injection scripts profile-specific');
 
   const args = chromeArgsForFingerprint(a1, { privacy: { dnt: true } });

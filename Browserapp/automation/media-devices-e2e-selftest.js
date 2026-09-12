@@ -71,6 +71,19 @@ const MARKER_PROBE = `(async () => {
   return JSON.stringify(acc);
 })()`;
 
+// Runs at document start, so firstSync is the page's very first synchronous read.
+const VOICE_PROBE = `(async () => {
+  const out = {};
+  try {
+    out.firstSync = speechSynthesis.getVoices().length;
+    await new Promise((r) => setTimeout(r, 900));
+    const list = speechSynthesis.getVoices();
+    out.afterWait = list.length;
+    out.sample = list.slice(0, 2).map((v) => ({ name: v.name, uri: v.voiceURI }));
+  } catch (e) { out.err = String(e); }
+  window.__docStartProbe = out;
+})()`;
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const results = [];
@@ -118,7 +131,7 @@ function stop(child, dir) {
   try { execSync(`pkill -f "user-data-dir=${dir}" 2>/dev/null || true`); } catch (_) {}
 }
 
-async function measure(profileId, grant, probeExpr, privacyExtra) {
+async function measure(profileId, grant, probeExpr, privacyExtra, opts) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob-media-'));
   const profile = profileFor(profileId, privacyExtra);
   const fp = buildFingerprint(profile);
@@ -162,6 +175,20 @@ async function measure(profileId, grant, probeExpr, privacyExtra) {
         if (grant) {
           await cdp.send('Browser.grantPermissions', { origin: new URL(url).origin, permissions: ['videoCapture', 'audioCapture'] });
         }
+        if (opts && opts.atDocumentStart) {
+          // A page observes the voice table from its own first synchronous call, which happens while
+          // the document is being parsed. Installing the probe together with the injection at document
+          // start reproduces that ordering; probing a document that has already been alive for a
+          // second would measure past the asynchronous load window and prove nothing.
+          await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: buildInjectionScript(fp) + '\n' + probeExpr }, sessionId);
+          await cdp.send('Page.navigate', { url }, sessionId);
+          await sleep(1600);
+          const r = await cdp.send('Runtime.evaluate', { expression: 'JSON.stringify(window.__docStartProbe || null)', returnByValue: true }, sessionId);
+          const v = r && r.result && r.result.result ? r.result.result.value : null;
+          let q = null; try { q = JSON.parse(v); } catch (_) { q = { raw: v }; }
+          result = q || { error: 'no probe result' };
+          await cdp.send('Target.closeTarget', { targetId });
+        } else {
         await sleep(1800);
         const inject = buildInjectionScript(fp);
         await cdp.send('Runtime.evaluate', { expression: inject, returnByValue: true }, sessionId);
@@ -174,6 +201,7 @@ async function measure(profileId, grant, probeExpr, privacyExtra) {
           result = q; break;
         }
         await cdp.send('Target.closeTarget', { targetId });
+        }
       } else { result = { error: 'attach failed' }; }
     } else { result = { error: 'createTarget failed' }; }
     try { ws.close(); } catch (_) {}
@@ -245,6 +273,22 @@ async function measure(profileId, grant, probeExpr, privacyExtra) {
     for (const id of a) assert.ok(!b.includes(id), `deviceId leaked across profiles: ${id}`);
     assert.notStrictEqual(granted.devices[0].groupId, otherProfile.devices[0].groupId,
       'groupIds must differ across profiles');
+  });
+
+  const voicesInjected = await measure('voices-injected', false, VOICE_PROBE, { speech: 'noise' }, { atDocumentStart: true });
+  const voicesNative = await measure('voices-native', false, VOICE_PROBE, { speech: 'real' }, { atDocumentStart: true });
+
+  check('the voice table is withheld until the asynchronous load window has passed', () => {
+    for (const [k, v] of Object.entries({ voicesInjected, voicesNative })) {
+      assert.ok(v && !v.error && !v.err, `${k} probe error: ${v && (v.error || v.err)}`);
+      assert.strictEqual(v.firstSync, 0,
+        `${k} first synchronous getVoices() must be empty, as a real build returns`);
+    }
+    assert.ok(voicesNative.afterWait > 0,
+      'the bundled kernel must still publish its own table asynchronously; if it does not, the withheld window is untested');
+    assert.ok(voicesInjected.afterWait > 0, 'the spoofed table must appear once the window has passed');
+    assert.ok(voicesInjected.sample.every((v) => v.name && v.uri === v.name),
+      'served voices must carry a plain name as their URI');
   });
 
   const markers = await measure('media-markers', false, MARKER_PROBE, { speech: 'noise' });

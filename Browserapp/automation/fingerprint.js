@@ -2991,11 +2991,30 @@ function buildInjectionScript(fp) {
         }
         return voice;
       });
+      // The table is published asynchronously by the engine: the first synchronous call answers with
+      // an empty list and the populated one only becomes observable once the engine announces the
+      // load. Returning the table straight away left a timing signal, so it is withheld until the
+      // engine reports readiness - the same signal a genuine build waits for, which also keeps the
+      // release instant aligned with the native one instead of being pinned to a fixed delay.
+      // Nothing is synthesised: a fabricated event would carry isTrusted === false and be a tell of
+      // its own. A bounded fallback releases the table on a build that never reports readiness.
+      let voicesReady = false;
+      const markVoicesReady = () => { voicesReady = true; };
+      try {
+        const sp = globalThis.speechSynthesis;
+        if (sp && typeof sp.addEventListener === 'function') {
+          sp.addEventListener('voiceschanged', markVoicesReady, { once: true });
+        }
+      } catch (_) {}
+      try {
+        setTimeout(markVoicesReady, 1000);
+      } catch (_) { markVoicesReady(); }
+      const readVoices = () => (voicesReady ? voices.slice() : []);
       const spProto = typeof SpeechSynthesis !== 'undefined' ? SpeechSynthesis.prototype : null;
       if (spProto && spProto.getVoices) {
-        replaceMethod(spProto, 'getVoices', () => function getVoices() { return voices.slice(); });
+        replaceMethod(spProto, 'getVoices', () => function getVoices() { return readVoices(); });
       } else if (globalThis.speechSynthesis) {
-        replaceMethod(speechSynthesis, 'getVoices', () => function getVoices() { return voices.slice(); });
+        replaceMethod(speechSynthesis, 'getVoices', () => function getVoices() { return readVoices(); });
       }
     } catch (_) {}
   }
