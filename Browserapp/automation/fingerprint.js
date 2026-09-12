@@ -1887,12 +1887,20 @@ function buildInjectionScript(fp) {
 
         if (AudioBuffer.prototype.copyFromChannel) {
           replaceMethod(AudioBuffer.prototype, 'copyFromChannel', (original) => function(destination, channelNumber, startInChannel) {
-            if (!this || typeof this.getChannelData !== 'function') return original.apply(this, arguments);
-            const chData = this.getChannelData(Number(channelNumber) || 0);
-            const start = Number(startInChannel) || 0;
-            const len = Math.min(destination.length, Math.max(0, chData.length - start));
-            for (let i = 0; i < len; i += 1) {
-              destination[i] = chData[start + i];
+            // Anything this wrapper cannot handle itself is handed to the native implementation, so
+            // its argument validation, error type and message stay exactly as the build produces.
+            try {
+              if (!this || typeof this.getChannelData !== 'function') return original.apply(this, arguments);
+              if (!destination || typeof destination.length !== 'number') return original.apply(this, arguments);
+              const index = Number(channelNumber) || 0;
+              const chData = this.getChannelData(index);
+              const start = Number(startInChannel) || 0;
+              const len = Math.min(destination.length, Math.max(0, chData.length - start));
+              for (let i = 0; i < len; i += 1) {
+                destination[i] = chData[start + i];
+              }
+            } catch (_) {
+              return original.apply(this, arguments);
             }
           });
         }
@@ -2389,36 +2397,10 @@ function buildInjectionScript(fp) {
       // The two entry points are separate functions in a real build - distinct objects, each named
       // after its own property. Sharing one replacement made them identical and left the legacy one
       // carrying the standard name, which a single equality or name check gives away.
-      const isElementReceiver = (receiver) => !!receiver && typeof receiver === 'object'
-        && typeof receiver.nodeType === 'number' && receiver.nodeType === 1;
-      const fullscreenFallback = (original, alternateKey) => {
-        const patched = nativeLike(function (options) {
-          // A receiver that is not an element is handed to the native implementation, whose own
-          // brand check produces the native error instead of our fallback turning it into a resolve.
-          if (!isElementReceiver(this)) return original.call(this, options);
-          const fallback = () => {
-            try {
-              const alt = this && this[alternateKey];
-              if (typeof alt === 'function' && alt !== patched) return alt.call(this, options);
-            } catch (_) {}
-            return Promise.resolve();
-          };
-          try {
-            const res = original.call(this, options);
-            if (res && typeof res.catch === 'function') return res.catch(fallback);
-            return res || Promise.resolve();
-          } catch (_) { return fallback(); }
-        }, original);
-        return patched;
-      };
-      const origRequestFs = Element.prototype.requestFullscreen;
-      if (typeof origRequestFs === 'function') {
-        try { Element.prototype.requestFullscreen = fullscreenFallback(origRequestFs, 'webkitRequestFullscreen'); } catch (_) {}
-      }
-      const origWebkitFs = Element.prototype.webkitRequestFullscreen;
-      if (typeof origWebkitFs === 'function') {
-        try { Element.prototype.webkitRequestFullscreen = fullscreenFallback(origWebkitFs, 'requestFullscreen'); } catch (_) {}
-      }
+      // The fullscreen entry points are deliberately left exactly as the build ships them. A shim
+      // here could only change what the page observes: retrying through the legacy entry point turned
+      // the native rejection into a success (the legacy call resolves in this build without actually
+      // entering fullscreen), and any replacement also adds its own frames to error stacks.
     } catch (_) {}
     try {
       const ensureIframeFullscreen = (node) => {
@@ -2515,6 +2497,9 @@ function buildInjectionScript(fp) {
       }
       if (HTMLCanvasElement && HTMLCanvasElement.prototype.toBlob) {
         replaceMethod(HTMLCanvasElement.prototype, 'toBlob', (originalBlob) => function(cb, ...rest) {
+          // Delegate the malformed-argument case with the original arity so the native arity error
+          // is the one the page sees.
+          if (typeof cb !== 'function') return originalBlob.apply(this, arguments);
           try {
             const copy = noiseCanvas(this);
             if (copy) return originalBlob.call(copy, cb, ...rest);

@@ -201,6 +201,20 @@ const RECEIVER_PROBE = `(async () => {
   scan('Navigator', Navigator, ['getBattery']);
   await settle('NavigatorUAData.getHighEntropyValues', window.NavigatorUAData && NavigatorUAData.prototype.getHighEntropyValues, [[]]);
   await settle('NavigatorUAData.toJSON', window.NavigatorUAData && NavigatorUAData.prototype.toJSON, []);
+  // Calling fullscreen on a real element must finish. A retry path that bounced between two
+  // replacements never settled and left the page spinning, so the outcome and liveness are both
+  // compared here.
+  const settleClass = (value, ms) => Promise.race([
+    Promise.resolve(value).then(() => 'resolved', (e) => 'rejected:' + (e && e.name)),
+    new Promise((r) => setTimeout(() => r('never-settled'), ms)),
+  ]);
+  try {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    out['fullscreen.element'] = await settleClass(el.requestFullscreen(), 2500);
+    out['fullscreen.legacyElement'] = await settleClass(el.webkitRequestFullscreen(), 2500);
+    el.remove();
+  } catch (e) { out['fullscreen.element'] = 'threw:' + (e && e.name) + ':' + String(e && e.message).slice(0, 40); }
   for (const [iface, key] of [['Navigator', 'userAgent'], ['Screen', 'width'], ['Document', 'fullscreenEnabled'],
     ['VisualViewport', 'width'], ['VisualViewport', 'height'], ['NavigatorUAData', 'brands']]) {
     let proto = null; try { proto = window[iface] && window[iface].prototype; } catch (_) {}
@@ -425,6 +439,16 @@ const check = (name, fn) => {
       .map((k) => `${k}: native=${a[k]} injected=${b[k]}`);
     assert.deepStrictEqual(drift, [],
       `calling these with a foreign receiver no longer matches the native build: ${drift.join(' | ')}`);
+  });
+
+  check('fullscreen calls settle instead of retrying between replacements', () => {
+    const a = baseline.receivers || {};
+    const b = injected.receivers || {};
+    for (const key of ['fullscreen.element', 'fullscreen.legacyElement']) {
+      assert.ok(key in a && key in b, `${key} was not probed`);
+      assert.notStrictEqual(String(b[key]), 'never-settled', `${key} never settled under injection`);
+      assert.strictEqual(String(b[key]), String(a[key]), `${key}: native=${a[key]} injected=${b[key]}`);
+    }
   });
 
   const failed = results.filter((r) => !r.ok);
