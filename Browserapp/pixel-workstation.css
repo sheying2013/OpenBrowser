@@ -588,7 +588,7 @@ html[data-ui-theme="pixel-workstation"] #view-profiles .group-chip.active {
 /* Even scale with main ui-shell table rules — no auto layout that clips the right side */
 html[data-ui-theme="pixel-workstation"] #view-profiles .profile-table-compact {
   width: 100% !important;
-  min-width: 0 !important;
+  min-width: 980px !important;
   table-layout: fixed !important;
 }
 html[data-ui-theme="pixel-workstation"] #view-profiles .profile-table-compact th,

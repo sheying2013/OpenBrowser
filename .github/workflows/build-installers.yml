@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.8'
+        default: 'v1.0.9'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,35 +42,17 @@ env:
 
     ### 中文
 
-    - **界面与交互体验全面优化（彻底解决操作按键字体空白与浏览器图标显示不全问题）**：
-      - **操作按键图标直出与双重保障**：重构 `iconActionButton`，内置 Lucide PascalCase 图标解析逻辑，在创建按钮时通过 `window.lucide.createElement` 直接同步生成原生 `<svg>` 矢量图标节点挂载至 DOM，根除动态环境列表与代理列表渲染时操作列 4 个功能按钮（启动/停止、窗口同步、编辑、克隆）呈现空白方块的问题；并在渲染完毕后追加全局刷新作为双重保险。
-      - **表格多列布局与最小宽度保护**：重构环境列表表格网格布局，移除导致内容极度压缩的 `min-width: 0` 规则，设置卡片安全自适应最小宽度 `min-width: 980px`；为内核列增加 `min-width: 145px`，确保 Chrome 官方三色徽标与 `Chromium 130 独立内核` 完整优雅展示，不再被截断为 `Chro...`；为编号列（`52px`）、分组列（`95px`）、扩展列（`48px`）、网络列（`65px`）、出口列（`110px`）、状态列（`105px`）、操作列（`148px`）配置专属保护宽度，杜绝 1080p 分辨率或分屏工作区下的文字截断（如 `编...`、`扩...`、`默认分...`）。
-      - **全主题样式适配**：对 `element-admin`、`merge-gateway` (xai-console)、`nes-light`、`retro-desktop`、`pixel-workstation` 统一对齐表格列宽与按钮图标样式规则。
-    - **防指纹深度加固（全面攻克网站识别指纹浏览器问题）**：
-      - **彻底消除注入脚本控制台日志暴露**：移除注入脚本全局异常捕获中的 `console.warn('[OpenBrowser] fingerprint inject', ...)`，全面改为纯净静默处理，严防反爬脚本监听控制台日志抓取软件特征。
-      - **空白 iframe 跨 Realm 全域指纹穿透深度同步**：扩展 `patchSubWindow` 机制，当页面通过动态创建 blank iframe（`document.createElement('iframe')`）试图穿透读取主机原始硬件时，子窗口除了自动同步 `Navigator` 基础属性外，深度同步子窗口的 `WebGL`（`WebGLRenderingContext` / `WebGL2RenderingContext` 显卡厂商与渲染器）、`Canvas` 确定性噪点、`Audio` 音频指纹、`userAgentData` 及 `chrome` 对象，彻底杜绝高级反爬系统（CreepJS、Turnstile、DataDome、Kasada）利用 iframe 比对击穿指纹伪装。
-      - **设备与语音对象 Own Property 规范化**：重构 `MediaDeviceInfo` 与 `SpeechSynthesisVoice` 虚拟对象构造逻辑，将 `deviceId`、`kind`、`label`、`name`、`lang` 等属性规范化为非可枚举属性（`enumerable: false`），使得实例自身的 `Object.keys()` 返回空数组 `[]`，彻底消除反爬指纹库通过探测属性枚举性识别虚拟设备对象的漏洞。
-      - **标准 Chromium 内置 PDF 插件模拟**：补齐 `navigator.plugins` 与 `navigator.mimeTypes` 真实桌面版 5 个内置 PDF 插件与 2 个 MIME 类型映射，消除部分特殊环境下无头或空插件特征。
-      - **WebGL 扩展对象原型链修复**：在模拟 `WEBGL_debug_renderer_info` 扩展对象时，正确将其原型链接至 `WebGLDebugRendererInfo.prototype`，消除 `Object.prototype.toString.call(ext)` 返回 `[object Object]` 的伪造痕迹。
-    - **SOCKS5 代理认证与网络连通性持续稳健**：
-      - 保持 RFC 1928/1929 握手强制用户名密码认证（`[5, 1, 2]`）、并发调度器上限 128、密码含 `#` 备注精准切分与连通性检测放行。
-    - **版本号 100% 全链路严格同步**：
-      - 全链路（`package.json`、`package-lock.json`、`index.html` 界面左上角显示、`brand-exe.mjs` PE 可执行文件信息、GitHub Actions `build-installers.yml`）统一严格对齐至 **v1.0.8**。
+    - **修复操作区按钮空白**：环境列表和代理列表的动态按钮现在会直接创建原生 SVG 图标，不再依赖延迟刷新；启动/停止、窗口同步、编辑、克隆四个按钮在首次渲染时即可显示。
+    - **修复内核列截断**：环境表保持最小可读宽度，主题层不再把表格压回 `min-width: 0`；内核列优先显示 `Chromium 148` 这类稳定标签，完整版本号保留在悬停提示中，避免出现 `Chro...`。
+    - **布局稳定性**：窄窗口改为表格横向滚动，不再通过压缩关键列来适配，编号、分组、扩展、状态和操作列均保留可点击空间。
+    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息和 GitHub Actions 发布参数统一为 **v1.0.9**。
 
     ### English
 
-    - **UI & Interaction Polish (Fixed Blank Action Buttons & Browser Engine Label Truncation)**:
-      - **Direct SVG Button Rendering**: Re-engineered `iconActionButton` with native Lucide PascalCase mapping, synchronously generating and appending genuine SVG DOM elements via `window.lucide.createElement` on creation, eliminating blank square placeholders in dynamic profile and proxy tables; backed by a post-render refresh safeguard.
-      - **Balanced Grid Columns & Min-Width Protection**: Upgraded table grid layout with container `min-width: 980px`; added dedicated minimum widths for browser engine (`145px`, showing full Chrome icon and `Chromium 130` without truncation), index (`52px`), group (`95px`), extension (`48px`), network (`65px`), exit (`110px`), status (`105px`), and actions (`148px`).
-      - **Full Theme Parity**: Synchronized column width and action button rules across all themes (element-admin, xai-console, nes-light, retro-desktop, pixel-workstation).
-    - **Anti-Fingerprint Hardening**:
-      - **Zero Console Artifacts**: Removed `console.warn('[OpenBrowser] fingerprint inject', ...)` from document-level injection scripts to eliminate console detection hooks.
-      - **Iframe Cross-Realm Full-Stack Sync**: Extended `patchSubWindow` to synchronize WebGL contexts (WebGL1/WebGL2 vendor & renderer), Canvas deterministic noise, AudioBuffer perturbations, and `userAgentData` across dynamically generated blank iframes, defeating cross-realm bot detection tests.
-      - **Device & Voice Own Property Normalization**: Configured `MediaDeviceInfo` and `SpeechSynthesisVoice` properties as non-enumerable (`enumerable: false`), ensuring `Object.keys()` returns an empty array matching native Chrome.
-      - **Standard Chromium PDF Plugins Mock**: Emulated standard Chromium desktop PDF plugins and MIME types when missing.
-      - **WebGL Debug Info Extension Prototype**: Bound simulated debug renderer info extensions to `WebGLDebugRendererInfo.prototype`.
-    - **Version Synchronization**:
-      - Synchronized version across `package.json`, `package-lock.json`, `index.html`, `brand-exe.mjs`, and `build-installers.yml` to **v1.0.8**.
+    - **Fixed blank action buttons**: Dynamic profile and proxy rows now create real SVG icon nodes synchronously. Start/stop, window-sync, edit, and clone controls render on the first paint without waiting for a second icon pass.
+    - **Fixed engine-column truncation**: The profile grid keeps a readable minimum width, and theme overrides no longer collapse it to `min-width: 0`. The compact label shows `Chromium 148` while the full version remains in the tooltip.
+    - **Stable narrow-window layout**: Narrow windows scroll horizontally instead of squeezing critical columns; index, group, extension, status, and action columns keep usable hit targets.
+    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows file metadata, and the GitHub Actions release input are all aligned to **v1.0.9**.
 
     ### 下载 / Downloads
 
@@ -173,6 +155,7 @@ jobs:
           npm run selftest:protocol
           npm run selftest:isolation
           npm run selftest:kernel
+          npm run selftest:profileui
       - run: npm run package:portable
       - name: Verify package
         run: |
@@ -248,6 +231,7 @@ jobs:
           npm run selftest:protocol
           npm run selftest:isolation
           npm run selftest:kernel
+          npm run selftest:profileui
       - run: npm run package:portable
       - name: Verify Ubuntu package and bundled kernel
         run: |
@@ -332,6 +316,7 @@ jobs:
           npm run selftest:protocol
           npm run selftest:isolation
           npm run selftest:kernel
+          npm run selftest:profileui
       - run: npm run package:portable
       - name: Verify package
         run: |
@@ -398,6 +383,7 @@ jobs:
           npm run selftest:protocol
           npm run selftest:isolation
           npm run selftest:kernel
+          npm run selftest:profileui
       - run: npm run package:portable
       - name: Verify package
         run: |

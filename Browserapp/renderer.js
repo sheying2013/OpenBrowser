@@ -962,17 +962,18 @@ function buildEnvBrowserCell(profile) {
   const label = document.createElement('div');
   label.className = 'env-browser-label';
 
-  let engineName = isEdge ? 'Microsoft Edge' : 'Chromium';
-  let versionMatch = rawBrowser.match(/\b(?:Chrome|Chromium|Edge)\/(\d+[\.\d]*)/i) || rawBrowser.match(/\b(\d{2,3})\b/);
-  let versionStr = versionMatch ? versionMatch[1] : '130';
+  const engineName = isEdge ? 'Microsoft Edge' : 'Chromium';
+  const versionMatch = rawBrowser.match(/\b(?:Chrome|Chromium|Edge)\/(\d+[\.\d]*)/i) || rawBrowser.match(/\b(\d{2,3})\b/);
+  const fullVersion = versionMatch ? versionMatch[1] : '130';
+  const displayVersion = String(fullVersion).split('.')[0] || fullVersion;
 
-  const titleEl = element('strong', '', `${engineName} ${versionStr}`);
+  const titleEl = element('strong', '', `${engineName} ${displayVersion}`);
   let kernelSub = isEdge ? t('profiles.kernel.edge') : t('profiles.kernel.independent');
   const subEl = element('small', '', kernelSub);
 
   label.append(titleEl, subEl);
   wrap.append(label);
-  wrap.title = `${engineName} ${versionStr} · ${kernelSub}`;
+  wrap.title = `${engineName} ${fullVersion} · ${kernelSub}`;
   return wrap;
 }
 
