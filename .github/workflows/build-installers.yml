@@ -328,6 +328,7 @@ jobs:
           npm run selftest:stealth
           npm run selftest:surfacediff
           npm run selftest:mediae2e
+          npm run selftest:popupe2e
       - run: npm run package:portable
       - name: Verify package
         run: |
@@ -399,6 +400,7 @@ jobs:
           npm run selftest:stealth
           npm run selftest:surfacediff
           npm run selftest:mediae2e
+          npm run selftest:popupe2e
       - run: npm run package:portable
       - name: Verify package
         run: |

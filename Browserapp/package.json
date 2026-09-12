@@ -108,7 +108,8 @@
     "selftest:rpaopen": "node automation/rpa-open-queue-selftest.js",
     "selftest:coalesce": "node automation/coalesced-writer-selftest.js",
     "selftest:mediae2e": "node automation/media-devices-e2e-selftest.js",
-    "selftest:surfacediff": "node automation/surface-integrity-e2e-selftest.js"
+    "selftest:surfacediff": "node automation/surface-integrity-e2e-selftest.js",
+    "selftest:popupe2e": "node automation/popup-target-injection-e2e-selftest.js"
   },
   "devDependencies": {
     "desktop-shell": "npm:electron@43.1.1",
