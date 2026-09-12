@@ -299,6 +299,13 @@ async function main() {
     'voice table must be released on the engine readiness signal');
   assert.ok(speechScript.includes('readVoices'), 'voice reads must go through the gate');
   assert.ok(speechScript.includes('setTimeout(markVoicesReady'), 'a bounded fallback must release the table');
+  // Distinct entry points must stay distinct objects with their own metadata. Installing one shared
+  // replacement under two names made the two fullscreen entry points identical and gave the legacy
+  // one the standard name, both of which a single equality or name check exposes.
+  assert.ok(speechScript.includes("fullscreenFallback(origRequestFs, 'webkitRequestFullscreen')"),
+    'the standard fullscreen entry point must get its own replacement');
+  assert.ok(speechScript.includes("fullscreenFallback(origWebkitFs, 'requestFullscreen')"),
+    'the legacy fullscreen entry point must get its own replacement');
   assert.ok(!/getVoices'\s*,\s*\(\)\s*=>\s*function getVoices\(\)\s*\{\s*return voices\.slice\(\)/.test(speechScript),
     'the table must never be returned synchronously');
   pass('injection scripts profile-specific');

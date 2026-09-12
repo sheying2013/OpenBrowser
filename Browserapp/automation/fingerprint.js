@@ -2318,29 +2318,33 @@ function buildInjectionScript(fp) {
       Object.defineProperty(document, 'webkitFullscreenEnabled', nativeAccessor('webkitFullscreenEnabled', { configurable: true, get: () => true }));
     } catch (_) {}
     try {
-      const origReqFs = Element.prototype.requestFullscreen || Element.prototype.webkitRequestFullscreen;
-      if (typeof origReqFs === 'function') {
-        const patchedReqFs = nativeLike(function requestFullscreen(options) {
-          try {
-            const res = origReqFs.call(this, options);
-            if (res && typeof res.catch === 'function') {
-              return res.catch(() => {
-                if (typeof this.webkitRequestFullscreen === 'function' && this.webkitRequestFullscreen !== requestFullscreen) {
-                  try { this.webkitRequestFullscreen(options); } catch (_) {}
-                }
-                return Promise.resolve();
-              });
-            }
-            return res || Promise.resolve();
-          } catch (_) {
-            if (typeof this.webkitRequestFullscreen === 'function' && this.webkitRequestFullscreen !== requestFullscreen) {
-              try { this.webkitRequestFullscreen(options); } catch (_) {}
-            }
+      // The two entry points are separate functions in a real build - distinct objects, each named
+      // after its own property. Sharing one replacement made them identical and left the legacy one
+      // carrying the standard name, which a single equality or name check gives away.
+      const fullscreenFallback = (original, alternateKey) => {
+        const patched = nativeLike(function (options) {
+          const fallback = () => {
+            try {
+              const alt = this && this[alternateKey];
+              if (typeof alt === 'function' && alt !== patched) return alt.call(this, options);
+            } catch (_) {}
             return Promise.resolve();
-          }
-        }, origReqFs);
-        try { Element.prototype.requestFullscreen = patchedReqFs; } catch (_) {}
-        try { Element.prototype.webkitRequestFullscreen = patchedReqFs; } catch (_) {}
+          };
+          try {
+            const res = original.call(this, options);
+            if (res && typeof res.catch === 'function') return res.catch(fallback);
+            return res || Promise.resolve();
+          } catch (_) { return fallback(); }
+        }, original);
+        return patched;
+      };
+      const origRequestFs = Element.prototype.requestFullscreen;
+      if (typeof origRequestFs === 'function') {
+        try { Element.prototype.requestFullscreen = fullscreenFallback(origRequestFs, 'webkitRequestFullscreen'); } catch (_) {}
+      }
+      const origWebkitFs = Element.prototype.webkitRequestFullscreen;
+      if (typeof origWebkitFs === 'function') {
+        try { Element.prototype.webkitRequestFullscreen = fullscreenFallback(origWebkitFs, 'requestFullscreen'); } catch (_) {}
       }
     } catch (_) {}
     try {

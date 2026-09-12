@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.17'
+        default: 'v1.0.18'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,19 +42,19 @@ env:
 
     ### 中文
 
-    - **语音表加载时序修正**：`speechSynthesis.getVoices()` 在真实构建里是异步就绪的 —— 页面第一次同步调用必然拿到空列表，语音表只有在引擎广播就绪之后才可见。此前实现用一个固定 250ms 定时器放行，实测会在同一个内核的原生 `voiceschanged`（267ms）**之前**就把表交出去（250ms 出表 vs 原生 267ms 事件、302ms 出表），形成“先有表、后有事件”的次序倒置 —— 真实构建不可能出现这种顺序。
-    - **改为跟随引擎就绪信号**：语音表默认扣留，收到内核原生 `voiceschanged` 后立即放行（另设 1000ms 兜底，避免引擎不广播就绪时表永远不可见）。不伪造事件：自造事件的 `isTrusted` 恒为 `false`，本身就是特征。
-    - **实测对齐**：修正后伪装 profile 在 258ms 收到原生事件、303ms 出表，与同一二进制原生路径（267ms 事件、302ms 出表）在时序上完全一致；首次同步调用两种路径均返回空列表。
-    - **回归加固**：端到端探针改为在 `document_start` 注入（页面真实观测点）而非页面存活 1.8s 后再注入，新增断言锁定“首次同步为空 + 原生路径仍异步出表 + 出表后 `voiceURI === name`”；CI 侧静态护栏防止有人改回同步返回。
-    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.17**。
+    - **全屏入口对象别名（真实缺陷）**：`Element.prototype.requestFullscreen` 与 `Element.prototype.webkitRequestFullscreen` 此前被装成**同一个函数对象**，而真实构建里它们是两个不同对象，且后者自带名字 `webkitRequestFullscreen`。注入后 `requestFullscreen === webkitRequestFullscreen` 返回 `true`、legacy 入口的 `name` 变成 `requestFullscreen` —— 一行相等判断或一次 `.name` 读取就能判定环境被改写。现已改为各自独立的替换函数，`name` / `length` / `prototype` 与真实构建逐项一致。
+    - **新增常驻回归：静态表面差分**。新增 `selftest:surfacediff`，遍历页面可达的全部原型（本次 951 个原型、约 9.9k 个表面项），与**同一二进制未注入基线**逐项对照，锁定四件事：不新增属性、不丢失属性、不新增函数对象别名、`name`/`length`/`prototype` 元数据一致。该用例已用变异验证：把旧的共享对象写法还原回去，三项断言立刻失败且退出码为 1。
+    - **CI 侧同步加护栏**：隔离回归中新增静态断言，禁止再把同一个替换函数挂到两个入口上。
+    - **顺带确认（无差异）**：注入层不泄漏源码 —— 对 Navigator / Screen / Canvas / WebGL / MediaDevices / SpeechSynthesis / Date / Performance / AudioContext / RTCPeerConnection / Element / Document 等原型上的 **1,164 个函数**逐一执行 `Function.prototype.toString`，全部返回 `[native code]`。
+    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.18**。
 
     ### English
 
-    - **Voice-table load timing fixed**: in a real build `speechSynthesis.getVoices()` becomes populated asynchronously — the first synchronous call always answers with an empty list, and the table only becomes observable once the engine announces readiness. The previous implementation released the table on a fixed 250ms timer, which on the same kernel fired *before* the native `voiceschanged` (250ms table vs the native 267ms event and 302ms populated table), producing an ordering a genuine build cannot exhibit.
-    - **Now follows the engine readiness signal**: the table starts withheld, is released as soon as the kernel's native `voiceschanged` arrives, and a 1000ms fallback keeps it from staying hidden forever on a build that never announces readiness. No event is synthesised, because a fabricated one would carry `isTrusted === false` and be a tell of its own.
-    - **Measured alignment**: after the fix the spoofed profile receives the native event at 258ms and exposes the table at 303ms, matching the same binary's native path (event at 267ms, table at 302ms); the first synchronous call returns an empty list on both paths.
-    - **Regression coverage**: the end-to-end probe now runs at `document_start` — the moment a page actually observes the table — instead of injecting 1.8s into the document's life, with assertions pinning "empty on the first synchronous call", "the native path still publishes asynchronously" and "`voiceURI === name`", plus a static guard in CI against reintroducing a synchronous return.
-    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.17**.
+    - **Fullscreen entry-point aliasing (real defect)**: `Element.prototype.requestFullscreen` and `Element.prototype.webkitRequestFullscreen` were installed as the *same function object*, while a genuine build keeps them distinct and names the legacy one `webkitRequestFullscreen`. Under injection `requestFullscreen === webkitRequestFullscreen` returned `true` and the legacy entry point carried the standard name - a single equality test or `.name` read exposed the rewrite. Each entry point now receives its own replacement with matching `name`, `length` and `prototype`.
+    - **New standing regression: static-surface diff.** The new `selftest:surfacediff` walks every prototype reachable from the page (951 prototypes, ~9.9k surface entries in this run) and compares it against the *same binary without the injected layer*, pinning four properties: no added property, no removed property, no new function-object alias, and matching `name`/`length`/`prototype` metadata. The case was mutation-tested: restoring the shared-object version fails three assertions and exits non-zero.
+    - **CI guard**: the isolation suite now fails statically if one replacement is again mounted on two entry points.
+    - **Also confirmed clean**: the injected layer leaks no source - `Function.prototype.toString` on **1,164 functions** across the Navigator, Screen, Canvas, WebGL, MediaDevices, SpeechSynthesis, Date, Performance, AudioContext, RTCPeerConnection, Element and Document prototypes returns `[native code]` for every one.
+    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.18**.
 
     ### 下载 / Downloads
 
