@@ -103,12 +103,21 @@ async function waitForPage(port, timeoutMs = 16000) {
   return null;
 }
 
-const PROBE = `(async () => {
+const GL_PARAM_NAMES = "['MAX_TEXTURE_SIZE','MAX_CUBE_MAP_TEXTURE_SIZE','MAX_RENDERBUFFER_SIZE','MAX_VERTEX_UNIFORM_VECTORS','MAX_VARYING_VECTORS']";
+
+function buildProbe() {
+  // The two contexts are separate prototypes in the engine, so both have to answer the same way.
+  // A page that reads WebGL1 and WebGL2 side by side would otherwise see one of them describe the
+  // host GPU; reading both also catches a patch that only landed on one prototype.
+  return `(async () => {
   const out = {};
-  const canvas = document.createElement('canvas');
-  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+  const names = ${GL_PARAM_NAMES};
+  const contextFor = (kind) => {
+    const canvas = document.createElement('canvas');
+    try { return canvas.getContext(kind, { failIfMajorPerformanceCaveat: false }); } catch (_) { return null; }
+  };
+  const gl = contextFor('webgl') || contextFor('experimental-webgl');
   if (!gl) return JSON.stringify({ missing: true });
-  const names = ['MAX_TEXTURE_SIZE','MAX_CUBE_MAP_TEXTURE_SIZE','MAX_RENDERBUFFER_SIZE','MAX_VERTEX_UNIFORM_VECTORS','MAX_VARYING_VECTORS'];
   for (const name of names) {
     try { out[name] = gl.getParameter(gl[name]); } catch (error) { out[name] = 'ERR:' + error.name; }
   }
@@ -122,8 +131,24 @@ const PROBE = `(async () => {
     try { out.UNMASKED_VENDOR_WEBGL = gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL); } catch (_) {}
     try { out.UNMASKED_RENDERER_WEBGL = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL); } catch (_) {}
   }
+  const gl2 = contextFor('webgl2');
+  out.__hasWebgl2 = Boolean(gl2);
+  if (gl2) {
+    out.gl2 = {};
+    for (const name of names) {
+      try { out.gl2[name] = gl2.getParameter(gl2[name]); } catch (error) { out.gl2[name] = 'ERR:' + error.name; }
+    }
+    try {
+      const dims = gl2.getParameter(gl2.MAX_VIEWPORT_DIMS);
+      out.gl2.MAX_VIEWPORT_DIMS = dims ? [Number(dims[0]), Number(dims[1])] : null;
+      out.gl2.MAX_VIEWPORT_DIMS_CTOR = dims ? String(dims.constructor && dims.constructor.name) : null;
+    } catch (error) { out.gl2.MAX_VIEWPORT_DIMS = 'ERR:' + error.name; }
+  }
   return JSON.stringify(out);
 })()`;
+}
+
+const PROBE = buildProbe();
 
 async function runProfile(label, serverPort) {
   const profile = {
@@ -243,6 +268,19 @@ async function runProfile(label, serverPort) {
         assert.strictEqual(dims[1], Number(limits[WEBGL_PARAM_IDS.MAX_RENDERBUFFER_SIZE]));
         assert.strictEqual(run.probe.MAX_VIEWPORT_DIMS_CTOR, 'Int32Array',
           'the array type must match what the engine hands out');
+      });
+      check('the second WebGL context answers with the same driver limits', () => {
+        const limits = run.limits;
+        if (!run.probe.__hasWebgl2) return;
+        const gl2 = run.probe.gl2 || {};
+        for (const name of ['MAX_TEXTURE_SIZE', 'MAX_CUBE_MAP_TEXTURE_SIZE', 'MAX_RENDERBUFFER_SIZE', 'MAX_VERTEX_UNIFORM_VECTORS', 'MAX_VARYING_VECTORS']) {
+          assert.strictEqual(Number(gl2[name]), Number(limits[WEBGL_PARAM_IDS[name]]),
+            `webgl2 ${name} must match the advertised class`);
+        }
+        assert.ok(Array.isArray(gl2.MAX_VIEWPORT_DIMS), 'webgl2 MAX_VIEWPORT_DIMS must stay an array');
+        assert.strictEqual(gl2.MAX_VIEWPORT_DIMS[0], gl2.MAX_VIEWPORT_DIMS[1]);
+        assert.strictEqual(gl2.MAX_VIEWPORT_DIMS[0], Number(limits[WEBGL_PARAM_IDS.MAX_RENDERBUFFER_SIZE]));
+        assert.strictEqual(gl2.MAX_VIEWPORT_DIMS_CTOR, 'Int32Array');
       });
       check('the adapter name and the limits come from the same identity', () => {
         const limits = run.limits;
