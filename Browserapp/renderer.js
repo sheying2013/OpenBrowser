@@ -2701,7 +2701,9 @@ async function refreshEditorProxy() {
 function useSystemEditorDefaults() {
   editorSet('#editor-user-agent', ''); editorSet('#editor-timezone-mode', 'real'); editorSet('#editor-timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || ''); editorSet('#editor-geo-mode', 'disabled'); editorSet('#editor-ui-language', 'system');
   editorSet('#editor-resolution', 'custom'); editorSet('#editor-width', Math.max(640, screen.availWidth || 1280)); editorSet('#editor-height', Math.max(480, screen.availHeight || 820));
-  editorSet('#editor-webrtc', 'real'); editorSet('#editor-canvas', 'real'); editorSet('#editor-webgl', 'real'); editorSet('#editor-webgpu', 'real'); editorSet('#editor-audio', 'real'); editorSet('#editor-media', 'real'); editorSet('#editor-speech', 'real'); editorSet('#editor-bluetooth', 'real');
+  // WebGPU must stay on the product default here: "real" would pair a host adapter with a WebGL
+  // identity the user may later disguise, which is a cross API contradiction a page can read.
+  editorSet('#editor-webrtc', 'real'); editorSet('#editor-canvas', 'real'); editorSet('#editor-webgl', 'real'); editorSet('#editor-webgpu', 'webgl'); editorSet('#editor-audio', 'real'); editorSet('#editor-media', 'real'); editorSet('#editor-speech', 'real'); editorSet('#editor-bluetooth', 'real');
   updateEditorVisibility(); renderEditorSummary(); toast(tx('已读取本机安全默认值'));
   refreshUaMetaPreview().catch(() => {});
 }

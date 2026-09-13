@@ -48,6 +48,17 @@ check('action buttons create real SVG nodes synchronously', () => {
   assert.ok(lucide.includes('createIcons'), 'bundled Lucide runtime must expose createIcons');
 });
 
+check('the system defaults action keeps WebGPU on the product default', () => {
+  const source = read('renderer.js');
+  assert.match(source, /function useSystemEditorDefaults\(\)\s*\{/);
+  const tail = source.slice(source.indexOf('function useSystemEditorDefaults()'));
+  const body = tail.slice(0, tail.indexOf('\n}') + 2);
+  assert.ok(body.includes("editorSet('#editor-webgpu', 'webgl')"),
+    'reading local defaults must not switch WebGPU to the host adapter');
+  assert.ok(!body.includes("editorSet('#editor-webgpu', 'real')"),
+    'an explicit real WebGPU default contradicts the profile WebGL identity');
+});
+
 const failed = results.filter((item) => !item.ok);
 for (const item of results) {
   if (item.ok) console.log('  PASS  ' + item.name);
