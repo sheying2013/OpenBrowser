@@ -113,6 +113,7 @@
     "selftest:surfacediff": "node automation/surface-integrity-e2e-selftest.js",
     "selftest:popupe2e": "node automation/popup-target-injection-e2e-selftest.js",
     "selftest:doclifecycle": "node automation/document-lifecycle-fingerprint-e2e-selftest.js",
+    "selftest:inlineframes": "node automation/inline-frame-injection-e2e-selftest.js",
     "selftest:timezonee2e": "node automation/timezone-fidelity-e2e-selftest.js"
   },
   "devDependencies": {

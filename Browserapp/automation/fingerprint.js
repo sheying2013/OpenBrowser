@@ -1489,6 +1489,11 @@ function buildInjectionScript(fp) {
     const navProto = typeof Navigator !== "undefined" ? Navigator.prototype : null;
     if (navProto) {
       for (const [key, desc] of Object.entries(navPatch)) {
+        // Only members this document already exposes may be answered. deviceMemory is gated on a
+        // secure context, so a data: frame has no such member: installing one there hands a page a
+        // navigator property no stock engine has, which is a single in-operator away from being a
+        // tell. The worker scope has carried this guard for the same reason.
+        try { if (!(key in navProto)) continue; } catch (_) { continue; }
         const fn = desc.get;
         const getter = makeNativeGetter(key, fn, "navigator");
         Object.defineProperty(navProto, key, {
