@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.20'
+        default: 'v1.0.21'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -38,25 +38,35 @@ env:
   OPENBROWSER_PACKAGE_VARIANT: with-kernel
   OPENBROWSER_BUNDLE_KERNEL: 'true'
   RELEASE_NOTES: |
-    ## OpenBrowser ${{ inputs.release_tag }}
+    ## OpenBrowser ${{ inputs.release_tag }} (**v1.0.21**)
 
     ### 中文
 
-    - **修复 v1.0.18/v1.0.19 引入的全屏死循环（严重）**：这两个版本为了让两个全屏入口各自保留名字，把同一个兼容层拆成了两个独立替换函数；而该兼容层的失败重试会去调用"另一个入口"，于是两个替换函数互相调用 —— 页面一旦触发全屏失败（例如没有用户手势时调用 `element.requestFullscreen()`，真实 Chrome 会 reject），标签页就会陷入无限重试并卡死。现已**彻底不再改写全屏入口**，两个方法保持内核原样。
-    - **全屏调用结果不再被伪造**：原有兼容层在全屏失败时返回成功（resolve）。实测本内核 `requestFullscreen()` 原生 reject（`Permissions check failed`），而 `webkitRequestFullscreen()` 直接 resolve 但并不真正进入全屏 —— 重试 legacy 会把失败伪装成成功，真实构建不会这样。现在全屏调用的 resolve/reject 与内核原生逐项一致。
-    - **非法接收者行为（真实缺陷，八个入口）**：替换函数此前对所有接收者都直接作答，而真实构建会先做品牌检查。用普通对象当接收者时，`speechSynthesis.getVoices`、`mediaDevices.enumerateDevices`、`navigator.getBattery`、`requestFullscreen`、`document.fullscreenEnabled`、`visualViewport.width`/`height`、`userAgentData.getHighEntropyValues`/`toJSON`、`AudioBuffer.copyFromChannel` 的结果都与原生不同（应为同步抛 `TypeError: Illegal invocation` 或返回被拒绝的 Promise）。已改为**只服务目标接收者，其余一律交回原生实现**。
-    - **参数校验错误文案对齐**：`AudioBuffer.copyFromChannel(null)`、`copyFromChannel(越界声道)`、`HTMLCanvasElement.toBlob()` 缺参数等场景此前抛出的是包装层自造的报错文案；现在一律交回原生实现，错误类型与文案与内核逐字一致（75 个入口的错误接收者矩阵、14 个畸形参数场景均为 0 差异）。
-    - **回归扩容与变异验证**：`selftest:surfacediff` 增至 8 项断言（属性集合 / 顺序 / Symbol / 描述符属性 / 函数对象身份 / 活动实例形态 / 错误接收者矩阵 / 全屏存活），并修正了一个"测试输入未开启对应伪装导致断言空跑"的问题；变异验证（还原接收者守卫）可立刻失败。
-    - **版本全链路同步**：`package.json`、`package-lock.json`、界面显示、Windows 文件版本信息、README 徽章与 GitHub Actions 发布参数统一为 **v1.0.20**。
+    - **版本标识与同步**：本发布版本统一为 **v1.0.21**，严格同步前端界面显示版本、npm 包版本、Windows 可执行文件与产品版本元数据、项目文档徽章及 CI/CD 工作流定义。
+    - **跨表面一致性防御（WebGPU / Canvas / Audio / ClientRects）**：防护能力全面覆盖主页面、DedicatedWorker、iframe、srcdoc 以及动态 `about:blank` 上下文；统一 OffscreenCanvas 与 DOM Canvas 噪音生成幅度；加固透明像素、0×0 边界尺寸、`getImageData` 非法接收者与异常参数防御；补齐 `AudioBuffer` 与 `DOMRectList` 原型链及属性描述符对齐。
+    - **首导航与 Worker 网络头泄漏修复（UA-CH / Accept-Language）**：彻底修复首次主框架导航（Main Frame Navigation）泄露宿主真实 Client Hints 的时序空窗；修复 DedicatedWorker 内 `fetch()` 请求泄露宿主系统 `Accept-Language` 的缺陷；重构 `RequestHeaderRewriter` 与 CSS 响应重写为请求与响应双阶段隔离架构，支持高熵 Client Hints、大写去重、CORS OPTIONS 与 WebSocket 链路。
+    - **移动端真实人设支持（Android / iOS）**：补全 Android 与 iOS 移动端人设覆盖，修复 Android 人设异常回退到 Windows / Win32 的逻辑缺陷；严格单向自洽对齐 User-Agent、Client Hints、`navigator.platform`、Touch 触控事件、屏幕尺寸、设备像素比（DPR）、GPU 渲染器及 Worker 执行环境。
+    - **本地字体与 CSS 探测防护（170 份真实字体资产）**：严密拦截 CSS `@font-face src: local()`、`FontFace(local())` 与 Worker 字体探测侧信道；支持静态 HTML、外链样式表、CSSOM、adoptedStyleSheets、`data:`/`blob:` 样式注入清洗；`queryLocalFonts()` 与 `FontData.blob()` 均返回清洗去标识的真实 WOFF2 二进制数据；内置 170 份 WOFF2 字体资产（Windows 60 份、macOS 76 份、Linux 24 份、Android 10 份）。
+    - **WebGL 宿主能力动态协商**：动态适配宿主底层图形驱动（如 macOS Metal），收敛 `ALIASED_POINT_SIZE_RANGE`（如 `[1, 511]`）与纹理上限（如 `MAX_TEXTURE_SIZE` 16K），防止宣称参数与物理分配能力矛盾导致内核崩溃；规范 WebGL 扩展列表，严格按设定的人设过滤跨厂商专属扩展。
+    - **Issue #19 UI 渲染与多窗口同步修复**：操作栏 4 个操作按钮改用内联同步 SVG fallback，彻底解决异步图标字体加载失败导致文字空白的问题；浏览器图标替换为完整 256×256 矢量 SVG 居中呈现，消除裁切现象；多窗口层叠同步采用屏幕工作区边界模运算折返与吸附，适配负坐标副屏与超大窗口；注入 Windows DPI 缩放因子（`--force-device-scale-factor=1`）；白名单放行 `chrome://` 安全镜像导航。
+    - **Issue #21 时区推导与内核时间同步**：建立 111 个国家到 IANA 时区与首都映射推导体系；针对 Windows Chromium 注入 `--time-zone-for-testing` C++ 内核参数；直连网络刷新失败时安全保留已有配置时区，避免意外回退重置；打通 Date、Intl、Cookie 格式化与 Worker 全链路时区一致性。
+    - **Issue #22 SOCKS5 代理全面合规与稳定性重构**：严格遵循 RFC 1928 / RFC 1929 规范，握手强制校验协议版本 0x05 及认证子协议 0x01；修复非 URL 代理配置中密码含有 `#` 字符被误判为备注截断的问题；代理转发器并发队列扩容至 128 并发，完善建连与取消时的 Abort listener 即时注销；支持可即时中断唤醒的指数退避重试；完善 4 阶段连接重置（Reset）异常捕获与已销毁 Socket 资源安全回收。
+    - **发布门禁体系（Release Gate）**：建立 37 项核心阻塞自测套件的自动化发布门禁，覆盖 7 处版本全链路同步校验、工作树磁盘卫生审计（严禁 pycache / 测试截图）以及便携打包器递归防御。
+    - **客观架构边界说明（内核层特征）**：TLS Client Hello 握手特征、JA4 指纹与系统原生 DNS 解析栈直接取决于 Chromium C++ 内核底层网络实现，本版本未在 JS 包装层进行脆弱或不完整的伪造，相关特征属于内核网络栈边界；缺失的 CJK 字符遵循真实系统字体层级降级，不会伪造虚假度量数据；特权 `chrome://` 页面受安全沙箱限制仅支持单向镜像导航。
 
     ### English
 
-    - **Fullscreen infinite retry introduced in v1.0.18/v1.0.19 (severe) - fixed**: those versions split one compatibility shim into two separate replacements so each entry point kept its own name. The shim's failure path called "the other entry point", so the two replacements called each other - any failing fullscreen call (for example `element.requestFullscreen()` without a user gesture, which a real Chrome rejects) sent the tab into an endless retry and froze it. The fullscreen entry points are now **left completely untouched**.
-    - **Fullscreen results are no longer faked**: the old shim resolved on failure. On this kernel `requestFullscreen()` rejects natively (`Permissions check failed`) while `webkitRequestFullscreen()` resolves without actually entering fullscreen, so retrying through the legacy entry point turned a failure into a success that a real build never reports. Resolve/reject now matches the kernel exactly.
-    - **Wrong-receiver behaviour (real defect, eight entry points)**: the replacements answered for every receiver while a genuine build brand-checks first. With a plain object as the receiver, `speechSynthesis.getVoices`, `mediaDevices.enumerateDevices`, `navigator.getBattery`, `requestFullscreen`, `document.fullscreenEnabled`, `visualViewport.width`/`height`, `userAgentData.getHighEntropyValues`/`toJSON` and `AudioBuffer.copyFromChannel` all differed from the native outcome. Replacements now **serve only their intended receiver and hand anything else back to the native implementation**.
-    - **Argument-validation messages aligned**: `AudioBuffer.copyFromChannel(null)`, an out-of-range channel index, `HTMLCanvasElement.toBlob()` without a callback and similar malformed calls used to raise a message assembled by the wrapper; they are now handed to the native implementation, so error types and text match the kernel word for word (zero differences across a 75-entry wrong-receiver matrix and 14 malformed-argument cases).
-    - **Regression widened, mutation-tested**: `selftest:surfacediff` now carries 8 assertions (property set, order, symbols, descriptor attributes, function identities, live instances, wrong-receiver matrix, fullscreen liveness), and a case where the test profile did not enable the relevant spoofing - making the assertion vacuous - was found and fixed through mutation testing.
-    - **Version synchronization**: `package.json`, `package-lock.json`, the in-app label, Windows metadata, README badges, and the GitHub Actions release input are all aligned to **v1.0.20**.
+    - **Version Alignment & Synchronization**: Formally released as **v1.0.21**, synchronized end-to-end across UI display labels, npm package definitions, Windows PE file and product version metadata, documentation badges, and CI/CD workflow manifests.
+    - **Cross-Surface Defense Consistency (WebGPU / Canvas / Audio / ClientRects)**: Comprehensive protection across main frames, DedicatedWorkers, standard iframes, srcdoc, and dynamic `about:blank` contexts; aligned OffscreenCanvas and DOM Canvas noise generation amplitudes; hardened transparent pixel handling, 0x0 dimensions, and wrong-receiver/malformed-argument contracts for `getImageData`; fully aligned `AudioBuffer` and `DOMRectList` prototype chains and descriptors.
+    - **Initial Navigation & Worker Header Leak Fixes (UA-CH / Accept-Language)**: Eliminated timing races on initial Main Frame navigations that previously leaked host Client Hints; resolved DedicatedWorker `fetch()` leaking host `Accept-Language` headers; restructured `RequestHeaderRewriter` and CSS response rewriting into two-phase request/response isolation supporting high-entropy Client Hints, header casing deduplication, CORS OPTIONS, and WebSockets.
+    - **Authentic Mobile Persona Support (Android / iOS)**: Added complete Android and iOS persona matrices, resolving bugs where Android profiles defaulted back to Windows / Win32; synchronized User-Agent, Client Hints, `navigator.platform`, Touch event APIs, screen geometries, devicePixelRatio, GPU renderers, and Worker execution environments.
+    - **CSS Local Font Shielding & 170 Real Font Assets**: Fully blocked local font enumeration side channels via CSS `@font-face src: local()`, `FontFace(local())`, and Worker FontFace APIs; sanitized static HTML, external stylesheets, CSSOM mutations, adoptedStyleSheets, and `data:`/`blob:` stylesheet injections; ensured `queryLocalFonts()` and `FontData.blob()` return de-identified, authentic WOFF2 font binaries; bundled 170 real WOFF2 font subset assets (Windows: 60, macOS: 76, Linux: 24, Android: 10).
+    - **WebGL Host Capability Negotiation**: Dynamically harmonized persona parameters with host GPU capabilities (such as macOS Metal), converging `ALIASED_POINT_SIZE_RANGE` (e.g. `[1, 511]`) and texture ceilings (e.g. `MAX_TEXTURE_SIZE` 16K) to avoid allocation crashes caused by impossible profile declarations; normalized WebGL extension catalogs to filter cross-vendor proprietary extensions.
+    - **Issue #19 UI Rendering & Multi-Window Sync**: Replaced action bar buttons with synchronous inline SVG fallbacks, eliminating blank buttons caused by asynchronous font loading; upgraded browser icons to full unclipped 256x256 vector SVGs; constrained multi-window cascade layouts within screen workspace boundaries using modulo foldback, properly handling negative-offset multi-monitor setups; injected Windows DPI scaling factor (`--force-device-scale-factor=1`); whitelisted safe `chrome://` mirror navigation.
+    - **Issue #21 Timezone Derivation & Kernel Sync**: Built a 111-country mapping database for IANA timezones and national capitals; injected `--time-zone-for-testing` into Windows Chromium C++ kernel; preserved user-configured timezones when network status checks fail, preventing accidental fallbacks; ensured strict timezone consistency across Date, Intl, Cookie formatters, and Worker scopes.
+    - **Issue #22 SOCKS5 RFC 1928/1929 Compliance & Reliability**: Full compliance with RFC 1928 and RFC 1929, enforcing version 0x05 handshakes and 0x01 authentication subnegotiation; protected passwords containing `#` characters in non-URL proxy configurations from remark truncation; expanded proxy forwarder capacity to 128 concurrent connections with immediate Abort listener deregistration; implemented interruptible exponential backoff retry; robustly caught 4-stage connection reset conditions and recycled destroyed sockets.
+    - **Release Gate & Disk Hygiene Defenses**: Integrated 37 core blocking self-test suites enforcing 7-location version synchronization, workspace hygiene (preventing pycache and test screenshots), and recursive packager exclusion rules.
+    - **Architectural Boundary Disclosure (Kernel-Layer Scope)**: TLS Client Hello signatures, JA4 fingerprints, and native OS DNS resolution pipelines reside fundamentally within Chromium's C++ networking stack; this release does not attempt fragile JavaScript-level emulation for transport traits. Missing CJK glyphs fall back natively through the system font stack without synthetic Canvas metric manipulation; privileged `chrome://` internal URLs remain mirror-only under security sandbox policies.
 
     ### 下载 / Downloads
 
@@ -74,6 +84,19 @@ jobs:
     name: Ensure GitHub Release
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify release tag matches packaged application version
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_tag="v$(node -p 'require("./Browserapp/package.json").version')"
+          if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
+            echo "Release tag must match Browserapp/package.json version: expected $expected_tag, got $RELEASE_TAG" >&2
+            exit 1
+          fi
       - name: Create or update release shell
         shell: bash
         env:

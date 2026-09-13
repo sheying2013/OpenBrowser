@@ -27,6 +27,9 @@ const {
 } = require('./automation/kernel-init-sync');
 const { fpLog, summarizeFp, LIVE_PROBE_EXPRESSION, logPath: fingerprintLogPath } = require('./automation/fingerprint-debug-log');
 const { buildPortScanProtectionScript } = require('./automation/port-scan-protection');
+const { buildWorkerFontPresenceSource } = require('./automation/worker-font-presence-fallback');
+const { createCssFontResponseRewriter } = require('./automation/css-font-response-rewrite');
+const { buildUaProfile, cdpUserAgentOverride, buildAcceptLanguageHeader } = require('./automation/user-agent');
 const { sanitizeUrlForLog } = require('./automation/log-sanitizer');
 
 // Stable identity of the document-start config. Two inject payloads built from the same
@@ -77,6 +80,333 @@ const {
   assertExtensionTreeSafe,
   sanitizeProfile: sanitizeProfileData,
 } = require("./engine/index");
+
+/**
+ * Validate whether a string is a recognized, valid IANA time zone identifier.
+ */
+function isValidIanaTimezone(tz) {
+  if (!tz || typeof tz !== "string") return false;
+  const trimmed = tz.trim();
+  if (!trimmed) return false;
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: trimmed });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Extract an explicit --time-zone-for-testing value from launch args if present.
+ */
+function extractTimezoneFromArgs(args) {
+  if (!Array.isArray(args)) return null;
+  for (let i = args.length - 1; i >= 0; i -= 1) {
+    const item = String(args[i] || "");
+    if (item.startsWith("--time-zone-for-testing=")) {
+      const val = item.slice("--time-zone-for-testing=".length).trim();
+      return val || null;
+    }
+  }
+  return null;
+}
+
+
+
+class RequestHeaderRewriter {
+  constructor(options = {}) {
+    this.enabled = options.enabled !== false;
+    this.logger = typeof options.logger === "function" ? options.logger : null;
+    this.inFlight = new Set();
+    this.inFlightBySession = new Map();
+    this.setPersona(options.profile, options.fingerprint);
+  }
+
+  setPersona(profile = {}, fingerprint = {}) {
+    const fp = fingerprint || {};
+    const prof = profile || {};
+    const ua = fp.userAgent || prof.userAgent || "";
+    const rawOs = String(fp.os || prof.os || fp.platform || prof.platform || "").toLowerCase();
+    const osKey = rawOs.includes("win") ? "windows"
+      : rawOs.includes("andr") ? "android"
+      : rawOs.includes("mac") ? "macos"
+      : rawOs.includes("ios") ? "ios"
+      : rawOs.includes("lin") ? "linux"
+      : (ua ? undefined : "windows");
+
+    const platformNav = osKey === "windows" ? "Win32"
+      : osKey === "android" ? "Linux armv8l"
+      : osKey === "macos" ? "MacIntel"
+      : osKey === "ios" ? "iPhone"
+      : osKey === "linux" ? "Linux x86_64"
+      : undefined;
+
+    const uaProfile = fp.uaProfile || buildUaProfile({
+      userAgent: ua,
+      os: osKey,
+      platformNav,
+    });
+
+    const langs = (Array.isArray(fp.languages) && fp.languages.length)
+      ? fp.languages
+      : (Array.isArray(prof.languages) && prof.languages.length)
+        ? prof.languages
+        : prof.language
+          ? [prof.language]
+          : [];
+
+    const acceptLanguageHeader = langs.length
+      ? buildAcceptLanguageHeader(langs)
+      : (uaProfile.language || "en-US,en;q=0.9");
+
+    const override = cdpUserAgentOverride(uaProfile, acceptLanguageHeader);
+
+    const meta = override.userAgentMetadata || {};
+    const metaFormFactors = fp.formFactors || prof.formFactors || fp.clientHints?.formFactors || prof.clientHints?.formFactors || fp.form_factors || prof.form_factors;
+    if (metaFormFactors && !meta.formFactors) {
+      meta.formFactors = metaFormFactors;
+    }
+
+    this.persona = {
+      userAgent: override.userAgent || uaProfile.userAgent || ua,
+      acceptLanguage: override.acceptLanguage || acceptLanguageHeader,
+      platformNav: override.platform || uaProfile.platform || platformNav || "Win32",
+      platform: meta.platform || uaProfile.metadata?.platform || (osKey === "android" ? "Android" : "Windows"),
+      mobile: Boolean(meta.mobile),
+      brands: meta.brands || [],
+      metadata: meta,
+    };
+
+    if (Array.isArray(this.persona.brands) && this.persona.brands.length) {
+      this.secChUa = this.persona.brands
+        .map((b) => "\"" + b.brand + "\";v=\"" + b.version + "\"")
+        .join(", ");
+    } else {
+      this.secChUa = "\"Chromium\";v=\"148\", \"Google Chrome\";v=\"148\"";
+    }
+
+    const fvl = this.persona.metadata?.fullVersionList;
+    if (Array.isArray(fvl) && fvl.length) {
+      this.secChUaFullVersionList = fvl
+        .map((b) => "\"" + b.brand + "\";v=\"" + b.version + "\"")
+        .join(", ");
+    } else {
+      const fv = this.persona.metadata?.fullVersion || "148.0.0.0";
+      if (Array.isArray(this.persona.brands) && this.persona.brands.length) {
+        this.secChUaFullVersionList = this.persona.brands
+          .map((b) => "\"" + b.brand + "\";v=\"" + fv + "\"")
+          .join(", ");
+      } else {
+        this.secChUaFullVersionList = "\"Chromium\";v=\"" + fv + "\", \"Google Chrome\";v=\"" + fv + "\"";
+      }
+    }
+  }
+
+  async _sendCommand(connection, method, params = {}, options = {}) {
+    if (!connection) throw new Error("No CDP connection available");
+    if (typeof connection.command === "function") {
+      return connection.command(method, params, options);
+    }
+    if (typeof connection.call === "function") {
+      return connection.call(method, params, options);
+    }
+    if (typeof connection.send === "function") {
+      return connection.send(method, params, options);
+    }
+    throw new Error("Unsupported connection object (missing command/call/send)");
+  }
+
+  cleanupSession(sessionId) {
+    if (!sessionId) return;
+    const reqs = this.inFlightBySession.get(sessionId);
+    if (reqs) {
+      for (const rid of reqs) {
+        this.inFlight.delete(rid);
+      }
+      this.inFlightBySession.delete(sessionId);
+    }
+  }
+
+  destroy() {
+    this.inFlight.clear();
+    this.inFlightBySession.clear();
+  }
+
+  handleEvent(event, connection) {
+    if (!event || event.method !== "Fetch.requestPaused" || !event.params) return;
+    const { requestId, request, responseStatusCode } = event.params;
+    const sessionId = event.sessionId;
+
+    // Only process requests at Request stage (where responseStatusCode is null/undefined)
+    if (!requestId || responseStatusCode != null) return;
+
+    // Prevent duplicate in-flight processing for the same requestId
+    if (this.inFlight.has(requestId)) return;
+    this.inFlight.add(requestId);
+    if (sessionId) {
+      if (!this.inFlightBySession.has(sessionId)) {
+        this.inFlightBySession.set(sessionId, new Set());
+      }
+      this.inFlightBySession.get(sessionId).add(requestId);
+    }
+
+    (async () => {
+      let settled = false;
+      let safetyTimer = null;
+
+      const doContinue = async (headers) => {
+        if (settled) return;
+        settled = true;
+        if (safetyTimer) {
+          clearTimeout(safetyTimer);
+          safetyTimer = null;
+        }
+        this.inFlight.delete(requestId);
+        if (sessionId && this.inFlightBySession.has(sessionId)) {
+          const s = this.inFlightBySession.get(sessionId);
+          s.delete(requestId);
+          if (s.size === 0) this.inFlightBySession.delete(sessionId);
+        }
+
+        try {
+          const params = { requestId };
+          if (headers && Array.isArray(headers)) params.headers = headers;
+          await this._sendCommand(connection, "Fetch.continueRequest", params, { sessionId, timeout: 6000 });
+        } catch (_) {
+          // If continuing with modified headers was rejected by CDP, fallback to raw continueRequest to avoid hanging
+          try {
+            await this._sendCommand(connection, "Fetch.continueRequest", { requestId }, { sessionId, timeout: 3000 });
+          } catch (_) {}
+        }
+      };
+
+      // Fail-open timeout guard: if anything stalls, resume after 7 seconds
+      safetyTimer = setTimeout(() => {
+        if (!settled) {
+          doContinue().catch(() => {});
+        }
+      }, 7000);
+      if (typeof safetyTimer.unref === "function") safetyTimer.unref();
+
+      try {
+        if (!this.enabled || !this.persona) {
+          return await doContinue();
+        }
+
+        const url = String(request?.url || "");
+        // Filter internal browser schemes: chrome, devtools, data, blob, about, etc.
+        if (/^(chrome|chrome-extension|edge|edge-extension|devtools|data|blob|about|javascript|filesystem|view-source|isolated-app):/i.test(url)) {
+          return await doContinue();
+        }
+
+        const reqHeaders = request?.headers || {};
+        const method = String(request?.method || "GET").toUpperCase();
+
+        // Filter WebSocket upgrades: modifying headers can break native WebSocket handshake
+        let isWs = false;
+        for (const [hk, hv] of Object.entries(reqHeaders)) {
+          if (hk.toLowerCase() === "upgrade" && String(hv).toLowerCase() === "websocket") {
+            isWs = true;
+            break;
+          }
+        }
+        if (isWs) {
+          return await doContinue();
+        }
+
+        const newHeaders = [];
+        const existingKeys = new Set();
+        const seenNames = new Set();
+
+        for (const [k, v] of Object.entries(reqHeaders)) {
+          const lk = k.toLowerCase();
+          existingKeys.add(lk);
+          // Strip all host User-Agent, Accept-Language, and any Client Hints (sec-ch-ua*)
+          if (
+            lk === "user-agent" ||
+            lk === "accept-language" ||
+            lk.startsWith("sec-ch-ua")
+          ) {
+            continue;
+          }
+          if (seenNames.has(lk)) continue;
+          seenNames.add(lk);
+          newHeaders.push({ name: k, value: String(v) });
+        }
+
+        // 1. User-Agent
+        if (this.persona.userAgent) {
+          newHeaders.push({ name: "User-Agent", value: this.persona.userAgent });
+        }
+
+        // 2. Accept-Language: send on all non-OPTIONS requests, or OPTIONS only if originally present
+        if (this.persona.acceptLanguage && (method !== "OPTIONS" || existingKeys.has("accept-language"))) {
+          newHeaders.push({ name: "Accept-Language", value: this.persona.acceptLanguage });
+        }
+
+        // 3. Low-entropy User-Agent Client Hints
+        if (this.secChUa) {
+          newHeaders.push({ name: "sec-ch-ua", value: this.secChUa });
+        }
+        if (this.persona.platform) {
+          newHeaders.push({ name: "sec-ch-ua-platform", value: "\"" + this.persona.platform + "\"" });
+        }
+        newHeaders.push({ name: "sec-ch-ua-mobile", value: this.persona.mobile ? "?1" : "?0" });
+
+        // 4. High-entropy User-Agent Client Hints (ONLY populated if server requested via Accept-CH)
+        const meta = this.persona.metadata || {};
+
+        if (existingKeys.has("sec-ch-ua-arch")) {
+          const arch = meta.architecture !== undefined ? meta.architecture : (this.persona.platform === "Android" ? "" : "x86");
+          newHeaders.push({ name: "sec-ch-ua-arch", value: "\"" + arch + "\"" });
+        }
+        if (existingKeys.has("sec-ch-ua-bitness")) {
+          const bitness = meta.bitness !== undefined ? meta.bitness : (this.persona.platform === "Android" ? "" : "64");
+          newHeaders.push({ name: "sec-ch-ua-bitness", value: "\"" + bitness + "\"" });
+        }
+        if (existingKeys.has("sec-ch-ua-model")) {
+          const model = meta.model !== undefined ? meta.model : "";
+          newHeaders.push({ name: "sec-ch-ua-model", value: "\"" + model + "\"" });
+        }
+        if (existingKeys.has("sec-ch-ua-platform-version")) {
+          const pv = meta.platformVersion !== undefined ? meta.platformVersion : "15.0.0";
+          newHeaders.push({ name: "sec-ch-ua-platform-version", value: "\"" + pv + "\"" });
+        }
+        if (existingKeys.has("sec-ch-ua-full-version")) {
+          const fv = meta.fullVersion || meta.uaFullVersion || "148.0.0.0";
+          newHeaders.push({ name: "sec-ch-ua-full-version", value: "\"" + fv + "\"" });
+        }
+        if (existingKeys.has("sec-ch-ua-full-version-list")) {
+          newHeaders.push({ name: "sec-ch-ua-full-version-list", value: this.secChUaFullVersionList });
+        }
+        if (existingKeys.has("sec-ch-ua-form-factors")) {
+          const ff = meta.formFactors || meta.form_factors;
+          if (ff) {
+            const val = Array.isArray(ff) ? ff.map((f) => "\"" + f + "\"").join(", ") : "\"" + ff + "\"";
+            newHeaders.push({ name: "sec-ch-ua-form-factors", value: val });
+          } else if (this.persona.mobile) {
+            newHeaders.push({ name: "sec-ch-ua-form-factors", value: "\"Mobile\"" });
+          }
+        }
+        if (existingKeys.has("sec-ch-ua-wow64")) {
+          newHeaders.push({ name: "sec-ch-ua-wow64", value: meta.wow64 ? "?1" : "?0" });
+        }
+
+        await doContinue(newHeaders);
+      } catch (err) {
+        if (this.logger) {
+          try { this.logger({ type: "request-rewrite-error", error: err.message, url: request?.url }); } catch (_) {}
+        }
+        await doContinue();
+      }
+    })();
+  }
+}
+
+function createRequestHeaderRewriter(options = {}) {
+  return new RequestHeaderRewriter(options);
+}
+
 
 class BrowserEngine {
   constructor(app, options = {}) {
@@ -995,8 +1325,38 @@ class BrowserEngine {
     const portScanSource = workerPrivacy.portScanProtect
       ? '\n' + buildPortScanProtectionScript(workerPrivacy.portScanAllow)
       : '';
-    const source = buildWorkerInjectionScript(fingerprint) + portScanSource;
+    const fontPresenceSource = typeof buildWorkerFontPresenceSource === 'function'
+      ? buildWorkerFontPresenceSource(fingerprint)
+      : '';
+    const source = buildWorkerInjectionScript(fingerprint)
+      + portScanSource
+      + (fontPresenceSource ? '\n' + fontPresenceSource : '');
     const browserWs = await cdp.browserSocket(item.port);
+    // Response rewriting runs below the parser, before static HTML/CSS is turned into a
+    // stylesheet. It complements the document gate, which only sees dynamic DOM/CSSOM writes.
+    const fontResponseRewriter = createCssFontResponseRewriter({
+      personaFonts: fingerprint?.fonts?.list || [],
+      logger: (details) => {
+        if (details?.type === 'handle-error' || details?.type === 'enable-error') {
+          const errMsg = String(details?.error || '');
+          if (/Can only get response body|No resource with given identifier/i.test(errMsg)) {
+            return;
+          }
+          item.cssFontResponseRewriteError = String(details.error || 'response rewrite error');
+        }
+      },
+    });
+    item.cssFontResponseRewriter = fontResponseRewriter;
+    const requestHeaderRewriter = new RequestHeaderRewriter({
+      profile: item.profile,
+      fingerprint,
+      logger: (details) => {
+        if (details?.type === 'request-rewrite-error') {
+          item.requestHeaderRewriteError = details.error;
+        }
+      },
+    });
+    item.requestHeaderRewriter = requestHeaderRewriter;
     const workerTypes = new Set(['worker', 'shared_worker', 'service_worker']);
     const internalUrl = /^(chrome|chrome-extension|edge|edge-extension|devtools):/i;
     const report = (error, targetInfo = {}) => {
@@ -1008,23 +1368,126 @@ class BrowserEngine {
         message: error.message,
       });
     };
+
+    // Tracking for initial pre-existing target attach and fetch enablement barrier
+    const pendingInitialTargets = new Set();
+    const completedInitialTargets = new Set();
+    let barrierResolve;
+    let barrierReject;
+    let barrierSettled = false;
+    let barrierTimer = null;
+
+    const barrierPromise = new Promise((resolve, reject) => {
+      barrierResolve = resolve;
+      barrierReject = reject;
+    });
+
+    const settleBarrier = (err) => {
+      if (barrierSettled) return;
+      barrierSettled = true;
+      if (barrierTimer) {
+        clearTimeout(barrierTimer);
+        barrierTimer = null;
+      }
+      if (err) {
+        barrierReject(err);
+      } else {
+        barrierResolve();
+      }
+    };
+
     const onAttached = (event, connection) => {
+      // Fetch.requestPaused at Request stage (responseStatusCode == null) is handled by
+      // requestHeaderRewriter to guarantee that main-frame navigations, subresources, and workers
+      // carry persona User-Agent, Client Hints (sec-ch-ua*), and Accept-Language without host leaks.
+      if (event?.method === 'Fetch.requestPaused' && event.params?.requestId && event.params?.responseStatusCode == null) {
+        try { requestHeaderRewriter.handleEvent(event, connection); } catch (_) {}
+        return;
+      }
+
+      // Fetch.requestPaused is delivered on this same browser connection. It must be dispatched
+      // before the Target branch below, otherwise a paused parser response can wait forever.
+      try { fontResponseRewriter.handleEvent(event, connection); } catch (_) {}
+
+      // Clean up in-flight requests when a target session detaches or closes
+      if (event?.method === 'Target.detachedFromTarget') {
+        const detachedSessionId = event.params?.sessionId;
+        if (detachedSessionId) {
+          try { requestHeaderRewriter.cleanupSession(detachedSessionId); } catch (_) {}
+          try { fontResponseRewriter.cleanupSession?.(detachedSessionId); } catch (_) {}
+        }
+        return;
+      }
+
+      // If an initial target closes before attaching, unblock barrier without hanging
+      if (event?.method === 'Target.targetDestroyed') {
+        const destroyedId = event.params?.targetId;
+        if (destroyedId && pendingInitialTargets.has(destroyedId)) {
+          pendingInitialTargets.delete(destroyedId);
+          if (pendingInitialTargets.size === 0) {
+            settleBarrier();
+          }
+        }
+        return;
+      }
+
       if (event.method !== 'Target.attachedToTarget') return;
       const { sessionId, targetInfo = {}, waitingForDebugger } = event.params || {};
       if (!sessionId) return;
+      const targetId = targetInfo.targetId;
+      const isInitial = Boolean(targetId && pendingInitialTargets.has(targetId));
+
       (async () => {
         try {
-          if (targetInfo.type === 'page' || targetInfo.type === 'iframe') {
+          const pageLikeTypes = new Set(['page', 'iframe', 'popup', 'webview']);
+          if (targetInfo.type === 'page' || targetInfo.type === 'iframe' || pageLikeTypes.has(targetInfo.type)) {
             // Nested attach so workers/iframes under this page also pause for inject.
             await connection.command('Target.setAutoAttach', {
               autoAttach: true,
               waitForDebuggerOnStart: true,
               flatten: true,
-            }, { sessionId });
+            }, { sessionId }).catch(() => {});
             // Critical: inject fingerprint BEFORE resuming the page/iframe target.
             // Polling in startRunningWatch is only a fallback, not the primary path.
             await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, targetInfo);
+            // Enable Fetch while this page/iframe is paused. The next navigation then receives
+            // sanitized HTML/CSS bytes before the renderer tokenizes its static styles.
+            await fontResponseRewriter.enable(connection, { sessionId, timeout: 8000 });
+            await connection.command('Fetch.enable', {
+              patterns: [
+                { urlPattern: '*', requestStage: 'Request' },
+                { urlPattern: '*', requestStage: 'Response', resourceType: 'Document' },
+                { urlPattern: '*', requestStage: 'Response', resourceType: 'Stylesheet' },
+              ],
+            }, { sessionId, timeout: 8000 }).catch(() => {});
+
+            if (isInitial && !completedInitialTargets.has(targetId)) {
+              completedInitialTargets.add(targetId);
+              pendingInitialTargets.delete(targetId);
+              if (pendingInitialTargets.size === 0) {
+                settleBarrier();
+              }
+            }
           } else if (workerTypes.has(targetInfo.type) && !internalUrl.test(String(targetInfo.url || ''))) {
+            await connection.command('Network.enable', {}, { sessionId }).catch(() => {});
+            const workerUa = requestHeaderRewriter.enabled ? requestHeaderRewriter.persona : null;
+            if (workerUa) {
+              await connection.command('Network.setUserAgentOverride', {
+                userAgent: workerUa.userAgent,
+                acceptLanguage: workerUa.acceptLanguage,
+                platform: workerUa.platformNav || workerUa.platform,
+                userAgentMetadata: workerUa.metadata,
+              }, { sessionId }).catch(() => {});
+              await connection.command('Emulation.setUserAgentOverride', {
+                userAgent: workerUa.userAgent,
+                acceptLanguage: workerUa.acceptLanguage,
+                platform: workerUa.platformNav || workerUa.platform,
+                userAgentMetadata: workerUa.metadata,
+              }, { sessionId }).catch(() => {});
+            }
+            await connection.command('Fetch.enable', {
+              patterns: [{ urlPattern: '*', requestStage: 'Request' }],
+            }, { sessionId, timeout: 8000 }).catch(() => {});
             await connection.command('Runtime.evaluate', { expression: source }, { sessionId, timeout: 10000 });
           }
         } catch (error) {
@@ -1035,6 +1498,9 @@ class BrowserEngine {
             targetType: targetInfo.type || '',
             message: error.message,
           });
+          if (isInitial) {
+            settleBarrier(new Error(`Initial target session attach failed for ${targetId}: ${error.message}`));
+          }
         } finally {
           if (waitingForDebugger) {
             await connection.command('Runtime.runIfWaitingForDebugger', {}, { sessionId })
@@ -1043,9 +1509,15 @@ class BrowserEngine {
         }
       })();
     };
+
     const connection = await cdp.connect(browserWs, {
       onEvent: onAttached,
       onDisconnect: (error) => {
+        try { requestHeaderRewriter.destroy(); } catch (_) {}
+        try { fontResponseRewriter.destroy?.(); } catch (_) {}
+        if (!barrierSettled) {
+          settleBarrier(new Error(`CDP connection closed before initial target barrier resolved: ${error?.message || error}`));
+        }
         if (item.cleanedUp || item.stopping) return;
         this.handleBrowserGone(item.profile.id, item, 'worker-cdp-disconnect', {
           expected: false,
@@ -1061,15 +1533,72 @@ class BrowserEngine {
       },
       timeout: 8000,
     });
+
+    const origClose = connection.close.bind(connection);
+    connection.close = () => {
+      try { requestHeaderRewriter.destroy(); } catch (_) {}
+      try { fontResponseRewriter.destroy?.(); } catch (_) {}
+      if (!barrierSettled) {
+        settleBarrier(new Error('CDP connection closed before initial target barrier resolved'));
+      }
+      return origClose();
+    };
+    item.workerFingerprintConnection = connection;
+
+    if (item.cleanedUp || item.stopping) {
+      connection.close();
+      throw new Error('Browser item is already stopping or cleaned up');
+    }
+
     try {
       await connection.command('Target.setDiscoverTargets', { discover: true });
+
+      // Identify existing targets before setAutoAttach to establish the initial target barrier
+      let discoveredTargets = [];
+      try {
+        const targetsRes = await connection.command('Target.getTargets', {}, { timeout: 8000 });
+        discoveredTargets = targetsRes?.targetInfos || [];
+      } catch (_) {
+        try {
+          const fallbackTargets = await cdp.targets(item.port);
+          discoveredTargets = fallbackTargets || [];
+        } catch (_) {}
+      }
+
+      for (const t of discoveredTargets) {
+        const tid = t.targetId || t.id;
+        const ttype = t.type;
+        const turl = String(t.url || '');
+        const pageLikeTypes = new Set(['page', 'iframe', 'popup', 'webview']);
+        if ((ttype === 'page' || ttype === 'iframe' || pageLikeTypes.has(ttype)) && !internalUrl.test(turl) && tid) {
+          pendingInitialTargets.add(tid);
+        }
+      }
+
+      if (pendingInitialTargets.size === 0) {
+        settleBarrier();
+      } else {
+        barrierTimer = setTimeout(() => {
+          const remaining = Array.from(pendingInitialTargets).join(', ');
+          settleBarrier(new Error(`Initial target session attach barrier timed out after 8000ms (targets: ${remaining})`));
+        }, 8000);
+        if (typeof barrierTimer.unref === 'function') barrierTimer.unref();
+      }
+
       await connection.command('Target.setAutoAttach', {
         autoAttach: true,
         waitForDebuggerOnStart: true,
         flatten: true,
       });
+
+      // Synchronize on the initial target barrier before returning to prevent navigation race
+      await barrierPromise;
     } catch (error) {
+      settleBarrier(error);
       connection.close();
+      if (item.workerFingerprintConnection === connection) {
+        item.workerFingerprintConnection = null;
+      }
       throw error;
     }
     item.workerFingerprintConnection = connection;
@@ -2388,6 +2917,16 @@ class BrowserEngine {
     args = mergeFlags(args, chromeArgsForFingerprint(fingerprint, profile), {
       listFlags: LIST_VALUE_FLAGS,
     });
+    const langList = (Array.isArray(fingerprint?.languages) && fingerprint.languages.length)
+      ? fingerprint.languages
+      : (Array.isArray(profile?.languages) && profile.languages.length)
+        ? profile.languages
+        : profile?.language
+          ? [profile.language]
+          : [];
+    if (langList.length && !args.some((a) => a.startsWith('--accept-lang='))) {
+      args.push(`--accept-lang=${langList.join(',')}`);
+    }
     // openbrowser-148: write profile/init.json so Framework native FP matches buildFingerprint
     let runtimeFingerprint = fingerprint;
     kernelWindowName = null;
@@ -2564,21 +3103,38 @@ class BrowserEngine {
         finalArgs.push('--headless=new');
         if (!finalArgs.some((arg) => String(arg).split('=')[0] === '--disable-gpu')) finalArgs.push('--disable-gpu');
       }
-      const effectiveTimezone = profile.exitTimezone
-        || pageNetwork?.timezone
-        || (profile.privacy?.timezoneMode === 'custom' ? profile.privacy.timezone : '')
-        || '';
-      // TZ moves the timezone for the whole browser process on POSIX, which keeps the C++ side
-      // (ICU, cookie expiry, cert validity, Date in every worker) consistent with the profile
-      // without relying on injected JS.
-      //
-      // It does NOT work on Windows: ICU's uprv_tzname() takes the
-      // U_PLATFORM_USES_ONLY_WIN32_API branch and calls uprv_detectWindowsTimeZone(), which
-      // reads the machine's registry setting and never consults TZ. On Windows the JS hooks in
-      // automation/fingerprint.js are the only thing holding the timezone, so they must stay
-      // self-consistent (Intl, every Date getter/setter, the multi-arg constructor and parse).
+      const isRealTimezone = profile.privacy?.timezoneMode === 'real';
+      const userExplicitTz = extractTimezoneFromArgs(finalArgs);
+      const hasExplicitTzFlag = Boolean(userExplicitTz || finalArgs.some((arg) => /^--time-zone-for-testing(?:=|$)/i.test(String(arg))));
+
+      let effectiveTimezone = '';
+      if (hasExplicitTzFlag) {
+        // User explicitly specified --time-zone-for-testing; honor explicit flag priority and avoid duplicates.
+        if (isValidIanaTimezone(userExplicitTz)) {
+          effectiveTimezone = userExplicitTz;
+        }
+      } else if (!isRealTimezone) {
+        const candidateTz = String(
+          profile.exitTimezone
+          || pageNetwork?.timezone
+          || (profile.privacy?.timezoneMode === 'custom' ? profile.privacy.timezone : '')
+          || profile.privacy?.timezone
+          || fingerprint?.timezone
+          || ''
+        ).trim();
+
+        if (isValidIanaTimezone(candidateTz)) {
+          effectiveTimezone = candidateTz;
+          finalArgs.push(`--time-zone-for-testing=${effectiveTimezone}`);
+        }
+      }
+
+      // Synchronize process-level timezone for POSIX kernels and C++ ICU subsystems.
+      // On Windows, ICU reads the system registry rather than TZ, so passing
+      // --time-zone-for-testing on the command line ensures the Chromium C++ core boots in
+      // the persona timezone.
       const spawnEnv = { ...process.env };
-      if (effectiveTimezone && profile.privacy?.timezoneMode !== 'real' && process.platform !== 'win32') {
+      if (effectiveTimezone && !isRealTimezone && process.platform !== 'win32') {
         spawnEnv.TZ = effectiveTimezone;
       }
       child = spawn(launchBinary, finalArgs, {
@@ -3520,4 +4076,8 @@ module.exports = {
   formatBrowserStartupError,
   writeBrowserStartupDiagnostic,
   systemBrowserCandidatesForPlatform,
+  isValidIanaTimezone,
+  extractTimezoneFromArgs,
+  RequestHeaderRewriter,
+  createRequestHeaderRewriter,
 };

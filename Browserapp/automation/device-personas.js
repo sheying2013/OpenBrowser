@@ -1,19 +1,19 @@
-'use strict';
+"use strict";
 
 /**
  * Coherent device personas.
  *
  * Sampling each hardware axis independently produces machines that do not exist — 4 cores
  * with 32 GB, a Mac reporting 24-bit colour at 1x, a laptop persona carrying a workstation
- * GPU. Detectors score the *combination*, so an impossible pairing is a stronger signal than
- * any single spoofed value. A persona keeps the axes that co-occur on real hardware bundled
- * together: CPU, memory, GPU, screen geometry, colour depth and pixel ratio ship as one unit.
+ * GPU, or an Android phone claiming Direct3D11 graphics and Win32 platform. Detectors score
+ * the combination, so an impossible pairing is a stronger signal than any single spoofed
+ * value. A persona keeps the axes that co-occur on real hardware bundled together: CPU,
+ * memory, GPU, screen geometry, colour depth and pixel ratio ship as one unit.
  *
  * Selection is seeded per profile, so a profile keeps the same persona across launches.
  *
  * GPU strings must match what the OS actually reports: ANGLE/D3D11 on Windows, Metal on
- * macOS, and Mesa/OpenGL on Linux. `webglPresetsForOs` in fingerprint.js holds the same
- * families; these entries pair them with plausible CPU/RAM/display combinations.
+ * macOS, Mesa/OpenGL on Linux, and OpenGL ES / Vulkan on Android.
  */
 
 /** @typedef {{os:string, cores:number, memory:number, colorDepth:number, devicePixelRatio:number, screen:{width:number,height:number}, webgl:{vendor:string,renderer:string,gpu?:{vendor:string,architecture:string}}}} DevicePersona */
@@ -21,57 +21,57 @@
 /** @type {DevicePersona[]} */
 const WINDOWS_PERSONAS = [
   {
-    os: 'windows', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1,
+    os: "windows", cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
-      vendor: 'Google Inc. (Intel)',
-      renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)',
-      gpu: { vendor: 'intel', architecture: 'gen-9' },
+      vendor: "Google Inc. (Intel)",
+      renderer: "ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      gpu: { vendor: "intel", architecture: "gen-9" },
     },
   },
   {
-    os: 'windows', cores: 4, memory: 8, colorDepth: 24, devicePixelRatio: 1,
+    os: "windows", cores: 4, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1366, height: 768 },
     webgl: {
-      vendor: 'Google Inc. (Intel)',
-      renderer: 'ANGLE (Intel, Intel(R) HD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)',
-      gpu: { vendor: 'intel', architecture: 'gen-9' },
+      vendor: "Google Inc. (Intel)",
+      renderer: "ANGLE (Intel, Intel(R) HD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      gpu: { vendor: "intel", architecture: "gen-9" },
     },
   },
   {
-    os: 'windows', cores: 12, memory: 8, colorDepth: 24, devicePixelRatio: 1,
+    os: "windows", cores: 12, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
-      vendor: 'Google Inc. (NVIDIA)',
-      renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)',
-      gpu: { vendor: 'nvidia', architecture: 'ampere' },
+      vendor: "Google Inc. (NVIDIA)",
+      renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      gpu: { vendor: "nvidia", architecture: "ampere" },
     },
   },
   {
-    os: 'windows', cores: 16, memory: 8, colorDepth: 24, devicePixelRatio: 1,
+    os: "windows", cores: 16, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 2560, height: 1440 },
     webgl: {
-      vendor: 'Google Inc. (NVIDIA)',
-      renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Direct3D11 vs_5_0 ps_5_0, D3D11)',
-      gpu: { vendor: 'nvidia', architecture: 'ada' },
+      vendor: "Google Inc. (NVIDIA)",
+      renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      gpu: { vendor: "nvidia", architecture: "ada" },
     },
   },
   {
-    os: 'windows', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1,
+    os: "windows", cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
-      vendor: 'Google Inc. (AMD)',
-      renderer: 'ANGLE (AMD, AMD Radeon RX 6600 Direct3D11 vs_5_0 ps_5_0, D3D11)',
-      gpu: { vendor: 'amd', architecture: 'rdna-2' },
+      vendor: "Google Inc. (AMD)",
+      renderer: "ANGLE (AMD, AMD Radeon RX 6600 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      gpu: { vendor: "amd", architecture: "rdna-2" },
     },
   },
   {
-    os: 'windows', cores: 6, memory: 8, colorDepth: 24, devicePixelRatio: 1,
+    os: "windows", cores: 6, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
-      vendor: 'Google Inc. (Intel)',
-      renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)',
-      gpu: { vendor: 'intel', architecture: 'gen-12lp' },
+      vendor: "Google Inc. (Intel)",
+      renderer: "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      gpu: { vendor: "intel", architecture: "gen-12lp" },
     },
   },
 ];
@@ -79,69 +79,109 @@ const WINDOWS_PERSONAS = [
 /** Apple hardware: Retina (2x) and 30-bit colour are the norm, not the exception. */
 const MACOS_PERSONAS = [
   {
-    os: 'macos', cores: 8, memory: 8, colorDepth: 30, devicePixelRatio: 2,
+    os: "macos", cores: 8, memory: 8, colorDepth: 30, devicePixelRatio: 2,
     screen: { width: 1440, height: 900 },
     webgl: {
-      vendor: 'Google Inc. (Apple)',
-      renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)',
-      gpu: { vendor: 'apple', architecture: 'apple-m1' },
+      vendor: "Google Inc. (Apple)",
+      renderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
+      gpu: { vendor: "apple", architecture: "apple-m1" },
     },
   },
   {
-    os: 'macos', cores: 10, memory: 8, colorDepth: 30, devicePixelRatio: 2,
+    os: "macos", cores: 10, memory: 8, colorDepth: 30, devicePixelRatio: 2,
     screen: { width: 1512, height: 982 },
     webgl: {
-      vendor: 'Google Inc. (Apple)',
-      renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)',
-      gpu: { vendor: 'apple', architecture: 'apple-m2' },
+      vendor: "Google Inc. (Apple)",
+      renderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)",
+      gpu: { vendor: "apple", architecture: "apple-m2" },
     },
   },
   {
-    os: 'macos', cores: 12, memory: 8, colorDepth: 30, devicePixelRatio: 2,
+    os: "macos", cores: 12, memory: 8, colorDepth: 30, devicePixelRatio: 2,
     screen: { width: 1728, height: 1117 },
     webgl: {
-      vendor: 'Google Inc. (Apple)',
-      renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Pro, Unspecified Version)',
-      gpu: { vendor: 'apple', architecture: 'apple-m3' },
+      vendor: "Google Inc. (Apple)",
+      renderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Pro, Unspecified Version)",
+      gpu: { vendor: "apple", architecture: "apple-m3" },
     },
   },
   {
-    os: 'macos', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 2,
+    os: "macos", cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 2,
     screen: { width: 1680, height: 1050 },
     webgl: {
-      vendor: 'Google Inc. (Intel)',
-      renderer: 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics 655, Unspecified Version)',
-      gpu: { vendor: 'intel', architecture: 'gen-9' },
+      vendor: "Google Inc. (Intel)",
+      renderer: "ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics 655, Unspecified Version)",
+      gpu: { vendor: "intel", architecture: "gen-9" },
     },
   },
 ];
 
 const LINUX_PERSONAS = [
   {
-    os: 'linux', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1,
+    os: "linux", cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
-      vendor: 'Google Inc. (Intel)',
-      renderer: 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)',
-      gpu: { vendor: 'intel', architecture: 'gen-9' },
+      vendor: "Google Inc. (Intel)",
+      renderer: "ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)",
+      gpu: { vendor: "intel", architecture: "gen-9" },
     },
   },
   {
-    os: 'linux', cores: 12, memory: 8, colorDepth: 24, devicePixelRatio: 1,
+    os: "linux", cores: 12, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 2560, height: 1440 },
     webgl: {
-      vendor: 'Google Inc. (NVIDIA)',
-      renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060/PCIe/SSE2, OpenGL 4.6)',
-      gpu: { vendor: 'nvidia', architecture: 'ampere' },
+      vendor: "Google Inc. (NVIDIA)",
+      renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060/PCIe/SSE2, OpenGL 4.6)",
+      gpu: { vendor: "nvidia", architecture: "ampere" },
     },
   },
   {
-    os: 'linux', cores: 4, memory: 8, colorDepth: 24, devicePixelRatio: 1,
+    os: "linux", cores: 4, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
-      vendor: 'Google Inc. (AMD)',
-      renderer: 'ANGLE (AMD, AMD Radeon Graphics (radeonsi, renoir), OpenGL 4.6)',
-      gpu: { vendor: 'amd', architecture: 'rdna-2' },
+      vendor: "Google Inc. (AMD)",
+      renderer: "ANGLE (AMD, AMD Radeon Graphics (radeonsi, renoir), OpenGL 4.6)",
+      gpu: { vendor: "amd", architecture: "rdna-2" },
+    },
+  },
+];
+
+/** Modern Android mobile device personas: high DPR (2.625 - 3.5), mobile viewports, Adreno / Mali / Xclipse GPUs. */
+const ANDROID_PERSONAS = [
+  {
+    os: "android", cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 3,
+    screen: { width: 412, height: 915 },
+    webgl: {
+      vendor: "Google Inc. (Qualcomm)",
+      renderer: "ANGLE (Qualcomm, Adreno (TM) 740, OpenGL ES 3.2)",
+      gpu: { vendor: "qualcomm", architecture: "adreno-700" },
+    },
+  },
+  {
+    os: "android", cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 2.625,
+    screen: { width: 412, height: 892 },
+    webgl: {
+      vendor: "Google Inc. (Qualcomm)",
+      renderer: "ANGLE (Qualcomm, Adreno (TM) 730, OpenGL ES 3.2)",
+      gpu: { vendor: "qualcomm", architecture: "adreno-700" },
+    },
+  },
+  {
+    os: "android", cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 2.75,
+    screen: { width: 393, height: 873 },
+    webgl: {
+      vendor: "Google Inc. (ARM)",
+      renderer: "ANGLE (ARM, Mali-G710, OpenGL ES 3.2)",
+      gpu: { vendor: "arm", architecture: "valhall" },
+    },
+  },
+  {
+    os: "android", cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 3,
+    screen: { width: 360, height: 800 },
+    webgl: {
+      vendor: "Google Inc. (Samsung Electronics)",
+      renderer: "ANGLE (Samsung Electronics, Samsung Xclipse 920, OpenGL ES 3.2)",
+      gpu: { vendor: "samsung", architecture: "rdna-2" },
     },
   },
 ];
@@ -151,51 +191,61 @@ const LINUX_PERSONAS = [
  * OS signals there is — Segoe UI and Calibri only exist on Windows, Helvetica Neue and the
  * SF faces only on macOS — so a profile presenting as one platform while the host is another
  * is contradicted the moment a page enumerates fonts.
- *
- * These lists are deliberately the common baseline rather than an exhaustive dump: claiming
- * an unusually large or exotic font set is itself distinguishing.
  */
 const OS_FONTS = Object.freeze({
   windows: Object.freeze([
-    'Arial', 'Arial Black', 'Bahnschrift', 'Calibri', 'Cambria', 'Cambria Math', 'Candara',
-    'Comic Sans MS', 'Consolas', 'Constantia', 'Corbel', 'Courier New', 'Ebrima',
-    'Franklin Gothic Medium', 'Gabriola', 'Gadugi', 'Georgia', 'Impact', 'Ink Free',
-    'Javanese Text', 'Leelawadee UI', 'Lucida Console', 'Lucida Sans Unicode',
-    'Malgun Gothic', 'Marlett', 'Microsoft Himalaya', 'Microsoft JhengHei',
-    'Microsoft New Tai Lue', 'Microsoft PhagsPa', 'Microsoft Sans Serif', 'Microsoft Tai Le',
-    'Microsoft YaHei', 'MingLiU-ExtB', 'Mongolian Baiti', 'MS Gothic', 'MV Boli',
-    'Myanmar Text', 'Nirmala UI', 'Palatino Linotype', 'Segoe MDL2 Assets', 'Segoe Print',
-    'Segoe Script', 'Segoe UI', 'Segoe UI Emoji', 'Segoe UI Historic', 'Segoe UI Symbol',
-    'SimSun', 'Sitka', 'Sylfaen', 'Symbol', 'Tahoma', 'Times New Roman', 'Trebuchet MS',
-    'Verdana', 'Webdings', 'Wingdings', 'Yu Gothic',
+    "Arial", "Arial Black", "Bahnschrift", "Calibri", "Cambria", "Cambria Math", "Candara",
+    "Comic Sans MS", "Consolas", "Constantia", "Corbel", "Courier New", "Ebrima",
+    "Franklin Gothic Medium", "Gabriola", "Gadugi", "Georgia", "Impact", "Ink Free",
+    "Javanese Text", "Leelawadee UI", "Lucida Console", "Lucida Sans Unicode",
+    "Malgun Gothic", "Marlett", "Microsoft Himalaya", "Microsoft JhengHei",
+    "Microsoft New Tai Lue", "Microsoft PhagsPa", "Microsoft Sans Serif", "Microsoft Tai Le",
+    "Microsoft YaHei", "MingLiU-ExtB", "Mongolian Baiti", "MS Gothic", "MV Boli",
+    "Myanmar Text", "Nirmala UI", "Palatino Linotype", "Segoe MDL2 Assets", "Segoe Print",
+    "Segoe Script", "Segoe UI", "Segoe UI Emoji", "Segoe UI Historic", "Segoe UI Symbol",
+    "SimSun", "Sitka", "Sylfaen", "Symbol", "Tahoma", "Times New Roman", "Trebuchet MS",
+    "Verdana", "Webdings", "Wingdings", "Yu Gothic",
+    "Aldhabi", "HoloLens MDL2 Assets", "Segoe Fluent Icons",
   ]),
   macos: Object.freeze([
-    'American Typewriter', 'Andale Mono', 'Arial', 'Arial Black', 'Arial Narrow',
-    'Arial Rounded MT Bold', 'Arial Unicode MS', 'Avenir', 'Avenir Next', 'Avenir Next Condensed',
-    'Baskerville', 'Big Caslon', 'Bodoni 72', 'Bradley Hand', 'Brush Script MT', 'Chalkboard',
-    'Chalkboard SE', 'Chalkduster', 'Charter', 'Cochin', 'Comic Sans MS', 'Copperplate',
-    'Courier', 'Courier New', 'Didot', 'DIN Alternate', 'DIN Condensed', 'Futura', 'Geneva',
-    'Georgia', 'Gill Sans', 'Helvetica', 'Helvetica Neue', 'Herculanum', 'Hoefler Text',
-    'Impact', 'Lucida Grande', 'Luminari', 'Marker Felt', 'Menlo', 'Microsoft Sans Serif',
-    'Monaco', 'Noteworthy', 'Optima', 'Palatino', 'Papyrus', 'Phosphate', 'Rockwell',
-    'Savoye LET', 'SignPainter', 'Skia', 'Snell Roundhand', 'Tahoma', 'Times', 'Times New Roman',
-    'Trattatello', 'Trebuchet MS', 'Verdana', 'Zapfino', 'PingFang SC', 'Hiragino Sans',
+    "American Typewriter", "Andale Mono", "Arial", "Arial Black", "Arial Narrow",
+    "Arial Rounded MT Bold", "Arial Unicode MS", "Avenir", "Avenir Next", "Avenir Next Condensed",
+    "Baskerville", "Big Caslon", "Bodoni 72", "Bradley Hand", "Brush Script MT", "Chalkboard",
+    "Chalkboard SE", "Chalkduster", "Charter", "Cochin", "Comic Sans MS", "Copperplate",
+    "Courier", "Courier New", "Didot", "DIN Alternate", "DIN Condensed", "Futura", "Geneva",
+    "Georgia", "Gill Sans", "Helvetica", "Helvetica Neue", "Herculanum", "Hoefler Text",
+    "Impact", "Lucida Grande", "Luminari", "Marker Felt", "Menlo", "Microsoft Sans Serif",
+    "Monaco", "Noteworthy", "Optima", "Palatino", "Papyrus", "Phosphate", "Rockwell",
+    "Savoye LET", "SignPainter", "Skia", "Snell Roundhand", "Tahoma", "Times", "Times New Roman",
+    "Trattatello", "Trebuchet MS", "Verdana", "Zapfino", "PingFang SC", "Hiragino Sans",
+    "PingFang HK Light", "Kohinoor Devanagari Medium", "InaiMathi Bold", "Galvji",
+    "MuktaMahee Regular", "American Typewriter Semibold", "Futura Bold",
+    "SignPainter-HouseScript Semibold", "Apple SD Gothic Neo ExtraBold",
+    "STIX Two Math Regular", "STIX Two Text Regular", "Noto Sans Canadian Aboriginal Regular",
+    "Noto Sans Gunjala Gondi Regular", "Noto Sans Masaram Gondi Regular",
+    "Noto Serif Yezidi Regular",
   ]),
   linux: Object.freeze([
-    'Abyssinica SIL', 'Bitstream Charter', 'Cantarell', 'Century Schoolbook L', 'Courier 10 Pitch',
-    'DejaVu Sans', 'DejaVu Sans Mono', 'DejaVu Serif', 'Dingbats', 'FreeMono', 'FreeSans',
-    'FreeSerif', 'Liberation Mono', 'Liberation Sans', 'Liberation Sans Narrow',
-    'Liberation Serif', 'Nimbus Mono PS', 'Nimbus Roman', 'Nimbus Sans', 'Noto Color Emoji',
-    'Noto Mono', 'Noto Sans', 'Noto Sans CJK JP', 'Noto Sans CJK SC', 'Noto Serif',
-    'P052', 'Standard Symbols PS', 'Ubuntu', 'Ubuntu Condensed', 'Ubuntu Mono', 'URW Bookman',
-    'URW Gothic', 'Z003',
+    "Abyssinica SIL", "Bitstream Charter", "Cantarell", "Century Schoolbook L", "Courier 10 Pitch",
+    "DejaVu Sans", "DejaVu Sans Mono", "DejaVu Serif", "Dingbats", "FreeMono", "FreeSans",
+    "FreeSerif", "Liberation Mono", "Liberation Sans", "Liberation Sans Narrow",
+    "Liberation Serif", "Nimbus Mono PS", "Nimbus Roman", "Nimbus Sans", "Noto Color Emoji",
+    "Noto Mono", "Noto Sans", "Noto Sans CJK JP", "Noto Sans CJK SC", "Noto Serif",
+    "P052", "Standard Symbols PS", "Ubuntu", "Ubuntu Condensed", "Ubuntu Mono", "URW Bookman",
+    "URW Gothic", "Z003",
+  ]),
+  android: Object.freeze([
+    "Roboto", "Noto Sans", "Noto Serif", "Noto Color Emoji",
+    "Droid Sans", "Droid Sans Mono", "Carrois Gothic", "Coming Soon",
+    "Cutive Mono", "Dancing Script",
   ]),
 });
 
 function fontsForOs(os) {
-  const family = String(os || '').toLowerCase();
-  if (family.startsWith('macos') || family === 'darwin') return OS_FONTS.macos;
-  if (family === 'linux') return OS_FONTS.linux;
+  const family = String(os || "").toLowerCase();
+  if (family.startsWith("macos") || family === "darwin") return OS_FONTS.macos;
+  if (family === "linux") return OS_FONTS.linux;
+  if (family === "android") return OS_FONTS.android;
   return OS_FONTS.windows;
 }
 
@@ -204,16 +254,27 @@ function fontsForOs(os) {
  * claiming Windows while the host answers "yes" to Helvetica Neue is a direct contradiction.
  */
 function exclusiveFontsForOtherOs(os) {
-  const family = String(os || '').toLowerCase();
-  const isMac = family.startsWith('macos') || family === 'darwin';
-  const isLinux = family === 'linux';
+  const family = String(os || "").toLowerCase();
+  const isMac = family.startsWith("macos") || family === "darwin";
+  const isLinux = family === "linux";
+  const isAndroid = family === "android";
   const mine = new Set(fontsForOs(os).map((name) => name.toLowerCase()));
   const others = [];
   for (const [key, list] of Object.entries(OS_FONTS)) {
-    const keyIsMac = key === 'macos';
-    const keyIsLinux = key === 'linux';
-    if ((isMac && keyIsMac) || (isLinux && keyIsLinux) || (!isMac && !isLinux && key === 'windows')) continue;
-    for (const name of list) if (!mine.has(name.toLowerCase())) others.push(name);
+    const keyIsMac = key === "macos";
+    const keyIsLinux = key === "linux";
+    const keyIsAndroid = key === "android";
+    if (
+      (isMac && keyIsMac) ||
+      (isLinux && keyIsLinux) ||
+      (isAndroid && keyIsAndroid) ||
+      (!isMac && !isLinux && !isAndroid && key === "windows")
+    ) {
+      continue;
+    }
+    for (const name of list) {
+      if (!mine.has(name.toLowerCase())) others.push(name);
+    }
   }
   return others;
 }
@@ -223,19 +284,102 @@ const PERSONAS_BY_OS = Object.freeze({
   macos: Object.freeze(MACOS_PERSONAS),
   macos_arm: Object.freeze(MACOS_PERSONAS),
   linux: Object.freeze(LINUX_PERSONAS),
+  android: Object.freeze(ANDROID_PERSONAS),
 });
 
 function personasForOs(os) {
-  return PERSONAS_BY_OS[String(os || '').toLowerCase()] || WINDOWS_PERSONAS;
+  return PERSONAS_BY_OS[String(os || "").toLowerCase()] || WINDOWS_PERSONAS;
 }
 
 /**
- * Deterministically pick one persona for an OS. `index` should come from the profile seed so
- * the same profile keeps the same hardware identity on every launch.
- * @returns {DevicePersona}
+ * Physical execution limits by host platform.
  */
-function pickPersona(os, index) {
+const HOST_WEBGL_LIMITS = Object.freeze({
+  macos: Object.freeze({
+    maxTextureSize: 16384,
+    maxCubeMapTextureSize: 16384,
+    maxRenderbufferSize: 16384,
+    maxViewportDims: Object.freeze([16384, 16384]),
+    aliasedPointSizeRange: Object.freeze([1, 511]),
+    aliasedLineWidthRange: Object.freeze([1, 1]),
+  }),
+  darwin: Object.freeze({
+    maxTextureSize: 16384,
+    maxCubeMapTextureSize: 16384,
+    maxRenderbufferSize: 16384,
+    maxViewportDims: Object.freeze([16384, 16384]),
+    aliasedPointSizeRange: Object.freeze([1, 511]),
+    aliasedLineWidthRange: Object.freeze([1, 1]),
+  }),
+  linux: Object.freeze({
+    maxTextureSize: 16384,
+    maxCubeMapTextureSize: 16384,
+    maxRenderbufferSize: 16384,
+    maxViewportDims: Object.freeze([16384, 16384]),
+    aliasedPointSizeRange: Object.freeze([1, 1024]),
+    aliasedLineWidthRange: Object.freeze([1, 1]),
+  }),
+  windows: Object.freeze({
+    maxTextureSize: 32768,
+    maxCubeMapTextureSize: 32768,
+    maxRenderbufferSize: 32768,
+    maxViewportDims: Object.freeze([32768, 32768]),
+    aliasedPointSizeRange: Object.freeze([1, 2048]),
+    aliasedLineWidthRange: Object.freeze([1, 1]),
+  }),
+});
+
+function getHostWebglLimits(hostPlatform = process.platform) {
+  const p = String(hostPlatform || "").toLowerCase().trim();
+  if (p === "darwin" || p === "macos") return HOST_WEBGL_LIMITS.macos;
+  if (p === "linux") return HOST_WEBGL_LIMITS.linux;
+  return HOST_WEBGL_LIMITS.windows;
+}
+
+function isPersonaWebglCompatible(persona, hostPlatform = process.platform) {
+  if (!persona || !persona.webgl) return true;
+  const hostLimits = typeof hostPlatform === "object" && hostPlatform !== null
+    ? hostPlatform
+    : getHostWebglLimits(hostPlatform);
+  const gpu = persona.webgl.gpu;
+  if (!gpu) return true;
+
+  const vendor = String(gpu.vendor || "").toLowerCase().trim();
+  const arch = String(gpu.architecture || "").toLowerCase().trim();
+
+  if (vendor === "nvidia") {
+    const is32kArch = arch.includes("ada") || arch.includes("ampere") || arch.includes("turing")
+      || arch.includes("40") || arch.includes("30") || arch.includes("20");
+    if (is32kArch && hostLimits.maxTextureSize < 32768) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function compatiblePersonasForOs(os, hostPlatform = process.platform) {
   const pool = personasForOs(os);
+  const hostLimits = typeof hostPlatform === "object" && hostPlatform !== null
+    ? hostPlatform
+    : getHostWebglLimits(hostPlatform);
+  const compatible = pool.filter((p) => isPersonaWebglCompatible(p, hostLimits));
+  return Object.freeze(compatible.length > 0 ? compatible : pool);
+}
+
+function resolveCompatiblePersona(persona, hostPlatform = process.platform) {
+  if (!persona) return persona;
+  if (isPersonaWebglCompatible(persona, hostPlatform)) return persona;
+  const pool = compatiblePersonasForOs(persona.os, hostPlatform);
+  return pool[0] || persona;
+}
+
+function pickPersona(os, index, options) {
+  let pool;
+  if (options && (options.hostCompatible || options.host || options.hostLimits)) {
+    pool = compatiblePersonasForOs(os, options.hostLimits || options.host || process.platform);
+  } else {
+    pool = personasForOs(os);
+  }
   const n = Number.isFinite(Number(index)) ? Math.abs(Math.trunc(Number(index))) : 0;
   return pool[n % pool.length];
 }
@@ -246,24 +390,35 @@ function isCoherent(persona) {
   const { cores, memory, colorDepth, devicePixelRatio, os, webgl } = persona;
   if (!Number.isInteger(cores) || cores < 2 || cores > 64) return false;
   if (!Number.isInteger(memory) || memory < 4 || memory > 8) return false;
-  // Memory tracks core count on real machines: no 4-core/32 GB or 16-core/4 GB laptops.
   if (cores <= 2 && memory > 8) return false;
   if (cores >= 12 && memory < 8) return false;
   if (![24, 30].includes(colorDepth)) return false;
-  if (!(devicePixelRatio >= 1 && devicePixelRatio <= 3)) return false;
-  // Apple ships Retina panels; a 1x Mac persona would stand out.
-  if (String(os).startsWith('macos') && devicePixelRatio < 2) return false;
-  // GPU strings must match the platform's graphics backend.
-  const renderer = String(webgl?.renderer || '');
-  if (os === 'windows' && !/D3D11/.test(renderer)) return false;
-  if (String(os).startsWith('macos') && !/Metal/.test(renderer)) return false;
-  if (os === 'linux' && !/OpenGL/.test(renderer)) return false;
+
+  const maxDpr = os === "android" ? 4 : 3;
+  if (!(devicePixelRatio >= 1 && devicePixelRatio <= maxDpr)) return false;
+
+  if (String(os).startsWith("macos") && devicePixelRatio < 2) return false;
+
+  const renderer = String(webgl?.renderer || "");
+  if (os === "windows" && !/D3D11/.test(renderer)) return false;
+  if (String(os).startsWith("macos") && !/Metal/.test(renderer)) return false;
+  if (os === "linux" && !/OpenGL/.test(renderer)) return false;
+  if (os === "android") {
+    if (!/OpenGL ES|Vulkan|Mali|Adreno|Xclipse/i.test(renderer)) return false;
+    if (devicePixelRatio < 1.5 || devicePixelRatio > 4) return false;
+  }
   return true;
 }
 
 module.exports = {
   PERSONAS_BY_OS,
+  DEVICE_PERSONAS: PERSONAS_BY_OS,
   OS_FONTS,
+  HOST_WEBGL_LIMITS,
+  getHostWebglLimits,
+  isPersonaWebglCompatible,
+  compatiblePersonasForOs,
+  resolveCompatiblePersona,
   personasForOs,
   pickPersona,
   isCoherent,

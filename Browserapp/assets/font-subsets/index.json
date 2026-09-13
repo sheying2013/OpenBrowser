@@ -1,295 +1,793 @@
 {
   "metadata": {
     "note": "Subsets preserve the advance widths and kern pairs of the source fonts.",
-    "totalBytes": 3514376,
-    "unicodes": "U+0020-007E,U+00A0-00FF,U+2013-2014,U+2018-201D,U+2022,U+2026,U+20AC,U+2122"
+    "totalBytes": 5734268,
+    "unicodes": "U+0020-007E,U+00A0-00FF,U+2013-2014,U+2018-201D,U+2022,U+2026,U+20AC,U+2122,U+E700-U+E800"
   },
   "platforms": {
     "android": {
       "Carrois Gothic": {
-        "bytes": 13740,
+        "bytes": 13700,
         "file": "carrois-gothic.woff2"
       },
       "Coming Soon": {
-        "bytes": 21656,
+        "bytes": 21636,
         "file": "coming-soon.woff2"
       },
       "Cutive Mono": {
-        "bytes": 19804,
+        "bytes": 19840,
         "file": "cutive-mono.woff2"
       },
       "Dancing Script": {
-        "bytes": 42800,
+        "bytes": 42688,
         "file": "dancing-script.woff2"
       },
       "Droid Sans": {
-        "bytes": 132100,
+        "bytes": 131888,
+        "exact": true,
         "file": "droid-sans.woff2"
       },
       "Droid Sans Mono": {
-        "bytes": 17420,
+        "bytes": 17400,
         "file": "droid-sans-mono.woff2"
       },
       "Noto Color Emoji": {
-        "bytes": 3764,
+        "bytes": 3772,
         "file": "noto-color-emoji.woff2"
       },
       "Noto Sans": {
-        "bytes": 3724,
+        "bytes": 10856,
         "file": "noto-sans.woff2"
       },
       "Noto Serif": {
-        "bytes": 12944,
+        "bytes": 12952,
         "file": "noto-serif.woff2"
       },
       "Roboto": {
-        "bytes": 132400,
+        "bytes": 131940,
         "file": "roboto.woff2"
       }
     },
     "linux": {
       "Abyssinica SIL": {
-        "bytes": 14584,
+        "bytes": 14608,
         "file": "abyssinica-sil.woff2"
       },
       "DejaVu Sans": {
-        "bytes": 21872,
+        "bytes": 21784,
         "file": "dejavu-sans.woff2"
       },
       "DejaVu Sans Mono": {
-        "bytes": 15828,
+        "bytes": 15736,
         "file": "dejavu-sans-mono.woff2"
       },
       "DejaVu Serif": {
-        "bytes": 20988,
+        "bytes": 21020,
         "file": "dejavu-serif.woff2"
       },
       "FreeMono": {
-        "bytes": 48764,
+        "bytes": 48892,
         "file": "freemono.woff2"
       },
       "FreeSans": {
-        "bytes": 50612,
+        "bytes": 50544,
         "file": "freesans.woff2"
       },
       "Liberation Mono": {
-        "bytes": 17260,
+        "bytes": 17244,
         "file": "liberation-mono.woff2"
       },
       "Liberation Sans": {
-        "bytes": 20860,
+        "bytes": 20932,
         "file": "liberation-sans.woff2"
       },
       "Liberation Sans Narrow": {
-        "bytes": 19440,
+        "bytes": 19520,
         "file": "liberation-sans-narrow.woff2"
       },
       "Liberation Serif": {
-        "bytes": 23996,
+        "bytes": 23992,
         "file": "liberation-serif.woff2"
       },
       "Nimbus Mono PS": {
-        "bytes": 17164,
+        "bytes": 17384,
         "file": "nimbus-mono-ps.woff2"
       },
       "Nimbus Roman": {
-        "bytes": 22336,
+        "bytes": 22508,
         "file": "nimbus-roman.woff2"
       },
       "Nimbus Sans": {
-        "bytes": 17840,
+        "bytes": 17912,
         "file": "nimbus-sans.woff2"
       },
       "Noto Color Emoji": {
-        "bytes": 3764,
+        "bytes": 3776,
         "file": "noto-color-emoji.woff2"
       },
       "Noto Mono": {
-        "bytes": 17436,
+        "bytes": 17408,
         "file": "noto-mono.woff2"
       },
       "Noto Sans": {
-        "bytes": 22524,
+        "bytes": 22420,
         "file": "noto-sans.woff2"
       },
       "Noto Serif": {
-        "bytes": 24232,
+        "bytes": 24180,
         "file": "noto-serif.woff2"
       },
       "P052": {
-        "bytes": 23180,
+        "bytes": 23196,
         "file": "p052.woff2"
       },
       "Standard Symbols PS": {
-        "bytes": 15776,
+        "bytes": 15900,
         "file": "standard-symbols-ps.woff2"
       },
       "URW Bookman": {
-        "bytes": 21976,
+        "bytes": 21932,
         "file": "urw-bookman.woff2"
       },
       "URW Gothic": {
-        "bytes": 17168,
+        "bytes": 17240,
         "file": "urw-gothic.woff2"
       },
       "Ubuntu": {
-        "bytes": 91220,
+        "bytes": 91016,
         "file": "ubuntu.woff2"
       },
       "Ubuntu Mono": {
-        "bytes": 21300,
+        "bytes": 21192,
         "file": "ubuntu-mono.woff2"
       },
       "Z003": {
-        "bytes": 29548,
+        "bytes": 29696,
         "file": "z003.woff2"
       }
     },
     "macos": {
+      "American Typewriter": {
+        "bytes": 32036,
+        "exact": true,
+        "family": "American Typewriter",
+        "file": "american-typewriter.woff2",
+        "fullName": "American Typewriter",
+        "postscriptName": "AmericanTypewriter"
+      },
+      "American Typewriter Semibold": {
+        "bytes": 21528,
+        "exact": true,
+        "family": "American Typewriter Semibold",
+        "file": "american-typewriter-semibold.woff2",
+        "fullName": "American Typewriter Semibold",
+        "postscriptName": "AmericanTypewriterSemibold"
+      },
+      "Andale Mono": {
+        "bytes": 21604,
+        "exact": true,
+        "family": "Andale Mono",
+        "file": "andale-mono.woff2",
+        "fullName": "Andale Mono",
+        "postscriptName": "AndaleMono"
+      },
+      "Apple SD Gothic Neo ExtraBold": {
+        "bytes": 52492,
+        "exact": true,
+        "family": "Apple SD Gothic Neo ExtraBold",
+        "file": "apple-sd-gothic-neo-extrabold.woff2",
+        "fullName": "Apple SD Gothic Neo ExtraBold",
+        "postscriptName": "AppleSDGothicNeoExtraBold"
+      },
       "Arial": {
-        "bytes": 40064,
-        "file": "arial.woff2"
+        "bytes": 40088,
+        "exact": true,
+        "family": "Arial",
+        "file": "arial.woff2",
+        "fullName": "Arial",
+        "postscriptName": "Arial"
       },
       "Arial Black": {
-        "bytes": 22468,
-        "file": "arial-black.woff2"
+        "bytes": 22352,
+        "exact": true,
+        "family": "Arial Black",
+        "file": "arial-black.woff2",
+        "fullName": "Arial Black",
+        "postscriptName": "ArialBlack"
       },
       "Arial Narrow": {
-        "bytes": 30504,
-        "file": "arial-narrow.woff2"
+        "bytes": 30516,
+        "exact": true,
+        "family": "Arial Narrow",
+        "file": "arial-narrow.woff2",
+        "fullName": "Arial Narrow",
+        "postscriptName": "ArialNarrow"
       },
       "Arial Rounded MT Bold": {
-        "bytes": 17968,
-        "file": "arial-rounded-mt-bold.woff2"
+        "bytes": 17964,
+        "exact": true,
+        "family": "Arial Rounded MT Bold",
+        "file": "arial-rounded-mt-bold.woff2",
+        "fullName": "Arial Rounded MT Bold",
+        "postscriptName": "ArialRoundedMTBold"
       },
       "Arial Unicode MS": {
-        "bytes": 33060,
-        "file": "arial-unicode-ms.woff2"
+        "bytes": 32976,
+        "exact": true,
+        "family": "Arial Unicode MS",
+        "file": "arial-unicode-ms.woff2",
+        "fullName": "Arial Unicode MS",
+        "postscriptName": "ArialUnicodeMS"
+      },
+      "Avenir": {
+        "bytes": 20388,
+        "exact": true,
+        "family": "Avenir",
+        "file": "avenir.woff2",
+        "fullName": "Avenir",
+        "postscriptName": "Avenir"
+      },
+      "Avenir Next": {
+        "bytes": 33028,
+        "exact": true,
+        "family": "Avenir Next",
+        "file": "avenir-next.woff2",
+        "fullName": "Avenir Next",
+        "postscriptName": "AvenirNext"
+      },
+      "Avenir Next Condensed": {
+        "bytes": 31592,
+        "exact": true,
+        "family": "Avenir Next Condensed",
+        "file": "avenir-next-condensed.woff2",
+        "fullName": "Avenir Next Condensed",
+        "postscriptName": "AvenirNextCondensed"
+      },
+      "Baskerville": {
+        "bytes": 12468,
+        "exact": true,
+        "family": "Baskerville",
+        "file": "baskerville.woff2",
+        "fullName": "Baskerville",
+        "postscriptName": "Baskerville"
       },
       "Big Caslon": {
-        "bytes": 24624,
-        "file": "big-caslon.woff2"
+        "bytes": 24796,
+        "exact": true,
+        "family": "Big Caslon",
+        "file": "big-caslon.woff2",
+        "fullName": "Big Caslon",
+        "postscriptName": "BigCaslon"
+      },
+      "Bodoni 72": {
+        "bytes": 26412,
+        "exact": true,
+        "family": "Bodoni 72",
+        "file": "bodoni-72.woff2",
+        "fullName": "Bodoni 72",
+        "postscriptName": "Bodoni72"
+      },
+      "Bradley Hand": {
+        "bytes": 60224,
+        "exact": true,
+        "family": "Bradley Hand",
+        "file": "bradley-hand.woff2",
+        "fullName": "Bradley Hand",
+        "postscriptName": "BradleyHand"
       },
       "Brush Script MT": {
-        "bytes": 24968,
-        "file": "brush-script-mt.woff2"
+        "bytes": 25060,
+        "exact": true,
+        "family": "Brush Script MT",
+        "file": "brush-script-mt.woff2",
+        "fullName": "Brush Script MT",
+        "postscriptName": "BrushScriptMT"
+      },
+      "Chalkboard": {
+        "bytes": 24244,
+        "exact": true,
+        "family": "Chalkboard",
+        "file": "chalkboard.woff2",
+        "fullName": "Chalkboard",
+        "postscriptName": "Chalkboard"
+      },
+      "Chalkboard SE": {
+        "bytes": 27992,
+        "exact": true,
+        "family": "Chalkboard SE",
+        "file": "chalkboard-se.woff2",
+        "fullName": "Chalkboard SE",
+        "postscriptName": "ChalkboardSE"
       },
       "Chalkduster": {
-        "bytes": 148296,
-        "file": "chalkduster.woff2"
+        "bytes": 148336,
+        "exact": true,
+        "family": "Chalkduster",
+        "file": "chalkduster.woff2",
+        "fullName": "Chalkduster",
+        "postscriptName": "Chalkduster"
+      },
+      "Charter": {
+        "bytes": 20112,
+        "exact": true,
+        "family": "Charter",
+        "file": "charter.woff2",
+        "fullName": "Charter",
+        "postscriptName": "Charter"
       },
       "Cochin": {
-        "bytes": 15148,
-        "file": "cochin.woff2"
+        "bytes": 23948,
+        "exact": true,
+        "family": "Cochin",
+        "file": "cochin.woff2",
+        "fullName": "Cochin",
+        "postscriptName": "Cochin"
       },
       "Comic Sans MS": {
-        "bytes": 32908,
-        "file": "comic-sans-ms.woff2"
+        "bytes": 32972,
+        "exact": true,
+        "family": "Comic Sans MS",
+        "file": "comic-sans-ms.woff2",
+        "fullName": "Comic Sans MS",
+        "postscriptName": "ComicSansMS"
+      },
+      "Copperplate": {
+        "bytes": 20196,
+        "exact": true,
+        "family": "Copperplate",
+        "file": "copperplate.woff2",
+        "fullName": "Copperplate",
+        "postscriptName": "Copperplate"
       },
       "Courier": {
-        "bytes": 44216,
+        "bytes": 21696,
+        "exact": true,
         "file": "courier.woff2"
       },
       "Courier New": {
-        "bytes": 38336,
-        "file": "courier-new.woff2"
+        "bytes": 38284,
+        "exact": true,
+        "family": "Courier New",
+        "file": "courier-new.woff2",
+        "fullName": "Courier New",
+        "postscriptName": "CourierNew"
+      },
+      "DIN Alternate": {
+        "bytes": 22912,
+        "exact": true,
+        "family": "DIN Alternate",
+        "file": "din-alternate.woff2",
+        "fullName": "DIN Alternate",
+        "postscriptName": "DINAlternate"
+      },
+      "DIN Condensed": {
+        "bytes": 9684,
+        "exact": true,
+        "family": "DIN Condensed",
+        "file": "din-condensed.woff2",
+        "fullName": "DIN Condensed",
+        "postscriptName": "DINCondensed"
+      },
+      "Didot": {
+        "bytes": 23888,
+        "exact": true,
+        "family": "Didot",
+        "file": "didot.woff2",
+        "fullName": "Didot",
+        "postscriptName": "Didot"
+      },
+      "Futura": {
+        "bytes": 11156,
+        "exact": true,
+        "family": "Futura",
+        "file": "futura.woff2",
+        "fullName": "Futura",
+        "postscriptName": "Futura"
+      },
+      "Futura Bold": {
+        "bytes": 14828,
+        "exact": true,
+        "family": "Futura Bold",
+        "file": "futura-bold.woff2",
+        "fullName": "Futura Bold",
+        "postscriptName": "FuturaBold"
+      },
+      "Galvji": {
+        "bytes": 10096,
+        "exact": true,
+        "family": "Galvji",
+        "file": "galvji.woff2",
+        "fullName": "Galvji",
+        "postscriptName": "Galvji"
       },
       "Geneva": {
-        "bytes": 26396,
-        "file": "geneva.woff2"
+        "bytes": 26532,
+        "exact": true,
+        "family": "Geneva",
+        "file": "geneva.woff2",
+        "fullName": "Geneva",
+        "postscriptName": "Geneva"
       },
       "Georgia": {
-        "bytes": 34056,
-        "file": "georgia.woff2"
+        "bytes": 34132,
+        "exact": true,
+        "family": "Georgia",
+        "file": "georgia.woff2",
+        "fullName": "Georgia",
+        "postscriptName": "Georgia"
       },
       "Gill Sans": {
-        "bytes": 19440,
-        "file": "gill-sans.woff2"
+        "bytes": 23432,
+        "exact": true,
+        "family": "Gill Sans",
+        "file": "gill-sans.woff2",
+        "fullName": "Gill Sans",
+        "postscriptName": "GillSans"
       },
       "Helvetica": {
-        "bytes": 22308,
-        "file": "helvetica.woff2"
+        "bytes": 25624,
+        "exact": true,
+        "family": "Helvetica",
+        "file": "helvetica.woff2",
+        "fullName": "Helvetica",
+        "postscriptName": "Helvetica"
+      },
+      "Helvetica Neue": {
+        "bytes": 18016,
+        "exact": true,
+        "family": "Helvetica Neue",
+        "file": "helvetica-neue.woff2",
+        "fullName": "Helvetica Neue",
+        "postscriptName": "HelveticaNeue"
       },
       "Herculanum": {
-        "bytes": 21708,
-        "file": "herculanum.woff2"
+        "bytes": 21884,
+        "exact": true,
+        "family": "Herculanum",
+        "file": "herculanum.woff2",
+        "fullName": "Herculanum",
+        "postscriptName": "Herculanum"
+      },
+      "Hiragino Sans": {
+        "bytes": 191980,
+        "exact": true,
+        "family": "Hiragino Sans",
+        "file": "hiragino-sans.woff2",
+        "fullName": "Hiragino Sans",
+        "postscriptName": "HiraginoSans"
       },
       "Hoefler Text": {
-        "bytes": 1668,
-        "file": "hoefler-text.woff2"
+        "bytes": 27476,
+        "exact": true,
+        "family": "Hoefler Text",
+        "file": "hoefler-text.woff2",
+        "fullName": "Hoefler Text",
+        "postscriptName": "HoeflerText"
       },
       "Impact": {
-        "bytes": 24032,
-        "file": "impact.woff2"
+        "bytes": 24172,
+        "exact": true,
+        "family": "Impact",
+        "file": "impact.woff2",
+        "fullName": "Impact",
+        "postscriptName": "Impact"
+      },
+      "InaiMathi Bold": {
+        "bytes": 11612,
+        "exact": true,
+        "family": "InaiMathi Bold",
+        "file": "inaimathi-bold.woff2",
+        "fullName": "InaiMathi Bold",
+        "postscriptName": "InaiMathiBold"
+      },
+      "Kohinoor Devanagari Medium": {
+        "bytes": 13824,
+        "exact": true,
+        "family": "Kohinoor Devanagari Medium",
+        "file": "kohinoor-devanagari-medium.woff2",
+        "fullName": "Kohinoor Devanagari Medium",
+        "postscriptName": "KohinoorDevanagariMedium"
+      },
+      "Lucida Grande": {
+        "bytes": 29764,
+        "exact": true,
+        "family": "Lucida Grande",
+        "file": "lucida-grande.woff2",
+        "fullName": "Lucida Grande",
+        "postscriptName": "LucidaGrande"
       },
       "Luminari": {
-        "bytes": 36636,
-        "file": "luminari.woff2"
+        "bytes": 36536,
+        "exact": true,
+        "family": "Luminari",
+        "file": "luminari.woff2",
+        "fullName": "Luminari",
+        "postscriptName": "Luminari"
+      },
+      "Marker Felt": {
+        "bytes": 33052,
+        "exact": true,
+        "family": "Marker Felt",
+        "file": "marker-felt.woff2",
+        "fullName": "Marker Felt",
+        "postscriptName": "MarkerFelt"
+      },
+      "Menlo": {
+        "bytes": 16616,
+        "exact": true,
+        "family": "Menlo",
+        "file": "menlo.woff2",
+        "fullName": "Menlo",
+        "postscriptName": "Menlo"
+      },
+      "Microsoft Sans Serif": {
+        "bytes": 28628,
+        "exact": true,
+        "family": "Microsoft Sans Serif",
+        "file": "microsoft-sans-serif.woff2",
+        "fullName": "Microsoft Sans Serif",
+        "postscriptName": "MicrosoftSansSerif"
       },
       "Monaco": {
-        "bytes": 24392,
-        "file": "monaco.woff2"
+        "bytes": 24420,
+        "exact": true,
+        "family": "Monaco",
+        "file": "monaco.woff2",
+        "fullName": "Monaco",
+        "postscriptName": "Monaco"
+      },
+      "MuktaMahee Regular": {
+        "bytes": 17584,
+        "exact": true,
+        "family": "MuktaMahee Regular",
+        "file": "muktamahee-regular.woff2",
+        "fullName": "MuktaMahee Regular",
+        "postscriptName": "MuktaMaheeRegular"
+      },
+      "Noteworthy": {
+        "bytes": 30304,
+        "exact": true,
+        "family": "Noteworthy",
+        "file": "noteworthy.woff2",
+        "fullName": "Noteworthy",
+        "postscriptName": "Noteworthy"
+      },
+      "Noto Sans Canadian Aboriginal Regular": {
+        "bytes": 704,
+        "exact": true,
+        "family": "Noto Sans Canadian Aboriginal Regular",
+        "file": "noto-sans-canadian-aboriginal-regular.woff2",
+        "fullName": "Noto Sans Canadian Aboriginal Regular",
+        "postscriptName": "NotoSansCanadianAboriginalRegular"
+      },
+      "Noto Sans Gunjala Gondi Regular": {
+        "bytes": 1672,
+        "exact": true,
+        "family": "Noto Sans Gunjala Gondi Regular",
+        "file": "noto-sans-gunjala-gondi-regular.woff2",
+        "fullName": "Noto Sans Gunjala Gondi Regular",
+        "postscriptName": "NotoSansGunjalaGondiRegular"
+      },
+      "Noto Sans Masaram Gondi Regular": {
+        "bytes": 1724,
+        "exact": true,
+        "family": "Noto Sans Masaram Gondi Regular",
+        "file": "noto-sans-masaram-gondi-regular.woff2",
+        "fullName": "Noto Sans Masaram Gondi Regular",
+        "postscriptName": "NotoSansMasaramGondiRegular"
+      },
+      "Noto Serif Yezidi Regular": {
+        "bytes": 648,
+        "exact": true,
+        "family": "Noto Serif Yezidi Regular",
+        "file": "noto-serif-yezidi-regular.woff2",
+        "fullName": "Noto Serif Yezidi Regular",
+        "postscriptName": "NotoSerifYezidiRegular"
       },
       "Optima": {
-        "bytes": 13064,
-        "file": "optima.woff2"
+        "bytes": 12880,
+        "exact": true,
+        "family": "Optima",
+        "file": "optima.woff2",
+        "fullName": "Optima",
+        "postscriptName": "Optima"
+      },
+      "Palatino": {
+        "bytes": 26700,
+        "exact": true,
+        "family": "Palatino",
+        "file": "palatino.woff2",
+        "fullName": "Palatino",
+        "postscriptName": "Palatino"
+      },
+      "Papyrus": {
+        "bytes": 45420,
+        "exact": true,
+        "family": "Papyrus",
+        "file": "papyrus.woff2",
+        "fullName": "Papyrus",
+        "postscriptName": "Papyrus"
+      },
+      "Phosphate": {
+        "bytes": 11056,
+        "exact": true,
+        "family": "Phosphate",
+        "file": "phosphate.woff2",
+        "fullName": "Phosphate",
+        "postscriptName": "Phosphate"
+      },
+      "PingFang HK Light": {
+        "bytes": 78144,
+        "exact": true,
+        "family": "PingFang HK Light",
+        "file": "pingfang-hk-light.woff2",
+        "fullName": "PingFang HK Light",
+        "postscriptName": "PingFangHKLight"
+      },
+      "PingFang SC": {
+        "bytes": 80152,
+        "exact": true,
+        "family": "PingFang SC",
+        "file": "pingfang-sc.woff2",
+        "fullName": "PingFang SC",
+        "postscriptName": "PingFangSC"
       },
       "Rockwell": {
-        "bytes": 13464,
-        "file": "rockwell.woff2"
+        "bytes": 19708,
+        "exact": true,
+        "family": "Rockwell",
+        "file": "rockwell.woff2",
+        "fullName": "Rockwell",
+        "postscriptName": "Rockwell"
+      },
+      "STIX Two Math Regular": {
+        "bytes": 40556,
+        "exact": true,
+        "family": "STIX Two Math Regular",
+        "file": "stix-two-math-regular.woff2",
+        "fullName": "STIX Two Math Regular",
+        "postscriptName": "STIXTwoMathRegular"
+      },
+      "STIX Two Text Regular": {
+        "bytes": 39904,
+        "exact": true,
+        "family": "STIX Two Text Regular",
+        "file": "stix-two-text-regular.woff2",
+        "fullName": "STIX Two Text Regular",
+        "postscriptName": "STIXTwoTextRegular"
+      },
+      "Savoye LET": {
+        "bytes": 12236,
+        "exact": true,
+        "family": "Savoye LET",
+        "file": "savoye-let.woff2",
+        "fullName": "Savoye LET",
+        "postscriptName": "SavoyeLET"
+      },
+      "SignPainter": {
+        "bytes": 40156,
+        "exact": true,
+        "family": "SignPainter",
+        "file": "signpainter.woff2",
+        "fullName": "SignPainter",
+        "postscriptName": "SignPainter"
+      },
+      "SignPainter-HouseScript Semibold": {
+        "bytes": 32076,
+        "exact": true,
+        "family": "SignPainter-HouseScript Semibold",
+        "file": "signpainter-housescript-semibold.woff2",
+        "fullName": "SignPainter-HouseScript Semibold",
+        "postscriptName": "SignPainterHouseScriptSemibold"
+      },
+      "Skia": {
+        "bytes": 91896,
+        "exact": true,
+        "family": "Skia",
+        "file": "skia.woff2",
+        "fullName": "Skia",
+        "postscriptName": "Skia"
+      },
+      "Snell Roundhand": {
+        "bytes": 33420,
+        "exact": true,
+        "family": "Snell Roundhand",
+        "file": "snell-roundhand.woff2",
+        "fullName": "Snell Roundhand",
+        "postscriptName": "SnellRoundhand"
       },
       "Tahoma": {
-        "bytes": 25952,
-        "file": "tahoma.woff2"
+        "bytes": 26036,
+        "exact": true,
+        "family": "Tahoma",
+        "file": "tahoma.woff2",
+        "fullName": "Tahoma",
+        "postscriptName": "Tahoma"
       },
       "Times": {
-        "bytes": 41792,
-        "file": "times.woff2"
+        "bytes": 31908,
+        "exact": true,
+        "family": "Times",
+        "file": "times.woff2",
+        "fullName": "Times",
+        "postscriptName": "Times"
       },
       "Times New Roman": {
-        "bytes": 52928,
-        "file": "times-new-roman.woff2"
+        "bytes": 52888,
+        "exact": true,
+        "family": "Times New Roman",
+        "file": "times-new-roman.woff2",
+        "fullName": "Times New Roman",
+        "postscriptName": "TimesNewRoman"
+      },
+      "Trattatello": {
+        "bytes": 140720,
+        "exact": true,
+        "family": "Trattatello",
+        "file": "trattatello.woff2",
+        "fullName": "Trattatello",
+        "postscriptName": "Trattatello"
       },
       "Trebuchet MS": {
-        "bytes": 27088,
-        "file": "trebuchet-ms.woff2"
+        "bytes": 27040,
+        "exact": true,
+        "family": "Trebuchet MS",
+        "file": "trebuchet-ms.woff2",
+        "fullName": "Trebuchet MS",
+        "postscriptName": "TrebuchetMS"
       },
       "Verdana": {
-        "bytes": 28408,
-        "file": "verdana.woff2"
+        "bytes": 28380,
+        "exact": true,
+        "family": "Verdana",
+        "file": "verdana.woff2",
+        "fullName": "Verdana",
+        "postscriptName": "Verdana"
       },
       "Zapfino": {
-        "bytes": 18564,
-        "file": "zapfino.woff2"
+        "bytes": 18680,
+        "exact": true,
+        "family": "Zapfino",
+        "file": "zapfino.woff2",
+        "fullName": "Zapfino",
+        "postscriptName": "Zapfino"
       }
     },
     "windows": {
+      "Aldhabi": {
+        "bytes": 29480,
+        "file": "aldhabi.woff2"
+      },
       "Arial": {
-        "bytes": 58832,
+        "bytes": 58520,
         "file": "arial.woff2"
       },
       "Arial Black": {
-        "bytes": 33600,
+        "bytes": 33616,
         "file": "arial-black.woff2"
       },
       "Bahnschrift": {
-        "bytes": 47732,
+        "bytes": 47572,
         "file": "bahnschrift.woff2"
       },
       "Calibri": {
-        "bytes": 68852,
+        "bytes": 68636,
         "file": "calibri.woff2"
       },
       "Cambria": {
-        "bytes": 44404,
+        "bytes": 44448,
         "file": "cambria.woff2"
       },
+      "Cambria Math": {
+        "bytes": 70672,
+        "file": "cambria-math.woff2"
+      },
       "Candara": {
-        "bytes": 29952,
+        "bytes": 29900,
         "file": "candara.woff2"
       },
       "Comic Sans MS": {
-        "bytes": 51012,
+        "bytes": 50892,
         "file": "comic-sans-ms.woff2"
       },
       "Consolas": {
@@ -297,15 +795,15 @@
         "file": "consolas.woff2"
       },
       "Constantia": {
-        "bytes": 38616,
+        "bytes": 38648,
         "file": "constantia.woff2"
       },
       "Corbel": {
-        "bytes": 31488,
+        "bytes": 31532,
         "file": "corbel.woff2"
       },
       "Courier New": {
-        "bytes": 38756,
+        "bytes": 38604,
         "file": "courier-new.woff2"
       },
       "Ebrima": {
@@ -313,132 +811,190 @@
         "file": "ebrima.woff2"
       },
       "Franklin Gothic Medium": {
-        "bytes": 26516,
+        "bytes": 26424,
         "file": "franklin-gothic-medium.woff2"
       },
       "Gabriola": {
-        "bytes": 151712,
+        "bytes": 151720,
         "file": "gabriola.woff2"
       },
       "Gadugi": {
-        "bytes": 23980,
+        "bytes": 24052,
         "file": "gadugi.woff2"
       },
       "Georgia": {
-        "bytes": 48896,
+        "bytes": 48860,
         "file": "georgia.woff2"
       },
+      "HoloLens MDL2 Assets": {
+        "bytes": 14884,
+        "exact": true,
+        "file": "hololens-mdl2-assets.woff2"
+      },
       "Impact": {
-        "bytes": 46912,
+        "bytes": 47044,
         "file": "impact.woff2"
       },
       "Ink Free": {
-        "bytes": 16148,
+        "bytes": 16140,
         "file": "ink-free.woff2"
       },
       "Javanese Text": {
-        "bytes": 19328,
+        "bytes": 19368,
         "file": "javanese-text.woff2"
       },
       "Leelawadee UI": {
-        "bytes": 19488,
+        "bytes": 19512,
         "file": "leelawadee-ui.woff2"
       },
       "Lucida Console": {
-        "bytes": 15168,
+        "bytes": 15184,
         "file": "lucida-console.woff2"
       },
       "Lucida Sans Unicode": {
-        "bytes": 20400,
+        "bytes": 20404,
         "file": "lucida-sans-unicode.woff2"
       },
+      "MS Gothic": {
+        "bytes": 9756,
+        "file": "ms-gothic.woff2"
+      },
       "MV Boli": {
-        "bytes": 31252,
+        "bytes": 31232,
         "file": "mv-boli.woff2"
       },
+      "Malgun Gothic": {
+        "bytes": 19504,
+        "file": "malgun-gothic.woff2"
+      },
       "Marlett": {
-        "bytes": 2204,
+        "bytes": 2200,
         "file": "marlett.woff2"
       },
+      "Microsoft Himalaya": {
+        "bytes": 25732,
+        "file": "microsoft-himalaya.woff2"
+      },
+      "Microsoft JhengHei": {
+        "bytes": 20984,
+        "file": "microsoft-jhenghei.woff2"
+      },
       "Microsoft New Tai Lue": {
-        "bytes": 20672,
+        "bytes": 20656,
         "file": "microsoft-new-tai-lue.woff2"
       },
       "Microsoft PhagsPa": {
-        "bytes": 8840,
+        "bytes": 8772,
         "file": "microsoft-phagspa.woff2"
       },
       "Microsoft Sans Serif": {
-        "bytes": 29604,
+        "bytes": 29460,
         "file": "microsoft-sans-serif.woff2"
       },
       "Microsoft Tai Le": {
-        "bytes": 20812,
+        "bytes": 20780,
         "file": "microsoft-tai-le.woff2"
       },
+      "Microsoft YaHei": {
+        "bytes": 20648,
+        "file": "microsoft-yahei.woff2"
+      },
+      "MingLiU-ExtB": {
+        "bytes": 11880,
+        "file": "mingliu-extb.woff2"
+      },
       "Mongolian Baiti": {
-        "bytes": 25272,
+        "bytes": 25260,
         "file": "mongolian-baiti.woff2"
       },
       "Myanmar Text": {
-        "bytes": 20656,
+        "bytes": 20716,
         "file": "myanmar-text.woff2"
       },
+      "Nirmala UI": {
+        "bytes": 40320,
+        "exact": true,
+        "file": "nirmala-ui.woff2"
+      },
       "Palatino Linotype": {
-        "bytes": 126272,
+        "bytes": 126032,
         "file": "palatino-linotype.woff2"
       },
+      "Segoe Fluent Icons": {
+        "bytes": 20300,
+        "file": "segoe-fluent-icons.woff2"
+      },
+      "Segoe MDL2 Assets": {
+        "bytes": 14880,
+        "file": "segoe-mdl2-assets.woff2"
+      },
       "Segoe Print": {
-        "bytes": 31160,
+        "bytes": 31080,
         "file": "segoe-print.woff2"
       },
       "Segoe Script": {
-        "bytes": 122840,
+        "bytes": 122920,
         "file": "segoe-script.woff2"
       },
       "Segoe UI": {
-        "bytes": 40408,
+        "bytes": 40204,
         "file": "segoe-ui.woff2"
       },
+      "Segoe UI Emoji": {
+        "bytes": 26372,
+        "file": "segoe-ui-emoji.woff2"
+      },
       "Segoe UI Historic": {
-        "bytes": 22628,
+        "bytes": 22652,
         "file": "segoe-ui-historic.woff2"
       },
       "Segoe UI Symbol": {
-        "bytes": 40856,
+        "bytes": 40924,
         "file": "segoe-ui-symbol.woff2"
       },
+      "SimSun": {
+        "bytes": 23504,
+        "file": "simsun.woff2"
+      },
+      "Sitka": {
+        "bytes": 99464,
+        "file": "sitka.woff2"
+      },
       "Sylfaen": {
-        "bytes": 38884,
+        "bytes": 38944,
         "file": "sylfaen.woff2"
       },
       "Symbol": {
-        "bytes": 3628,
+        "bytes": 3564,
         "file": "symbol.woff2"
       },
       "Tahoma": {
-        "bytes": 36556,
+        "bytes": 36356,
         "file": "tahoma.woff2"
       },
       "Times New Roman": {
-        "bytes": 16404,
+        "bytes": 16372,
         "file": "times-new-roman.woff2"
       },
       "Trebuchet MS": {
-        "bytes": 42808,
+        "bytes": 43012,
         "file": "trebuchet-ms.woff2"
       },
       "Verdana": {
-        "bytes": 38080,
+        "bytes": 38116,
         "file": "verdana.woff2"
       },
       "Webdings": {
-        "bytes": 2236,
+        "bytes": 2208,
         "file": "webdings.woff2"
       },
       "Wingdings": {
-        "bytes": 3144,
+        "bytes": 3152,
         "file": "wingdings.woff2"
+      },
+      "Yu Gothic": {
+        "bytes": 184444,
+        "file": "yu-gothic.woff2"
       }
     }
   }

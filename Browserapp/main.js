@@ -1085,20 +1085,153 @@ function environmentStartUrl(entry) {
   return pathToFileURL(path.join(root, 'openbrowser-start.html')).href;
 }
 
+// --- Internal Browser Page Synchronization Rules (Issue #19) ---
+// Internal WebUI pages (chrome://, edge://) can be mirrored initially across browsers
+// via CDP navigation, but cannot participate in DOM live-sync due to Chromium security sandbox.
+const MAX_SYNC_TABS = 20;
+
+const BLOCKED_INTERNAL_SCHEMES = Object.freeze([
+  'javascript:',
+  'data:',
+  'file:',
+  'vbscript:',
+  'chrome-devtools:',
+  'devtools:',
+  'view-source:',
+]);
+
+const BLOCKED_INTERNAL_HOSTS = Object.freeze(new Set([
+  'crash',
+  'kill',
+  'quit',
+  'restart',
+  'hang',
+  'shorthang',
+  'gpuclean',
+  'gpucrash',
+  'gpuhang',
+  'memory-exhaust',
+  'inducebrowsercrashforrealz',
+  'badcastcrash',
+  'dcheck_failure',
+  'inspect',
+]));
+
+const ALLOWED_INTERNAL_HOSTS = Object.freeze(new Set([
+  'extensions',
+  'settings',
+  'downloads',
+  'history',
+  'version',
+  'bookmarks',
+  'flags',
+  'about',
+  'chrome-urls',
+  'gpu',
+  'newtab',
+  'new-tab-page',
+  'management',
+  'system',
+  'components',
+  'policy',
+  'credits',
+  'terms',
+  'favorites',
+]));
+
+function isNavigableInternalUrl(url) {
+  if (typeof url !== 'string' || !url) return false;
+  const lower = url.trim().toLowerCase();
+  if (!lower.startsWith('chrome://') && !lower.startsWith('edge://')) return false;
+  const match = lower.match(/^(?:chrome|edge):\/\/([^/?#]+)/);
+  if (!match) return false;
+  const host = match[1];
+  if (BLOCKED_INTERNAL_HOSTS.has(host)) return false;
+  return ALLOWED_INTERNAL_HOSTS.has(host);
+}
+
+function isDangerousOrBlockedInternalUrl(url) {
+  if (typeof url !== 'string' || !url) return true;
+  const lower = url.trim().toLowerCase();
+  for (const scheme of BLOCKED_INTERNAL_SCHEMES) {
+    if (lower.startsWith(scheme)) return true;
+  }
+  const match = lower.match(/^(?:chrome|edge):\/\/([^/?#]+)/);
+  if (match && BLOCKED_INTERNAL_HOSTS.has(match[1])) return true;
+  return false;
+}
+
+function canMirrorTabUrl(url) {
+  if (typeof url !== 'string' || !url) return false;
+  const trimmed = url.trim();
+  if (isDangerousOrBlockedInternalUrl(trimmed)) return false;
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return true;
+  if (lower === 'about:blank' || isEnvironmentStartUrl(trimmed)) return true;
+  if (isNavigableInternalUrl(trimmed)) return true;
+  return false;
+}
+
+function canDomLiveSyncTabUrl(url) {
+  if (!canMirrorTabUrl(url)) return false;
+  if (isNavigableInternalUrl(url)) return false;
+  return true;
+}
+
 async function syncTabsFromMaster(ids) {
   const entries = engine.runningWithCdp(sanitizeIds(ids));
   if (entries.length < 2) throw new Error('Select at least two running browser environments');
-  const masterTabs = (await cdp.tabs(entries[0].item.port)).filter((tab) => !tab.url.startsWith('chrome://') && !tab.url.startsWith('edge://'));
-  const urls = masterTabs.map((tab) => tab.url).filter(Boolean).slice(0, 20);
-  for (const slave of entries.slice(1)) {
-    const existing = (await cdp.tabs(slave.item.port)).filter((tab) => !tab.url.startsWith('chrome://') && !tab.url.startsWith('edge://'));
-    for (let index = 0; index < urls.length; index += 1) {
-      const targetUrl = isEnvironmentStartUrl(urls[index]) ? (environmentStartUrl(slave) || urls[index]) : urls[index];
-      if (existing[index]) await cdp.call(existing[index].webSocketDebuggerUrl, 'Page.navigate', { url: targetUrl }).catch(() => cdp.navigate(slave.item.port, targetUrl));
-      else await cdp.newTab(slave.item.port, targetUrl);
+  const masterEntry = entries[0];
+  const slaveEntries = entries.slice(1);
+
+  // Filter master tabs: mirror normal web pages and navigable internal pages,
+  // excluding dangerous or malformed URLs. Cap at MAX_SYNC_TABS.
+  const masterTabs = (await cdp.tabs(masterEntry.item.port)).filter((tab) => canMirrorTabUrl(tab?.url));
+  const urls = masterTabs.map((tab) => tab.url).filter(Boolean).slice(0, MAX_SYNC_TABS);
+
+  const slaveSummaries = [];
+  for (const slave of slaveEntries) {
+    const summary = { id: slave.id, mirrored: 0, failed: 0, errors: [] };
+    try {
+      const existing = (await cdp.tabs(slave.item.port)).filter((tab) => canMirrorTabUrl(tab?.url));
+      for (let index = 0; index < urls.length; index += 1) {
+        const sourceUrl = urls[index];
+        const targetUrl = isEnvironmentStartUrl(sourceUrl) ? (environmentStartUrl(slave) || sourceUrl) : sourceUrl;
+        try {
+          if (existing[index]) {
+            await cdp.call(existing[index].webSocketDebuggerUrl, 'Page.navigate', { url: targetUrl })
+              .catch(() => cdp.navigate(slave.item.port, targetUrl));
+          } else {
+            await cdp.newTab(slave.item.port, targetUrl);
+          }
+          summary.mirrored += 1;
+        } catch (tabError) {
+          // Failure isolation: failure on an internal or invalid tab navigation
+          // must not block synchronization for subsequent normal pages.
+          summary.failed += 1;
+          summary.errors.push({ url: targetUrl, error: String(tabError?.message || tabError) });
+        }
+      }
+    } catch (slaveError) {
+      summary.errors.push({ url: null, error: String(slaveError?.message || slaveError) });
     }
+    slaveSummaries.push(summary);
   }
-  return { success: true, master: entries[0].id, slaves: entries.length - 1, tabCount: urls.length };
+
+  const liveSyncEligibleUrls = urls.filter(canDomLiveSyncTabUrl);
+  const internalMirrorOnlyUrls = urls.filter(isNavigableInternalUrl);
+
+  return {
+    success: true,
+    master: masterEntry.id,
+    slaves: slaveEntries.length,
+    tabCount: urls.length,
+    mirroredUrls: urls,
+    liveSyncEligibleCount: liveSyncEligibleUrls.length,
+    internalMirrorCount: internalMirrorOnlyUrls.length,
+    mirrorOnlyCount: internalMirrorOnlyUrls.length,
+    slaveSummaries,
+  };
 }
 
 function syncSnapshot() { return { ...syncState, selected: [...syncState.selected] }; }
@@ -2379,3 +2512,14 @@ app.on('window-all-closed', () => {
   // exits cannot remain active behind a hidden macOS application.
   if (!quitting) app.quit();
 });
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    isNavigableInternalUrl,
+    isDangerousOrBlockedInternalUrl,
+    canMirrorTabUrl,
+    canDomLiveSyncTabUrl,
+    MAX_SYNC_TABS,
+    syncTabsFromMaster,
+  };
+}

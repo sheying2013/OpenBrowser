@@ -690,8 +690,8 @@ body {
 }
 #view-profiles .table-card th.col-browser,
 #view-profiles .table-card td.col-browser {
-  width: 145px;
-  min-width: 145px;
+  width: 155px;
+  min-width: 155px;
   max-width: none !important;
   overflow: visible !important;
 }
@@ -732,6 +732,7 @@ html #view-profiles .table-card td.col-browser .browser-engine-icon svg,
   display: block !important;
   flex-shrink: 0 !important;
   overflow: visible !important;
+  object-fit: contain !important;
 }
 #view-profiles .table-card th.col-network,
 #view-profiles .table-card td.col-network {
@@ -817,6 +818,16 @@ html #view-profiles .table-card td.col-browser .browser-engine-icon svg,
   gap: 4px;
   justify-content: flex-end;
   max-width: 100%;
+}
+.mini.clone {
+  color: #0891b2;
+  border-color: #cffafe;
+  background: #f0fdfa;
+}
+.mini.clone:hover {
+  color: #0e7490;
+  border-color: #a5f3fc;
+  background: #ecfeff;
 }
 #view-profiles .table-card .actions .mini:not(.action-icon) {
   flex: 0 1 auto;
@@ -1961,6 +1972,7 @@ html #view-profiles .table-card .actions .action-icon svg,
   display: block !important;
   overflow: visible !important;
   flex: 0 0 14px !important;
+  object-fit: contain !important;
 }
 
 /* Keep work surfaces intentional on large desktop windows. Data grids remain full width;

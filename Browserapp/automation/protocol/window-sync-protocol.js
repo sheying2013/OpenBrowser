@@ -209,23 +209,207 @@ function buildFanoutPlan(masterEvent, options = {}) {
   };
 }
 
-/** operateRang range=1: cascade left = left + vs * abs(indexFromEnd) */
+const DEFAULT_WINDOW_WIDTH = 1200;
+const DEFAULT_WINDOW_HEIGHT = 800;
+const DEFAULT_MIN_WINDOW_WIDTH = 320;
+const DEFAULT_MIN_WINDOW_HEIGHT = 240;
+const DEFAULT_CASCADE_STEP_X = 40;
+
+/**
+ * Resolve display work area boundaries from options.
+ * Handles workArea / work objects, workWidth / workHeight, and explicit origins.
+ */
+function resolveWorkArea(options = {}) {
+  if (!options || typeof options !== 'object') {
+    return { hasWorkArea: false, x: 0, y: 0, width: undefined, height: undefined };
+  }
+
+  const wa = (options.workArea && typeof options.workArea === 'object') ? options.workArea
+           : (options.work && typeof options.work === 'object') ? options.work
+           : null;
+
+  let workWidth;
+  if (wa && Number.isFinite(Number(wa.width))) {
+    workWidth = Number(wa.width);
+  } else if (Number.isFinite(Number(options.workWidth))) {
+    workWidth = Number(options.workWidth);
+  }
+
+  let workHeight;
+  if (wa && Number.isFinite(Number(wa.height))) {
+    workHeight = Number(wa.height);
+  } else if (Number.isFinite(Number(options.workHeight))) {
+    workHeight = Number(options.workHeight);
+  }
+
+  const hasWorkArea = Number.isFinite(workWidth) && Number.isFinite(workHeight) && workWidth > 0 && workHeight > 0;
+
+  let workX;
+  if (wa && Number.isFinite(Number(wa.x ?? wa.left))) {
+    workX = Number(wa.x ?? wa.left);
+  } else if (Number.isFinite(Number(options.workX ?? options.workLeft))) {
+    workX = Number(options.workX ?? options.workLeft);
+  } else if (hasWorkArea && Number.isFinite(Number(options.left ?? options.x))) {
+    workX = Number(options.left ?? options.x);
+  }
+
+  let workY;
+  if (wa && Number.isFinite(Number(wa.y ?? wa.top))) {
+    workY = Number(wa.y ?? wa.top);
+  } else if (Number.isFinite(Number(options.workY ?? options.workTop))) {
+    workY = Number(options.workY ?? options.workTop);
+  } else if (hasWorkArea && Number.isFinite(Number(options.top ?? options.y))) {
+    workY = Number(options.top ?? options.y);
+  }
+
+  return {
+    hasWorkArea,
+    x: Number.isFinite(workX) ? Math.round(workX) : 0,
+    y: Number.isFinite(workY) ? Math.round(workY) : 0,
+    width: hasWorkArea ? Math.max(1, Math.round(workWidth)) : undefined,
+    height: hasWorkArea ? Math.max(1, Math.round(workHeight)) : undefined,
+  };
+}
+
+/**
+ * Compute cascading window bounds for slave or synced browser instances.
+ * Guarantees every window's bounds remain strictly within the provided work area,
+ * preventing off-screen overflows across multi-monitor setups, small viewports,
+ * and high window counts without requiring UI-layer clamping.
+ */
 function computeCascadeBounds(handles, options = {}) {
-  const ids = Array.isArray(handles) ? handles : String(handles || '').split(',').filter(Boolean);
-  const width = Number(options.width) || 1200;
-  const height = Number(options.height) || 800;
-  const top = Number(options.top) || 0;
-  const left = Number(options.left) || 0;
-  const vs = Number(options.vs) || 40;
-  const vsY = Number(options.vsY) || (Math.round(vs * 0.8) || 32);
-  const maxShiftX = Number(options.maxShiftX) || (options.workWidth ? Math.max(vs, options.workWidth - width) : 400);
-  const maxShiftY = Number(options.maxShiftY) || (options.workHeight ? Math.max(vsY, options.workHeight - height) : 300);
+  const ids = Array.isArray(handles)
+    ? handles.map((h) => (h && typeof h === 'object') ? (h.id ?? h.handle ?? h) : h)
+    : (handles !== null && handles !== undefined && String(handles).trim())
+      ? String(handles).split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
+
+  const opts = (options && typeof options === 'object') ? options : {};
+
+  // Mutation mode check: bypasses boundary clamping to demonstrate test sensitivity
+  if (opts._disableClamp) {
+    const rawW = Number(opts.width) || DEFAULT_WINDOW_WIDTH;
+    const rawH = Number(opts.height) || DEFAULT_WINDOW_HEIGHT;
+    const rawT = Number(opts.top) || 0;
+    const rawL = Number(opts.left) || 0;
+    const rawVs = Number(opts.vs) || DEFAULT_CASCADE_STEP_X;
+    const rawVsY = Number(opts.vsY) || (Math.round(rawVs * 0.8) || 32);
+    const rawMaxShiftX = Number(opts.maxShiftX) || (opts.workWidth ? Math.max(rawVs, opts.workWidth - rawW) : 400);
+    const rawMaxShiftY = Number(opts.maxShiftY) || (opts.workHeight ? Math.max(rawVsY, opts.workHeight - rawH) : 300);
+    return ids.map((id, indexFromStart) => {
+      const offsetX = rawMaxShiftX > rawVs ? (indexFromStart * rawVs) % rawMaxShiftX : (indexFromStart * rawVs);
+      const offsetY = rawMaxShiftY > rawVsY ? (indexFromStart * rawVsY) % rawMaxShiftY : (indexFromStart * rawVsY);
+      return {
+        handle: id,
+        bounds: { width: rawW, height: rawH, top: rawT + offsetY, left: rawL + offsetX },
+      };
+    });
+  }
+
+  const work = resolveWorkArea(opts);
+
+  // When no display work area is specified, preserve baseline unbounded behavior
+  if (!work.hasWorkArea) {
+    const width = Number.isFinite(Number(opts.width)) && Number(opts.width) > 0 ? Math.round(Number(opts.width)) : DEFAULT_WINDOW_WIDTH;
+    const height = Number.isFinite(Number(opts.height)) && Number(opts.height) > 0 ? Math.round(Number(opts.height)) : DEFAULT_WINDOW_HEIGHT;
+    const top = Number.isFinite(Number(opts.top ?? opts.y)) ? Math.round(Number(opts.top ?? opts.y)) : 0;
+    const left = Number.isFinite(Number(opts.left ?? opts.x)) ? Math.round(Number(opts.left ?? opts.x)) : 0;
+    const vs = Math.max(1, Math.round(Number(opts.vs) || DEFAULT_CASCADE_STEP_X));
+    const vsY = Math.max(1, Math.round(Number(opts.vsY) || Math.round(vs * 0.8) || 32));
+    const maxShiftX = Number.isFinite(Number(opts.maxShiftX)) && Number(opts.maxShiftX) > 0 ? Math.round(Number(opts.maxShiftX)) : 400;
+    const maxShiftY = Number.isFinite(Number(opts.maxShiftY)) && Number(opts.maxShiftY) > 0 ? Math.round(Number(opts.maxShiftY)) : 300;
+    return ids.map((id, indexFromStart) => {
+      const offsetX = maxShiftX > vs ? (indexFromStart * vs) % maxShiftX : (indexFromStart * vs);
+      const offsetY = maxShiftY > vsY ? (indexFromStart * vsY) % maxShiftY : (indexFromStart * vsY);
+      return {
+        handle: id,
+        bounds: { width, height, top: top + offsetY, left: left + offsetX },
+      };
+    });
+  }
+
+  // Work area is present: enforce strict spatial containment
+  const minWParam = Number.isFinite(Number(opts.minWidth)) && Number(opts.minWidth) > 0
+    ? Math.round(Number(opts.minWidth))
+    : DEFAULT_MIN_WINDOW_WIDTH;
+  const minHParam = Number.isFinite(Number(opts.minHeight)) && Number(opts.minHeight) > 0
+    ? Math.round(Number(opts.minHeight))
+    : DEFAULT_MIN_WINDOW_HEIGHT;
+
+  // On small viewports, minimum bounds scale down to fit the available surface
+  const effectiveMinWidth = Math.min(minWParam, work.width);
+  const effectiveMinHeight = Math.min(minHParam, work.height);
+
+  const rawWidth = Number.isFinite(Number(opts.width)) && Number(opts.width) > 0
+    ? Math.round(Number(opts.width))
+    : DEFAULT_WINDOW_WIDTH;
+  const rawHeight = Number.isFinite(Number(opts.height)) && Number(opts.height) > 0
+    ? Math.round(Number(opts.height))
+    : DEFAULT_WINDOW_HEIGHT;
+
+  const width = Math.max(effectiveMinWidth, Math.min(rawWidth, work.width));
+  const height = Math.max(effectiveMinHeight, Math.min(rawHeight, work.height));
+
+  const minLeft = work.x;
+  const maxLeft = work.x + Math.max(0, work.width - width);
+  const rawLeft = Number.isFinite(Number(opts.left ?? opts.x))
+    ? Math.round(Number(opts.left ?? opts.x))
+    : work.x;
+  const startLeft = Math.max(minLeft, Math.min(maxLeft, rawLeft));
+
+  const minTop = work.y;
+  const maxTop = work.y + Math.max(0, work.height - height);
+  const rawTop = Number.isFinite(Number(opts.top ?? opts.y))
+    ? Math.round(Number(opts.top ?? opts.y))
+    : work.y;
+  const startTop = Math.max(minTop, Math.min(maxTop, rawTop));
+
+  const availableSpanX = Math.max(0, maxLeft - startLeft);
+  const availableSpanY = Math.max(0, maxTop - startTop);
+
+  const vs = Math.max(1, Math.round(Number(opts.vs) || DEFAULT_CASCADE_STEP_X));
+  const vsY = Math.max(1, Math.round(Number(opts.vsY) || Math.round(vs * 0.8) || 32));
+
+  let maxShiftX = availableSpanX;
+  if (Number.isFinite(Number(opts.maxShiftX)) && Number(opts.maxShiftX) > 0) {
+    maxShiftX = Math.min(availableSpanX, Math.round(Number(opts.maxShiftX)));
+  }
+
+  let maxShiftY = availableSpanY;
+  if (Number.isFinite(Number(opts.maxShiftY)) && Number(opts.maxShiftY) > 0) {
+    maxShiftY = Math.min(availableSpanY, Math.round(Number(opts.maxShiftY)));
+  }
+
   return ids.map((id, indexFromStart) => {
-    const offsetX = maxShiftX > vs ? (indexFromStart * vs) % maxShiftX : (indexFromStart * vs);
-    const offsetY = maxShiftY > vsY ? (indexFromStart * vsY) % maxShiftY : (indexFromStart * vsY);
+    let offsetX = 0;
+    if (maxShiftX > 0) {
+      if (maxShiftX > vs) {
+        offsetX = (indexFromStart * vs) % maxShiftX;
+      } else {
+        offsetX = (indexFromStart % 2 === 0) ? 0 : maxShiftX;
+      }
+    }
+
+    let offsetY = 0;
+    if (maxShiftY > 0) {
+      if (maxShiftY > vsY) {
+        offsetY = (indexFromStart * vsY) % maxShiftY;
+      } else {
+        offsetY = (indexFromStart % 2 === 0) ? 0 : maxShiftY;
+      }
+    }
+
+    const finalLeft = Math.max(work.x, Math.min(maxLeft, startLeft + offsetX));
+    const finalTop = Math.max(work.y, Math.min(maxTop, startTop + offsetY));
+
     return {
       handle: id,
-      bounds: { width, height, top: top + offsetY, left: left + offsetX },
+      bounds: {
+        width,
+        height,
+        left: finalLeft,
+        top: finalTop,
+      },
     };
   });
 }
@@ -238,4 +422,9 @@ module.exports = {
   translateToStandardCdp,
   buildFanoutPlan,
   computeCascadeBounds,
+  resolveWorkArea,
+  DEFAULT_MIN_WINDOW_WIDTH,
+  DEFAULT_MIN_WINDOW_HEIGHT,
+  DEFAULT_WINDOW_WIDTH,
+  DEFAULT_WINDOW_HEIGHT,
 };

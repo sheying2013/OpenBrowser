@@ -282,6 +282,57 @@ check('storage and performance end-to-end suite is registered in package.json', 
     'automation/storage-perf-e2e-selftest.js must exist on disk');
 });
 
+check('release gate and all core fingerprint suites are registered in package.json and exist on disk', () => {
+  const coreSuites = [
+    { key: 'selftest:fontpresence', file: 'automation/font-presence-local-e2e-selftest.js' },
+    { key: 'selftest:workerfontpresence', file: 'automation/worker-font-presence-e2e-selftest.js' },
+    { key: 'selftest:workerfontwiring', file: 'automation/worker-font-presence-wiring-selftest.js' },
+    { key: 'selftest:cssfontgate', file: 'automation/css-font-local-gate-e2e-selftest.js' },
+    { key: 'selftest:cssfontrewrite', file: 'automation/css-font-response-rewrite-e2e-selftest.js' },
+    { key: 'selftest:cssfontwiring', file: 'automation/css-font-response-wiring-selftest.js' },
+    { key: 'selftest:cssfontbypass', file: 'automation/css-local-font-bypass-e2e-selftest.js' },
+    { key: 'selftest:fontblob', file: 'automation/query-local-font-blob-e2e-selftest.js' },
+    { key: 'selftest:fontblobassets', file: 'automation/query-local-font-blob-real-assets-selftest.js' },
+    { key: 'selftest:winfontsubsets', file: 'automation/windows-missing-font-subsets-e2e-selftest.js' },
+    { key: 'selftest:macosfontsubsets', file: 'automation/macos-missing-font-subsets-e2e-selftest.js' },
+    { key: 'selftest:fontdeepmeta', file: 'automation/font-deep-metadata-e2e-selftest.js' },
+    { key: 'selftest:fontnametable', file: 'automation/font-asset-name-table-e2e-selftest.js' },
+    { key: 'selftest:fontcjkprobe', file: 'automation/font-cjk-probe-e2e-selftest.js' },
+    { key: 'selftest:fontconsistency', file: 'automation/font-persona-consistency-e2e-selftest.js' },
+    { key: 'selftest:initialpageguard', file: 'automation/initial-page-css-guard-barrier-selftest.js' },
+    { key: 'selftest:webglarchnorm', file: 'automation/webgl-architecture-normalization-e2e-selftest.js' },
+    { key: 'selftest:webglextprofile', file: 'automation/webgl-extensions-profile-e2e-selftest.js' },
+    { key: 'selftest:webglcompat', file: 'automation/webgl-capability-compatibility-e2e-selftest.js' },
+    { key: 'selftest:workerwebgpu', file: 'automation/worker-webgpu-fingerprint-e2e-selftest.js' },
+    { key: 'selftest:crosssurface', file: 'automation/fingerprint-cross-surface-audit-selftest.js' },
+    { key: 'selftest:canvasaudiorects', file: 'automation/canvas-audio-clientrects-cross-surface-e2e-selftest.js' },
+    { key: 'selftest:reqheaders', file: 'automation/request-headers-e2e-selftest.js' },
+    { key: 'selftest:mobilepersona', file: 'automation/mobile-personas-selftest.js' },
+    { key: 'selftest:mobilefp', file: 'automation/mobile-fingerprint-e2e-selftest.js' },
+    { key: 'selftest:tzcountry', file: 'automation/timezone-country-fallback-selftest.js' },
+    { key: 'selftest:wintzkernel', file: 'automation/windows-timezone-kernel-e2e-selftest.js' },
+    { key: 'selftest:uiactions', file: 'profile-action-buttons-ui-selftest.js' },
+    { key: 'selftest:internalpagesync', file: 'automation/internal-pages-tab-sync-selftest.js' },
+    { key: 'selftest:windpi', file: 'automation/windows-dpi-scale-factor-selftest.js' },
+    { key: 'selftest:wincascade', file: 'automation/window-sync-cascade-bounds-selftest.js' },
+    { key: 'selftest:releasecoverage', file: 'automation/fingerprint-release-coverage-selftest.js' },
+    { key: 'selftest:fpreleasegate', file: 'automation/fingerprint-release-gate-selftest.js' },
+  ];
+  for (const item of coreSuites) {
+    assert.ok(scripts[item.key], item.key + " must be registered in package.json");
+    assert.strictEqual(scripts[item.key], "node " + item.file, item.key + " script value mismatch");
+    assert.ok(fs.existsSync(path.join(root, item.file)), item.file + " must exist on disk");
+  }
+
+  assert.ok(scripts['audit:issueclosure'], 'audit:issueclosure must be registered in package.json');
+  assert.strictEqual(scripts['audit:issueclosure'], 'node automation/issue-closure-audit-selftest.js');
+  assert.ok(fs.existsSync(path.join(root, 'automation/issue-closure-audit-selftest.js')), 'issue-closure-audit-selftest.js must exist on disk');
+
+  assert.ok(scripts['regression:final'], 'regression:final must be registered in package.json');
+  assert.strictEqual(scripts['regression:final'], 'node automation/final-release-regression-runner.js');
+  assert.ok(fs.existsSync(path.join(root, 'automation/final-release-regression-runner.js')), 'final-release-regression-runner.js must exist on disk');
+});
+
 check('runtime storage and performance APIs remain untouched by injection script', () => {
   assert.ok(!script.includes('navigator.storage'), 'navigator.storage must not be modified by injection script');
   assert.ok(!script.includes('performance.timeOrigin'), 'performance.timeOrigin must not be modified by injection script');

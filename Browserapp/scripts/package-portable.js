@@ -85,7 +85,23 @@ function run(command, args, options = {}) {
   if (result.status !== 0) throw new Error(`${command} exited with code ${result.status}`);
 }
 
+function isPackagingExcluded(entryName, fullPath = "") {
+  if (!entryName || typeof entryName !== "string") return false;
+  const lower = entryName.toLowerCase();
+  if (lower === "reports" || lower === "__pycache__" || lower === ".ds_store" || lower === "node_modules" || lower === ".git") {
+    return true;
+  }
+  if (lower.endsWith(".pyc") || lower.endsWith(".pyo")) {
+    return true;
+  }
+  return false;
+}
+
 function copyRecursive(source, destination) {
+  const base = path.basename(source);
+  if (isPackagingExcluded(base, source)) {
+    return;
+  }
   const stats = fs.lstatSync(source);
   if (stats.isSymbolicLink()) {
     fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -95,6 +111,7 @@ function copyRecursive(source, destination) {
   if (stats.isDirectory()) {
     fs.mkdirSync(destination, { recursive: true });
     for (const entry of fs.readdirSync(source)) {
+      if (isPackagingExcluded(entry, path.join(source, entry))) continue;
       copyRecursive(path.join(source, entry), path.join(destination, entry));
     }
     return;
@@ -194,7 +211,16 @@ function shouldShipBundledWayfern(platform = process.platform, arch = packageArc
  * Legacy bundled-kernels/ is never shipped.
  */
 function appResourceExcludes() {
-  return new Set(['node_modules', 'dist', '.git', 'CODE_OVERVIEW.md', 'bundled-kernels']);
+  return new Set([
+    'node_modules',
+    'dist',
+    '.git',
+    'CODE_OVERVIEW.md',
+    'bundled-kernels',
+    'reports',
+    '__pycache__',
+    '.DS_Store',
+  ]);
 }
 
 function pruneForeignKernelSeeds(resourceApp, platform = process.platform, arch = packageArch) {
@@ -791,10 +817,18 @@ function packageMac() {
   console.log('主机：' + os.platform() + ' ' + os.arch());
 }
 
-if (process.platform === 'win32') packageWindows();
-else if (process.platform === 'darwin') packageMac();
-else if (process.platform === 'linux') packageLinux();
-else {
-  console.error('当前平台暂不支持 package:portable：' + process.platform);
-  process.exit(1);
+if (require.main === module) {
+  if (process.platform === 'win32') packageWindows();
+  else if (process.platform === 'darwin') packageMac();
+  else if (process.platform === 'linux') packageLinux();
+  else {
+    console.error('当前平台暂不支持 package:portable：' + process.platform);
+    process.exit(1);
+  }
 }
+
+module.exports = {
+  appResourceExcludes,
+  isPackagingExcluded,
+  copyRecursive,
+};

@@ -924,30 +924,26 @@ function buildBrowserEngineIcon(name, size = 26) {
       <path d="M16231 15886c-80 105-330 250-330 566 0 260 170 512 472 723 1438 1003 4149 868 4156 868a5954 5954 0 003027-839 6147 6147 0 001133-850 6180 6180 0 001910-4437c26-2242-796-3732-1133-4392-2120-4141-6694-6525-11668-6525-7011 0-12703 5635-12798 12620 47-3654 3679-6605 7996-6605 350 0 2346 34 4200 1007 1634 858 2490 1894 3086 2921 618 1067 728 2415 728 2952s-271 1333-780 1990z" fill="url(#edge-b3)"/>
     </svg>`;
   }
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  return `<svg width="${size}" height="${size}" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
     <defs>
-      <linearGradient id="cr-red" x1="12" y1="0" x2="21" y2="7.5" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#EA4335"/>
-        <stop offset="1" stop-color="#D93025"/>
+      <linearGradient id="cr-green" x1="145" x2="34" y1="253" y2="61" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#1e8e3e"/>
+        <stop offset="1" stop-color="#34a853"/>
       </linearGradient>
-      <linearGradient id="cr-green" x1="3.75" y1="19.5" x2="12" y2="22.5" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#34A853"/>
-        <stop offset="1" stop-color="#1E8E3E"/>
+      <linearGradient id="cr-yellow" x1="111" x2="222" y1="254" y2="62" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#fcc934"/>
+        <stop offset="1" stop-color="#fbbc04"/>
       </linearGradient>
-      <linearGradient id="cr-yellow" x1="21" y1="9" x2="15" y2="22.5" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#FBBC04"/>
-        <stop offset="1" stop-color="#F9AB00"/>
-      </linearGradient>
-      <linearGradient id="cr-blue" x1="9" y1="9" x2="15" y2="15" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#4285F4"/>
-        <stop offset="1" stop-color="#1A73E8"/>
+      <linearGradient id="cr-red" x1="17" x2="239" y1="80" y2="80" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#d93025"/>
+        <stop offset="1" stop-color="#ea4335"/>
       </linearGradient>
     </defs>
-    <path d="M12 0C8.21 0 4.831 1.757 2.632 4.501l3.953 6.848A5.454 5.454 0 0 1 12 6.545h10.691A12 12 0 0 0 12 0z" fill="url(#cr-red)"/>
-    <path d="M1.931 5.47A11.943 11.943 0 0 0 0 12c0 6.012 4.42 10.991 10.189 11.864l3.953-6.847a5.45 5.45 0 0 1-6.865-2.29z" fill="url(#cr-green)"/>
-    <path d="m15.273 7.636a5.446 5.446 0 0 1 1.45 7.09l.002.001h-.002l-5.344 9.257c.206.01.413.016.621.016 6.627 0 12-5.373 12-12 0-1.54-.29-3.011-.818-4.364z" fill="url(#cr-yellow)"/>
-    <circle cx="12" cy="12" r="5.45" fill="#FFFFFF"/>
-    <circle cx="12" cy="12" r="4.36" fill="url(#cr-blue)"/>
+    <circle cx="128" cy="128" r="64" fill="#ffffff"/>
+    <path fill="url(#cr-green)" d="M96 183.4A63.7 63.7 0 0 1 72.6 160L17.2 64A128 128 0 0 0 128 256l55.4-96A64 64 0 0 1 96 183.4Z"/>
+    <path fill="url(#cr-yellow)" d="M192 128a63.7 63.7 0 0 1-8.6 32L128 256A128 128 0 0 0 238.9 64h-111a64 64 0 0 1 64 64Z"/>
+    <circle cx="128" cy="128" r="52" fill="#1a73e8"/>
+    <path fill="url(#cr-red)" d="M96 72.6a63.7 63.7 0 0 1 32-8.6h110.8a128 128 0 0 0-221.7 0l55.5 96A64 64 0 0 1 96 72.6Z"/>
   </svg>`;
 }
 
@@ -1083,6 +1079,18 @@ function toLucidePascalCase(str) {
     .join('');
 }
 
+const ACTION_ICON_SVGS = {
+  play: '<polygon points="6 3 20 12 6 21 6 3"></polygon>',
+  square: '<rect width="18" height="18" x="3" y="3" rx="2"></rect>',
+  'panels-top-left': '<rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 9h18"></path><path d="M9 21V9"></path>',
+  pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>',
+  activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.48 12H2"></path>',
+  'users-round': '<path d="M18 21a8 8 0 0 0-16 0"></path><circle cx="10" cy="8" r="5"></circle><path d="M22 20c0-.37-.06-.73-.17-1.07a5 5 0 0 0-4.4-3.93"></path><path d="M16 3.13a5 5 0 0 1 0 9.75"></path>',
+  'link-2': '<path d="M9 17H7A5 5 0 0 1 7 7h2"></path><path d="M15 7h2a5 5 0 1 1 0 10h-2"></path><line x1="8" x2="16" y1="12" y2="12"></line>',
+  'trash-2': '<path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path><line x1="10" x2="10" y1="11" y2="17"></line><line x1="14" x2="14" y1="11" y2="17"></line>',
+};
+
 function createLucideIconElement(iconName, customAttrs = {}) {
   try {
     const pascal = toLucidePascalCase(iconName);
@@ -1102,6 +1110,25 @@ function createLucideIconElement(iconName, customAttrs = {}) {
       }
     }
   } catch (_) {}
+  if (ACTION_ICON_SVGS[iconName]) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    svg.setAttribute('width', '24');
+    svg.setAttribute('height', '24');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.75');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('class', `lucide lucide-${iconName}`);
+    for (const [key, val] of Object.entries(customAttrs)) {
+      svg.setAttribute(key, String(val));
+    }
+    svg.innerHTML = ACTION_ICON_SVGS[iconName];
+    return svg;
+  }
   const glyph = document.createElement('i');
   glyph.dataset.lucide = iconName;
   glyph.setAttribute('aria-hidden', 'true');
@@ -3462,8 +3489,10 @@ function renderProfiles() {
       toggle.disabled = true;
       toggle.classList.add('is-starting');
       toggle.title = startProgressLabel(startingProfiles.get(profile.id));
+      toggle.setAttribute('aria-label', toggle.title);
+      toggle.setAttribute('aria-disabled', 'true');
     }
-    const sync = iconActionButton('panels-top-left', t('profiles.syncSelect'), 'mini blue'); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting;
+    const sync = iconActionButton('panels-top-left', t('profiles.syncSelect'), 'mini blue'); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting; if (sync.disabled) sync.setAttribute('aria-disabled', 'true');
     const edit = iconActionButton('pencil', t('action.edit'), 'mini edit'); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
     const clone = iconActionButton('copy', t('action.clone') || '克隆', 'mini clone'); clone.dataset.action = 'clone'; clone.dataset.id = profile.id;
     actions.append(toggle, sync, edit, clone); actionCell.append(actions);

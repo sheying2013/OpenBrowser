@@ -596,7 +596,7 @@ html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-num { width:
 html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-profile-id { width: 9% !important; }
 html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-name { width: 18% !important; min-width: 160px !important; }
 html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-group { width: 95px !important; min-width: 95px !important; }
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-browser { width: 145px !important; min-width: 145px !important; }
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-browser { width: 155px !important; min-width: 155px !important; }
 html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-network { width: 65px !important; min-width: 65px !important; }
 html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-exit { width: 110px !important; min-width: 110px !important; }
 html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-ext { width: 48px !important; min-width: 48px !important; }
@@ -628,11 +628,41 @@ html[data-ui-theme="merge-gateway"] #view-profiles .network-check {
   line-height: 18px !important;
 }
 
-html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini {
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini:not(.action-icon) {
   min-height: 28px !important;
   padding: 0 8px !important;
   font-size: 12px !important;
   line-height: 18px !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .action-icon,
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions button.mini.action-icon {
+  width: 28px !important;
+  min-width: 28px !important;
+  max-width: 28px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  max-height: 28px !important;
+  padding: 0 !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  flex: 0 0 28px !important;
+  box-sizing: border-box !important;
+  border-radius: var(--ui-radius-sm, 6px) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .action-icon svg,
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .action-icon .lucide {
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  min-height: 14px !important;
+  max-width: 14px !important;
+  max-height: 14px !important;
+  stroke: currentColor !important;
+  display: block !important;
+  overflow: visible !important;
+  flex: 0 0 14px !important;
 }
 
 html[data-ui-theme="merge-gateway"] #view-profiles .profile-page-nav button {

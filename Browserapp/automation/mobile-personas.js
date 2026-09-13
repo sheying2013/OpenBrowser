@@ -1,4 +1,4 @@
-'use strict';
+"use strict";
 
 /**
  * Mobile device personas.
@@ -10,17 +10,16 @@
  * phones that never existed, so a device is picked as one unit and every derived axis falls out of
  * that single record.
  *
- * The pool carries Android and iOS models. Only Android is wired into the runtime today: an iOS
- * profile implies the WebKit engine, which ships no Client Hints surface, so a Chromium kernel
- * claiming iOS contradicts itself on `navigator.userAgentData`. iOS rows stay in the data for the
- * day a WebKit-consistent surface layer exists — see RUNTIME_OS.
+ * The pool carries Android and iOS models. Both platforms are supported in the runtime:
+ * - Android: Client Hints, Linux armv8l platform, real vendor GPUs (Qualcomm Adreno, ARM Mali, etc.).
+ * - iOS: iPhone platform, Apple GPU, Retina/Super Retina physical DPR and panel dimensions.
  */
 
-const pool = require('./data/mobile-devices.json');
-const { buildUaProfile } = require('./user-agent');
+const pool = require("./data/mobile-devices.json");
+const { buildUaProfile } = require("./user-agent");
 
 /** Operating systems whose personas the injector can currently back with a consistent surface. */
-const RUNTIME_OS = Object.freeze(['android']);
+const RUNTIME_OS = Object.freeze(["android", "ios"]);
 
 /** Pixel ratios Android panels actually use, and the panel widths they ship at. */
 const ANDROID_DPR_STEPS = Object.freeze([1.5, 1.75, 2, 2.25, 2.5, 2.625, 2.75, 2.875, 3, 3.5, 4]);
@@ -31,7 +30,7 @@ const ANDROID_PANELS = Object.freeze([1080, 720, 1440]);
 const URL_BAR_HEIGHT = 56;
 const DEFAULT_CHROME_MAJOR = 148;
 
-const normalizeOs = (os) => (String(os || '').toLowerCase() === 'ios' ? 'ios' : 'android');
+const normalizeOs = (os) => (String(os || "").toLowerCase() === "ios" ? "ios" : "android");
 
 function devicesForOs(os) {
   const key = normalizeOs(os);
@@ -39,12 +38,12 @@ function devicesForOs(os) {
 }
 
 function supportsRuntimePersona(os) {
-  return RUNTIME_OS.includes(String(os || '').toLowerCase());
+  return RUNTIME_OS.includes(String(os || "").toLowerCase());
 }
 
 /** Highest Android release a device advertises support for, e.g. "12-15" -> 15. */
 function androidVersionFromRange(range, fallback = 13) {
-  const versions = String(range || '')
+  const versions = String(range || "")
     .split(/[^0-9]+/)
     .filter(Boolean)
     .map(Number)
@@ -53,11 +52,6 @@ function androidVersionFromRange(range, fallback = 13) {
   return Math.max(...versions);
 }
 
-/**
- * Android renders the same CSS width on several physical panels, so the pixel ratio has to be the
- * one whose panel actually ships rather than a freely drawn float. Pick the (panel, ratio) pair
- * that lands closest on a real panel width, preferring the lower ratio on a tie.
- */
 /**
  * Pick the density bucket whose panel best matches a CSS viewport. Android derives the layout
  * viewport from a physical panel divided by a density bucket, so these two have to agree; the
@@ -87,24 +81,38 @@ function deriveAndroidDpr(cssWidth) {
   return resolveAndroidPanel(cssWidth).dpr;
 }
 
-/** Apple ships 2x panels up to 375pt and 3x from 390pt on. */
-function deriveIosDpr(cssWidth) {
-  return Number(cssWidth) >= 390 ? 3 : 2;
+/**
+ * Apple devices ship physical panels with strict density buckets:
+ * - 2x (Retina / Liquid Retina): iPhone 6/7/8/SE (375x667), iPhone XR / 11 (414x896).
+ * - 3x (Retina HD Plus / Super Retina OLED / Super Retina XDR):
+ *   iPhone 6+/7+/8+ (414x736), iPhone X/XS/11 Pro (375x812), iPhone 12/13 mini (360x780),
+ *   modern OLED iPhone 12/13/14/15/16 (390..440pt).
+ */
+function deriveIosDpr(cssWidth, deviceName = "") {
+  const name = String(deviceName || "").trim();
+  const w = Number(cssWidth);
+  if (name) {
+    if (/iPhone\s+(6|7|8|SE)/i.test(name) && !/Plus/i.test(name)) return 2;
+    if (/iPhone\s+(XR|11\b)/i.test(name) && !/Pro/i.test(name)) return 2;
+    if (/iPhone\s+(X|XS|11\s+Pro|12|13|14|15|16)/i.test(name)) return 3;
+    if (/Plus/i.test(name)) return 3;
+  }
+  return Number.isFinite(w) && w >= 390 ? 3 : 2;
 }
 
 /** UA model tokens are plain ASCII: keep what real firmware reports, drop the rest. */
-function sanitizeModelToken(value, fallback = '') {
-  const cleaned = String(value || '')
-    .replace(/[^\x20-\x7E]/g, ' ')
-    .replace(/[^A-Za-z0-9 ._-]/g, ' ')
-    .replace(/\s+/g, ' ')
+function sanitizeModelToken(value, fallback = "") {
+  const cleaned = String(value || "")
+    .replace(/[^\x20-\x7E]/g, " ")
+    .replace(/[^A-Za-z0-9 ._-]/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
   return cleaned || fallback;
 }
 
 function buildAndroidUserAgent({ model, version, chromeMajor } = {}) {
   const major = Number(chromeMajor) || DEFAULT_CHROME_MAJOR;
-  const token = sanitizeModelToken(model, 'Android');
+  const token = sanitizeModelToken(model, "Android");
   const release = Number(version) || 13;
   return `Mozilla/5.0 (Linux; Android ${release}; ${token}) AppleWebKit/537.36 `
     + `(KHTML, like Gecko) Chrome/${major}.0.0.0 Mobile Safari/537.36`;
@@ -112,92 +120,104 @@ function buildAndroidUserAgent({ model, version, chromeMajor } = {}) {
 
 function buildIosUserAgent({ version, chromeMajor } = {}) {
   const major = Number(chromeMajor) || DEFAULT_CHROME_MAJOR;
-  const release = Number(version) || 18;
-  return `Mozilla/5.0 (iPhone; CPU iPhone OS ${release}_0 like Mac OS X) AppleWebKit/605.1.15 `
+  const relStr = String(version || 18).trim();
+  const release = relStr.includes("_") ? relStr : (relStr.includes(".") ? relStr.replace(/\./g, "_") : `${relStr}_0`);
+  return `Mozilla/5.0 (iPhone; CPU iPhone OS ${release} like Mac OS X) AppleWebKit/605.1.15 `
     + `(KHTML, like Gecko) CriOS/${major}.0.0.0 Mobile/15E148 Safari/604.1`;
 }
 
 /** GPU family key used by the WebGL payload, derived from the vendor string the pool reports. */
 function gpuFamily(vendor) {
-  const v = String(vendor || '').toLowerCase();
-  if (v.includes('qualcomm')) return 'qualcomm';
-  if (v.includes('imagination')) return 'imagination';
-  if (v.includes('arm')) return 'arm';
-  if (v.includes('samsung')) return 'samsung';
-  if (v.includes('apple')) return 'apple';
-  return '';
+  const v = String(vendor || "").toLowerCase();
+  if (v.includes("qualcomm")) return "qualcomm";
+  if (v.includes("imagination")) return "imagination";
+  if (v.includes("arm")) return "arm";
+  if (v.includes("samsung")) return "samsung";
+  if (v.includes("apple")) return "apple";
+  return "";
 }
 
 /**
  * Draw one device and derive every axis from it.
  * @param {number} seedU32 unsigned 32-bit profile seed
- * @param {'android'|'ios'} [os]
+ * @param {"android"|"ios"} [os]
  * @param {{ chromeMajor?: number }} [options]
  */
-function mobilePersona(seedU32, os = 'android', options = {}) {
+function mobilePersona(seedU32, os = "android", options = {}) {
   const key = normalizeOs(os);
   const devices = devicesForOs(key);
   if (!devices.length) throw new Error(`mobile device pool has no ${key} entries`);
   const seed = Number.isFinite(Number(seedU32)) ? Math.abs(Math.trunc(Number(seedU32))) : 1;
   const device = devices[seed % devices.length];
-  const isIos = key === 'ios';
+  const isIos = key === "ios";
   const chromeMajor = Number(options.chromeMajor) || DEFAULT_CHROME_MAJOR;
   const osVersion = androidVersionFromRange(device.osRange, isIos ? 18 : 13);
   const resolvedPanel = isIos ? null : resolveAndroidPanel(device.width);
-  const dpr = isIos ? deriveIosDpr(device.width) : resolvedPanel.dpr;
+  const dpr = isIos ? deriveIosDpr(device.width, device.name) : resolvedPanel.dpr;
   // The pool records the display in CSS pixels, so the layout viewport is that panel minus the
   // browser chrome. screen.* keeps the full panel, which is what a phone reports.
   const screenWidth = device.width;
   const screenHeight = device.height;
   const viewportHeight = Math.max(320, Math.round(screenHeight - URL_BAR_HEIGHT));
-  // Phones with two cores ship with 4 GB; everything else lands on the 8 GB cap Chrome reports.
-  const deviceMemory = device.cores <= 4 ? 4 : 8;
-  const model = sanitizeModelToken(device.model, sanitizeModelToken(device.name, 'Android'));
+  // Memory follows device hardware capabilities quantized to Chrome spec
+  const deviceMemory = isIos
+    ? (device.cores <= 2 ? 2 : (device.cores <= 4 ? 4 : 8))
+    : (device.cores <= 4 ? 4 : 8);
+  const model = isIos ? "iPhone" : sanitizeModelToken(device.model, sanitizeModelToken(device.name, "Android"));
+  const deviceModel = sanitizeModelToken(device.model, sanitizeModelToken(device.name, isIos ? "iPhone" : "Android"));
   const userAgent = isIos
     ? buildIosUserAgent({ version: osVersion, chromeMajor })
     : buildAndroidUserAgent({ model, version: osVersion, chromeMajor });
+  const vendor = isIos ? "Apple Computer, Inc." : "Google Inc.";
   const uaProfile = buildUaProfile({
     userAgent,
     os: key,
     chromeMajor,
-    platformNav: isIos ? 'iPhone' : 'Linux armv8l',
-    platform: isIos ? 'iOS' : 'Android',
+    platformNav: isIos ? "iPhone" : "Linux armv8l",
+    platform: isIos ? "iOS" : "Android",
     platformVersion: `${osVersion}.0.0`,
     model,
     mobile: true,
-    architecture: '',
-    bitness: '',
+    architecture: "",
+    bitness: "",
     wow64: false,
+    vendor,
   });
 
-  // Android Client Hints omit architecture/bitness; the shared builder substitutes desktop
-  // defaults for empty strings, so clear them on the mobile profile rather than change a
-  // contract the desktop paths rely on.
-  uaProfile.metadata.architecture = '';
-  uaProfile.metadata.bitness = '';
-  uaProfile.clientHints.architecture = '';
-  uaProfile.clientHints.bitness = '';
+  // Mobile Client Hints omit architecture/bitness; ensure they remain empty
+  uaProfile.metadata.architecture = "";
+  uaProfile.metadata.bitness = "";
+  uaProfile.clientHints.architecture = "";
+  uaProfile.clientHints.bitness = "";
+  uaProfile.vendor = vendor;
+
+  const panelWidth = isIos ? Math.round(screenWidth * dpr) : resolvedPanel.panel;
+  const panelHeight = Math.round(screenHeight * dpr);
+  const panelError = isIos ? 0 : Number(resolvedPanel.error.toFixed(2));
 
   return {
     os: key,
     runtimeSupported: supportsRuntimePersona(key),
     name: device.name,
     model,
+    deviceModel,
     osVersion,
     osRange: device.osRange,
     cores: device.cores,
     deviceMemory,
     colorDepth: 24,
     dpr,
-    // Physical panel the layout viewport renders on. Android derives the CSS viewport from the
-    // panel and a density bucket, so the panel is the primitive and the viewport the derived one.
-    panel: resolvedPanel
-      ? { width: resolvedPanel.panel, height: Math.round(screenHeight * dpr), error: Number(resolvedPanel.error.toFixed(2)) }
-      : { width: Math.round(screenWidth * dpr), height: Math.round(screenHeight * dpr), error: 0 },
+    // Physical panel the layout viewport renders on.
+    panel: {
+      width: panelWidth,
+      height: panelHeight,
+      error: panelError,
+    },
     screen: { width: screenWidth, height: screenHeight },
     viewport: { width: screenWidth, height: viewportHeight },
     touch: true,
     maxTouchPoints: 5,
+    vendor,
     gpu: {
       vendor: device.gpuVendor,
       renderer: device.gpuRenderer,

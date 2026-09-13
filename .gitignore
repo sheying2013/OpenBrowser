@@ -1,0 +1,17 @@
+# Dependencies
+node_modules
+node_modules/
+
+# Python bytecode and cache
+__pycache__
+__pycache__/
+*.pyc
+
+# Test reports and build output
+Browserapp/reports/
+/reports/
+dist
+dist/
+
+# OS generated files
+.DS_Store

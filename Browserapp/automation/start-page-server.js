@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const { URL } = require('url');
 const { buildStartPageHtml } = require('./start-page-template');
 const { calculateIpHealthScore } = require('./ip-health-score');
+const { timezoneFromCountryCode, resolveProfileTimezone, isIanaTimezoneId } = require('./locale-from-country');
 const { lookupDirectCountry, parseProxy, startAuthenticatedProxy } = require('../proxy-forwarder');
 const { fpLog } = require('./fingerprint-debug-log');
 const dnsPromises = dns.promises;
@@ -96,10 +97,15 @@ function countryLabel(code, fallback = '') {
 
 async function lookupDirectNetwork() {
   const network = await lookupDirectCountry();
-  return {
+  const directNet = {
     ...network,
     protocol: 'direct',
   };
+  if (!directNet.timezone && directNet.countryCode) {
+    const derived = timezoneFromCountryCode(directNet.countryCode);
+    if (derived) directNet.timezone = derived;
+  }
+  return directNet;
 }
 
 function decorateNetwork(network) {
@@ -738,11 +744,16 @@ class StartPageServer {
     const profileId = String(profile.id || '');
     const serial = String(profile.number || profile.serial || extras.serial || profileId);
     const network = decorateNetwork(extras.network || profile.network || null);
-    const timezone = extras.timezone
-      || profile.exitTimezone
-      || network?.timezone
-      || (profile.privacy?.timezoneMode === 'custom' ? profile.privacy.timezone : '')
-      || '';
+    const timezone = (extras.timezone && isIanaTimezoneId(extras.timezone))
+      ? String(extras.timezone).trim()
+      : resolveProfileTimezone(profile, {
+          timezone: network?.timezone,
+          countryCode: network?.countryCode || profile.exitCountryCode,
+        });
+
+    if (network && !network.timezone && timezone) {
+      network.timezone = timezone;
+    }
 
     const session = {
       pid: profileId,
@@ -872,10 +883,32 @@ class StartPageServer {
     const session = this.getSession(pid);
     if (!session || !network) return session;
     const decoratedNetwork = decorateNetwork(network);
+
+    const netTz = isIanaTimezoneId(decoratedNetwork.timezone) ? String(decoratedNetwork.timezone).trim() : '';
+    const sessTz = isIanaTimezoneId(session.timezone) ? String(session.timezone).trim() : '';
+    const netCountry = String(decoratedNetwork.countryCode || '').trim().toUpperCase();
+    const sessCountry = String(session.countryCode || '').trim().toUpperCase();
+    const countryChanged = Boolean(netCountry && sessCountry && netCountry !== sessCountry);
+
+    let effectiveTz = '';
+    if (netTz) {
+      effectiveTz = netTz;
+    } else if (sessTz && !countryChanged) {
+      effectiveTz = sessTz;
+    } else {
+      effectiveTz = timezoneFromCountryCode(netCountry || sessCountry) || sessTz || session.timezone || '';
+    }
+
+    if (effectiveTz) {
+      decoratedNetwork.timezone = effectiveTz;
+      if (typeof network === 'object' && network !== null) network.timezone = effectiveTz;
+      session.timezone = effectiveTz;
+      session.exitTimezone = effectiveTz;
+    }
+
     session.network = decoratedNetwork;
     session.exitIp = decoratedNetwork.ip || session.exitIp;
     session.countryCode = decoratedNetwork.countryCode || session.countryCode;
-    if (decoratedNetwork.timezone) session.timezone = decoratedNetwork.timezone;
     session.at = Date.now();
     return session;
   }
@@ -982,20 +1015,27 @@ class StartPageServer {
           const network = isDirect
             ? await this.lookupDirectNetwork()
             : await this.engine.checkProxy(profile);
-          if (isDirect) this.engine.networkInfo?.set?.(String(pid), network);
-          this.updateNetwork(pid, network);
-          return decorateNetwork(network);
+          const updatedSession = this.updateNetwork(pid, network);
+          const activeNetwork = updatedSession?.network || network;
+          if (isDirect) this.engine.networkInfo?.set?.(String(pid), activeNetwork);
+          return decorateNetwork(activeNetwork);
         } catch (error) {
           if (session?.network?.ip) return session.network;
           if (isDirect) {
             // Direct mode is still valid local exit; geo is best-effort only.
+            const preservedTz = (session && session.timezone)
+              || (session && session.exitTimezone)
+              || profile.exitTimezone
+              || resolveProfileTimezone(profile, session?.network || {})
+              || timezoneFromCountryCode(session?.countryCode || profile.exitCountryCode)
+              || undefined;
             const soft = {
               ip: session?.exitIp || profile.exitIp || '',
               country: '',
               countryCode: session?.countryCode || profile.exitCountryCode || '',
               region: '',
               city: '',
-              timezone: session?.timezone || profile.exitTimezone || '',
+              timezone: preservedTz,
               latitude: profile.exitLatitude ?? null,
               longitude: profile.exitLongitude ?? null,
               protocol: 'direct',
@@ -1021,15 +1061,28 @@ class StartPageServer {
     // 但已知代理配置的失败必须在上面的代理分支中原样返回。
     if (refresh && !session) {
       try {
-        return decorateNetwork(await this.lookupDirectNetwork());
+        const directNet = await this.lookupDirectNetwork();
+        if (directNet && !directNet.timezone && directNet.countryCode) {
+          const derived = timezoneFromCountryCode(directNet.countryCode);
+          if (derived) directNet.timezone = derived;
+        }
+        return decorateNetwork(directNet);
       } catch (_) {
+        let fallbackTz = undefined;
+        if (this.engine && pid) {
+          const prof = this.engine.profiles?.get?.(String(pid));
+          if (prof) {
+            const resolved = resolveProfileTimezone(prof, {});
+            if (resolved) fallbackTz = resolved;
+          }
+        }
         return decorateNetwork({
           ip: '',
           country: '',
           countryCode: '',
           region: '',
           city: '',
-          timezone: '',
+          timezone: fallbackTz,
           protocol: 'direct',
           soft: true,
           checkedAt: new Date().toISOString(),
@@ -1038,18 +1091,22 @@ class StartPageServer {
     }
     if (session?.network) return decorateNetwork(session.network);
     if (session?.exitIp) {
+      const sessTz = session.timezone
+        || (session.countryCode ? timezoneFromCountryCode(session.countryCode) : undefined);
       return decorateNetwork({
         ip: session.exitIp,
         countryCode: session.countryCode || '',
-        timezone: session.timezone || '',
+        timezone: sessTz,
         protocol: session.networkMode === 'direct' || session.proxyProtocol === 'direct' ? 'direct' : undefined,
       });
     }
     if (session && (session.networkMode === 'direct' || session.proxyProtocol === 'direct')) {
+      const sessTz = session.timezone
+        || (session.countryCode ? timezoneFromCountryCode(session.countryCode) : undefined);
       return decorateNetwork({
         ip: '',
         countryCode: session.countryCode || '',
-        timezone: session.timezone || '',
+        timezone: sessTz,
         protocol: 'direct',
         soft: true,
         checkedAt: new Date().toISOString(),
