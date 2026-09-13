@@ -16,6 +16,7 @@ const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const http = require('http');
 
 const { buildFingerprint, buildInjectionScript } = require('./fingerprint');
 const { writeOpenBrowserKernelInit } = require('./kernel-init-sync');
@@ -113,6 +114,53 @@ const PROBE = `(async () => {
     };
   } catch (e) { out.renderedErr = String(e).slice(0, 60); }
   try {
+    const hashBytes = (view) => { let h = 2166136261 >>> 0; for (let i = 0; i < view.length; i += 1) { h ^= view[i]; h = Math.imul(h, 16777619) >>> 0; } return h; };
+    const c = document.createElement("canvas"); c.width = 32; c.height = 32;
+    const g = c.getContext("2d"); g.fillStyle = "#f60"; g.fillRect(0, 0, 32, 32); g.fillStyle = "#069"; g.fillRect(4, 4, 12, 12);
+    const imageHash = hashBytes(new Uint8Array(g.getImageData(0, 0, 32, 32).data.buffer));
+    let frameHash = null; let streamHash = null;
+    if (typeof VideoFrame === "function") {
+      const frame = new VideoFrame(c, { timestamp: 0 });
+      const buffer = new Uint8Array(frame.allocationSize({ format: "RGBA" }));
+      await frame.copyTo(buffer, { format: "RGBA" });
+      frameHash = hashBytes(buffer);
+      frame.close();
+    }
+    if (typeof MediaStreamTrackProcessor === "function" && typeof c.captureStream === "function") {
+      const stream = c.captureStream(1);
+      const processor = new MediaStreamTrackProcessor({ track: stream.getVideoTracks()[0] });
+      const reader = processor.readable.getReader();
+      const grabbed = await reader.read();
+      const buffer = new Uint8Array(grabbed.value.allocationSize({ format: "RGBA" }));
+      await grabbed.value.copyTo(buffer, { format: "RGBA" });
+      streamHash = hashBytes(buffer);
+      grabbed.value.close(); reader.releaseLock();
+    }
+    out.pixelPaths = { imageHash: imageHash, frameHash: frameHash, streamHash: streamHash };
+  } catch (e) { out.pixelPathErr = String(e).slice(0, 70); }
+  try {
+    if (navigator.gpu && typeof GPUTextureUsage === 'object') {
+      const hashBytes = (view) => { let h = 2166136261 >>> 0; for (let i = 0; i < view.length; i += 1) { h ^= view[i]; h = Math.imul(h, 16777619) >>> 0; } return h; };
+      const adapter = await navigator.gpu.requestAdapter();
+      if (adapter) {
+        const device = await adapter.requestDevice();
+        const source = document.createElement('canvas'); source.width = 32; source.height = 32;
+        const sg = source.getContext('2d'); sg.fillStyle = '#0a6'; sg.fillRect(0, 0, 32, 32); sg.fillStyle = '#f60'; sg.fillRect(3, 3, 9, 9);
+        const texture = device.createTexture({ size: [32, 32], format: 'rgba8unorm', usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT });
+        device.queue.copyExternalImageToTexture({ source: source }, { texture: texture }, [32, 32]);
+        const bytesPerRow = 256;
+        const buffer = device.createBuffer({ size: bytesPerRow * 32, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        const encoder = device.createCommandEncoder();
+        encoder.copyTextureToBuffer({ texture: texture }, { buffer: buffer, bytesPerRow: bytesPerRow }, [32, 32]);
+        device.queue.submit([encoder.finish()]);
+        await buffer.mapAsync(GPUMapMode.READ);
+        out.webgpuPixels = hashBytes(new Uint8Array(buffer.getMappedRange().slice(0)));
+        buffer.unmap();
+      }
+    }
+  } catch (e) { out.webgpuPixelErr = String((e && e.message) || e).slice(0, 70); }
+
+  try {
     const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     const graph = () => { const off = new OAC(1, 512, 44100); const osc = off.createOscillator(); osc.type = 'triangle'; osc.frequency.value = 900; osc.connect(off.destination); osc.start(0); return off; };
     // Writing one sample in used to exempt the whole buffer, which handed the page the untouched
@@ -171,7 +219,9 @@ function client() {
 
 async function launch(profileDir) {
   try { fs.rmSync(path.join(profileDir, 'DevToolsActivePort'), { force: true }); } catch (_) {}
-  const child = spawn(launcher, [profileDir, '--headless=new'], { cwd: kernelRoot, detached: true, stdio: 'ignore' });
+  // The software rasterizer is what makes WebGPU available in a headless kernel; the WebGPU
+  // read-back check below needs an adapter to exist.
+  const child = spawn(launcher, [profileDir, '--headless=new', '--enable-unsafe-swiftshader'], { cwd: kernelRoot, detached: true, stdio: 'ignore' });
   child.unref();
   let port = null;
   for (let i = 0; i < 80; i += 1) {
@@ -195,9 +245,13 @@ async function launch(profileDir) {
   return { child, port, page };
 }
 
-function stop(child, profileDir) {
+function stop(child, profileDir, server) {
   try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
   try { execSync(`pkill -f "user-data-dir=${profileDir}" 2>/dev/null || true`); } catch (_) {}
+  if (server) {
+    try { if (typeof server.closeAllConnections === 'function') server.closeAllConnections(); } catch (_) {}
+    try { server.close(); } catch (_) {}
+  }
 }
 
 (async () => {
@@ -225,8 +279,20 @@ function stop(child, profileDir) {
     return;
   }
 
+  // WebGPU is gated on a secure context and the kernel's initial about:blank is not one, so the
+  // probe page is served from loopback for the whole run.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<!doctype html><html><body>cdp noise probe</body></html>');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const probeUrl = 'http://127.0.0.1:' + server.address().port + '/';
+
   const cdp = client();
   await cdp.attach(page.webSocketDebuggerUrl);
+  await cdp.call('Page.enable', {});
+  await cdp.call('Page.navigate', { url: probeUrl });
+  await sleep(1200);
   const baseline = await cdp.evalValue(PROBE);
   await cdp.call('Page.enable', {});
   await cdp.call('Page.addScriptToEvaluateOnNewDocument', { source: inject });
@@ -236,7 +302,7 @@ function stop(child, profileDir) {
   await sleep(2000);
   const reloaded = await cdp.evalValue(PROBE);
   cdp.close();
-  stop(child, dir);
+  stop(child, dir, server);
 
   check('baseline probe returns real hardware values', () => {
     assert.ok(baseline && typeof baseline.canvas === 'number', 'baseline canvas hash');
@@ -273,6 +339,24 @@ function stop(child, profileDir) {
     assert.strictEqual(injected.renderedPaths.consistent, true, 'the complete event and the promise must agree on one buffer');
     assert.notDeepStrictEqual(injected.renderedPaths.awaited, baseline.renderedPaths.awaited, 'the awaited buffer must be perturbed');
     assert.notDeepStrictEqual(injected.renderedPaths.event, baseline.renderedPaths.event, 'the complete-event buffer must be perturbed');
+  });
+
+  check('a WebGPU read-back answers with the masked rendering', () => {
+    if (baseline.webgpuPixels === undefined || injected.webgpuPixels === undefined) {
+      console.log('  SKIP  WebGPU read-back unavailable (' + (baseline.webgpuPixelErr || injected.webgpuPixelErr || 'no adapter') + ')');
+      return;
+    }
+    assert.notStrictEqual(injected.webgpuPixels, baseline.webgpuPixels, 'the WebGPU read-back must not hand out the raw rendering');
+  });
+
+  check('every pixel read path answers with one masked value', () => {
+    assert.ok(baseline.pixelPaths && injected.pixelPaths, 'pixel path probe missing (' + (baseline.pixelPathErr || '') + (injected.pixelPathErr || '') + ')');
+    assert.strictEqual(baseline.pixelPaths.frameHash, baseline.pixelPaths.imageHash, 'baseline control: the frame must match the 2D read');
+    assert.strictEqual(injected.pixelPaths.frameHash, injected.pixelPaths.imageHash, 'a WebCodecs frame must answer like getImageData');
+    assert.notStrictEqual(injected.pixelPaths.imageHash, baseline.pixelPaths.imageHash, 'the pixels must still be perturbed');
+    if (baseline.pixelPaths.streamHash !== null && injected.pixelPaths.streamHash !== null) {
+      assert.strictEqual(injected.pixelPaths.streamHash, injected.pixelPaths.imageHash, 'a captureStream frame must answer like getImageData');
+    }
   });
 
   check('a rendered buffer keeps the samples the page wrote and masks the rest', () => {

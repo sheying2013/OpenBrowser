@@ -2658,6 +2658,125 @@ function buildInjectionScript(fp) {
           return applyCanvasNoise(original.call(this, x, y, w, h), mark);
         });
       }
+      // WebCodecs hands the very same pixels out again - a frame built from a canvas, and the frames
+      // a captureStream pipeline delivers - and it does not go through the 2D read hooks at all. A
+      // page could therefore read the machine's real rendering (measured: the copied bytes matched
+      // the uninjected canvas exactly) and could also see the two surfaces disagree, which is a tell
+      // on its own. The copied bytes are put through the same grid the 2D path uses, so both
+      // surfaces answer with one value; the red channel is the one perturbed, exactly like
+      // getImageData, so the delta a page can observe is the same on both.
+      const videoFrameProto = globalThis.VideoFrame ? VideoFrame.prototype : null;
+      if (videoFrameProto && typeof videoFrameProto.copyTo === 'function') {
+        const packedRedOffset = (format) => {
+          const name = String(format || '');
+          if (name === 'RGBA' || name === 'RGBX') return 0;
+          if (name === 'BGRA' || name === 'BGRX') return 2;
+          return -1;
+        };
+        const perturbCopiedFrame = (frame, destination, options) => {
+          try {
+            const settings = options || {};
+            const redOffset = packedRedOffset(settings.format || frame.format);
+            if (redOffset < 0) return;
+            const view = destination instanceof ArrayBuffer
+              ? new Uint8Array(destination)
+              : (ArrayBuffer.isView(destination)
+                ? new Uint8Array(destination.buffer, destination.byteOffset, destination.byteLength)
+                : null);
+            if (!view) return;
+            const frameWidth = Number(frame.codedWidth || frame.displayWidth || 0) || 0;
+            const frameHeight = Number(frame.codedHeight || frame.displayHeight || 0) || 0;
+            if (!frameWidth || !frameHeight) return;
+            const layout = settings.layout || null;
+            const base = Number(layout && layout.offset) || 0;
+            const rowBytes = Number(layout && layout.bytesPerRow) >= frameWidth * 4
+              ? Number(layout.bytesPerRow)
+              : frameWidth * 4;
+            const rect = settings.rect || null;
+            const rx = Number(rect && rect.x) || 0;
+            const ry = Number(rect && rect.y) || 0;
+            const rw = Number(rect && rect.width) || frameWidth;
+            const rh = Number(rect && rect.height) || frameHeight;
+            if (!(rw > 0) || !(rh > 0)) return;
+            const temp = new Uint8ClampedArray(rw * rh * 4);
+            for (let y = 0; y < rh; y += 1) {
+              for (let x = 0; x < rw; x += 1) {
+                const from = base + (ry + y) * rowBytes + (rx + x) * 4;
+                if (from + 3 >= view.length) return;
+                const to = (y * rw + x) * 4;
+                temp[to] = view[from + redOffset];
+                temp[to + 1] = view[from + 1];
+                temp[to + 2] = view[from + (redOffset === 0 ? 2 : 0)];
+                temp[to + 3] = view[from + 3];
+              }
+            }
+            applyCanvasNoise({ data: temp, width: rw, height: rh }, mark);
+            for (let y = 0; y < rh; y += 1) {
+              for (let x = 0; x < rw; x += 1) {
+                const from = base + (ry + y) * rowBytes + (rx + x) * 4;
+                const to = (y * rw + x) * 4;
+                if (from + 3 >= view.length) return;
+                if (temp[to] === view[from + redOffset]) continue;
+                view[from + redOffset] = temp[to];
+              }
+            }
+          } catch (_) {}
+        };
+        replaceMethod(videoFrameProto, 'copyTo', (original) => function copyTo(destination, options) {
+          const result = original.apply(this, arguments);
+          try {
+            if (result && typeof result.then === 'function') {
+              return result.then((value) => { perturbCopiedFrame(this, destination, options); return value; });
+            }
+            perturbCopiedFrame(this, destination, options);
+          } catch (_) {}
+          return result;
+        });
+      }
+      // WebGPU is the third door onto the same pixels: copyExternalImageToTexture puts the canvas into
+      // a texture and copyTextureToBuffer plus mapAsync hands the bytes back without touching any 2D
+      // hook (measured: that read-back matched the uninjected rendering exactly). The source the
+      // queue receives is swapped for a masked copy instead, so the GPU sees the same rendering the
+      // 2D path reports.
+      const gpuQueueProto = globalThis.GPUQueue ? GPUQueue.prototype : null;
+      if (gpuQueueProto && typeof gpuQueueProto.copyExternalImageToTexture === 'function') {
+        const sourceSize = (value) => {
+          try {
+            const w = Math.round(Number(value.width || value.displayWidth || value.codedWidth || 0)) || 0;
+            const h = Math.round(Number(value.height || value.displayHeight || value.codedHeight || 0)) || 0;
+            return w > 0 && h > 0 ? { width: w, height: h } : null;
+          } catch (_) { return null; }
+        };
+        const maskedCopyOf = (value) => {
+          const size = sourceSize(value);
+          if (!size || !originalGet || webglCanvases.has(value)) return null;
+          try {
+            const copy = document.createElement('canvas');
+            copy.width = size.width;
+            copy.height = size.height;
+            const surface = copy.getContext('2d');
+            if (!surface) return null;
+            surface.drawImage(value, 0, 0, size.width, size.height);
+            const image = applyCanvasNoise(originalGet.call(surface, 0, 0, size.width, size.height), mark);
+            surface.putImageData(image, 0, 0);
+            return copy;
+          } catch (_) { return null; }
+        };
+        replaceMethod(gpuQueueProto, 'copyExternalImageToTexture', (original) => function copyExternalImageToTexture(source, destination, copySize) {
+          try {
+            if (source && source.source) {
+              const masked = maskedCopyOf(source.source);
+              if (masked) {
+                const swapped = {};
+                for (const key of Object.keys(source)) swapped[key] = source[key];
+                swapped.source = masked;
+                return original.call(this, swapped, destination, copySize);
+              }
+            }
+          } catch (_) {}
+          return original.apply(this, arguments);
+        });
+      }
       if (globalThis.OffscreenCanvas?.prototype?.convertToBlob) {
         replaceMethod(OffscreenCanvas.prototype, 'convertToBlob', (original) => async function(options) {
           const blob = await original.call(this, options);
