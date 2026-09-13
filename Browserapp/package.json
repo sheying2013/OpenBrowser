@@ -102,6 +102,7 @@
     "selftest:portscan": "node automation/port-scan-protection-selftest.js",
     "selftest:portsce2e": "node automation/port-scan-protection-e2e-selftest.js",
     "selftest:kernelinit": "node automation/kernel-init-sync-selftest.js",
+    "selftest:fpcoverage": "node automation/fingerprint-coverage-selftest.js",
     "selftest:injectorder": "node fingerprint-inject-order-selftest.js",
     "selftest:fpstability": "node automation/fingerprint-stability-selftest.js",
     "selftest:cdpready": "node automation/kernel-cdp-ready-selftest.js",
