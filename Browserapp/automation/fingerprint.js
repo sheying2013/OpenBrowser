@@ -1256,6 +1256,27 @@ function fingerprintConsistencyIssues(fp) {
   if (fp?.deviceMemory != null && !(Number(fp.deviceMemory) >= 1 && Number(fp.deviceMemory) <= 8)) {
     add('memory-invalid', 'deviceMemory must be between 1 and 128 when overridden.', 'error');
   }
+  // WebGL and WebGPU read the same physical adapter, so a page that finds a disguised WebGL
+  // renderer next to an untouched WebGPU adapter has two GPUs on one machine - a contradiction no
+  // real desktop produces. Leaving WebGPU "real" is a legitimate user choice, so this is reported
+  // rather than enforced: the point is that the trade-off is visible instead of silent.
+  const webglGpu = fp?.webgl?.gpu || null;
+  const webglDisguised = Boolean(webglGpu && (webglGpu.vendor || webglGpu.architecture)
+    && String(fp?.webgl?.mode || 'noise') !== 'real');
+  if (webglDisguised && String(fp?.webgpu?.mode || '') === 'real') {
+    add('webgpu-real-vs-webgl-disguised',
+      'WebGL reports a profile GPU while WebGPU is left on the host adapter; the two APIs will disagree.',
+      'warning');
+  }
+  // The driver limits are derived from the same GPU the renderer string names, so the class the
+  // limits table knows about has to be the class the renderer claims. Mobile GPU families have no
+  // table entry yet, which is why this is a warning - those profiles keep the host limits, and
+  // surfacing that is the difference between a known gap and a silent one.
+  if (webglGpu && (webglGpu.vendor || webglGpu.architecture) && !webglParameterOverrides(webglGpu)) {
+    add('webgl-limits-unknown-gpu',
+      `No driver limit table entry for ${String(webglGpu.vendor || 'unknown')}/${String(webglGpu.architecture || 'unknown')}.`,
+      'warning');
+  }
   return { ok: !issues.some((issue) => issue.severity === 'error'), issues };
 }
 

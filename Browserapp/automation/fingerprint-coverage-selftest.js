@@ -22,6 +22,7 @@ const path = require('path');
 const {
   buildFingerprint,
   buildInjectionScript,
+  fingerprintConsistencyIssues,
   WEBGL_PRESETS,
   webglParameterOverrides,
   WEBGL_PARAM_IDS,
@@ -230,6 +231,48 @@ check('a real-mode profile does not publish a synthetic native identity', () => 
   assert.strictEqual(realFields.is_audio_finger_printing_enable, false, 'real audio must not claim noise');
   assert.strictEqual(realFields.is_font_finger_printing_enable, false, 'real fonts must not claim a list');
   assert.strictEqual(realFields.webgpu_parameter, undefined, 'real webgpu must not publish an identity');
+});
+
+check('a profile with a disguised WebGL renderer does not silently leave WebGPU real', () => {
+  const base = { id: 'diag-base', userAgent: WINDOWS_UA, privacy: { ...PROFILE.privacy } };
+  const consistent = buildFingerprint(base);
+  const consistentCodes = consistent.consistency.issues.map((issue) => issue.code);
+  assert.ok(!consistentCodes.includes('webgpu-real-vs-webgl-disguised'),
+    'the product default must not be reported as a contradiction');
+
+  const risky = buildFingerprint({ ...base, id: 'diag-risky', privacy: { ...PROFILE.privacy, webgpu: 'real' } });
+  const riskyIssues = risky.consistency.issues.filter((issue) => issue.code === 'webgpu-real-vs-webgl-disguised');
+  assert.strictEqual(riskyIssues.length, 1, 'leaving WebGPU real next to a disguised WebGL renderer must be reported');
+  assert.strictEqual(riskyIssues[0].severity, 'warning', 'an explicit user choice is reported, not blocked');
+  assert.strictEqual(risky.consistency.ok, true, 'a warning must not make the build fail');
+});
+
+check('a GPU class without driver limits is surfaced instead of assumed', () => {
+  // The renderer string wins over a partial override, so this is exercised on the diagnostic
+  // directly rather than through a profile that would resolve to a modelled preset.
+  const issues = fingerprintConsistencyIssues({
+    userAgent: WINDOWS_UA,
+    platform: 'Win32',
+    screen: { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040, availLeft: 0, availTop: 0, screenX: 0, screenY: 0, devicePixelRatio: 1 },
+    hardwareConcurrency: 8,
+    deviceMemory: 8,
+    webgl: { mode: 'noise', vendor: 'Google Inc. (Imagination)', renderer: 'IMG', gpu: { vendor: 'imagination', architecture: '' } },
+    userAgentMetadata: { platform: 'Windows' },
+  });
+  const codes = issues.issues.map((issue) => issue.code);
+  assert.ok(codes.includes('webgl-limits-unknown-gpu'),
+    'a GPU family with no limits entry must be reported');
+  assert.strictEqual(issues.ok, true, 'an unmodelled mobile GPU must not break the build');
+});
+
+check('every desktop preset GPU is fully modelled', () => {
+  for (const list of Object.values(WEBGL_PRESETS)) {
+    for (const preset of (Array.isArray(list) ? list : [])) {
+      const gpu = preset && preset.gpu;
+      if (!gpu) continue;
+      assert.ok(webglParameterOverrides(gpu), `${gpu.vendor}/${gpu.architecture} must be modelled`);
+    }
+  }
 });
 
 const failed = results.filter((item) => !item.ok);
