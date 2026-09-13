@@ -19,8 +19,15 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const { buildFingerprint, buildInjectionScript } = require('./fingerprint');
+const {
+  buildFingerprint,
+  buildInjectionScript,
+  WEBGL_PRESETS,
+  webglParameterOverrides,
+  WEBGL_PARAM_IDS,
+} = require('./fingerprint');
 const { mapFingerprintToInitFields } = require('./kernel-init-sync');
+
 
 const root = path.join(__dirname, '..');
 const read = (name) => fs.readFileSync(path.join(root, name), 'utf8');
@@ -165,6 +172,32 @@ check('every dimension is claimed by a registered suite', () => {
     if (!scripts[dimension.suite]) missing.push(`${dimension.name} (${dimension.suite})`);
   }
   assert.deepStrictEqual(missing, [], `dimensions without a registered suite: ${missing.join(', ')}`);
+});
+
+check('every GPU class in the preset pool has driver limit overrides', () => {
+  // A new preset without a limits entry would keep the adapter name spoofed but answer the
+  // driver limits from the host GPU, which is the exact contradiction the limits table exists
+  // to remove. This has to fail at build time, not at detection time.
+  const classes = new Set();
+  for (const list of Object.values(WEBGL_PRESETS)) {
+    for (const preset of (Array.isArray(list) ? list : [])) {
+      const gpu = preset && preset.gpu;
+      if (!gpu) continue;
+      classes.add(`${String(gpu.vendor || '').toLowerCase()}/${String(gpu.architecture || '').toLowerCase()}`);
+    }
+  }
+  assert.ok(classes.size >= 8, `the preset pool should expose a broad GPU range (found ${classes.size})`);
+  const uncovered = [];
+  for (const key of classes) {
+    const [vendor, architecture] = key.split('/');
+    const limits = webglParameterOverrides({ vendor, architecture });
+    if (!limits) { uncovered.push(key); continue; }
+    for (const name of ['MAX_TEXTURE_SIZE', 'MAX_CUBE_MAP_TEXTURE_SIZE', 'MAX_RENDERBUFFER_SIZE', 'MAX_VERTEX_UNIFORM_VECTORS', 'MAX_VARYING_VECTORS']) {
+      const value = limits[WEBGL_PARAM_IDS[name]];
+      if (!Number.isInteger(value) || value <= 0) uncovered.push(`${key}:${name}`);
+    }
+  }
+  assert.deepStrictEqual(uncovered, [], `GPU classes without usable driver limits: ${uncovered.join(', ')}`);
 });
 
 check('the coverage table does not outlive the switches it names', () => {
