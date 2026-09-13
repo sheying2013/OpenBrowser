@@ -160,6 +160,7 @@ jobs:
           npm run selftest:kernel
           npm run selftest:profileui
           npm run selftest:kernelinit
+          npm run selftest:fpcoverage
           npm run selftest:stealth
       - run: npm run package:portable
       - name: Verify package
@@ -238,6 +239,7 @@ jobs:
           npm run selftest:kernel
           npm run selftest:profileui
           npm run selftest:kernelinit
+          npm run selftest:fpcoverage
           npm run selftest:stealth
       - run: npm run package:portable
       - name: Verify Ubuntu package and bundled kernel
@@ -325,7 +327,9 @@ jobs:
           npm run selftest:kernel
           npm run selftest:profileui
           npm run selftest:kernelinit
+          npm run selftest:fpcoverage
           npm run selftest:stealth
+          npm run selftest:webglparams
           npm run selftest:surfacediff
           npm run selftest:mediae2e
           npm run selftest:popupe2e
@@ -402,7 +406,9 @@ jobs:
           npm run selftest:kernel
           npm run selftest:profileui
           npm run selftest:kernelinit
+          npm run selftest:fpcoverage
           npm run selftest:stealth
+          npm run selftest:webglparams
           npm run selftest:surfacediff
           npm run selftest:mediae2e
           npm run selftest:popupe2e
