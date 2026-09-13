@@ -59,6 +59,19 @@ check('the system defaults action keeps WebGPU on the product default', () => {
     'an explicit real WebGPU default contradicts the profile WebGL identity');
 });
 
+check('every editor control the renderer reaches for exists in the page', () => {
+  // A renamed or deleted control makes the setting silently fall back to its default: the profile
+  // saves something the user never chose, and nothing errors. Both directions are checked here.
+  const renderer = read('renderer.js');
+  const html = read('index.html');
+  const referenced = new Set(
+    [...renderer.matchAll(/['"]#(editor-[a-z0-9-]+)['"]/gi)].map((match) => match[1])
+  );
+  assert.ok(referenced.size >= 100, `expected the editor to drive many controls (found ${referenced.size})`);
+  const missing = [...referenced].filter((id) => !html.includes(`id="${id}"`));
+  assert.deepStrictEqual(missing, [], `renderer references controls that do not exist: ${missing.join(', ')}`);
+});
+
 const failed = results.filter((item) => !item.ok);
 for (const item of results) {
   if (item.ok) console.log('  PASS  ' + item.name);
