@@ -616,6 +616,77 @@ function webglPresetsForOs(os, options = {}) {
   return list;
 }
 
+// WebGL reports a handful of hardware limits straight from the driver. A page that reads the
+// spoofed adapter name and then compares it against those limits can tell the two apart - a
+// persona claiming one GPU while MAX_TEXTURE_SIZE still describes the host GPU is exactly the
+// kind of cross check a detector runs. Each entry below is the value a page sees for that GPU
+// class under a current desktop driver; `texture` doubles as the viewport/cube/renderbuffer size
+// because those limits are equal on every desktop driver in the table.
+const WEBGL_GPU_LIMITS = {
+  // vendor: architecture -> limits
+  nvidia: {
+    ada: { texture: 32768, vertexUniform: 1024, varying: 32 },
+    ampere: { texture: 32768, vertexUniform: 1024, varying: 32 },
+    turing: { texture: 32768, vertexUniform: 1024, varying: 32 },
+  },
+  amd: {
+    'rdna-3': { texture: 16384, vertexUniform: 1024, varying: 32 },
+    'rdna-2': { texture: 16384, vertexUniform: 1024, varying: 32 },
+    'rdna-1': { texture: 16384, vertexUniform: 1024, varying: 32 },
+    'gcn-4': { texture: 16384, vertexUniform: 4096, varying: 32 },
+    'gcn-3': { texture: 16384, vertexUniform: 4096, varying: 32 },
+    vega: { texture: 16384, vertexUniform: 4096, varying: 32 },
+  },
+  intel: {
+    alchemist: { texture: 16384, vertexUniform: 1024, varying: 32 },
+    gen12: { texture: 16384, vertexUniform: 1024, varying: 32 },
+    gen11: { texture: 16384, vertexUniform: 1024, varying: 32 },
+    gen9: { texture: 16384, vertexUniform: 1024, varying: 32 },
+    gen7: { texture: 8192, vertexUniform: 1024, varying: 32 },
+  },
+  apple: {
+    'common-3': { texture: 16384, vertexUniform: 1024, varying: 32 },
+    'common-4': { texture: 16384, vertexUniform: 1024, varying: 32 },
+  },
+};
+
+/** WebGL parameter ids that a coerced adapter identity has to answer for. */
+const WEBGL_PARAM_IDS = Object.freeze({
+  MAX_TEXTURE_SIZE: 0x0d33,
+  MAX_VIEWPORT_DIMS: 0x0d3a,
+  MAX_CUBE_MAP_TEXTURE_SIZE: 0x851c,
+  MAX_RENDERBUFFER_SIZE: 0x84e8,
+  MAX_VERTEX_UNIFORM_VECTORS: 0x8dfb,
+  MAX_VARYING_VECTORS: 0x8dfc,
+});
+
+/**
+ * Per-persona overrides for the driver-reported WebGL limits.
+ *
+ * Returns null when nothing should be coerced (no GPU identity, or real mode), otherwise a
+ * plain object keyed by the numeric parameter id. Values are pulled from the class table so
+ * two profiles with the same GPU always agree, and `MAX_VIEWPORT_DIMS` is derived from the
+ * renderbuffer size rather than being carried separately.
+ */
+function webglParameterOverrides(gpu) {
+  if (!gpu || typeof gpu !== 'object') return null;
+  const vendor = String(gpu.vendor || '').toLowerCase();
+  const arch = String(gpu.architecture || '').toLowerCase();
+  const family = WEBGL_GPU_LIMITS[vendor];
+  if (!family) return null;
+  // An unknown architecture still has to agree with itself, so fall back to the vendor's
+  // most conservative entry instead of leaving the host limits in place.
+  const entry = family[arch] || Object.values(family)[Object.keys(family).length - 1];
+  if (!entry) return null;
+  const overrides = {};
+  overrides[WEBGL_PARAM_IDS.MAX_TEXTURE_SIZE] = entry.texture;
+  overrides[WEBGL_PARAM_IDS.MAX_CUBE_MAP_TEXTURE_SIZE] = entry.texture;
+  overrides[WEBGL_PARAM_IDS.MAX_RENDERBUFFER_SIZE] = entry.texture;
+  overrides[WEBGL_PARAM_IDS.MAX_VERTEX_UNIFORM_VECTORS] = entry.vertexUniform;
+  overrides[WEBGL_PARAM_IDS.MAX_VARYING_VECTORS] = entry.varying;
+  return overrides;
+}
+
 function expectedClientHintPlatform(os) {
   if (os === 'macos' || os === 'macos_arm') return 'macOS';
   if (os === 'linux') return 'Linux';
@@ -1208,6 +1279,7 @@ function buildInjectionScript(fp) {
       renderer: fp.webgl?.renderer,
       mark: fp.webgl?.mark,
       gpu: fp.webgl?.gpu || null,
+      limits: webglParameterOverrides(fp.webgl?.gpu),
     },
     canvas: fp.canvas,
     audio: fp.audio,
@@ -2856,6 +2928,22 @@ function buildInjectionScript(fp) {
             if (param === UNMASKED_VENDOR_WEBGL) return metaMode === 'blocked' ? '' : CFG.webgl.vendor;
             if (param === UNMASKED_RENDERER_WEBGL) return metaMode === 'blocked' ? '' : CFG.webgl.renderer;
           }
+          const limits = CFG.webgl && CFG.webgl.limits;
+          if (limits) {
+            if (param === 0x0d3a) {
+              // MAX_VIEWPORT_DIMS has to follow the size limits, and it is an array, so it is
+              // rebuilt from the native value's own constructor to keep the exact same type.
+              const native = original.apply(this, arguments);
+              const side = Number(limits[0x84e8]) || 0;
+              if (side && native && native.length === 2) {
+                const out = new native.constructor(2);
+                out[0] = side; out[1] = side;
+                return out;
+              }
+              return native;
+            }
+            if (Object.prototype.hasOwnProperty.call(limits, param)) return limits[param];
+          }
           return original.apply(this, arguments);
         });
       };
@@ -3880,6 +3968,7 @@ function buildWorkerInjectionScript(fp) {
       renderer: fp.webgl?.renderer,
       mark: fp.webgl?.mark,
       gpu: fp.webgl?.gpu || null,
+      limits: webglParameterOverrides(fp.webgl?.gpu),
     },
     canvas: fp.canvas,
     seed: fp.seed,
@@ -4622,6 +4711,23 @@ function buildWorkerInjectionScript(fp) {
           return original.apply(this, arguments);
         });
       }
+      const limits = CFG.webgl && CFG.webgl.limits;
+      if (limits) {
+        replace(proto, 'getParameter', (original) => function(param) {
+          if (param === 0x0d3a) {
+            const native = original.apply(this, arguments);
+            const side = Number(limits[0x84e8]) || 0;
+            if (side && native && native.length === 2) {
+              const out = new native.constructor(2);
+              out[0] = side; out[1] = side;
+              return out;
+            }
+            return native;
+          }
+          if (Object.prototype.hasOwnProperty.call(limits, param)) return limits[param];
+          return original.apply(this, arguments);
+        });
+      }
       if (!pixelNoise) return;
       replace(proto, 'readPixels', (original) => function(...args) {
         const result = original.apply(this, args);
@@ -4930,6 +5036,8 @@ module.exports = {
   formatGeopositionValue,
   createBatteryFromSeed,
   buildWebglFpPayload,
+  webglParameterOverrides,
+  WEBGL_PARAM_IDS,
   audioMarkFromSeed,
   clientRectMarkFromSeed,
   resolveStabilityPolicy,
