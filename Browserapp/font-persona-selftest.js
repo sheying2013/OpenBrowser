@@ -1,17 +1,16 @@
 'use strict';
 
-// Font probing is one of the strongest OS signals available, and on a stock Chromium kernel
-// nothing shields it — the host's real fonts answer. A profile presenting as Windows while
-// running on a Mac is contradicted the moment a page asks about Helvetica Neue.
+// Font probing is one of the strongest OS signals available: on an unmodified kernel the host's
+// real fonts answer, so a profile presenting as Windows while running on a Mac is contradicted
+// the moment a page asks about Helvetica Neue.
 //
-// Only Local Font Access is answered from the persona's platform set here. Two boundaries are
-// pinned deliberately:
+// Local Font Access is answered from the persona's platform set here, and the persona's font
+// stack is supplied to the page as real font faces, so enumeration and measurement both agree
+// with the claimed OS. One boundary is pinned deliberately:
 //   * document.fonts.check() is left native. It answers true for every system family in this
 //     engine, so denying "foreign" families would be a difference from an unmodified build (an
 //     own member on the FontFaceSet, a false where every stock browser answers true, and no
 //     SyntaxError for a spec without a size) that hides nothing.
-//   * Text measurement is not intercepted, since that means touching the geometry pages use
-//     for layout.
 // The returned FontData objects must keep the engine's shape, because a plain object is itself
 // a tell: it stringifies, enumerates and brands differently.
 
@@ -50,7 +49,10 @@ const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.
 {
   const fp = buildFingerprint({ id: 'escape', userAgent: WIN_UA, privacy: { deviceProfile: 'persona' }, advanced: {} });
   const src = buildInjectionScript(fp);
-  const literals = src.match(/\/(?![/*])(?:\\.|\[[^\]]*\]|[^/\n\\])+\/[gimsuy]*/g) || [];
+  // The payload carries base64 font data, whose "/" characters read as regex delimiters to a
+  // naive scan. Strip string bodies first so only real code is matched.
+  const code = src.replace(/"(?:\\.|[^"\\\n])*"/g, '""').replace(/'(?:\\.|[^'\\\n])*'/g, "''");
+  const literals = code.match(/\/(?![/*])(?:\\.|\[[^\]]*\]|[^/\n\\])+\/[gimsuy]*/g) || [];
   const suspicious = literals.filter((r) => /\((\?:)?\^\|s\)/.test(r) || /\)s\*/.test(r) || /[^\\]\bs\+/.test(r) || /[^\\]\bd\+/.test(r) || /[^\\]\b[swdb]\{/.test(r));
   ok(`emitted regexes keep their escapes (${literals.length} scanned)`, suspicious.length === 0);
   if (suspicious.length) suspicious.forEach((r) => console.log('     x ' + r));

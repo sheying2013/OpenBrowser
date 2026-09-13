@@ -151,9 +151,9 @@ function buildProbe() {
     { family: 'Verdana', file: 'Verdana.ttf', role: 'positive' },
     { family: 'Tahoma', file: 'Tahoma.ttf', role: 'positive' },
     { family: 'Times New Roman', file: 'Times New Roman.ttf', role: 'positive' },
-    { family: 'Segoe UI', file: 'Tahoma.ttf', role: 'negative_cross_tahoma' },
-    { family: 'Consolas', file: 'Georgia.ttf', role: 'negative_cross_georgia' },
-    { family: 'Segoe UI Real', file: 'Segoe UI.otf', role: 'negative_win11_real' },
+    { family: 'Probe Cross Tahoma', file: 'Tahoma.ttf', role: 'negative_cross_tahoma' },
+    { family: 'Probe Cross Georgia', file: 'Georgia.ttf', role: 'negative_cross_georgia' },
+    { family: 'Probe Segoe Real', file: 'Segoe UI.otf', role: 'negative_win11_real' },
   ];
 
   // Phase 1: Measure baseline before registering any FontFace
@@ -330,45 +330,46 @@ function printMetricsTable(items, monoWidth) {
         `All positive font families must have distinct measured widths: found ${uniqueWidths.size} unique in ${positiveItems.length}`);
     });
 
-    const segoeTahoma = probeResult.items.find((item) => item.family === 'Segoe UI');
+    const segoeTahoma = probeResult.items.find((item) => item.family === 'Probe Cross Tahoma');
     const tahomaItem = probeResult.items.find((item) => item.family === 'Tahoma');
     check('negative control: Segoe UI switches from fallback to the injected font metrics', () => {
-      assert.ok(segoeTahoma && tahomaItem, 'Segoe UI and Tahoma items must exist');
-      // Before registration, Segoe UI is absent on macOS and falls back to monospace
+      assert.ok(segoeTahoma && tahomaItem, 'the cross-registration probe and Tahoma must exist');
+      // The probe family is synthetic, so before registration it falls back to monospace even
+      // though the persona layer has already supplied the real Windows families.
       assert.strictEqual(segoeTahoma.beforeWidth, probeResult.monoWidth,
-        'Segoe UI before registration must match monospace fallback width');
+        'the cross-registration probe must start at the monospace fallback width');
       // After registration with Tahoma.ttf, width must change from fallback to Tahoma.ttf width
       assert.notStrictEqual(segoeTahoma.afterWidth, segoeTahoma.beforeWidth,
-        'Segoe UI width must change after FontFace registration');
+        'the cross-registration probe width must change after FontFace registration');
       assert.strictEqual(segoeTahoma.afterWidth, tahomaItem.afterWidth,
-        'Segoe UI width must match Tahoma width when fed Tahoma.ttf');
+        'the cross-registration probe width must match Tahoma when fed Tahoma.ttf');
       assert.strictEqual(segoeTahoma.diff, Math.round((tahomaItem.afterWidth - probeResult.monoWidth) * 1000) / 1000,
         'diff must accurately match the jump from monospace to Tahoma');
     });
 
-    const consolasGeorgia = probeResult.items.find((item) => item.family === 'Consolas');
+    const consolasGeorgia = probeResult.items.find((item) => item.family === 'Probe Cross Georgia');
     const georgiaItem = probeResult.items.find((item) => item.family === 'Georgia');
     check('negative control: Consolas switches from fallback to Georgia metrics', () => {
-      assert.ok(consolasGeorgia && georgiaItem, 'Consolas and Georgia items must exist');
+      assert.ok(consolasGeorgia && georgiaItem, 'the cross-registration probe and Georgia must exist');
       assert.strictEqual(consolasGeorgia.beforeWidth, probeResult.monoWidth,
-        'Consolas before registration must match monospace fallback width');
+        'the cross-registration probe must start at the monospace fallback width');
       assert.strictEqual(consolasGeorgia.afterWidth, georgiaItem.afterWidth,
-        'Consolas width must match Georgia width when fed Georgia.ttf');
+        'the cross-registration probe width must match Georgia when fed Georgia.ttf');
       assert.notStrictEqual(consolasGeorgia.afterWidth, consolasGeorgia.beforeWidth,
-        'Consolas width must change after FontFace registration');
+        'the cross-registration probe width must change after FontFace registration');
     });
 
-    const segoeReal = probeResult.items.find((item) => item.family === 'Segoe UI Real');
+    const segoeReal = probeResult.items.find((item) => item.family === 'Probe Segoe Real');
     check('negative control: real Windows font file yields distinct genuine metrics', () => {
-      assert.ok(segoeReal, 'Segoe UI Real item must exist');
+      assert.ok(segoeReal, 'the real-file probe must exist');
       assert.strictEqual(segoeReal.beforeWidth, probeResult.monoWidth,
-        'Segoe UI Real before registration must match monospace fallback width');
+        'the real-file probe must start at the monospace fallback width');
       assert.notStrictEqual(segoeReal.afterWidth, segoeReal.beforeWidth,
-        'Segoe UI Real width must change after loading Segoe UI.otf');
+        'the real-file probe width must change after loading Segoe UI.otf');
       // Must not collide with any positive font
       for (const item of positiveItems) {
         assert.notStrictEqual(segoeReal.afterWidth, item.afterWidth,
-          `Segoe UI Real width (${segoeReal.afterWidth}) must not collide with ${item.family} (${item.afterWidth})`);
+          `the real-file probe width (${segoeReal.afterWidth}) must not collide with ${item.family} (${item.afterWidth})`);
       }
     });
 
