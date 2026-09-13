@@ -275,6 +275,20 @@ check('every desktop preset GPU is fully modelled', () => {
   }
 });
 
+check('storage and performance end-to-end suite is registered in package.json', () => {
+  assert.ok(scripts['selftest:storageperf'], 'selftest:storageperf script must be registered');
+  assert.strictEqual(scripts['selftest:storageperf'], 'node automation/storage-perf-e2e-selftest.js');
+  assert.ok(fs.existsSync(path.join(root, 'automation', 'storage-perf-e2e-selftest.js')),
+    'automation/storage-perf-e2e-selftest.js must exist on disk');
+});
+
+check('runtime storage and performance APIs remain untouched by injection script', () => {
+  assert.ok(!script.includes('navigator.storage'), 'navigator.storage must not be modified by injection script');
+  assert.ok(!script.includes('performance.timeOrigin'), 'performance.timeOrigin must not be modified by injection script');
+  assert.ok(!script.includes('performance.now'), 'performance.now must not be modified by injection script');
+  assert.ok(!script.includes('crypto.randomUUID'), 'crypto.randomUUID must not be patched by injection script');
+});
+
 const failed = results.filter((item) => !item.ok);
 if (!failed.length) console.log(`fingerprint-coverage-selftest: OK ${results.length}/${results.length}`);
 else {

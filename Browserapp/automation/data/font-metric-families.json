@@ -1,0 +1,709 @@
+{
+  "metadata": {
+    "description": "Mapping of fingerprint-probed font families to kernel font assets",
+    "generatedAt": "2026-09-13",
+    "kernelVersion": "148.0.7778.165",
+    "summary": {
+      "windows": {
+        "targetCount": 44,
+        "matchedCount": 44,
+        "totalBytes": 22067212,
+        "totalMB": 21.04
+      },
+      "macos": {
+        "targetCount": 49,
+        "matchedCount": 32,
+        "totalBytes": 32750408,
+        "totalMB": 31.23
+      },
+      "linux": {
+        "targetCount": 31,
+        "matchedCount": 25,
+        "totalBytes": 15559996,
+        "totalMB": 14.84
+      },
+      "android": {
+        "targetCount": 13,
+        "matchedCount": 10,
+        "totalBytes": 8317036,
+        "totalMB": 7.93
+      }
+    }
+  },
+  "families": {
+    "windows": {
+      "Segoe UI": {
+        "file": "segoeui5_67.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/segoeui5_67.ttf",
+        "sizeBytes": 980960,
+        "format": "ttf"
+      },
+      "Calibri": {
+        "file": "calibri6_26.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/calibri6_26.ttf",
+        "sizeBytes": 1681220,
+        "format": "ttf"
+      },
+      "Cambria": {
+        "file": "cambriab6_98.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/cambriab6_98.ttf",
+        "sizeBytes": 841440,
+        "format": "ttf"
+      },
+      "Candara": {
+        "file": "candara5_64.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/candara5_64.ttf",
+        "sizeBytes": 242012,
+        "format": "ttf"
+      },
+      "Consolas": {
+        "file": "consola7_00.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/consola7_00.ttf",
+        "sizeBytes": 459180,
+        "format": "ttf"
+      },
+      "Constantia": {
+        "file": "constan5_93.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/constan5_93.ttf",
+        "sizeBytes": 448376,
+        "format": "ttf"
+      },
+      "Corbel": {
+        "file": "corbel6_01.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/corbel6_01.ttf",
+        "sizeBytes": 277168,
+        "format": "ttf"
+      },
+      "Arial": {
+        "file": "arial7_04.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/arial7_04.ttf",
+        "sizeBytes": 1097456,
+        "format": "ttf"
+      },
+      "Arial Black": {
+        "file": "ariblk5_23.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/ariblk5_23.ttf",
+        "sizeBytes": 167592,
+        "format": "ttf"
+      },
+      "Tahoma": {
+        "file": "tahoma7_04.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/tahoma7_04.ttf",
+        "sizeBytes": 948860,
+        "format": "ttf"
+      },
+      "Verdana": {
+        "file": "verdana5_33.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/verdana5_33.ttf",
+        "sizeBytes": 243304,
+        "format": "ttf"
+      },
+      "Georgia": {
+        "file": "georgia5_59.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/georgia5_59.ttf",
+        "sizeBytes": 219712,
+        "format": "ttf"
+      },
+      "Times New Roman": {
+        "file": "MTimes-ExtraBold.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/MTimes-ExtraBold.otf",
+        "sizeBytes": 35552,
+        "format": "otf"
+      },
+      "Comic Sans MS": {
+        "file": "comic5_15.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/comic5_15.ttf",
+        "sizeBytes": 272612,
+        "format": "ttf"
+      },
+      "Courier New": {
+        "file": "cour6_94.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/cour6_94.ttf",
+        "sizeBytes": 828760,
+        "format": "ttf"
+      },
+      "Impact": {
+        "file": "impact5_11.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/impact5_11.ttf",
+        "sizeBytes": 206784,
+        "format": "ttf"
+      },
+      "Trebuchet MS": {
+        "file": "trebuc5_15.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/trebuc5_15.ttf",
+        "sizeBytes": 254396,
+        "format": "ttf"
+      },
+      "Franklin Gothic Medium": {
+        "file": "framd5_02.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/framd5_02.ttf",
+        "sizeBytes": 133632,
+        "format": "ttf"
+      },
+      "Lucida Console": {
+        "file": "Lucida Console.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/Lucida Console.otf",
+        "sizeBytes": 115016,
+        "format": "otf"
+      },
+      "Lucida Sans Unicode": {
+        "file": "Lucida Sans Unicode.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/Lucida Sans Unicode.otf",
+        "sizeBytes": 325400,
+        "format": "otf"
+      },
+      "Palatino Linotype": {
+        "file": "pala5_03.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/pala5_03.ttf",
+        "sizeBytes": 472284,
+        "format": "ttf"
+      },
+      "Gabriola": {
+        "file": "gabriola5_93.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/gabriola5_93.ttf",
+        "sizeBytes": 1806004,
+        "format": "ttf"
+      },
+      "Ebrima": {
+        "file": "ebrima5_19.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/ebrima5_19.ttf",
+        "sizeBytes": 949408,
+        "format": "ttf"
+      },
+      "Gadugi": {
+        "file": "gadugi1_13.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/gadugi1_13.ttf",
+        "sizeBytes": 242684,
+        "format": "ttf"
+      },
+      "Sylfaen": {
+        "file": "sylfaen5_08.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/sylfaen5_08.ttf",
+        "sizeBytes": 260108,
+        "format": "ttf"
+      },
+      "Marlett": {
+        "file": "marlett5_01.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/marlett5_01.ttf",
+        "sizeBytes": 27724,
+        "format": "ttf"
+      },
+      "Wingdings": {
+        "file": "wingding5_01.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/wingding5_01.ttf",
+        "sizeBytes": 82180,
+        "format": "ttf"
+      },
+      "Webdings": {
+        "file": "webdings5_01.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/webdings5_01.ttf",
+        "sizeBytes": 120560,
+        "format": "ttf"
+      },
+      "Symbol": {
+        "file": "symbol5_01.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/symbol5_01.ttf",
+        "sizeBytes": 69036,
+        "format": "ttf"
+      },
+      "Bahnschrift": {
+        "file": "bahnschrift2_07.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/bahnschrift2_07.ttf",
+        "sizeBytes": 361564,
+        "format": "ttf"
+      },
+      "Ink Free": {
+        "file": "inkfree2_00.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/inkfree2_00.ttf",
+        "sizeBytes": 198972,
+        "format": "ttf"
+      },
+      "Segoe Print": {
+        "file": "segoepr5_04.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/segoepr5_04.ttf",
+        "sizeBytes": 168404,
+        "format": "ttf"
+      },
+      "Segoe Script": {
+        "file": "Segoe Script.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/Segoe Script.otf",
+        "sizeBytes": 620204,
+        "format": "otf"
+      },
+      "Microsoft Sans Serif": {
+        "file": "micross7_03.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/micross7_03.ttf",
+        "sizeBytes": 888228,
+        "format": "ttf"
+      },
+      "Microsoft Tai Le": {
+        "file": "taile6_00.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/taile6_00.ttf",
+        "sizeBytes": 67568,
+        "format": "ttf"
+      },
+      "Microsoft New Tai Lue": {
+        "file": "ntailu5_99.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/ntailu5_99.ttf",
+        "sizeBytes": 74464,
+        "format": "ttf"
+      },
+      "Microsoft PhagsPa": {
+        "file": "phagspa6_00.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/phagspa6_00.ttf",
+        "sizeBytes": 93720,
+        "format": "ttf"
+      },
+      "MV Boli": {
+        "file": "mvboli6_85.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/mvboli6_85.ttf",
+        "sizeBytes": 79320,
+        "format": "ttf"
+      },
+      "Segoe UI Symbol": {
+        "file": "seguisym6_24.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/seguisym6_24.ttf",
+        "sizeBytes": 2514056,
+        "format": "ttf"
+      },
+      "Segoe UI Historic": {
+        "file": "seguihis1_09.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/seguihis1_09.ttf",
+        "sizeBytes": 1622060,
+        "format": "ttf"
+      },
+      "Leelawadee UI": {
+        "file": "leelauib5_06.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/leelauib5_06.ttf",
+        "sizeBytes": 319536,
+        "format": "ttf"
+      },
+      "Javanese Text": {
+        "file": "javatext1_10.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/javatext1_10.ttf",
+        "sizeBytes": 305448,
+        "format": "ttf"
+      },
+      "Mongolian Baiti": {
+        "file": "monbaiti5_54.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/monbaiti5_54.ttf",
+        "sizeBytes": 589452,
+        "format": "ttf"
+      },
+      "Myanmar Text": {
+        "file": "mmrtext1_21.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/mmrtext1_21.ttf",
+        "sizeBytes": 354796,
+        "format": "ttf"
+      }
+    },
+    "macos": {
+      "Arial": {
+        "file": "Arial.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Arial.ttf",
+        "sizeBytes": 773236,
+        "format": "ttf"
+      },
+      "Arial Black": {
+        "file": "Arial Black.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Arial Black.ttf",
+        "sizeBytes": 122556,
+        "format": "ttf"
+      },
+      "Arial Narrow": {
+        "file": "Arial Narrow.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Arial Narrow.ttf",
+        "sizeBytes": 179492,
+        "format": "ttf"
+      },
+      "Arial Rounded MT Bold": {
+        "file": "Arial Rounded Bold.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Arial Rounded Bold.ttf",
+        "sizeBytes": 49296,
+        "format": "ttf"
+      },
+      "Arial Unicode MS": {
+        "file": "Arial Unicode.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Arial Unicode.ttf",
+        "sizeBytes": 23278008,
+        "format": "ttf"
+      },
+      "Big Caslon": {
+        "file": "BigCaslon.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/BigCaslon.ttf",
+        "sizeBytes": 223700,
+        "format": "ttf"
+      },
+      "Brush Script MT": {
+        "file": "Brush Script.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Brush Script.ttf",
+        "sizeBytes": 222640,
+        "format": "ttf"
+      },
+      "Chalkduster": {
+        "file": "Chalkduster.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Chalkduster.ttf",
+        "sizeBytes": 486880,
+        "format": "ttf"
+      },
+      "Cochin": {
+        "file": "Cochin.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/Cochin.otf",
+        "sizeBytes": 33736,
+        "format": "otf"
+      },
+      "Comic Sans MS": {
+        "file": "Comic Sans MS.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Comic Sans MS.ttf",
+        "sizeBytes": 135484,
+        "format": "ttf"
+      },
+      "Copperplate": {
+        "file": "Copperplate Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/Copperplate Regular.ttf",
+        "sizeBytes": 38012,
+        "format": "ttf"
+      },
+      "Courier": {
+        "file": "Courier New Bold Italic.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Courier New Bold Italic.ttf",
+        "sizeBytes": 506640,
+        "format": "ttf"
+      },
+      "Courier New": {
+        "file": "Courier New.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Courier New.ttf",
+        "sizeBytes": 684624,
+        "format": "ttf"
+      },
+      "Futura": {
+        "file": "Futura Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/Futura Regular.ttf",
+        "sizeBytes": 37680,
+        "format": "ttf"
+      },
+      "Geneva": {
+        "file": "Geneva.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Geneva.ttf",
+        "sizeBytes": 736764,
+        "format": "ttf"
+      },
+      "Georgia": {
+        "file": "Georgia.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Georgia.ttf",
+        "sizeBytes": 379588,
+        "format": "ttf"
+      },
+      "Gill Sans": {
+        "file": "Gill Sans Condensed.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/Gill Sans Condensed.ttf",
+        "sizeBytes": 78908,
+        "format": "ttf"
+      },
+      "Helvetica": {
+        "file": "Helvetica Bold.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/Helvetica Bold.ttf",
+        "sizeBytes": 53100,
+        "format": "ttf"
+      },
+      "Herculanum": {
+        "file": "Herculanum.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Herculanum.ttf",
+        "sizeBytes": 111468,
+        "format": "ttf"
+      },
+      "Hoefler Text": {
+        "file": "Hoefler Text Ornaments.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/Hoefler Text Ornaments.ttf",
+        "sizeBytes": 38688,
+        "format": "ttf"
+      },
+      "Impact": {
+        "file": "Impact.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Impact.ttf",
+        "sizeBytes": 138488,
+        "format": "ttf"
+      },
+      "Luminari": {
+        "file": "Luminari.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Luminari.ttf",
+        "sizeBytes": 558352,
+        "format": "ttf"
+      },
+      "Monaco": {
+        "file": "Monaco.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Monaco.ttf",
+        "sizeBytes": 534216,
+        "format": "ttf"
+      },
+      "Optima": {
+        "file": "Optima.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/Optima.otf",
+        "sizeBytes": 30124,
+        "format": "otf"
+      },
+      "Rockwell": {
+        "file": "MRockwell-BoldCondensed.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/win11/MRockwell-BoldCondensed.otf",
+        "sizeBytes": 28544,
+        "format": "otf"
+      },
+      "Skia": {
+        "file": "Skia.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Skia.ttf",
+        "sizeBytes": 489984,
+        "format": "ttf"
+      },
+      "Tahoma": {
+        "file": "Tahoma Bold.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Tahoma Bold.ttf",
+        "sizeBytes": 626928,
+        "format": "ttf"
+      },
+      "Times": {
+        "file": "Times New Roman Bold Italic.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Times New Roman Bold Italic.ttf",
+        "sizeBytes": 620008,
+        "format": "ttf"
+      },
+      "Times New Roman": {
+        "file": "Times New Roman.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Times New Roman.ttf",
+        "sizeBytes": 824920,
+        "format": "ttf"
+      },
+      "Trebuchet MS": {
+        "file": "Trebuchet MS.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Trebuchet MS.ttf",
+        "sizeBytes": 138848,
+        "format": "ttf"
+      },
+      "Verdana": {
+        "file": "Verdana.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Verdana.ttf",
+        "sizeBytes": 186188,
+        "format": "ttf"
+      },
+      "Zapfino": {
+        "file": "Zapfino.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/macos/Zapfino.ttf",
+        "sizeBytes": 403308,
+        "format": "ttf"
+      }
+    },
+    "linux": {
+      "Ubuntu": {
+        "file": "Ubuntu-B.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/Ubuntu-B.ttf",
+        "sizeBytes": 1072960,
+        "format": "ttf"
+      },
+      "Ubuntu Mono": {
+        "file": "UbuntuMono-B.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/UbuntuMono-B.ttf",
+        "sizeBytes": 172232,
+        "format": "ttf"
+      },
+      "DejaVu Sans": {
+        "file": "DejaVuSans-Bold.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/DejaVuSans-Bold.ttf",
+        "sizeBytes": 708920,
+        "format": "ttf"
+      },
+      "DejaVu Sans Mono": {
+        "file": "DejaVuSansMono-Bold.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/DejaVuSansMono-Bold.ttf",
+        "sizeBytes": 334268,
+        "format": "ttf"
+      },
+      "DejaVu Serif": {
+        "file": "DejaVuSerif-Bold.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/DejaVuSerif-Bold.ttf",
+        "sizeBytes": 356668,
+        "format": "ttf"
+      },
+      "FreeMono": {
+        "file": "FreeMono.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/FreeMono.ttf",
+        "sizeBytes": 1126964,
+        "format": "ttf"
+      },
+      "FreeSans": {
+        "file": "FreeSans.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/FreeSans.ttf",
+        "sizeBytes": 1844796,
+        "format": "ttf"
+      },
+      "FreeSerif": {
+        "file": "FreeSerif.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/FreeSerif.ttf",
+        "sizeBytes": 3686360,
+        "format": "ttf"
+      },
+      "Liberation Mono": {
+        "file": "LiberationMono-Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/LiberationMono-Regular.ttf",
+        "sizeBytes": 319624,
+        "format": "ttf"
+      },
+      "Liberation Sans": {
+        "file": "LiberationSans-Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/LiberationSans-Regular.ttf",
+        "sizeBytes": 410820,
+        "format": "ttf"
+      },
+      "Liberation Sans Narrow": {
+        "file": "LiberationSansNarrow-Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/LiberationSansNarrow-Regular.ttf",
+        "sizeBytes": 112644,
+        "format": "ttf"
+      },
+      "Liberation Serif": {
+        "file": "LiberationSerif-Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/LiberationSerif-Regular.ttf",
+        "sizeBytes": 393692,
+        "format": "ttf"
+      },
+      "Nimbus Mono PS": {
+        "file": "NimbusMonoPS-Regular.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/NimbusMonoPS-Regular.otf",
+        "sizeBytes": 77936,
+        "format": "otf"
+      },
+      "Nimbus Roman": {
+        "file": "NimbusRoman-Regular.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/NimbusRoman-Regular.otf",
+        "sizeBytes": 98200,
+        "format": "otf"
+      },
+      "Nimbus Sans": {
+        "file": "NimbusSans-Regular.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/NimbusSans-Regular.otf",
+        "sizeBytes": 82264,
+        "format": "otf"
+      },
+      "Noto Sans": {
+        "file": "NotoSans-Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/NotoSans-Regular.ttf",
+        "sizeBytes": 512672,
+        "format": "ttf"
+      },
+      "Noto Serif": {
+        "file": "NotoSerif-Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/NotoSerif-Regular.ttf",
+        "sizeBytes": 588876,
+        "format": "ttf"
+      },
+      "Noto Mono": {
+        "file": "NotoMono-Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/NotoMono-Regular.ttf",
+        "sizeBytes": 107848,
+        "format": "ttf"
+      },
+      "Noto Color Emoji": {
+        "file": "NotoColorEmoji.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/NotoColorEmoji.ttf",
+        "sizeBytes": 2813064,
+        "format": "ttf"
+      },
+      "Standard Symbols PS": {
+        "file": "StandardSymbolsPS.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/StandardSymbolsPS.otf",
+        "sizeBytes": 21176,
+        "format": "otf"
+      },
+      "URW Bookman": {
+        "file": "URWBookman-Demi.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/URWBookman-Demi.otf",
+        "sizeBytes": 97208,
+        "format": "otf"
+      },
+      "URW Gothic": {
+        "file": "URWGothic-Book.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/URWGothic-Book.otf",
+        "sizeBytes": 82968,
+        "format": "otf"
+      },
+      "Z003": {
+        "file": "Z003-MediumItalic.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/Z003-MediumItalic.otf",
+        "sizeBytes": 114052,
+        "format": "otf"
+      },
+      "P052": {
+        "file": "P052-Bold.otf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/P052-Bold.otf",
+        "sizeBytes": 110980,
+        "format": "otf"
+      },
+      "Abyssinica SIL": {
+        "file": "AbyssinicaSIL-Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/ubuntu/AbyssinicaSIL-Regular.ttf",
+        "sizeBytes": 312804,
+        "format": "ttf"
+      }
+    },
+    "android": {
+      "Roboto": {
+        "file": "DroidSans-Bold.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/android/DroidSans-Bold.ttf",
+        "sizeBytes": 2371712,
+        "format": "ttf"
+      },
+      "Droid Sans": {
+        "file": "DroidSans-Bold.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/android/DroidSans-Bold.ttf",
+        "sizeBytes": 2371712,
+        "format": "ttf"
+      },
+      "Droid Sans Mono": {
+        "file": "DroidSansMono.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/android/DroidSansMono.ttf",
+        "sizeBytes": 108128,
+        "format": "ttf"
+      },
+      "Noto Sans": {
+        "file": "NotoSansAdlam-VF.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/android/NotoSansAdlam-VF.ttf",
+        "sizeBytes": 99448,
+        "format": "ttf"
+      },
+      "Noto Serif": {
+        "file": "NotoSerif-Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/android/NotoSerif-Regular.ttf",
+        "sizeBytes": 246740,
+        "format": "ttf"
+      },
+      "Noto Color Emoji": {
+        "file": "NotoColorEmoji.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/android/NotoColorEmoji.ttf",
+        "sizeBytes": 2813064,
+        "format": "ttf"
+      },
+      "Cutive Mono": {
+        "file": "CutiveMono.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/android/CutiveMono.ttf",
+        "sizeBytes": 78984,
+        "format": "ttf"
+      },
+      "Dancing Script": {
+        "file": "DancingScript-Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/android/DancingScript-Regular.ttf",
+        "sizeBytes": 133636,
+        "format": "ttf"
+      },
+      "Coming Soon": {
+        "file": "ComingSoon.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/android/ComingSoon.ttf",
+        "sizeBytes": 53256,
+        "format": "ttf"
+      },
+      "Carrois Gothic": {
+        "file": "CarroisGothicSC-Regular.ttf",
+        "relativePath": "kernels/windows-x64/wayfern_fonts/android/CarroisGothicSC-Regular.ttf",
+        "sizeBytes": 40356,
+        "format": "ttf"
+      }
+    }
+  }
+}

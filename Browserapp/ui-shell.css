@@ -693,15 +693,45 @@ body {
   width: 145px;
   min-width: 145px;
   max-width: none !important;
+  overflow: visible !important;
 }
 #view-profiles .table-card td.col-browser .env-browser-cell-app,
 #view-profiles .table-card td.col-browser .env-browser-cell-engine {
   gap: 8px;
   min-width: 0;
+  overflow: visible !important;
 }
 #view-profiles .table-card td.col-browser .env-badge {
   /* same app-mark language as 环境名称 column */
   flex: 0 0 var(--ui-mark-size, 2.125rem);
+}
+html #view-profiles .table-card td.col-browser .browser-engine-icon,
+#view-profiles .table-card td.col-browser .browser-engine-icon,
+.browser-engine-icon {
+  flex: 0 0 26px !important;
+  width: 26px !important;
+  min-width: 26px !important;
+  max-width: 26px !important;
+  height: 26px !important;
+  min-height: 26px !important;
+  max-height: 26px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow: visible !important;
+}
+html #view-profiles .table-card td.col-browser .browser-engine-icon svg,
+#view-profiles .table-card td.col-browser .browser-engine-icon svg,
+.browser-engine-icon svg {
+  width: 26px !important;
+  height: 26px !important;
+  min-width: 26px !important;
+  min-height: 26px !important;
+  max-width: 26px !important;
+  max-height: 26px !important;
+  display: block !important;
+  flex-shrink: 0 !important;
+  overflow: visible !important;
 }
 #view-profiles .table-card th.col-network,
 #view-profiles .table-card td.col-network {
@@ -788,7 +818,7 @@ body {
   justify-content: flex-end;
   max-width: 100%;
 }
-#view-profiles .table-card .actions .mini {
+#view-profiles .table-card .actions .mini:not(.action-icon) {
   flex: 0 1 auto;
   min-width: 0;
   min-height: 26px !important;
@@ -1895,21 +1925,42 @@ button.mini-btn {
 }
 
 /* Shared action density: icon-only table controls retain explicit tooltips and labels. */
+html #view-profiles .table-card .actions button.mini.action-icon,
+html #view-profiles .table-card .actions button.action-icon,
+#view-profiles .table-card .actions .action-icon,
 .actions .action-icon {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
+  width: 28px !important;
+  min-width: 28px !important;
+  max-width: 28px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  max-height: 28px !important;
   padding: 0 !important;
-  display: inline-grid;
-  place-items: center;
+  display: inline-grid !important;
+  place-items: center !important;
+  flex: 0 0 28px !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
 }
+html #view-profiles .table-card .actions .action-icon .lucide,
+html #view-profiles .table-card .actions .action-icon i[data-lucide],
+html #view-profiles .table-card .actions .action-icon svg,
+#view-profiles .table-card .actions .action-icon .lucide,
+#view-profiles .table-card .actions .action-icon i[data-lucide],
+#view-profiles .table-card .actions .action-icon svg,
 .actions .action-icon .lucide,
 .actions .action-icon i[data-lucide],
 .actions .action-icon svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  min-height: 14px !important;
+  max-width: 14px !important;
+  max-height: 14px !important;
+  stroke: currentColor !important;
+  display: block !important;
+  overflow: visible !important;
+  flex: 0 0 14px !important;
 }
 
 /* Keep work surfaces intentional on large desktop windows. Data grids remain full width;

@@ -18,6 +18,8 @@
  */
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { mergeFlags, LIST_VALUE_FLAGS } = require('./command-line-flags');
 const { pickPersona, fontsForOs, exclusiveFontsForOtherOs } = require('./device-personas');
 const { mobilePersona, supportsRuntimePersona } = require('./mobile-personas');
@@ -30,6 +32,254 @@ const {
   parseOsFromUa,
   OS_PRESETS,
 } = require('./user-agent');
+
+const FONT_SUBSET_ROOT = path.join(__dirname, '..', 'assets', 'font-subsets');
+
+let fontSubsetIndexCache = null;
+const fontSubsetPayloadCache = new Map();
+
+/**
+ * Map platform string (e.g. Win32, MacIntel, Linux x86_64, Android)
+ * to standard font subset platform key (windows | macos | linux | android).
+ * Returns null if unrecognized or unsupported.
+ */
+function mapPlatformToSubsetKey(platform) {
+  if (typeof platform !== 'string') return null;
+  const p = platform.trim();
+  if (!p) return null;
+  if (/^win/i.test(p)) return 'windows';
+  if (/^mac/i.test(p) || /darwin/i.test(p)) return 'macos';
+  if (/android/i.test(p)) return 'android';
+  if (/^linux/i.test(p)) {
+    if (/arm|aarch/i.test(p)) return 'android';
+    return 'linux';
+  }
+  return null;
+}
+
+/**
+ * Load and cache platform font subset definitions and base64 payloads.
+ * Only reads index.json on first invocation and lazily reads font files per platform.
+ */
+function loadFontSubsetPayload(platformKey) {
+  const normalizedKey = mapPlatformToSubsetKey(platformKey) || (['windows', 'macos', 'linux', 'android'].includes(platformKey) ? platformKey : null);
+  if (!normalizedKey) return [];
+  if (fontSubsetPayloadCache.has(normalizedKey)) {
+    return fontSubsetPayloadCache.get(normalizedKey);
+  }
+
+  if (!fontSubsetIndexCache) {
+    const indexPath = path.join(FONT_SUBSET_ROOT, 'index.json');
+    if (!fs.existsSync(indexPath)) {
+      return [];
+    }
+    try {
+      fontSubsetIndexCache = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  const platformData = fontSubsetIndexCache?.platforms?.[normalizedKey];
+  if (!platformData || typeof platformData !== 'object') {
+    return [];
+  }
+
+  const payload = [];
+  for (const [family, entry] of Object.entries(platformData)) {
+    if (!entry || !entry.file) continue;
+    const fontFilePath = path.join(FONT_SUBSET_ROOT, normalizedKey, entry.file);
+    if (!fs.existsSync(fontFilePath)) continue;
+    try {
+      const buf = fs.readFileSync(fontFilePath);
+      payload.push({
+        family,
+        format: entry.file.endsWith('.woff2') ? 'font/woff2' : 'font/ttf',
+        base64: buf.toString('base64'),
+      });
+    } catch (_) {}
+  }
+
+  fontSubsetPayloadCache.set(normalizedKey, payload);
+  return payload;
+}
+
+/**
+ * Generate document-start IIFE to inject authentic platform font subsets
+ * into document.fonts via FontFace, with filtered proxy masking on Document.prototype.fonts.
+ */
+function buildFontMetricsScript(platformKey, options = {}) {
+  if (options && options.disabled) {
+    return '';
+  }
+
+  const resolvedPlatform = mapPlatformToSubsetKey(platformKey) || (['windows', 'macos', 'linux', 'android'].includes(platformKey) ? platformKey : null);
+  if (!resolvedPlatform) {
+    return '';
+  }
+
+  const payload = loadFontSubsetPayload(resolvedPlatform);
+  if (!payload || !payload.length) {
+    return '';
+  }
+
+  return `(() => {
+  try {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const markerKey = '__system_fonts_registered__';
+    if (window[markerKey]) return;
+    try {
+      Object.defineProperty(window, markerKey, {
+        value: true,
+        configurable: false,
+        enumerable: false,
+        writable: false,
+      });
+    } catch (_) {
+      window[markerKey] = true;
+    }
+
+    if (typeof FontFace !== 'function' || !document || !document.fonts) return;
+
+    const fontData = ${JSON.stringify(payload)};
+    if (!fontData || !fontData.length) return;
+
+    const internalFaces = new WeakSet();
+    const shieldedFontsMap = new WeakMap();
+    const boundMethodCache = new Map();
+    const nativeMap = new WeakMap();
+    const origToString = Function.prototype.toString;
+
+    const origFontsDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'fonts');
+    if (origFontsDesc && typeof origFontsDesc.get === 'function') {
+      const origFontsGet = origFontsDesc.get;
+
+      const createShieldedProxy = (realFonts) => {
+        return new Proxy(realFonts, {
+          get(target, prop, receiver) {
+            if (prop === 'size') {
+              let count = 0;
+              for (const face of target) {
+                if (!internalFaces.has(face)) count++;
+              }
+              return count;
+            }
+            if (prop === 'has') {
+              return function has(face) {
+                if (internalFaces.has(face)) return false;
+                return target.has(face);
+              };
+            }
+            if (prop === 'entries') {
+              return function* entries() {
+                for (const face of target) {
+                  if (!internalFaces.has(face)) yield [face, face];
+                }
+              };
+            }
+            if (prop === 'keys' || prop === 'values' || prop === Symbol.iterator) {
+              return function* () {
+                for (const face of target) {
+                  if (!internalFaces.has(face)) yield face;
+                }
+              };
+            }
+            if (prop === 'forEach') {
+              return function forEach(callback, thisArg) {
+                for (const face of target) {
+                  if (!internalFaces.has(face)) {
+                    callback.call(thisArg, face, face, receiver);
+                  }
+                }
+              };
+            }
+            if (prop === 'delete') {
+              return function delete_(face) {
+                if (internalFaces.has(face)) return false;
+                return target.delete(face);
+              };
+            }
+            if (prop === 'clear') {
+              return function clear() {
+                for (const face of Array.from(target)) {
+                  if (!internalFaces.has(face)) target.delete(face);
+                }
+              };
+            }
+            const val = Reflect.get(target, prop, target);
+            if (typeof val === 'function') {
+              let bound = boundMethodCache.get(val);
+              if (!bound) {
+                bound = val.bind(target);
+                try { Object.defineProperty(bound, 'name', { value: val.name, configurable: true }); } catch (_) {}
+                try { Object.defineProperty(bound, 'length', { value: val.length, configurable: true }); } catch (_) {}
+                nativeMap.set(bound, 'function ' + val.name + '() { [native code] }');
+                boundMethodCache.set(val, bound);
+              }
+              return bound;
+            }
+            return val;
+          }
+        });
+      };
+
+      const patchedFontsGet = function getFonts() {
+        const isDoc = this === document || (typeof Document !== 'undefined' && this instanceof Document) ||
+          Object.prototype.toString.call(this) === '[object HTMLDocument]' ||
+          Object.prototype.toString.call(this) === '[object Document]';
+        if (!isDoc) {
+          throw new TypeError('Illegal invocation');
+        }
+        const realFonts = origFontsGet.call(this);
+        let shielded = shieldedFontsMap.get(this);
+        if (!shielded) {
+          shielded = createShieldedProxy(realFonts);
+          shieldedFontsMap.set(this, shielded);
+        }
+        return shielded;
+      };
+
+      try {
+        Object.defineProperty(patchedFontsGet, 'name', { configurable: true, value: 'get fonts' });
+      } catch (_) {}
+      try {
+        Object.defineProperty(patchedFontsGet, 'length', { configurable: true, value: 0 });
+      } catch (_) {}
+      nativeMap.set(patchedFontsGet, 'function get fonts() { [native code] }');
+
+      const customToString = function toString() {
+        if (nativeMap.has(this)) return nativeMap.get(this);
+        return origToString.call(this);
+      };
+      nativeMap.set(customToString, 'function toString() { [native code] }');
+      try {
+        Object.defineProperty(Function.prototype, 'toString', {
+          configurable: true,
+          writable: true,
+          value: customToString,
+        });
+      } catch (_) {}
+
+      Object.defineProperty(Document.prototype, 'fonts', {
+        configurable: true,
+        enumerable: origFontsDesc.enumerable,
+        get: patchedFontsGet,
+        set: undefined,
+      });
+    }
+
+    for (let i = 0; i < fontData.length; i++) {
+      try {
+        const item = fontData[i];
+        const face = new FontFace(item.family, 'url("data:' + item.format + ';base64,' + item.base64 + '")');
+        internalFaces.add(face);
+        document.fonts.add(face);
+        face.load().catch(() => {});
+      } catch (_) {}
+    }
+  } catch (_) {}
+})();`;
+}
 
 function hashSeed(input) {
   return crypto.createHash('sha256').update(String(input || '')).digest();
@@ -1341,7 +1591,7 @@ function buildInjectionScript(fp) {
     ? buildUaInjectionScript(fp.uaProfile)
     : (fp.userAgent ? buildUaInjectionScript(buildUaProfile({ userAgent: fp.userAgent, platform: fp.platform })) : '');
 
-  return `${uaScript}
+  const mainScript = `${uaScript}
 (() => {
   try {
   const CFG = ${json};
@@ -2248,19 +2498,15 @@ function buildInjectionScript(fp) {
   }
 
   // --- fonts ---
-  // Only the APIs that report a font presence directly are answered here. Measurement-based
-  // probing (rendering text and comparing widths) is NOT intercepted: doing so means hooking the
-  // same geometry the page uses for layout, which risks visibly breaking sites. The kernel-side
-  // font switch cannot cover it either - toggling it and shipping a font list changed no measured
-  // width on this build - so host metrics stay reachable from a page and closing that path
-  // belongs in the platform font stack, not in script.
+  // Direct font enumeration via Local Font Access API (queryLocalFonts) is answered below by
+  // aligning returned FontData entries with the persona font set.
+  // Measurement-based probing (rendering text to measure advance widths) is handled at document
+  // start by registering authentic platform font subsets via FontFace into document.fonts,
+  // accompanied by a filtered proxy view that shields injected faces from enumeration (size === 0).
   //
   // document.fonts.check() is deliberately left native. In this engine it answers true for
-  // every system family, present or not, because it only tracks CSS-connected font faces. An
-  // override that denied the families belonging to another platform would add three differences
-  // from an unmodified build - an own check on the FontFaceSet, a false where every stock
-  // browser answers true, and no SyntaxError for a spec that carries no size - while hiding
-  // nothing that a width probe cannot read anyway.
+  // registered and system families, and the injected platform font faces ensure check() passes
+  // natively without synthetic method overrides.
   if (CFG.fonts && Array.isArray(CFG.fonts.list) && CFG.fonts.list.length) {
     const personaFonts = CFG.fonts.list.map((name) => String(name));
     // Local Font Access: enumerate the persona set rather than the host set. The entries keep
@@ -3967,6 +4213,16 @@ function buildInjectionScript(fp) {
 
 } catch (_) {}
 })();`;
+
+  let fontMetricsScript = '';
+  if (fp && fp.fonts && Array.isArray(fp.fonts.list) && fp.fonts.list.length) {
+    const platformKey = mapPlatformToSubsetKey(fp.platform);
+    if (platformKey) {
+      fontMetricsScript = buildFontMetricsScript(platformKey, fp.fontMetricsOptions || {});
+    }
+  }
+
+  return fontMetricsScript ? `${mainScript}\n${fontMetricsScript}` : mainScript;
 }
 
 /** Worker-safe subset injected before attached workers are resumed. */
@@ -5046,6 +5302,10 @@ module.exports = {
   buildFingerprint,
   buildInjectionScript,
   buildWorkerInjectionScript,
+  buildFontMetricsScript,
+  loadFontSubsetPayload,
+  mapPlatformToSubsetKey,
+  FONT_SUBSET_ROOT,
   chromeArgsForFingerprint,
   applyFingerprintToTab,
   fingerprintConsistencyIssues,

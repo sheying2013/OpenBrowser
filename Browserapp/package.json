@@ -117,7 +117,14 @@
     "selftest:popupe2e": "node automation/popup-target-injection-e2e-selftest.js",
     "selftest:doclifecycle": "node automation/document-lifecycle-fingerprint-e2e-selftest.js",
     "selftest:inlineframes": "node automation/inline-frame-injection-e2e-selftest.js",
-    "selftest:timezonee2e": "node automation/timezone-fidelity-e2e-selftest.js"
+    "selftest:timezonee2e": "node automation/timezone-fidelity-e2e-selftest.js",
+    "selftest:reqheaders": "node automation/request-headers-e2e-selftest.js",
+    "selftest:storageperf": "node automation/storage-perf-e2e-selftest.js",
+    "selftest:cssfontmetrics": "node automation/css-font-metrics-e2e-selftest.js",
+    "selftest:fontmetricsinject": "node automation/font-metrics-injection-e2e-selftest.js",
+    "selftest:rowactions": "node automation/profile-row-actions-selftest.js",
+    "selftest:webrtcfb": "node automation/webrtc-fallback-e2e-selftest.js",
+    "selftest:fontmetricsprod": "node automation/font-metrics-production-e2e-selftest.js"
   },
   "devDependencies": {
     "desktop-shell": "npm:electron@43.1.1",

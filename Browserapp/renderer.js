@@ -223,8 +223,7 @@ function applyPlatformClass() {
 function refreshIcons() {
   if (!window.lucide?.createIcons) return;
   try {
-    // UMD build: icons live on lucide.icons (not the root export bag)
-    const icons = window.lucide.icons;
+    const icons = window.lucide.icons || window.lucide;
     if (!icons || !Object.keys(icons).length) {
       console.warn('Lucide icons map is empty');
       return;
@@ -900,52 +899,55 @@ function buildEnvIdentity(profile) {
 function buildBrowserEngineIcon(name, size = 26) {
   const isEdge = /edge/i.test(name);
   if (isEdge) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+    return `<svg width="${size}" height="${size}" viewBox="0 0 27600 27600" fill="none" xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <linearGradient id="edge-b1" x1="26.5" y1="21.5" x2="14" y2="30.5" gradientUnits="userSpaceOnUse">
-          <stop stop-color="#0C59A4"/>
-          <stop offset="1" stop-color="#114A8B"/>
+        <linearGradient id="edge-b1" x1="6870" x2="24704" y1="18705" y2="18705" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#0c59a4"/>
+          <stop offset="1" stop-color="#114a8b"/>
         </linearGradient>
-        <linearGradient id="edge-b2" x1="16" y1="16" x2="31.5" y2="16" gradientUnits="userSpaceOnUse">
-          <stop stop-color="#0078D7"/>
-          <stop offset="0.82" stop-color="#00BCF2"/>
+        <linearGradient id="edge-b2" x1="16272" x2="5133" y1="10968" y2="23102" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#1b9de2"/>
+          <stop offset=".16" stop-color="#1595df"/>
+          <stop offset=".67" stop-color="#0680d7"/>
+          <stop offset="1" stop-color="#0078d4"/>
         </linearGradient>
-        <linearGradient id="edge-b3" x1="16" y1="0.5" x2="2.5" y2="24.5" gradientUnits="userSpaceOnUse">
-          <stop stop-color="#00BCF2"/>
-          <stop offset="0.25" stop-color="#00B294"/>
-          <stop offset="0.6" stop-color="#009E49"/>
-          <stop offset="1" stop-color="#BAD80A"/>
-        </linearGradient>
+        <radialGradient id="edge-b3" cx="2523" cy="4680" r="20243" gradientTransform="matrix(-.03715 .99931 -2.12836 -.07913 13579 3530)" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#35c1f1"/>
+          <stop offset=".11" stop-color="#34c1ed"/>
+          <stop offset=".23" stop-color="#2fc2df"/>
+          <stop offset=".31" stop-color="#2bc3d2"/>
+          <stop offset=".67" stop-color="#36c752"/>
+        </radialGradient>
       </defs>
-      <path d="M30 17.5C29.4 17.4 28.7 17.4 28 17.5C21.8 17.9 16.5 22.5 16.5 28.5C16.5 29.5 16.7 30.4 17 31.3C11.5 30.6 7 26.5 5.5 21C6.7 21.6 8 21.9 9.5 21.9C15.8 21.9 20.8 17.4 21.5 11.2C21.6 10.3 21.5 9.4 21.2 8.5C26.5 9.8 30.5 14.5 30 17.5Z" fill="url(#edge-b1)"/>
-      <path d="M21.2 8.5C20.5 9.4 19.5 10.1 18.3 10.6C12.8 12.8 6.5 10 4.3 4.5C3.8 3.3 3.6 2.1 3.5 0.9C10.5 -1.2 18.2 0.8 23.3 6C22.6 6.8 21.9 7.6 21.2 8.5Z" fill="url(#edge-b3)"/>
-      <path d="M16.5 28.5C16.5 24 19.5 20.2 23.7 19.2C25.7 18.7 27.8 18.9 29.8 19.8C31.2 23.5 29.8 27.8 26.3 30.1C23.5 31.8 20 31.9 17 30.3C16.7 29.7 16.5 29.1 16.5 28.5Z" fill="url(#edge-b2)"/>
+      <path d="M24105 20053a9345 9345 0 01-1053 472 10202 10202 0 01-3590 646c-4732 0-8855-3255-8855-7432 0-1175 680-2193 1643-2729-4280 180-5380 4640-5380 7253 0 7387 6810 8137 8276 8137 791 0 1984-230 2704-456l130-44a12834 12834 0 006660-5282c220-350-168-757-535-565z" fill="url(#edge-b1)"/>
+      <path d="M11571 25141a7913 7913 0 01-2273-2137 8145 8145 0 01-1514-4740 8093 8093 0 013093-6395 8082 8082 0 011373-859c312-148 846-414 1554-404a3236 3236 0 012569 1297 3184 3184 0 01636 1866c0-21 2446-7960-8005-7960-4390 0-8004 4166-8004 7820 0 2319 538 4170 1212 5604a12833 12833 0 007684 6757 12795 12795 0 003908 610c1414 0 2774-233 4045-656a7575 7575 0 01-6278-803z" fill="url(#edge-b2)"/>
+      <path d="M16231 15886c-80 105-330 250-330 566 0 260 170 512 472 723 1438 1003 4149 868 4156 868a5954 5954 0 003027-839 6147 6147 0 001133-850 6180 6180 0 001910-4437c26-2242-796-3732-1133-4392-2120-4141-6694-6525-11668-6525-7011 0-12703 5635-12798 12620 47-3654 3679-6605 7996-6605 350 0 2346 34 4200 1007 1634 858 2490 1894 3086 2921 618 1067 728 2415 728 2952s-271 1333-780 1990z" fill="url(#edge-b3)"/>
     </svg>`;
   }
-  return `<svg width="${size}" height="${size}" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
     <defs>
-      <linearGradient id="cr-red" x1="16" y1="2" x2="28" y2="12" gradientUnits="userSpaceOnUse">
+      <linearGradient id="cr-red" x1="12" y1="0" x2="21" y2="7.5" gradientUnits="userSpaceOnUse">
         <stop stop-color="#EA4335"/>
         <stop offset="1" stop-color="#D93025"/>
       </linearGradient>
-      <linearGradient id="cr-green" x1="5" y1="26" x2="16" y2="30" gradientUnits="userSpaceOnUse">
+      <linearGradient id="cr-green" x1="3.75" y1="19.5" x2="12" y2="22.5" gradientUnits="userSpaceOnUse">
         <stop stop-color="#34A853"/>
         <stop offset="1" stop-color="#1E8E3E"/>
       </linearGradient>
-      <linearGradient id="cr-yellow" x1="28" y1="12" x2="20" y2="30" gradientUnits="userSpaceOnUse">
+      <linearGradient id="cr-yellow" x1="21" y1="9" x2="15" y2="22.5" gradientUnits="userSpaceOnUse">
         <stop stop-color="#FBBC04"/>
         <stop offset="1" stop-color="#F9AB00"/>
       </linearGradient>
-      <linearGradient id="cr-blue" x1="12" y1="12" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+      <linearGradient id="cr-blue" x1="9" y1="9" x2="15" y2="15" gradientUnits="userSpaceOnUse">
         <stop stop-color="#4285F4"/>
         <stop offset="1" stop-color="#1A73E8"/>
       </linearGradient>
     </defs>
-    <path d="M16 2C21.7 2 26.6 5.4 28.8 10.3L16 10.3C12.9 10.3 10.3 12.9 10.3 16C10.3 16.4 10.4 16.8 10.5 17.2L4.2 13.5C6.1 6.8 10.5 2 16 2Z" fill="url(#cr-red)"/>
-    <path d="M16 30C10.6 30 5.9 26.9 3.6 22.3L10 11.3C11.5 14.1 14.5 16 18 16L18 23.3C14.7 27.4 9 30 16 30Z" fill="url(#cr-green)"/>
-    <path d="M30 16C30 22.8 25 28.5 18.5 29.8L12.2 18.9C13.2 19.6 14.5 20 16 20C18.2 20 20 18.2 20 16C20 14.7 19.4 13.5 18.5 12.7L28.8 10.3C29.6 12 30 14 30 16Z" fill="url(#cr-yellow)"/>
-    <circle cx="16" cy="16" r="6.2" fill="#FFFFFF"/>
-    <circle cx="16" cy="16" r="5" fill="url(#cr-blue)"/>
+    <path d="M12 0C8.21 0 4.831 1.757 2.632 4.501l3.953 6.848A5.454 5.454 0 0 1 12 6.545h10.691A12 12 0 0 0 12 0z" fill="url(#cr-red)"/>
+    <path d="M1.931 5.47A11.943 11.943 0 0 0 0 12c0 6.012 4.42 10.991 10.189 11.864l3.953-6.847a5.45 5.45 0 0 1-6.865-2.29z" fill="url(#cr-green)"/>
+    <path d="m15.273 7.636a5.446 5.446 0 0 1 1.45 7.09l.002.001h-.002l-5.344 9.257c.206.01.413.016.621.016 6.627 0 12-5.373 12-12 0-1.54-.29-3.011-.818-4.364z" fill="url(#cr-yellow)"/>
+    <circle cx="12" cy="12" r="5.45" fill="#FFFFFF"/>
+    <circle cx="12" cy="12" r="4.36" fill="url(#cr-blue)"/>
   </svg>`;
 }
 
@@ -1084,15 +1086,20 @@ function toLucidePascalCase(str) {
 function createLucideIconElement(iconName, customAttrs = {}) {
   try {
     const pascal = toLucidePascalCase(iconName);
-    const def = window.lucide?.icons?.[pascal];
+    const icons = window.lucide?.icons || window.lucide;
+    const def = icons?.[pascal];
     if (def && typeof window.lucide?.createElement === 'function') {
-      return window.lucide.createElement(def, {
-        'aria-hidden': 'true',
-        'stroke-width': '1.75',
-        stroke: 'currentColor',
-        class: `lucide lucide-${iconName}`,
-        ...customAttrs,
-      });
+      const svg = window.lucide.createElement(def);
+      if (svg) {
+        svg.setAttribute('aria-hidden', 'true');
+        svg.setAttribute('stroke-width', '1.75');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('class', `lucide lucide-${iconName}`);
+        for (const [key, val] of Object.entries(customAttrs)) {
+          svg.setAttribute(key, String(val));
+        }
+        return svg;
+      }
     }
   } catch (_) {}
   const glyph = document.createElement('i');

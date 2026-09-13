@@ -1,0 +1,445 @@
+{
+  "metadata": {
+    "note": "Subsets preserve the advance widths and kern pairs of the source fonts.",
+    "totalBytes": 3514376,
+    "unicodes": "U+0020-007E,U+00A0-00FF,U+2013-2014,U+2018-201D,U+2022,U+2026,U+20AC,U+2122"
+  },
+  "platforms": {
+    "android": {
+      "Carrois Gothic": {
+        "bytes": 13740,
+        "file": "carrois-gothic.woff2"
+      },
+      "Coming Soon": {
+        "bytes": 21656,
+        "file": "coming-soon.woff2"
+      },
+      "Cutive Mono": {
+        "bytes": 19804,
+        "file": "cutive-mono.woff2"
+      },
+      "Dancing Script": {
+        "bytes": 42800,
+        "file": "dancing-script.woff2"
+      },
+      "Droid Sans": {
+        "bytes": 132100,
+        "file": "droid-sans.woff2"
+      },
+      "Droid Sans Mono": {
+        "bytes": 17420,
+        "file": "droid-sans-mono.woff2"
+      },
+      "Noto Color Emoji": {
+        "bytes": 3764,
+        "file": "noto-color-emoji.woff2"
+      },
+      "Noto Sans": {
+        "bytes": 3724,
+        "file": "noto-sans.woff2"
+      },
+      "Noto Serif": {
+        "bytes": 12944,
+        "file": "noto-serif.woff2"
+      },
+      "Roboto": {
+        "bytes": 132400,
+        "file": "roboto.woff2"
+      }
+    },
+    "linux": {
+      "Abyssinica SIL": {
+        "bytes": 14584,
+        "file": "abyssinica-sil.woff2"
+      },
+      "DejaVu Sans": {
+        "bytes": 21872,
+        "file": "dejavu-sans.woff2"
+      },
+      "DejaVu Sans Mono": {
+        "bytes": 15828,
+        "file": "dejavu-sans-mono.woff2"
+      },
+      "DejaVu Serif": {
+        "bytes": 20988,
+        "file": "dejavu-serif.woff2"
+      },
+      "FreeMono": {
+        "bytes": 48764,
+        "file": "freemono.woff2"
+      },
+      "FreeSans": {
+        "bytes": 50612,
+        "file": "freesans.woff2"
+      },
+      "Liberation Mono": {
+        "bytes": 17260,
+        "file": "liberation-mono.woff2"
+      },
+      "Liberation Sans": {
+        "bytes": 20860,
+        "file": "liberation-sans.woff2"
+      },
+      "Liberation Sans Narrow": {
+        "bytes": 19440,
+        "file": "liberation-sans-narrow.woff2"
+      },
+      "Liberation Serif": {
+        "bytes": 23996,
+        "file": "liberation-serif.woff2"
+      },
+      "Nimbus Mono PS": {
+        "bytes": 17164,
+        "file": "nimbus-mono-ps.woff2"
+      },
+      "Nimbus Roman": {
+        "bytes": 22336,
+        "file": "nimbus-roman.woff2"
+      },
+      "Nimbus Sans": {
+        "bytes": 17840,
+        "file": "nimbus-sans.woff2"
+      },
+      "Noto Color Emoji": {
+        "bytes": 3764,
+        "file": "noto-color-emoji.woff2"
+      },
+      "Noto Mono": {
+        "bytes": 17436,
+        "file": "noto-mono.woff2"
+      },
+      "Noto Sans": {
+        "bytes": 22524,
+        "file": "noto-sans.woff2"
+      },
+      "Noto Serif": {
+        "bytes": 24232,
+        "file": "noto-serif.woff2"
+      },
+      "P052": {
+        "bytes": 23180,
+        "file": "p052.woff2"
+      },
+      "Standard Symbols PS": {
+        "bytes": 15776,
+        "file": "standard-symbols-ps.woff2"
+      },
+      "URW Bookman": {
+        "bytes": 21976,
+        "file": "urw-bookman.woff2"
+      },
+      "URW Gothic": {
+        "bytes": 17168,
+        "file": "urw-gothic.woff2"
+      },
+      "Ubuntu": {
+        "bytes": 91220,
+        "file": "ubuntu.woff2"
+      },
+      "Ubuntu Mono": {
+        "bytes": 21300,
+        "file": "ubuntu-mono.woff2"
+      },
+      "Z003": {
+        "bytes": 29548,
+        "file": "z003.woff2"
+      }
+    },
+    "macos": {
+      "Arial": {
+        "bytes": 40064,
+        "file": "arial.woff2"
+      },
+      "Arial Black": {
+        "bytes": 22468,
+        "file": "arial-black.woff2"
+      },
+      "Arial Narrow": {
+        "bytes": 30504,
+        "file": "arial-narrow.woff2"
+      },
+      "Arial Rounded MT Bold": {
+        "bytes": 17968,
+        "file": "arial-rounded-mt-bold.woff2"
+      },
+      "Arial Unicode MS": {
+        "bytes": 33060,
+        "file": "arial-unicode-ms.woff2"
+      },
+      "Big Caslon": {
+        "bytes": 24624,
+        "file": "big-caslon.woff2"
+      },
+      "Brush Script MT": {
+        "bytes": 24968,
+        "file": "brush-script-mt.woff2"
+      },
+      "Chalkduster": {
+        "bytes": 148296,
+        "file": "chalkduster.woff2"
+      },
+      "Cochin": {
+        "bytes": 15148,
+        "file": "cochin.woff2"
+      },
+      "Comic Sans MS": {
+        "bytes": 32908,
+        "file": "comic-sans-ms.woff2"
+      },
+      "Courier": {
+        "bytes": 44216,
+        "file": "courier.woff2"
+      },
+      "Courier New": {
+        "bytes": 38336,
+        "file": "courier-new.woff2"
+      },
+      "Geneva": {
+        "bytes": 26396,
+        "file": "geneva.woff2"
+      },
+      "Georgia": {
+        "bytes": 34056,
+        "file": "georgia.woff2"
+      },
+      "Gill Sans": {
+        "bytes": 19440,
+        "file": "gill-sans.woff2"
+      },
+      "Helvetica": {
+        "bytes": 22308,
+        "file": "helvetica.woff2"
+      },
+      "Herculanum": {
+        "bytes": 21708,
+        "file": "herculanum.woff2"
+      },
+      "Hoefler Text": {
+        "bytes": 1668,
+        "file": "hoefler-text.woff2"
+      },
+      "Impact": {
+        "bytes": 24032,
+        "file": "impact.woff2"
+      },
+      "Luminari": {
+        "bytes": 36636,
+        "file": "luminari.woff2"
+      },
+      "Monaco": {
+        "bytes": 24392,
+        "file": "monaco.woff2"
+      },
+      "Optima": {
+        "bytes": 13064,
+        "file": "optima.woff2"
+      },
+      "Rockwell": {
+        "bytes": 13464,
+        "file": "rockwell.woff2"
+      },
+      "Tahoma": {
+        "bytes": 25952,
+        "file": "tahoma.woff2"
+      },
+      "Times": {
+        "bytes": 41792,
+        "file": "times.woff2"
+      },
+      "Times New Roman": {
+        "bytes": 52928,
+        "file": "times-new-roman.woff2"
+      },
+      "Trebuchet MS": {
+        "bytes": 27088,
+        "file": "trebuchet-ms.woff2"
+      },
+      "Verdana": {
+        "bytes": 28408,
+        "file": "verdana.woff2"
+      },
+      "Zapfino": {
+        "bytes": 18564,
+        "file": "zapfino.woff2"
+      }
+    },
+    "windows": {
+      "Arial": {
+        "bytes": 58832,
+        "file": "arial.woff2"
+      },
+      "Arial Black": {
+        "bytes": 33600,
+        "file": "arial-black.woff2"
+      },
+      "Bahnschrift": {
+        "bytes": 47732,
+        "file": "bahnschrift.woff2"
+      },
+      "Calibri": {
+        "bytes": 68852,
+        "file": "calibri.woff2"
+      },
+      "Cambria": {
+        "bytes": 44404,
+        "file": "cambria.woff2"
+      },
+      "Candara": {
+        "bytes": 29952,
+        "file": "candara.woff2"
+      },
+      "Comic Sans MS": {
+        "bytes": 51012,
+        "file": "comic-sans-ms.woff2"
+      },
+      "Consolas": {
+        "bytes": 34664,
+        "file": "consolas.woff2"
+      },
+      "Constantia": {
+        "bytes": 38616,
+        "file": "constantia.woff2"
+      },
+      "Corbel": {
+        "bytes": 31488,
+        "file": "corbel.woff2"
+      },
+      "Courier New": {
+        "bytes": 38756,
+        "file": "courier-new.woff2"
+      },
+      "Ebrima": {
+        "bytes": 18228,
+        "file": "ebrima.woff2"
+      },
+      "Franklin Gothic Medium": {
+        "bytes": 26516,
+        "file": "franklin-gothic-medium.woff2"
+      },
+      "Gabriola": {
+        "bytes": 151712,
+        "file": "gabriola.woff2"
+      },
+      "Gadugi": {
+        "bytes": 23980,
+        "file": "gadugi.woff2"
+      },
+      "Georgia": {
+        "bytes": 48896,
+        "file": "georgia.woff2"
+      },
+      "Impact": {
+        "bytes": 46912,
+        "file": "impact.woff2"
+      },
+      "Ink Free": {
+        "bytes": 16148,
+        "file": "ink-free.woff2"
+      },
+      "Javanese Text": {
+        "bytes": 19328,
+        "file": "javanese-text.woff2"
+      },
+      "Leelawadee UI": {
+        "bytes": 19488,
+        "file": "leelawadee-ui.woff2"
+      },
+      "Lucida Console": {
+        "bytes": 15168,
+        "file": "lucida-console.woff2"
+      },
+      "Lucida Sans Unicode": {
+        "bytes": 20400,
+        "file": "lucida-sans-unicode.woff2"
+      },
+      "MV Boli": {
+        "bytes": 31252,
+        "file": "mv-boli.woff2"
+      },
+      "Marlett": {
+        "bytes": 2204,
+        "file": "marlett.woff2"
+      },
+      "Microsoft New Tai Lue": {
+        "bytes": 20672,
+        "file": "microsoft-new-tai-lue.woff2"
+      },
+      "Microsoft PhagsPa": {
+        "bytes": 8840,
+        "file": "microsoft-phagspa.woff2"
+      },
+      "Microsoft Sans Serif": {
+        "bytes": 29604,
+        "file": "microsoft-sans-serif.woff2"
+      },
+      "Microsoft Tai Le": {
+        "bytes": 20812,
+        "file": "microsoft-tai-le.woff2"
+      },
+      "Mongolian Baiti": {
+        "bytes": 25272,
+        "file": "mongolian-baiti.woff2"
+      },
+      "Myanmar Text": {
+        "bytes": 20656,
+        "file": "myanmar-text.woff2"
+      },
+      "Palatino Linotype": {
+        "bytes": 126272,
+        "file": "palatino-linotype.woff2"
+      },
+      "Segoe Print": {
+        "bytes": 31160,
+        "file": "segoe-print.woff2"
+      },
+      "Segoe Script": {
+        "bytes": 122840,
+        "file": "segoe-script.woff2"
+      },
+      "Segoe UI": {
+        "bytes": 40408,
+        "file": "segoe-ui.woff2"
+      },
+      "Segoe UI Historic": {
+        "bytes": 22628,
+        "file": "segoe-ui-historic.woff2"
+      },
+      "Segoe UI Symbol": {
+        "bytes": 40856,
+        "file": "segoe-ui-symbol.woff2"
+      },
+      "Sylfaen": {
+        "bytes": 38884,
+        "file": "sylfaen.woff2"
+      },
+      "Symbol": {
+        "bytes": 3628,
+        "file": "symbol.woff2"
+      },
+      "Tahoma": {
+        "bytes": 36556,
+        "file": "tahoma.woff2"
+      },
+      "Times New Roman": {
+        "bytes": 16404,
+        "file": "times-new-roman.woff2"
+      },
+      "Trebuchet MS": {
+        "bytes": 42808,
+        "file": "trebuchet-ms.woff2"
+      },
+      "Verdana": {
+        "bytes": 38080,
+        "file": "verdana.woff2"
+      },
+      "Webdings": {
+        "bytes": 2236,
+        "file": "webdings.woff2"
+      },
+      "Wingdings": {
+        "bytes": 3144,
+        "file": "wingdings.woff2"
+      }
+    }
+  }
+}
