@@ -97,6 +97,7 @@
     "selftest:webrtc": "node automation/webrtc-rewrite-selftest.js",
     "selftest:webrtce2e": "node automation/webrtc-fingerprint-e2e-selftest.js",
     "selftest:fontpersonae2e": "node automation/font-persona-e2e-selftest.js",
+    "selftest:fontnative": "node automation/font-native-layer-selftest.js",
     "selftest:webgpue2e": "node automation/webgpu-adapter-e2e-selftest.js",
     "selftest:webglparams": "node automation/webgl-params-e2e-selftest.js",
     "selftest:portscan": "node automation/port-scan-protection-selftest.js",

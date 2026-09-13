@@ -161,6 +161,7 @@ jobs:
           npm run selftest:profileui
           npm run selftest:kernelinit
           npm run selftest:fpcoverage
+          npm run selftest:fontnative
           npm run selftest:stealth
       - run: npm run package:portable
       - name: Verify package
@@ -240,6 +241,7 @@ jobs:
           npm run selftest:profileui
           npm run selftest:kernelinit
           npm run selftest:fpcoverage
+          npm run selftest:fontnative
           npm run selftest:stealth
       - run: npm run package:portable
       - name: Verify Ubuntu package and bundled kernel
@@ -328,6 +330,7 @@ jobs:
           npm run selftest:profileui
           npm run selftest:kernelinit
           npm run selftest:fpcoverage
+          npm run selftest:fontnative
           npm run selftest:stealth
           npm run selftest:webglparams
           npm run selftest:surfacediff
@@ -407,6 +410,7 @@ jobs:
           npm run selftest:profileui
           npm run selftest:kernelinit
           npm run selftest:fpcoverage
+          npm run selftest:fontnative
           npm run selftest:stealth
           npm run selftest:webglparams
           npm run selftest:surfacediff
