@@ -112,6 +112,26 @@ const PROBE = `(async () => {
       consistent: bothEventFirst === bothBuffer.getChannelData(0)[0],
     };
   } catch (e) { out.renderedErr = String(e).slice(0, 60); }
+  try {
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const graph = () => { const off = new OAC(1, 512, 44100); const osc = off.createOscillator(); osc.type = 'triangle'; osc.frequency.value = 900; osc.connect(off.destination); osc.start(0); return off; };
+    // Writing one sample in used to exempt the whole buffer, which handed the page the untouched
+    // machine values for every other sample - a one line detector.
+    const partial = await graph().startRendering();
+    partial.copyToChannel(new Float32Array([0.125]), 0, 7);
+    const partialView = partial.getChannelData(0);
+    // A channel the page fully wrote is the page's own data and has to come back exactly.
+    const full = await graph().startRendering();
+    const written = new Float32Array(512);
+    for (let i = 0; i < written.length; i += 1) written[i] = 0.25;
+    full.copyToChannel(written, 0);
+    const fullView = full.getChannelData(0);
+    out.renderedSpans = {
+      written: [partialView[7], partialView[6], partialView[8]],
+      outside: [partialView[100], partialView[101], partialView[102]],
+      fullWritten: [fullView[0], fullView[1], fullView[511]],
+    };
+  } catch (e) { out.renderedSpanErr = String(e).slice(0, 60); }
 
   return JSON.stringify(out);
 })()`;
@@ -253,6 +273,14 @@ function stop(child, profileDir) {
     assert.strictEqual(injected.renderedPaths.consistent, true, 'the complete event and the promise must agree on one buffer');
     assert.notDeepStrictEqual(injected.renderedPaths.awaited, baseline.renderedPaths.awaited, 'the awaited buffer must be perturbed');
     assert.notDeepStrictEqual(injected.renderedPaths.event, baseline.renderedPaths.event, 'the complete-event buffer must be perturbed');
+  });
+
+  check('a rendered buffer keeps the samples the page wrote and masks the rest', () => {
+    assert.ok(baseline.renderedSpans && injected.renderedSpans, 'rendered span probe missing (' + (baseline.renderedSpanErr || '') + (injected.renderedSpanErr || '') + ')');
+    assert.strictEqual(injected.renderedSpans.written[0], 0.125, 'the sample the page wrote must come back exactly');
+    assert.strictEqual(baseline.renderedSpans.written[0], 0.125, 'baseline control for the written sample');
+    assert.notDeepStrictEqual(injected.renderedSpans.outside, baseline.renderedSpans.outside, 'the samples the page did not write must stay perturbed');
+    assert.deepStrictEqual(injected.renderedSpans.fullWritten, [0.25, 0.25, 0.25], 'a fully written channel is page data and must be exact');
   });
 
   check('noise survives navigation and stays stable', () => {

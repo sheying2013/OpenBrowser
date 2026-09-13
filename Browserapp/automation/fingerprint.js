@@ -1970,16 +1970,45 @@ function buildInjectionScript(fp) {
   if (CFG.audio && CFG.audio.mode === 'noise') {
     try {
       const mark = Number(CFG.audio.mark) || 1;
-      // A buffer the page put its own samples into is the page's data, and perturbing that both
-      // corrupts the caller and hands out a one-line detector - write 0.5 with copyToChannel,
-      // read it back, compare. The exemption therefore has to be recorded where the page takes
-      // ownership of a buffer, never where the engine renders one: a rendered buffer can also be
-      // collected from the complete event, which fires before any promise continuation runs, so a
-      // marker on the promise path would cover only half the readers of the very same buffer.
-      const authoredBuffers = new WeakSet();
-      const markAuthored = (value) => {
-        try { if (value && typeof value === 'object') authoredBuffers.add(value); } catch (_) {}
+      // A buffer the engine rendered from the profile graph is a stable per-machine value, so it
+      // needs the same per-profile perturbation the canvas gets. Two rules have to hold at once:
+      // a buffer the page owns stays exact, and a sample the page wrote into a rendered buffer
+      // stays exact too. Exempting the whole buffer the moment the page wrote one sample in broke
+      // the second rule - the page could write a single sample, read the rest, and get the machine
+      // values back bit for bit (measured: the read-back matched the uninjected engine output to
+      // the last bit). The perturbation is therefore bound to the rendered buffer itself and skips
+      // the spans the page wrote, never the buffer as a whole.
+      const renderedBuffers = new WeakSet();
+      const authoredSpans = new WeakMap();
+      const markRendered = (value) => {
+        try { if (value && typeof value === 'object') renderedBuffers.add(value); } catch (_) {}
         return value;
+      };
+      const spanFor = (buffer, channel) => {
+        try {
+          const channels = authoredSpans.get(buffer);
+          if (!channels) return null;
+          return channels.get(channel) || null;
+        } catch (_) { return null; }
+      };
+      const recordSpan = (buffer, channelNumber, start, length) => {
+        try {
+          if (!buffer || typeof buffer !== 'object' || !renderedBuffers.has(buffer)) return;
+          const channel = Number(channelNumber) || 0;
+          const from = Math.max(0, Number(start) || 0);
+          const cover = Number(length) || 0;
+          if (cover <= 0) return;
+          let channels = authoredSpans.get(buffer);
+          if (!channels) { channels = new Map(); authoredSpans.set(buffer, channels); }
+          const spans = channels.get(channel) || [];
+          spans.push([from, from + cover]);
+          channels.set(channel, spans);
+        } catch (_) {}
+      };
+      const inAuthoredSpan = (spans, index) => {
+        if (!spans) return false;
+        for (const span of spans) { if (index >= span[0] && index < span[1]) return true; }
+        return false;
       };
       // Only the prototype that declares a method is replaced: defining the same key on a
       // subclass would add an own member that the unmodified build does not have.
@@ -1994,33 +2023,50 @@ function buildInjectionScript(fp) {
         try { if (ctor && ctor.prototype && audioProtos.indexOf(ctor.prototype) === -1) audioProtos.push(ctor.prototype); } catch (_) {}
       }
       for (const proto of audioProtos) {
-        // Decoded samples are a pure function of the bytes the page handed over, so they are the
-        // page's data as much as a copied-in buffer is. Both hand-off styles are covered: the
-        // promise the page awaits and the callback form, which can be the only one a caller uses.
-        hookOwn(proto, 'decodeAudioData', (original) => function decodeAudioData(audioData, successCallback, errorCallback) {
-          const onDecoded = typeof successCallback === 'function'
-            ? function(successBuffer) { return successCallback(markAuthored(successBuffer)); }
-            : successCallback;
-          const result = original.call(this, audioData, onDecoded, errorCallback);
-          try { if (result && typeof result.then === 'function') result.then(markAuthored, () => {}); } catch (_) {}
+        // Rendered samples reach the page two ways and the complete event fires first, so both have
+        // to hand out a marked buffer - a page that only listens for the event would otherwise read
+        // the untouched machine values.
+        hookOwn(proto, 'startRendering', (original) => function startRendering(...args) {
+          const result = original.apply(this, args);
+          try { if (result && typeof result.then === 'function') return result.then(markRendered); } catch (_) {}
           return result;
         });
       }
+      try {
+        const completionProto = globalThis.OfflineAudioCompletionEvent ? OfflineAudioCompletionEvent.prototype : null;
+        const descriptor = completionProto ? Object.getOwnPropertyDescriptor(completionProto, 'renderedBuffer') : null;
+        if (descriptor && typeof descriptor.get === 'function' && descriptor.configurable !== false) {
+          const nativeGet = descriptor.get;
+          Object.defineProperty(completionProto, 'renderedBuffer', {
+            configurable: descriptor.configurable,
+            enumerable: descriptor.enumerable,
+            get: makeNativeGetter('renderedBuffer', function () {
+              return markRendered(nativeGet.call(this));
+            }, 'OfflineAudioCompletionEvent'),
+          });
+        }
+      } catch (_) {}
       if (globalThis.AudioBuffer && AudioBuffer.prototype.getChannelData) {
         const processed = new WeakMap();
         if (AudioBuffer.prototype.copyToChannel) {
-          // Writing samples in is the moment a buffer becomes the page's own data, and
-          // copyToChannel is the only path that puts exact values into one.
-          hookOwn(AudioBuffer.prototype, 'copyToChannel', (original) => function copyToChannel() {
+          // Writing samples in is the moment those samples become the page's own data, so the span
+          // it covered is recorded - and only that span, because everything else in a rendered
+          // buffer is still the machine's audio fingerprint.
+          hookOwn(AudioBuffer.prototype, 'copyToChannel', (original) => function copyToChannel(source, channelNumber, startInChannel) {
             const result = original.apply(this, arguments);
-            markAuthored(this);
+            try {
+              const length = source && typeof source.length === 'number' ? source.length : 0;
+              recordSpan(this, channelNumber, startInChannel, length);
+            } catch (_) {}
             return result;
           });
         }
         replaceMethod(AudioBuffer.prototype, 'getChannelData', (original) => function() {
           const data = original.apply(this, arguments);
           try {
-            if (authoredBuffers.has(this)) return data;
+            // Anything the page built, decoded or constructed itself is page data and is handed
+            // back exactly as it is.
+            if (!renderedBuffers.has(this)) return data;
             const channel = Number(arguments[0]) || 0;
             let channels = processed.get(this);
             if (!channels) { channels = new Set(); processed.set(this, channels); }
@@ -2030,7 +2076,9 @@ function buildInjectionScript(fp) {
                 if (data[i] !== 0) { silent = false; break; }
               }
               if (!silent) {
+                const spans = spanFor(this, channel);
                 for (let i = 0; i < data.length; i += 1) {
+                  if (inAuthoredSpan(spans, i)) continue;
                   data[i] = data[i] + (noise(i + channel * 4099 + mark) - 0.5) * 1e-7;
                 }
               }
@@ -2046,7 +2094,6 @@ function buildInjectionScript(fp) {
             // its argument validation, error type and message stay exactly as the build produces.
             try {
               if (!this || typeof this.getChannelData !== 'function') return original.apply(this, arguments);
-              if (authoredBuffers.has(this)) return original.apply(this, arguments);
               if (!destination || typeof destination.length !== 'number') return original.apply(this, arguments);
               const index = Number(channelNumber) || 0;
               const chData = this.getChannelData(index);
