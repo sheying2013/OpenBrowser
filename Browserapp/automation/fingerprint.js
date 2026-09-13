@@ -688,7 +688,16 @@ function buildFingerprint(profile = {}) {
   const mediaDevicesMode = mode('mediaDevices', ['real', 'noise', 'empty'], privacy.mediaDevices === 'real' ? 'real' : (privacy.mediaDevices === 'empty' ? 'empty' : (privacy.media === 'noise' ? 'noise' : (privacy.media === 'blocked' ? 'empty' : 'noise'))));
   const speechMode = mode('speech', ['real', 'noise', 'blocked'], privacy.speech === 'blocked' ? 'blocked' : (privacy.speech === 'noise' ? 'noise' : 'real'));
   const batteryMode = mode('battery', ['real', 'noise', 'blocked'], privacy.battery === 'blocked' ? 'blocked' : (privacy.battery === 'real' ? 'real' : 'noise'));
-  const webgpuMode = mode('webgpu', ['real', 'blocked', 'webgl'], privacy.webgpu === 'blocked' ? 'blocked' : (privacy.webgpu === 'webgl' ? 'webgl' : 'real'));
+  // Profiles the product saved carry an explicit choice (its own default is the WebGL derived
+  // identity, see the renderer normalisation), but a profile that never went through that step - an
+  // older record, an API created one - used to fall through to `real` here. That leaks the machine
+  // adapter (vendor / architecture) while WebGL already reports the profile GPU, which is both a
+  // hardware leak and a cross API contradiction. An unset value therefore follows the product
+  // default; an explicit `real` still means real and is left alone.
+  const webgpuChoice = privacy.webgpu === undefined || privacy.webgpu === null || privacy.webgpu === ''
+    ? 'webgl'
+    : String(privacy.webgpu);
+  const webgpuMode = mode('webgpu', ['real', 'blocked', 'webgl'], webgpuChoice === 'blocked' ? 'blocked' : (webgpuChoice === 'webgl' ? 'webgl' : 'real'));
   const bluetoothMode = mode('bluetooth', ['real', 'blocked'], privacy.bluetooth === 'blocked' ? 'blocked' : 'real');
   const stability = resolveStabilityPolicy(privacy, {
     host: fpIn.stabilityHost || privacy.stabilityHost || profile.stabilityHost || '',

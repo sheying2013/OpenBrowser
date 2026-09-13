@@ -80,8 +80,9 @@ function brandsForInit(fp) {
 function webgpuFromFp(fp) {
   // "real" must remain the absence of a native override, and "blocked" must let the page see no
   // adapter. Only "webgl" asks the kernel to publish a synthetic adapter identity, so do not write
-  // webgpu_parameter for the other two modes.
-  if (String(fp?.webgpu?.mode || 'real') !== 'webgl') return null;
+  // webgpu_parameter for the other two modes. The resolved mode already folds an unset choice into
+  // the product default, and the fallback keeps the same default if the record predates that field.
+  if (String(fp?.webgpu?.mode || 'webgl') !== 'webgl') return null;
   const gpu = fp.webgpu?.gpu || fp.webgl?.gpu || null;
   if (!gpu || typeof gpu !== 'object') return null;
   return {

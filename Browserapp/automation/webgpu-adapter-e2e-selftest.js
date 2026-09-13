@@ -120,7 +120,9 @@ async function runMode(mode, serverPort, gpuOverride = null) {
     privacy: {
       deviceProfile: 'persona',
       webgl: 'noise',
-      webgpu: mode,
+      // 'default' models a profile that never carried a choice of its own - an older record or one
+      // created through the API - so the field is left out entirely.
+      ...(mode === 'default' ? {} : { webgpu: mode }),
       fingerprint: gpuOverride ? { webgpu: gpuOverride } : undefined,
     },
   };
@@ -219,7 +221,8 @@ async function runMode(mode, serverPort, gpuOverride = null) {
           : { vendor: 'nvidia', architecture: 'ada' };
     const blocked = await runMode('blocked', serverPort);
     const webgl = await runMode('webgl', serverPort, synthetic);
-    const runs = { real, blocked, webgl };
+    const fallback = await runMode('default', serverPort);
+    const runs = { real, blocked, webgl, default: fallback };
 
     if (Object.values(runs).some((run) => run.error || run.probe?.error)) {
       for (const [name, run] of Object.entries(runs)) {
@@ -249,6 +252,18 @@ async function runMode(mode, serverPort, gpuOverride = null) {
           assert.strictEqual(runs.webgl.probe.requestAdapterInfo.architecture, runs.webgl.probe.info.architecture);
         }
       });
+      check('a profile without a choice of its own follows the product default, not the host adapter', () => {
+        assert.strictEqual(runs.default.probe.adapter, true, 'the default must keep a usable adapter');
+        assert.ok(runs.default.probe.info, 'adapter.info must be available');
+        const expected = runs.default.fp.webgpu.gpu || {};
+        assert.strictEqual(runs.default.probe.info.vendor, String(expected.vendor || ''), 'default vendor');
+        assert.strictEqual(runs.default.probe.info.architecture, String(expected.architecture || ''), 'default architecture');
+        if (String(expected.vendor || '').toLowerCase() !== realVendor) {
+          assert.notStrictEqual(String(runs.default.probe.info.vendor || '').toLowerCase(), realVendor,
+            'the default must not publish the host adapter vendor');
+        }
+      });
+
       check('real mode is not silently overwritten with the synthetic identity', () => {
         const nativeInfo = runs.real.probe.info || {};
         const expected = synthetic;

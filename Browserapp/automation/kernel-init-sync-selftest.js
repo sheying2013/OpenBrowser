@@ -84,8 +84,15 @@ async function main() {
     'font families must be trimmed and de-duplicated case-insensitively'
   );
   assert.ok(fontListFromFp({}).length > 0, 'a fingerprint without a persona still models its claimed platform');
-  assert.strictEqual(fields.webgpu_parameter, undefined,
-    'webgpu=real must not write a native WebGPU parameter');
+  // A profile that never picked a WebGPU mode must not hand the native layer a host adapter; the
+  // synthetic identity it publishes has to line up with the WebGL identity on the same profile.
+  assert.ok(fields.webgpu_parameter,
+    'an unset webgpu mode must publish the profile identity, not fall back to the host adapter');
+  assert.ok(fields.webgpu_parameter.vendor, 'an unset webgpu mode must still publish a vendor');
+  assert.ok(fields.webgpu_parameter.architecture, 'an unset webgpu mode must still publish an architecture');
+  assert.strictEqual(fields.webgpu_parameter.vendor,
+    String(fp.webgl.gpu.vendor || '').toLowerCase(),
+    'the native WebGPU identity must not contradict the WebGL identity');
 
   assert.ok(fields.user_agent_data.uaFullVersion);
   assert.ok(fields.user_agent_data.brands.length >= 2);
@@ -136,6 +143,15 @@ async function main() {
   const blockedGpuFields = mapFingerprintToInitFields(buildFingerprint(blockedGpuProfile), blockedGpuProfile);
   assert.strictEqual(blockedGpuFields.webgpu_parameter, undefined,
     'webgpu=blocked must not publish a synthetic native identity');
+
+  const realGpuProfile = {
+    ...plainProfile,
+    id: 'env-sync-webgpu-real',
+    privacy: { ...plainProfile.privacy, webgpu: 'real' },
+  };
+  const realGpuFields = mapFingerprintToInitFields(buildFingerprint(realGpuProfile), realGpuProfile);
+  assert.strictEqual(realGpuFields.webgpu_parameter, undefined,
+    'webgpu=real must not write a native WebGPU parameter');
 
 
   const stripped = fingerprintForNativeKernelInject(fp);
