@@ -20,6 +20,56 @@ const path = require('path');
 const { BrowserKernelManager } = require('./browser-kernel');
 const { MANIFEST_FILENAME } = require('./asset-integrity');
 
+
+/** Every file under the wayfern_fonts directories, grouped by OS subdirectory. */
+function countFontFiles(platformDir) {
+  const byOs = {};
+  let total = 0;
+  const stack = [platformDir];
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
+    const isFontRoot = path.basename(dir) === 'wayfern_fonts';
+    const insideFontRoot = isFontRoot || dir.includes(path.sep + 'wayfern_fonts' + path.sep);
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { stack.push(full); continue; }
+      if (!insideFontRoot && path.basename(path.dirname(full)) !== 'wayfern_fonts') continue;
+      if (!/^wayfern_fonts/.test(path.basename(dir)) && path.basename(path.dirname(full)) !== 'wayfern_fonts' && !insideFontRoot) continue;
+      total += 1;
+      const parts = full.split(path.sep);
+      const idx = parts.lastIndexOf('wayfern_fonts');
+      if (idx >= 0 && parts[idx + 1]) byOs[parts[idx + 1]] = (byOs[parts[idx + 1]] || 0) + 1;
+    }
+  }
+  return { total, byOs };
+}
+
+/** Streaming marker test so a 250 MB framework is never read into memory at once. */
+function fileContainsMarker(file, marker) {
+  const needle = Buffer.from(marker);
+  const chunkSize = 8 * 1024 * 1024;
+  const buf = Buffer.alloc(chunkSize);
+  let fd = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.statSync(file).size;
+    let offset = 0;
+    while (offset < size) {
+      const read = fs.readSync(fd, buf, 0, chunkSize, offset);
+      if (read <= 0) break;
+      if (buf.subarray(0, read).includes(needle)) return true;
+      offset += read;
+    }
+  } catch (_) {
+    return false;
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd); } catch (_) {} }
+  }
+  return false;
+}
+
 const results = [];
 function check(name, fn) {
   try { fn(); results.push({ name, ok: true }); }
@@ -195,6 +245,36 @@ function newManager(events) {
     const engineSource = fs.readFileSync(path.join(__dirname, '..', 'engine.js'), 'utf8');
     assert.ok(/kernelIntegrityCheck\(\)/.test(engineSource), 'engine does not expose the check');
     assert.ok(/checkInstalledKernelIntegrity/.test(engineSource), 'engine does not delegate to the manager');
+  });
+
+  // ---- bundled font assets vs native font control ----
+  check('a kernel with font-control natives ships the matching font pack', () => {
+    const kernelsRoot = path.resolve(__dirname, '..', 'kernels');
+    for (const plan of [{ platform: 'macos-arm64', osDir: 'macos' }, { platform: 'windows-x64', osDir: 'win11' }]) {
+      const base = path.join(kernelsRoot, plan.platform);
+      if (!fs.existsSync(base)) continue;
+      const fonts = countFontFiles(base);
+      let nativeWithControl = 0;
+      const stack = [base];
+      while (stack.length) {
+        const dir = stack.pop();
+        let entries = [];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
+        for (const entry of entries) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) { stack.push(full); continue; }
+          if (!/(Framework|chrome\.dll|chrome\.exe|libskit)/.test(entry.name)) continue;
+          let size = 0; try { size = fs.statSync(full).size; } catch (_) { continue; }
+          if (size < 1e6) continue;
+          if (fileContainsMarker(full, 'BundledFontRegistry')) nativeWithControl += 1;
+        }
+      }
+      if (nativeWithControl > 0) {
+        assert.ok(fonts.total > 0, `${plan.platform} carries font-control natives but ships no wayfern_fonts`);
+        assert.ok((fonts.byOs[plan.osDir] || 0) > 100,
+          `${plan.platform} must ship the ${plan.osDir} font pack (found ${fonts.byOs[plan.osDir] || 0})`);
+      }
+    }
   });
 
   // ================= report =================
