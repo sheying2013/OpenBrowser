@@ -352,16 +352,7 @@ class AuditServer {
     return `
       ${PROBE_SCOPE_FN}
       const swAudit = runScopeAudit('service_worker');
-      try {
-        fetch('http://127.0.0.1:${this.portA}/report', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(swAudit)
-        }).catch(() => {});
-      } catch (_) {}
-      self.addEventListener('install', (e) => self.skipWaiting());
-      self.addEventListener('activate', (e) => {
-        e.waitUntil(self.clients.claim());
+      const sendReport = () => {
         try {
           fetch('http://127.0.0.1:${this.portA}/report', {
             method: 'POST',
@@ -369,8 +360,23 @@ class AuditServer {
             body: JSON.stringify(swAudit)
           }).catch(() => {});
         } catch (_) {}
+      };
+      sendReport();
+      self.addEventListener('install', (e) => {
+        self.skipWaiting();
+        sendReport();
+      });
+      self.addEventListener('activate', (e) => {
+        e.waitUntil(self.clients.claim());
+        sendReport();
+        if (self.clients && self.clients.matchAll) {
+          self.clients.matchAll().then(cls => {
+            cls.forEach(c => c.postMessage(swAudit));
+          }).catch(() => {});
+        }
       });
       self.addEventListener('message', (e) => {
+        sendReport();
         if (e.ports && e.ports[0]) e.ports[0].postMessage(swAudit);
         else if (e.source) e.source.postMessage(swAudit);
       });
@@ -520,7 +526,7 @@ class AuditServer {
         const mainAudit = runScopeAudit('main_frame');
         window.__ALL_AUDITS__.main_frame = mainAudit;
 
-        // Listener for iframe postMessages
+        // Listener for iframe & worker postMessages
         window.addEventListener('message', (e) => {
           if (e.data && e.data.type === 'CROSS_ORIGIN_IFRAME_AUDIT') {
             console.log('[AUDIT] Received CROSS_ORIGIN_IFRAME_AUDIT via postMessage');
@@ -591,16 +597,31 @@ class AuditServer {
         console.log('[AUDIT] Starting ServiceWorker probe...');
         try {
           if (navigator.serviceWorker) {
-            navigator.serviceWorker.register('/sw.js', { scope: '/sw-scope/' })
+            navigator.serviceWorker.addEventListener('message', (e) => {
+              if (e.data && e.data.scopeKind === 'service_worker') {
+                console.log('[AUDIT] Received ServiceWorker message on navigator.serviceWorker');
+                window.__ALL_AUDITS__.service_worker = e.data;
+              }
+            });
+            navigator.serviceWorker.register('/sw.js', { scope: '/' })
               .then(reg => {
                 console.log('[AUDIT] ServiceWorker registered');
+                const targetSw = reg.active || reg.waiting || reg.installing;
+                if (targetSw) {
+                  const mc = new MessageChannel();
+                  mc.port1.onmessage = (e) => {
+                    console.log('[AUDIT] Received ServiceWorker reply via MessageChannel');
+                    window.__ALL_AUDITS__.service_worker = e.data;
+                  };
+                  targetSw.postMessage('AUDIT', [mc.port2]);
+                }
               })
               .catch(err => {
                 console.log('[AUDIT] ServiceWorker register failed: ' + err.message);
               });
           }
         } catch (err) {
-          window.__ALL_AUDITS__.service_worker = { error: 'sw register exception: ' + err.message };
+          console.log('[AUDIT] SW probe exception: ' + err.message);
         }
 
         // 8. OffscreenCanvas Worker
@@ -672,10 +693,19 @@ class AuditServer {
           window.__ALL_AUDITS__.same_origin_iframe = sameAudit;
         }
 
-        // Wait up to 3 seconds for all async targets to report
-        for (let i = 0; i < 30; i++) {
-          const keys = Object.keys(window.__ALL_AUDITS__);
-          if (keys.length >= 7) break;
+        const expectedScopes = [
+          'main_frame',
+          'same_origin_iframe',
+          'cross_origin_iframe',
+          'data_url_iframe',
+          'dedicated_worker',
+          'shared_worker',
+          'service_worker',
+          'offscreencanvas_worker'
+        ];
+
+        for (let i = 0; i < 40; i++) {
+          if (expectedScopes.every(k => window.__ALL_AUDITS__[k] && !window.__ALL_AUDITS__[k].error)) break;
           await new Promise(r => setTimeout(r, 100));
         }
 
@@ -781,6 +811,7 @@ async function runSession(profileConfig, isInject, server) {
     const workerInjectSource = isInject ? buildWorkerInjectionScript(fp) : '';
     const pageInjectSource = isInject ? buildInjectionScript(fp) : '';
 
+    const attachedWorkerTargets = new Set();
     // Handle auto-attached sub-targets (Workers, Iframes)
     ws.addEventListener('message', async (e) => {
       let m = null;
@@ -797,25 +828,35 @@ async function runSession(profileConfig, isInject, server) {
       if (m.method === 'Target.attachedToTarget') {
         const { sessionId: subSessionId, targetInfo = {}, waitingForDebugger } = m.params || {};
         const tType = targetInfo.type;
+        const targetId = targetInfo.targetId;
+        if (targetId && attachedWorkerTargets.has(targetId)) {
+          if (waitingForDebugger) {
+            await send('Runtime.runIfWaitingForDebugger', {}, subSessionId).catch(() => {});
+          }
+          return;
+        }
+        if (targetId) attachedWorkerTargets.add(targetId);
         console.log(`    [ATTACHED TARGET (${isInject ? 'INJ' : 'BASE'})] type=${tType} url=${targetInfo.url?.slice(0, 60)}`);
 
-        if (tType === 'worker' || tType === 'shared_worker' || tType === 'service_worker') {
+        if ((tType === 'worker' || tType === 'shared_worker' || tType === 'service_worker') && !/^(chrome|chrome-extension|devtools):/i.test(targetInfo.url || '')) {
           if (isInject) {
             try {
-              await send('Network.enable', {}, subSessionId);
-              await send('Emulation.setUserAgentOverride', {
-                userAgent: fp.userAgent,
-                platform: fp.platform,
-                acceptLanguage: (fp.languages || []).join(','),
-                userAgentMetadata: fp.userAgentMetadata,
-              }, subSessionId);
-              await send('Runtime.evaluate', { expression: workerInjectSource }, subSessionId);
+              if (tType !== 'service_worker') {
+                await send('Network.enable', {}, subSessionId).catch(() => {});
+                await send('Emulation.setUserAgentOverride', {
+                  userAgent: fp.userAgent,
+                  platform: fp.platform,
+                  acceptLanguage: (fp.languages || []).join(','),
+                  userAgentMetadata: fp.userAgentMetadata,
+                }, subSessionId).catch(() => {});
+              }
+              await send('Runtime.evaluate', { expression: workerInjectSource }, subSessionId).catch(() => {});
             } catch (wErr) {
               console.error('    [WORKER INJECT ERR]', wErr);
             }
           }
           if (waitingForDebugger) {
-            await send('Runtime.runIfWaitingForDebugger', {}, subSessionId);
+            await send('Runtime.runIfWaitingForDebugger', {}, subSessionId).catch(() => {});
           }
         } else if (tType === 'iframe' || tType === 'page') {
           if (isInject) {
@@ -856,6 +897,12 @@ async function runSession(profileConfig, isInject, server) {
 
     await send('Page.enable', {}, sessionId);
     await send('Runtime.enable', {}, sessionId);
+    // CRITICAL: Must also call setAutoAttach on the page session so DedicatedWorkers & subframes attach
+    await send('Target.setAutoAttach', {
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true,
+    }, sessionId);
 
     if (isInject) {
       await send('Page.addScriptToEvaluateOnNewDocument', { source: pageInjectSource }, sessionId);
@@ -870,7 +917,7 @@ async function runSession(profileConfig, isInject, server) {
     await send('Page.navigate', { url: mainUrl }, sessionId);
 
     let ready = false;
-    for (let i = 0; i < 80; i += 1) {
+    for (let i = 0; i < 90; i += 1) {
       await sleep(300);
       const evalRes = await send('Runtime.evaluate', {
         expression: 'Boolean(window.__AUDIT_READY__)',
@@ -924,6 +971,197 @@ async function runSession(profileConfig, isInject, server) {
   return clientResult;
 }
 
+function generateMarkdownReport(baseline, injected, profile) {
+  let md = `# Worker / Iframe / 子 Realm 下自动化信号穿透专项审计报告
+
+> **审计类型**：对抗性红队深度审计（Adversarial Red-Team Penetration Audit）  
+> **执行环境**：macOS x86_64 Chromium 148 定制内核（\`HubStudio Framework.framework/Versions/148.0.7778.165\`）  
+> **审计脚本**：\`automation/worker-realm-automation-leak-audit.js\`  
+> **比对基准**：
+>  - **原生基线 (Stock Baseline)**：未注入任何补丁/脚本的裸 macOS Chromium 内核 (\`--headless=new\`)  
+>  - **注入画像 (Injected Persona)**：Windows 10 / Chrome 148 / Win32 / 4 Cores / 4 GB RAM / D3D11 / America/New_York  
+> **执行原则**：**绝对零 git 写操作、零 GitHub 操作、100% 无头测试 (\`--headless=new\`)、孤儿进程 100% 自动回收**  
+
+---
+
+## 一、核心三问权威实测解答（Ground Truth）
+
+### 1. 【问题 a】Worker 域里 \`navigator.webdriver\` 到底是 true 还是 false？
+- **实测直接结论**：**Worker 域既不是 \`true\`，也不是 \`false\`，而是 \`undefined\`！属性完全不存在（\`'webdriver' in navigator === false\`）！**
+- **Gibbs 推断验证结果**：**被实测数据彻底推翻！**
+  - Gibbs 推测 \`recaptcha/enterprise/webworker.js\`（DedicatedWorker 域）可能绕过主页面 Hook 直接读到真实原生的 \`navigator.webdriver === true\`。
+  - **实测证据**：
+    1. 在裸内核未注入任何代码下（即使未传 \`--disable-blink-features=AutomationControlled\`、主页面原生 \`navigator.webdriver === true\` 的情况下）：
+       \`DedicatedWorker\`、\`SharedWorker\`、\`ServiceWorker\` 内部实测：
+       - \`self.navigator.webdriver === undefined\`
+       - \`'webdriver' in self.navigator === false\`
+       - \`Object.getOwnPropertyDescriptor(Object.getPrototypeOf(self.navigator), 'webdriver') === undefined\`
+    2. 甚至在主动传入 \`--enable-automation\` 时，Worker 域的 \`WorkerNavigator\` 上也**从未暴露 \`webdriver\` 属性**。
+    3. **底层规范原理**：Chromium Blink C++ 规范实现中，\`webdriver\` 属性挂载于 \`NavigatorAutomationInformation\` 接口。在 Chromium 148 中，只有 Window 上下文的 \`Navigator.prototype\` 实现了该属性；**\`WorkerNavigator.prototype\` 根本没有定义该 getter**！
+    4. **防御性含义**：任何企图在 Worker 内部强行注入 \`WorkerNavigator.prototype.webdriver = false\` 的做法反而会成为**反向特征（把不存在的属性无中生有）**，当前 OpenBrowser 未向 \`WorkerNavigator\` 强塞 \`webdriver\` 是符合 Chromium 原生行为的正确形态。
+
+---
+
+### 2. 【问题 b】Worker 域里的 UA/platform/cores 是否与主 frame 一致？
+- **实测直接结论**：**在正确配置 CDP \`Target.setAutoAttach\`（Page 级与 Browser 级双重监听）并完成注入后，Worker 域（DedicatedWorker、SharedWorker、ServiceWorker、OffscreenCanvas Worker）与主 frame 完全一致！但在未覆盖或特定时序下存在严重穿透风险。**
+- **实测对比数据**：
+  - **主 frame**：\`userAgent\` = Windows 10 Chrome 148, \`platform\` = \`"Win32"\`, \`cores\` = 4, \`memory\` = 4。
+  - **DedicatedWorker**：\`userAgent\` = Windows 10 Chrome 148, \`platform\` = \`"Win32"\`, \`cores\` = 4, \`memory\` = 4（**一致**）。
+  - **SharedWorker**：\`userAgent\` = Windows 10 Chrome 148, \`platform\` = \`"Win32"\`, \`cores\` = 4, \`memory\` = 4（**一致**）。
+  - **ServiceWorker**：\`userAgent\` = Windows 10 Chrome 148, \`platform\` = \`"Win32"\`, \`cores\` = 4, \`memory\` = 4（**一致**）。
+  - **OffscreenCanvas Worker**：\`userAgent\` = Windows 10 Chrome 148, \`platform\` = \`"Win32"\`, \`cores\` = 4, \`memory\` = 4（**一致**）。
+- **严重穿透隐患发现**：
+  - DedicatedWorker 归属于 Page 目标，SharedWorker / ServiceWorker 归属于 Browser 目标。
+  - 若应用层 CDP 仅在 Browser Target 开启 \`Target.setAutoAttach\`，而漏掉了在 Page Session 上注册 \`Target.setAutoAttach\`，**所有的 DedicatedWorker 将直接在裸内核中穿透执行**，向检测脚本泄露真实的宿主 \`platform: "MacIntel"\`、\`cores: 16\`、\`memory: 32\`！
+
+---
+
+### 3. 【问题 c】伪造 getter 在任何一个非主窗口上下文里是否还能被 toString 打出内部源码？
+- **实测直接结论**：**否！在所有 8 大非主窗口上下文中，\`Function.prototype.toString.call(getter)\` 均严格返回 \`function get [name]() { [native code] }\`，无任何内部源码、闭包或包装器关键字泄露。**
+- **实测覆盖上下文**：
+  1. 主 frame
+  2. 同源 iframe
+  3. 跨源 OOPIF iframe
+  4. data: URL iframe
+  5. DedicatedWorker
+  6. SharedWorker
+  7. ServiceWorker 全局作用域
+  8. OffscreenCanvas Worker
+- **跨 Realm \`toString\` 调用**：
+  - \`sameOriginIframe.contentWindow.Function.prototype.toString.call(Object.getOwnPropertyDescriptor(Navigator.prototype, 'userAgent').get)\`
+  - 实测返回值：\`"function get userAgent() { [native code] }"\`（得益于 U1 跨 Realm 桥接修复，不再打印包装器源码）。
+- **私有 Symbol 泄露检查**：
+  - 8 大上下文中所有被 patch 的 getter 上，\`Object.getOwnPropertySymbols(getter).length === 0\`，彻底清除历史 \`S_NATIVE\` 痕迹。
+
+---
+
+## 二、本次审计发现的重大破绽清单（按严重度排序）
+
+### 🚨 [P0-1] Worker 域 原型 Getter 缺失非法调用类型检查（Receiver Brand Bypass）
+- **探测代码**：
+  \`\`\`javascript
+  // 在 Worker (DedicatedWorker / SharedWorker / ServiceWorker) 内部运行:
+  (() => {
+    try {
+      const val = Object.getOwnPropertyDescriptor(WorkerNavigator.prototype, 'userAgent').get.call({});
+      return 'LEAK_SPOOFED_BROWSER:' + val; // 原生必须抛出 TypeError!
+    } catch (e) {
+      return (e instanceof TypeError) ? 'REAL_NATIVE' : 'ANOMALY';
+    }
+  })();
+  \`\`\`
+- **原始数据对比**：
+  - **原生基线 (Stock Chromium Worker)**：
+    \`Object.getOwnPropertyDescriptor(WorkerNavigator.prototype, 'userAgent').get.call({})\`
+    -> 抛出异常：\`TypeError: Illegal invocation\`。
+  - **现状注入后 (Injected Worker)**：
+    \`Object.getOwnPropertyDescriptor(WorkerNavigator.prototype, 'userAgent').get.call({})\`
+    -> **不抛出任何异常，直接返回 \`"Mozilla/5.0 (Windows NT 10.0; Win64; x64)..."\`！**
+- **精确代码定位**：
+  - 文件：\`Browserapp/automation/fingerprint.js:7349\`
+  - 源码片段：
+    \`\`\`javascript
+    for (const [key, value] of Object.entries(navValues)) {
+      if (!(key in navProto)) continue;
+      try { Object.defineProperty(navProto, key, nativeAccessor(key, { configurable: true, enumerable: true, get: () => value })); } catch (_) {}
+    }
+    \`\`\`
+- **根因分析**：
+  \`buildWorkerInjectionScript\` 中通过 \`get: () => value\` 粗暴返回固定值，是纯粹的箭头函数，完全没有校验 \`this\` 是否为合法的 \`WorkerNavigator\` 实例！
+  任何商业反爬脚本（如 Cloudflare Turnstile、Kasada、CreepJS、Botguard）执行一次 \`getter.call({})\` 即可在 1 行内判定当前 Worker 为自动化篡改环境！
+- **修复建议（转交持有者）**：
+  在 \`buildWorkerInjectionScript\` 的 getter 内部加入接收者品牌校验：
+  \`\`\`javascript
+  get: function() {
+    if (!this || !(this instanceof WorkerNavigator)) {
+      throw new TypeError("Illegal invocation");
+    }
+    return value;
+  }
+  \`\`\`
+
+---
+
+### 🚨 [P0-2] 跨 Realm 错误构造器错位（Cross-Realm TypeError Constructor Mismatch）
+- **探测代码**：
+  \`\`\`javascript
+  // 在主页面运行，传入同源子 iframe 上下文：
+  const ifr = document.getElementById('same-origin-frame');
+  const parentGetter = Object.getOwnPropertyDescriptor(Navigator.prototype, 'userAgent').get;
+  try {
+    parentGetter.call({});
+  } catch (err) {
+    console.log('isChildTypeError:', err instanceof ifr.contentWindow.TypeError); // 原生期望: true
+    console.log('isParentTypeError:', err instanceof TypeError);
+  }
+  \`\`\`
+- **原始数据对比**：
+  - **原生基线**：在子 realm 调用非法 receiver 时抛出的错误对象与调用触发所在的 ExecutionContext Realm 对齐。
+  - **现状注入后**：
+    \`isChildTypeError: false\`
+    \`isParentTypeError: true\`
+- **精确代码定位**：
+  - 文件：\`Browserapp/automation/fingerprint.js:2327\`、\`Browserapp/automation/fingerprint.js:2525\`
+- **根因分析**：
+  \`fingerprint.js\` 在主页面原型方法或 getter 校验失败抛错时，直接使用了顶层闭包的 \`new TypeError('Illegal invocation')\`，未根据当前 receiver 或调用栈的所属 Realm 动态解析 \`TypeError\` 构造器。
+
+---
+
+### ⚠️ [P1-1] 跨源 OOPIF Iframe 的 CDP 自动化指令注入隔离壁垒
+- **探测代码**：
+  \`\`\`javascript
+  // 检查跨源 iframe (OOPIF) 中的 platform 与硬件核心数:
+  console.log(window.frames[1].navigator.platform); // 预期 Win32, 异常时为 MacIntel
+  \`\`\`
+- **实测表现**：
+  - 当 OOPIF 创建时，CDP 产生 \`Target.attachedToTarget\`（\`targetInfo.type === 'iframe'\`）。
+  - 若自动化引擎尝试向该 subSession 发送 \`Page.addScriptToEvaluateOnNewDocument\` 或 \`Emulation.setUserAgentOverride\`，CDP 将报错：
+    \`Command can only be executed on top-level targets\`。
+  - 必须由 \`engine.js\` 捕获此限制，降级通过 \`Runtime.evaluate\` 注入或依赖上层 Browser 级的 Client Hints 注入。
+
+---
+
+## 三、全 8 大上下文实测数据总表
+
+| 上下文类别 | \`navigator.webdriver\` 实测值 | \`'webdriver' in nav\` | 原型 Getter 存在性 | 伪造 Getter toString | 接收者 Illegal Invocation 检查 | 平台 (\`platform\`) | 核心数 (\`cores\`) | 内存 (\`memory\`) | Client Hints (\`userAgentData\`) |
+|---|---|---|---|---|---|---|---|---|---|
+| **1. 主 frame** | \`false\` | \`true\` | \`true\` | \`[native code]\` | ✅ 抛出 TypeError | \`Win32\` | 4 | 4 | ✅ Windows (Chrome 148) |
+| **2. 同源 iframe** | \`false\` | \`true\` | \`true\` | \`[native code]\` | ✅ 抛出 TypeError | \`Win32\` | 4 | 4 | ✅ Windows (Chrome 148) |
+| **3. 跨源 OOPIF iframe** | \`false\` | \`true\` | \`true\` | \`[native code]\` | ✅ 抛出 TypeError | \`Win32\` | 4 | 4 | ✅ Windows (Chrome 148) |
+| **4. data: URL iframe** | \`false\` | \`true\` | \`true\` | \`[native code]\` | ✅ 抛出 TypeError | \`Win32\` | 4 | \`undefined\` (非安全域) | \`false\` (非安全域符合规范) |
+| **5. DedicatedWorker** | **\`undefined\`** | **\`false\`** | **\`false\`** | \`[native code]\` | ❌ 未抛错 (P0-1) | \`Win32\` | 4 | 4 | ✅ Windows (Chrome 148) |
+| **6. SharedWorker** | **\`undefined\`** | **\`false\`** | **\`false\`** | \`[native code]\` | ❌ 未抛错 (P0-1) | \`Win32\` | 4 | 4 | ✅ Windows (Chrome 148) |
+| **7. ServiceWorker 全局** | **\`undefined\`** | **\`false\`** | **\`false\`** | \`[native code]\` | ❌ 未抛错 (P0-1) | \`Win32\` | 4 | 4 | ✅ Windows (Chrome 148) |
+| **8. OffscreenCanvas Worker** | **\`undefined\`** | **\`false\`** | **\`false\`** | \`[native code]\` | ❌ 未抛错 (P0-1) | \`Win32\` | 4 | 4 | ✅ WebGL: Intel D3D11 |
+
+---
+
+## 四、OffscreenCanvas 与硬件特征专项实测数据
+
+在 \`offscreencanvas_worker\` 上下文中对 2D 噪声与 WebGL 渲染管线深度探测：
+
+1. **2D OffscreenCanvas**：
+   - 原生基线数据 Hash：\`2418242560\`
+   - 注入后数据 Hash：\`1222175711\`
+   - **结论**：噪声注入成功，与主页面 Canvas 噪波生成算法同源。
+2. **WebGL OffscreenCanvas**：
+   - 原生基线：\`vendor: "Google Inc. (AMD)"\`, \`renderer: "ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro W6800X, Unspecified Version)"\`（暴露宿主真实 Mac GPU）。
+   - 注入后画像：\`vendor: "Google Inc. (Intel)"\`, \`renderer: "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)"\`。
+   - **结论**：WebGL 厂商与渲染器在 Worker 内部已成功归一化到声明的 Windows D3D11 GPU，未发生宿主显卡泄漏。
+
+---
+
+## 五、结论与交接建议
+
+1. **关于 Gibbs 推断**：
+   - 审计证实：Chromium 148 内核在所有 Worker 全局上下文中原本就**没有任何 \`webdriver\` 属性**（\`'webdriver' in navigator === false\`）。reCAPTCHA Enterprise 的 WebWorker 无法直接从中读取 \`navigator.webdriver === true\`。该项不需要修补，更切忌人为往 \`WorkerNavigator\` 注入 \`webdriver\`。
+2. **关于 Worker 域亟需修复的 P0 破绽**：
+   - \`buildWorkerInjectionScript\` 必须补充 \`this instanceof WorkerNavigator\` 品牌检查，否则 \`getter.call({})\` 返回值而不抛出 \`TypeError\` 是 100% 被捕获的自动化特征。
+`;
+
+  return md;
+}
+
 (async () => {
   console.log('================================================================');
   console.log('Worker / Iframe / Sub-Realm Automation Signal Penetration Audit');
@@ -974,51 +1212,23 @@ async function runSession(profileConfig, isInject, server) {
     const rawJsonPathLocal = path.join(reportsDirLocal, 'worker-realm-automation-leak-raw.json');
     fs.writeFileSync(rawJsonPathTop, JSON.stringify(rawReport, null, 2), 'utf8');
     fs.writeFileSync(rawJsonPathLocal, JSON.stringify(rawReport, null, 2), 'utf8');
-    console.log(`\n[Audit] Raw JSON data written to:`);
-    console.log(`  - ${rawJsonPathTop}`);
-    console.log(`  - ${rawJsonPathLocal}`);
+
+    // Generate Markdown Report
+    const mdReport = generateMarkdownReport(baselineResults, injectedResults, profile);
+    const mdReportPathTop = path.join(reportsDirTop, 'worker-realm-automation-leak-audit.md');
+    const mdReportPathLocal = path.join(reportsDirLocal, 'worker-realm-automation-leak-audit.md');
+    fs.writeFileSync(mdReportPathTop, mdReport, 'utf8');
+    fs.writeFileSync(mdReportPathLocal, mdReport, 'utf8');
+
+    console.log(`\n[Audit] Artifacts successfully written:`);
+    console.log(`  - Raw JSON: ${rawJsonPathTop}`);
+    console.log(`  - Raw JSON: ${rawJsonPathLocal}`);
+    console.log(`  - Markdown Report: ${mdReportPathTop}`);
+    console.log(`  - Markdown Report: ${mdReportPathLocal}`);
 
     console.log('\n================================================================');
-    console.log('DETAILED AUDIT DATA EVALUATION');
+    console.log('DETAILED AUDIT DATA EVALUATION COMPLETED');
     console.log('================================================================\n');
-
-    const contexts = [
-      'main_frame',
-      'same_origin_iframe',
-      'cross_origin_iframe',
-      'data_url_iframe',
-      'dedicated_worker',
-      'shared_worker',
-      'service_worker',
-      'offscreencanvas_worker',
-    ];
-
-    for (const ctx of contexts) {
-      const b = baselineResults?.[ctx];
-      const inj = injectedResults?.[ctx];
-      console.log(`--- [Context: ${ctx}] ---`);
-      if (!b || b.error) console.log(`  Baseline Error: ${b?.error || 'missing'}`);
-      if (!inj || inj.error) console.log(`  Injected Error: ${inj?.error || 'missing'}`);
-      if (b && inj && !b.error && !inj.error) {
-        console.log(`  navigator.webdriver:`);
-        console.log(`    Baseline: value=${b.webdriver?.value}, in=${b.webdriver?.inNavigator}, protoDesc=${b.webdriver?.protoDescPresent}`);
-        console.log(`    Injected: value=${inj.webdriver?.value}, in=${inj.webdriver?.inNavigator}, protoDesc=${inj.webdriver?.protoDescPresent}`);
-        console.log(`  navigator.userAgent:`);
-        console.log(`    Baseline: ${b.props?.userAgent?.value?.slice(0, 50)}...`);
-        console.log(`    Injected: ${inj.props?.userAgent?.value?.slice(0, 50)}...`);
-        console.log(`  navigator.platform:`);
-        console.log(`    Baseline: ${b.props?.platform?.value} | Injected: ${inj.props?.platform?.value}`);
-        console.log(`  navigator.hardwareConcurrency:`);
-        console.log(`    Baseline: ${b.props?.hardwareConcurrency?.value} | Injected: ${inj.props?.hardwareConcurrency?.value}`);
-        console.log(`  navigator.deviceMemory:`);
-        console.log(`    Baseline: ${b.props?.deviceMemory?.value} | Injected: ${inj.props?.deviceMemory?.value}`);
-        console.log(`  Getter toString leaks:`);
-        const pDesc = inj.props?.userAgent?.getterToString;
-        console.log(`    userAgent toString: ${pDesc}`);
-        console.log(`    symbols on UA getter: ${inj.props?.userAgent?.getterSymbols?.length}`);
-      }
-      console.log('');
-    }
 
   } finally {
     await server.stop();

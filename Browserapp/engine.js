@@ -250,6 +250,78 @@ if (!cdp.__serviceWorkerHardened) {
   };
 }
 
+/**
+ * Chromium 原生线缆层 HTTP 报头标准槽位序列 (Canonical Wire Header Order).
+ *
+ * 【背景与 JA4H / Akamai 指纹防御】：
+ * JA4H (HTTP Client Fingerprinting) 与 Akamai Bot Manager 会依据线缆层请求头的名字序列（以及特定头的哈希）
+ * 建立客户端指纹。原生 Chromium 在网络栈 (net::URLRequestHttpJob, ClientHints, NavigationLoader) 中
+ * 按照固定的装配阶段构建报头流。若中间层重写器将 Client Hints (sec-ch-ua*) 或 User-Agent / Accept-Language
+ * 错误 append 到末尾，会导致明显的顺序倒置特征（如 sec-ch-ua 跑到 user-agent 之后），被 WAF 判定为异常机器人。
+ *
+ * 【槽位排序原理与位置说明】：
+ * 1. host: HTTP/1.1 规范要求的首个虚拟主机头，Chromium 网络栈最优先填充。
+ * 2. connection: 传输层连接控制选项 (keep-alive, upgrade)，紧随 Host。
+ * 3. cache-control / pragma: 条件请求/刷新时的缓存指令，由缓存层在较早阶段插入。
+ * 4. sec-ch-ua 系列 (Client Hints): Chromium ClientHints 委托在请求构建极早期（before User-Agent）下发：
+ *    - sec-ch-ua: 基础品牌版本列表 (GREASE + Chromium + Brand)。
+ *    - sec-ch-ua-mobile: 是否移动端布尔标记 (?0 或 ?1)。
+ *    - sec-ch-ua-platform: 操作系统平台名 (如 "Windows", "Android", "macOS")。
+ *    - 高熵 Client Hints (当服务器通过 Accept-CH 明确请求时按标准次序出现):
+ *      sec-ch-ua-arch, sec-ch-ua-bitness, sec-ch-ua-model, sec-ch-ua-platform-version,
+ *      sec-ch-ua-full-version, sec-ch-ua-full-version-list, sec-ch-ua-form-factors, sec-ch-ua-wow64
+ * 5. upgrade-insecure-requests: 页面导航层下发的升级请求标记，位于 User-Agent 之前。
+ * 6. user-agent: 浏览器核心 UA 字符串，位于 Accept 之前。
+ * 7. accept: 客户端内容协商偏好 (text/html, application/xhtml+xml, ...)。
+ * 8. sec-fetch-* 系列 (W3C Fetch Metadata): 紧随 Accept 之后按规范排布：
+ *    - sec-fetch-site: 请求源关系 (same-origin, cross-site, none 等)。
+ *    - sec-fetch-mode: 请求模式 (navigate, cors, no-cors 等)。
+ *    - sec-fetch-user: 用户手势标记 (?1)。
+ *    - sec-fetch-dest: 请求目标资源类型 (document, script, empty 等)。
+ *    - sec-fetch-storage-access: 存储访问权限标记。
+ * 9. referer: 来源页 URL。
+ * 10. origin: CORS 跨域请求的源标识。
+ * 11. accept-encoding: 浏览器支持的内容编码 (gzip, deflate, br, zstd)。
+ * 12. accept-language: 语言与区域偏好（含 RFC 9110 q-factor 权重），排在 Cookie 之前。
+ * 13. cookie: 携带的持久化/会话 Cookie。
+ * 14. priority: HTTP/2 与 HTTP/3 流优先级控制头。
+ */
+const CHROMIUM_CANONICAL_HEADER_ORDER = Object.freeze([
+  "host",
+  "connection",
+  "cache-control",
+  "pragma",
+  "sec-ch-ua",
+  "sec-ch-ua-mobile",
+  "sec-ch-ua-platform",
+  "sec-ch-ua-arch",
+  "sec-ch-ua-bitness",
+  "sec-ch-ua-model",
+  "sec-ch-ua-platform-version",
+  "sec-ch-ua-full-version",
+  "sec-ch-ua-full-version-list",
+  "sec-ch-ua-form-factors",
+  "sec-ch-ua-wow64",
+  "upgrade-insecure-requests",
+  "user-agent",
+  "accept",
+  "accept-language",
+  "sec-fetch-site",
+  "sec-fetch-mode",
+  "sec-fetch-user",
+  "sec-fetch-dest",
+  "sec-fetch-storage-access",
+  "referer",
+  "origin",
+  "accept-encoding",
+  "cookie",
+  "priority",
+]);
+
+const CHROMIUM_CANONICAL_HEADER_INDEX = Object.freeze(
+  new Map(CHROMIUM_CANONICAL_HEADER_ORDER.map((name, i) => [name, i]))
+);
+
 class RequestHeaderRewriter {
   constructor(options = {}) {
     this.enabled = options.enabled !== false;
@@ -568,44 +640,22 @@ class RequestHeaderRewriter {
           newHeaders.push(acceptLanguageHeader);
         }
 
-        const CANONICAL_ORDER = [
-          "host",
-          "connection",
-          "sec-ch-ua",
-          "sec-ch-ua-mobile",
-          "sec-ch-ua-platform",
-          "sec-ch-ua-arch",
-          "sec-ch-ua-bitness",
-          "sec-ch-ua-model",
-          "sec-ch-ua-platform-version",
-          "sec-ch-ua-full-version",
-          "sec-ch-ua-full-version-list",
-          "sec-ch-ua-form-factors",
-          "sec-ch-ua-wow64",
-          "upgrade-insecure-requests",
-          "user-agent",
-          "accept",
-          "sec-fetch-site",
-          "sec-fetch-mode",
-          "sec-fetch-user",
-          "sec-fetch-dest",
-          "referer",
-          "origin",
-          "accept-encoding",
-          "accept-language",
-          "cookie",
-          "priority",
-        ];
-        const orderMap = new Map();
-        CANONICAL_ORDER.forEach((name, i) => orderMap.set(name, i));
-
-        newHeaders.sort((a, b) => {
-          const rankA = orderMap.has(a.name.toLowerCase()) ? orderMap.get(a.name.toLowerCase()) : 999;
-          const rankB = orderMap.has(b.name.toLowerCase()) ? orderMap.get(b.name.toLowerCase()) : 999;
-          return rankA - rankB;
+        const indexedHeaders = newHeaders.map((h, idx) => {
+          const lk = (h && typeof h.name === "string") ? h.name.toLowerCase() : "";
+          const canonicalRank = CHROMIUM_CANONICAL_HEADER_INDEX.has(lk)
+            ? CHROMIUM_CANONICAL_HEADER_INDEX.get(lk)
+            : (1000 + idx);
+          return { header: h, rank: canonicalRank, originalIndex: idx };
         });
 
-        await doContinue(newHeaders);
+        indexedHeaders.sort((a, b) => {
+          if (a.rank !== b.rank) return a.rank - b.rank;
+          return a.originalIndex - b.originalIndex;
+        });
+
+        const sortedHeaders = indexedHeaders.map((item) => item.header);
+
+        await doContinue(sortedHeaders);
       } catch (err) {
         if (this.logger) {
           try { this.logger({ type: "request-rewrite-error", error: err.message, url: request?.url }); } catch (_) {}
@@ -5077,6 +5127,8 @@ module.exports = {
   extractTimezoneFromArgs,
   RequestHeaderRewriter,
   createRequestHeaderRewriter,
+  CHROMIUM_CANONICAL_HEADER_ORDER,
+  CHROMIUM_CANONICAL_HEADER_INDEX,
   evaluateFingerprintDelivery,
   normalizePlatformFamily,
   detectUaPlatform,

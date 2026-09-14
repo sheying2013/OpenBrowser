@@ -33,7 +33,7 @@ const launcher = path.join(kernelRoot, 'launch_openbrowser.sh');
 
 const { buildFingerprint } = require('./fingerprint');
 const { writeOpenBrowserKernelInit } = require('./kernel-init-sync');
-const { BrowserEngine } = require('../engine');
+const { BrowserEngine, RequestHeaderRewriter, CHROMIUM_CANONICAL_HEADER_ORDER, CHROMIUM_CANONICAL_HEADER_INDEX } = require('../engine');
 const cdp = require('../cdp');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -419,7 +419,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       `count=${fb.count}, family="${fb.family}", size=${fb.size}, magic="${fb.magic}"`
     );
 
-    // 9. Wire header order: sec-ch-ua before user-agent
+    // 9. Wire header order: hard assertions matching CHROMIUM_CANONICAL_HEADER_ORDER on live request
     const rawList = mainNavRawHeaders || [];
     const lowerHeaders = [];
     for (let i = 0; i < rawList.length; i += 2) {
@@ -427,11 +427,131 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     }
     const secChIdx = lowerHeaders.indexOf('sec-ch-ua');
     const uaIdx = lowerHeaders.indexOf('user-agent');
-    const c9 = secChIdx !== -1 && uaIdx !== -1 && secChIdx < uaIdx;
+    const acceptIdx = lowerHeaders.indexOf('accept');
+    const langIdx = lowerHeaders.indexOf('accept-language');
+
+    // Canonical monotonic sequence check on live wire request
+    let canonicalMonotonic = true;
+    let lastRank = -1;
+    let rankViolations = [];
+    for (const h of lowerHeaders) {
+      if (CHROMIUM_CANONICAL_HEADER_INDEX && CHROMIUM_CANONICAL_HEADER_INDEX.has(h)) {
+        const currentRank = CHROMIUM_CANONICAL_HEADER_INDEX.get(h);
+        if (currentRank < lastRank) {
+          canonicalMonotonic = false;
+          rankViolations.push(`${h} (rank ${currentRank}) appeared after rank ${lastRank}`);
+        }
+        lastRank = currentRank;
+      }
+    }
+
+    const c9 = secChIdx !== -1 && uaIdx !== -1 && acceptIdx !== -1 &&
+      secChIdx < uaIdx && uaIdx < acceptIdx && canonicalMonotonic;
     check(
-      '9. Wire header order: sec-ch-ua precedes user-agent',
+      '9. Wire header order: full canonical sequence (sec-ch-ua < user-agent < accept < accept-language)',
       c9,
-      `sec-ch-ua index=${secChIdx}, user-agent index=${uaIdx}, order=[${lowerHeaders.join(', ')}]`
+      `sec-ch-ua=${secChIdx}, user-agent=${uaIdx}, accept=${acceptIdx}, accept-language=${langIdx}, monotonic=${canonicalMonotonic}${rankViolations.length ? `, violations: ${rankViolations.join(', ')}` : ''}`
+    );
+
+    // Helper for wire header variations testing RequestHeaderRewriter
+    const runHeaderRewriteSimulation = async (rewriterOpts, reqOpts) => {
+      let forwardedHeaders = null;
+      const fakeConn = {
+        command: async (method, params) => {
+          if (method === 'Fetch.continueRequest') {
+            forwardedHeaders = params.headers;
+          }
+          return {};
+        },
+      };
+      const rewriter = new RequestHeaderRewriter(rewriterOpts);
+      rewriter.handleEvent({
+        method: 'Fetch.requestPaused',
+        sessionId: 'sim-s1',
+        params: {
+          requestId: 'sim-req-1',
+          responseStatusCode: null,
+          request: reqOpts,
+        },
+      }, fakeConn);
+      await sleep(60);
+      return forwardedHeaders || [];
+    };
+
+    // 9a. Variation: Without sec-ch-ua* (iOS Persona strictly omits sec-ch-ua* and preserves order)
+    const iosHeaders = await runHeaderRewriteSimulation({
+      profile: { os: 'iOS', platform: 'iOS', platformNav: 'iPhone', language: 'en-US' },
+    }, {
+      url: 'https://example.com/',
+      headers: {
+        'Host': 'example.com',
+        'Connection': 'keep-alive',
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)',
+        'Accept': 'text/html',
+        'Accept-Language': 'en-US',
+      },
+    });
+    const iosNames = iosHeaders.map(h => h.name.toLowerCase());
+    const iosHasNoCh = iosNames.filter(n => n.startsWith('sec-ch-ua')).length === 0;
+    const iosUaIdx = iosNames.indexOf('user-agent');
+    const iosAcceptIdx = iosNames.indexOf('accept');
+    const c9a = iosHasNoCh && iosUaIdx !== -1 && iosAcceptIdx !== -1 && iosUaIdx < iosAcceptIdx;
+    check(
+      '9a. Wire header variation: iOS persona strictly omits sec-ch-ua* and preserves order',
+      c9a,
+      `hasZeroSecChUa=${iosHasNoCh}, user-agent=${iosUaIdx}, accept=${iosAcceptIdx}`
+    );
+
+    // 9b. Variation: Without accept-language (e.g. OPTIONS preflight)
+    const noLangHeaders = await runHeaderRewriteSimulation({
+      profile: { os: 'Windows' },
+    }, {
+      method: 'OPTIONS',
+      url: 'https://example.com/api',
+      headers: {
+        'Host': 'example.com',
+        'Connection': 'keep-alive',
+        'User-Agent': 'Host UA',
+        'Accept': '*/*',
+      },
+    });
+    const noLangNames = noLangHeaders.map(h => h.name.toLowerCase());
+    const noLangAbsent = noLangNames.indexOf('accept-language') === -1;
+    const noLangSecChIdx = noLangNames.indexOf('sec-ch-ua');
+    const noLangUaIdx = noLangNames.indexOf('user-agent');
+    const c9b = noLangAbsent && noLangSecChIdx !== -1 && noLangUaIdx !== -1 && noLangSecChIdx < noLangUaIdx;
+    check(
+      '9b. Wire header variation: without accept-language (OPTIONS) preserves sec-ch-ua < user-agent',
+      c9b,
+      `acceptLanguageAbsent=${noLangAbsent}, sec-ch-ua=${noLangSecChIdx}, user-agent=${noLangUaIdx}`
+    );
+
+    // 9c. Variation: Custom headers inserted retain order and deduplicate
+    const customHeaders = await runHeaderRewriteSimulation({
+      profile: { os: 'Windows', language: 'en-US' },
+    }, {
+      url: 'https://example.com/api',
+      headers: {
+        'Host': 'example.com',
+        'X-Header-Alpha': 'val-1',
+        'X-Header-Beta': 'val-2',
+        'User-Agent': 'Host UA',
+        'X-Header-Gamma': 'val-3',
+        'x-header-alpha': 'val-dup',
+        'Accept': 'application/json',
+      },
+    });
+    const customNames = customHeaders.map(h => h.name.toLowerCase());
+    const alphaIdx = customNames.indexOf('x-header-alpha');
+    const betaIdx = customNames.indexOf('x-header-beta');
+    const gammaIdx = customNames.indexOf('x-header-gamma');
+    const alphaCount = customNames.filter(n => n === 'x-header-alpha').length;
+    const c9c = alphaIdx !== -1 && betaIdx !== -1 && gammaIdx !== -1 &&
+      alphaIdx < betaIdx && betaIdx < gammaIdx && alphaCount === 1;
+    check(
+      '9c. Wire header variation: custom headers preserve insertion order and deduplicate',
+      c9c,
+      `alpha=${alphaIdx}, beta=${betaIdx}, gamma=${gammaIdx}, alphaCount=${alphaCount}`
     );
 
     // 10. Sandboxed iframe platform === 'Win32'
