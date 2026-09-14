@@ -130,7 +130,13 @@ function stop(child, dir) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob-worker-fp-'));
   await writeOpenBrowserKernelInit(dir, { fingerprint: fp, profile, templatePath: path.join(kernelRoot, 'init_template.json') });
 
-  const child = spawn(launcher, [dir, '--headless=new'], { cwd: kernelRoot, detached: true, stdio: 'ignore' });
+  // Hosted macOS Intel runners expose no physical GPU. Use the same SwiftShader bootstrap as
+  // the mobile persona WebGL E2E test so this worker-only assertion verifies an actual context.
+  const child = spawn(launcher, [dir, '--headless=new', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'], {
+    cwd: kernelRoot,
+    detached: true,
+    stdio: 'ignore',
+  });
   child.unref();
   let port = null;
   for (let i = 0; i < 80; i += 1) {
