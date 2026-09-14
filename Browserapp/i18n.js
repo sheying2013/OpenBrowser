@@ -1967,6 +1967,7 @@
     "已关联代理库：${proxyLibraryLabel(item)}": "Linked proxy library: ${proxyLibraryLabel(item)}",
     "代理未就绪": "Proxy not ready",
     "回退直连": "Fall back to direct connection",
+    "回退直连（真实 IP 暴露风险）": "Fall back to direct connection (real IP exposure risk)",
     "已关联代理库：${proxyLibraryLabel(linkedProxy)}": "Linked proxy library: ${proxyLibraryLabel(linkedProxy)}",
     "代理节点已失效：${linkedProxyId}": "Proxy library node is unavailable: ${linkedProxyId}",
     "未关联代理库节点": "No proxy library node linked",

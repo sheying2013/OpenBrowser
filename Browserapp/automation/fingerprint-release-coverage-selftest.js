@@ -187,6 +187,20 @@ const COVERAGE_DOMAINS = [
       { key: "selftest:fpreleasegate", script: "node automation/fingerprint-release-gate-selftest.js", file: "automation/fingerprint-release-gate-selftest.js" },
       { key: "selftest:releasecoverage", script: "node automation/fingerprint-release-coverage-selftest.js", file: "automation/fingerprint-release-coverage-selftest.js" },
     ]
+  },
+  {
+    domain: "Fingerprint Hardening & Security Barriers",
+    description: "Font/CSSOM exit closure, media track labels, worker WebGPU parity, stability semantics, DoH, profile Local State and fail-closed startup",
+    suites: [
+      { key: "selftest:stabilitysemantics", script: "node automation/stability-semantics-selftest.js", file: "automation/stability-semantics-selftest.js" },
+      { key: "selftest:mediatracklabel", script: "node automation/mediastreamtrack-label-selftest.js", file: "automation/mediastreamtrack-label-selftest.js" },
+      { key: "selftest:cssomfontecho", script: "node automation/cssom-font-echo-selftest.js", file: "automation/cssom-font-echo-selftest.js" },
+      { key: "selftest:appcenterfilter", script: "node automation/app-center-fingerprint-filter-selftest.js", file: "automation/app-center-fingerprint-filter-selftest.js" },
+      { key: "selftest:livesyncinternal", script: "node automation/live-sync-internal-pages-selftest.js", file: "automation/live-sync-internal-pages-selftest.js" },
+      { key: "selftest:proxydoh", script: "node automation/proxy-forwarder-doh-selftest.js", file: "automation/proxy-forwarder-doh-selftest.js" },
+      { key: "selftest:profilelocalstate", script: "node automation/profile-local-state-selftest.js", file: "automation/profile-local-state-selftest.js" },
+      { key: "selftest:startupbarrier", script: "node automation/startup-consistency-and-barrier-selftest.js", file: "automation/startup-consistency-and-barrier-selftest.js" },
+    ]
   }
 ];
 
@@ -244,8 +258,8 @@ console.log("Starting OpenBrowser Release Coverage Selftest (mode: " + (isMutate
 const allCoreSuites = COVERAGE_DOMAINS.flatMap((d) => d.suites);
 
 // Check 1: Coverage Domains Integrity
-check("all 12 functional coverage domains are defined and non-empty", () => {
-  assert.strictEqual(COVERAGE_DOMAINS.length, 12, "Must declare exactly 12 core coverage domains");
+check("all 13 functional coverage domains are defined and non-empty", () => {
+  assert.strictEqual(COVERAGE_DOMAINS.length, 13, "Must declare exactly 13 core coverage domains");
   for (const domain of COVERAGE_DOMAINS) {
     assert.ok(domain.suites.length > 0, "Domain " + domain.domain + " must contain at least one suite");
   }

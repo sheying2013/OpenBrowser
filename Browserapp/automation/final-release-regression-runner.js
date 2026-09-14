@@ -11,7 +11,7 @@
  *    - Working-tree disk hygiene (zero pycache, zero screenshot artifacts)
  *    - Re-entry and recursion prevention guard
  * 2. Core Blocking Regression Suites (selftest:*):
- *    - 56 verified suites across 12 functional domains:
+ *    - 64 verified suites across 13 functional domains:
  *      * Worker Isolation & WebGPU Parity (workerwebgpu, workerfontpresence, workerfontwiring, webrtcfb)
  *      * Cross-Surface Multi-Context Parity (crosssurface, canvasaudiorects)
  *      * Font System Integrity, CJK Probing & Deep Metadata (fontpresence, fontdeepmeta, fontnametable, fontblob, fontblobassets, winfontsubsets, macosfontsubsets, fontcjkprobe, fontconsistency)
@@ -116,7 +116,7 @@ Options:
 }
 
 /**
- * Complete Functional Coverage Matrix (12 Domains, 56 Core Blocking Suites)
+ * Complete Functional Coverage Matrix (13 Domains, 64 Core Blocking Suites)
  */
 const COVERAGE_DOMAINS = [
   {
@@ -245,6 +245,20 @@ const COVERAGE_DOMAINS = [
     suites: [
       { key: "selftest:fpreleasegate", script: "node automation/fingerprint-release-gate-selftest.js", file: "automation/fingerprint-release-gate-selftest.js" },
       { key: "selftest:releasecoverage", script: "node automation/fingerprint-release-coverage-selftest.js", file: "automation/fingerprint-release-coverage-selftest.js" },
+    ]
+  },
+  {
+    domain: "Fingerprint Hardening & Security Barriers",
+    description: "Font/CSSOM exit closure, media track labels, worker WebGPU parity, stability semantics, DoH, profile Local State and fail-closed startup",
+    suites: [
+      { key: "selftest:stabilitysemantics", script: "node automation/stability-semantics-selftest.js", file: "automation/stability-semantics-selftest.js" },
+      { key: "selftest:mediatracklabel", script: "node automation/mediastreamtrack-label-selftest.js", file: "automation/mediastreamtrack-label-selftest.js" },
+      { key: "selftest:cssomfontecho", script: "node automation/cssom-font-echo-selftest.js", file: "automation/cssom-font-echo-selftest.js" },
+      { key: "selftest:appcenterfilter", script: "node automation/app-center-fingerprint-filter-selftest.js", file: "automation/app-center-fingerprint-filter-selftest.js" },
+      { key: "selftest:livesyncinternal", script: "node automation/live-sync-internal-pages-selftest.js", file: "automation/live-sync-internal-pages-selftest.js" },
+      { key: "selftest:proxydoh", script: "node automation/proxy-forwarder-doh-selftest.js", file: "automation/proxy-forwarder-doh-selftest.js" },
+      { key: "selftest:profilelocalstate", script: "node automation/profile-local-state-selftest.js", file: "automation/profile-local-state-selftest.js" },
+      { key: "selftest:startupbarrier", script: "node automation/startup-consistency-and-barrier-selftest.js", file: "automation/startup-consistency-and-barrier-selftest.js" },
     ]
   }
 ];
@@ -705,7 +719,7 @@ function setupSignalHandlers() {
  */
 /**
  * Detect definitive test completion report from child process stdout.
- * Recognizes standard scorecard banners output by all 56 core test suites and diagnostic audits.
+ * Recognizes standard scorecard banners output by all 64 core test suites and diagnostic audits.
  */
 function parseSuiteCompletion(output) {
   if (!output || typeof output !== "string") return null;

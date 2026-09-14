@@ -1,6 +1,53 @@
+const dns = require('dns');
 const net = require('net');
 const { normalizeLatitude, normalizeLongitude } = require('./automation/input-validation');
 const tls = require('tls');
+
+let proxyDohResolver = null;
+let proxyDohLookup = null;
+
+function getProxyDohLookup() {
+  if (!proxyDohLookup) {
+    try {
+      const { DohResolver, createDohLookup } = require('./automation/doh-resolver');
+      if (!proxyDohResolver) {
+        proxyDohResolver = new DohResolver();
+      }
+      const baseLookup = createDohLookup(proxyDohResolver, {
+        fallback: (hostname, opts, callback) => {
+          console.warn(`[proxy-forwarder] DoH lookup for "${hostname}" fell back to system DNS (potential ISP DNS leak)`);
+          dns.lookup(hostname, opts, callback);
+        },
+      });
+      // createDohLookup deliberately surfaces transport errors (a blocked or unreachable DoH
+      // endpoint) so callers can decide. Proxy dialling must still succeed in restricted
+      // networks, so degrade to the system resolver — loudly, never silently.
+      proxyDohLookup = (hostname, opts, callback) => {
+        const settings = typeof opts === 'function' ? {} : (opts || {});
+        const done = typeof opts === 'function' ? opts : callback;
+        baseLookup(hostname, settings, (error, address, family) => {
+          if (!error) { done(null, address, family); return; }
+          console.warn(`[proxy-forwarder] DoH transport failure for "${hostname}" (${error.code || error.message}); resolving via system DNS (potential ISP DNS leak)`);
+          dns.lookup(hostname, settings, done);
+        });
+      };
+    } catch (err) {
+      console.warn('[proxy-forwarder] Failed to initialize DoH resolver, falling back to system DNS:', err?.message || err);
+      proxyDohLookup = (hostname, opts, callback) => {
+        const done = typeof opts === 'function' ? opts : callback;
+        const options = typeof opts === 'function' ? {} : (opts || {});
+        console.warn(`[proxy-forwarder] DoH lookup unavailable, resolving "${hostname}" with system DNS (potential ISP DNS leak)`);
+        dns.lookup(hostname, options, done);
+      };
+    }
+  }
+  return proxyDohLookup;
+}
+
+function setProxyDohResolver(resolver) {
+  proxyDohResolver = resolver;
+  proxyDohLookup = null;
+}
 
 const IP_LOOKUP_CHANNELS = Object.freeze(['ip-api', 'ip2location', 'ifconfig-me']);
 
@@ -399,7 +446,11 @@ class BufferedReader {
 function connectSocket(host, port, timeout = 8000, signal = null) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error('Proxy bridge closed'));
-    const socket = net.connect({ host, port });
+    const connectOptions = { host, port };
+    if (host && !net.isIP(host)) {
+      connectOptions.lookup = getProxyDohLookup();
+    }
+    const socket = net.connect(connectOptions);
     let onAbort = null;
     const cleanup = () => {
       socket.off('error', onError);
@@ -688,14 +739,20 @@ function forwardedHeader(header, config) {
 }
 
 function connectHttpUpstream(config, onConnect) {
+  const connectOpts = { host: config.host, port: config.port };
+  if (config.host && !net.isIP(config.host)) {
+    connectOpts.lookup = getProxyDohLookup();
+  }
   if (config.protocol === 'https') {
     const tlsProfile = resolveTlsProfile(config.tlsProfile || 'auto');
-    const opts = tlsConnectOptionsFromProfile(tlsProfile, { servername: config.host, rejectUnauthorized: true });
-    opts.host = config.host;
-    opts.port = config.port;
+    const opts = tlsConnectOptionsFromProfile(tlsProfile, {
+      ...connectOpts,
+      servername: config.host,
+      rejectUnauthorized: true,
+    });
     return tls.connect(opts, onConnect);
   }
-  return net.connect({ host: config.host, port: config.port }, onConnect);
+  return net.connect(connectOpts, onConnect);
 }
 
 async function startHttpBridge(config, onStatus) {
@@ -1568,4 +1625,7 @@ module.exports = {
   resolveTlsProfile,
   tlsConnectOptionsFromProfile,
   TLS_PROFILE_PRESETS,
+  connectSocket,
+  getProxyDohLookup,
+  setProxyDohResolver,
 };

@@ -451,11 +451,16 @@ async function main() {
   assert.ok(!scriptA.includes('__ob_'));
   assert.ok(!scriptA.includes('ob.fp'));
   assert.ok(scriptA.includes("patchList(Element.prototype, 'getClientRects')"));
-  assert.ok(scriptA.includes("patchList(Range.prototype, 'getClientRects')"));
+  assert.ok(scriptA.includes("patchList(Range.prototype, 'getClientRects', true)"));
   assert.ok(scriptA.includes("patchList(targetWin.Element.prototype, 'getClientRects')"));
-  assert.ok(scriptA.includes("patchList(targetWin.Range.prototype, 'getClientRects')"));
+  assert.ok(scriptA.includes("patchList(targetWin.Range.prototype, 'getClientRects', true)"));
   assert.ok(scriptA.includes('patchClientRectsForWindow(globalThis)'));
   assert.ok(scriptA.includes('patchClientRectsForWindow(subWin)'));
+  // The font shield and the clientRects noise must share ONE bridge wrapper: two independent
+  // nativeLike wrappers would make replaceMethod treat the second as an existing bridge and skip
+  // it, silently dropping the per-profile clientRects noise.
+  assert.ok(scriptA.includes('sanitizeElementFontScope'), 'clientRects measurement must run inside the font sanitiser scope');
+  assert.ok(!scriptA.includes('patchElementMethod(globalThis.Element.prototype'), 'font shield must not claim getBoundingClientRect separately');
   pass('fingerprint injection avoids public markers and covers main and dynamic window client rects');
 
   // locks

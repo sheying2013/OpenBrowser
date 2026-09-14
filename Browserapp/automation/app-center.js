@@ -4,45 +4,16 @@
  * Application Center (应用中心) — self-contained catalog for OpenBrowser.
  * Does NOT embed third-party CRX binaries.
  * Recommended apps use public Chrome Web Store IDs / URLs only.
+ *
+ * 【架构设计与指纹权威性说明】
+ * 刻意排除防指纹类扩展（如 Canvas Defender, WebRTC Control, Spoof Timezone, AudioContext Defender）：
+ * 1. 冲突原因：此类扩展会在 DOM 层重复改写 toDataURL / getImageData / 时区 / WebRTC，导致画布噪声双重叠加、
+ *    指纹稳定性（Hamming lock）失效，且第三方时区插件会与底层已对齐的时区竞争冲突。
+ * 2. 状态异常：Canvas Defender 等扩展已从 Chrome 应用商店下架，安装会直接返回 HTTP 204 异常。
+ * 3. 唯一事实来源：OpenBrowser 引擎内核指纹注入（fingerprint.js / engine.js）是唯一权威来源，应用层扩展严禁插手底层指纹防伪逻辑。
  */
 
 const RECOMMENDED_APPS = [
-  {
-    id: 'rec-canvas-defender',
-    name: 'Canvas Defender',
-    category: 'privacy',
-    description: '通过向 Canvas 添加噪点防指纹追踪',
-    store_id: 'obdbgnebcljmgkoljcdddaopadkifnpm',
-    store_url: 'https://chromewebstore.google.com/detail/canvas-defender/obdbgnebcljmgkoljcdddaopadkifnpm',
-    tags: ['privacy', 'anti-detect'],
-  },
-  {
-    id: 'rec-webrtc-control',
-    name: 'WebRTC Control',
-    category: 'privacy',
-    description: '防止 WebRTC 泄漏真实 IP',
-    store_id: 'fjkmabmdepjfammlkbgkcfbkamcgkdeg',
-    store_url: 'https://chromewebstore.google.com/detail/webrtc-control/fjkmabmdepjfammlkbgkcfbkamcgkdeg',
-    tags: ['privacy', 'webrtc'],
-  },
-  {
-    id: 'rec-spoof-timezone',
-    name: 'Spoof Timezone',
-    category: 'privacy',
-    description: '自动根据 IP 伪装浏览器时区',
-    store_id: 'kcabmhnajflfolpjhminmbkgmlpjnbjc',
-    store_url: 'https://chromewebstore.google.com/detail/spoof-timezone/kcabmhnajflfolpjhminmbkgmlpjnbjc',
-    tags: ['privacy', 'timezone'],
-  },
-  {
-    id: 'rec-audioctx-defender',
-    name: 'AudioContext Defender',
-    category: 'privacy',
-    description: '防 AudioContext 声音指纹探测',
-    store_id: 'pmlkpdfnjdmoenlamjdfeoojifpejioc',
-    store_url: 'https://chromewebstore.google.com/detail/audiocontext-defender/pmlkpdfnjdmoenlamjdfeoojifpejioc',
-    tags: ['privacy', 'anti-detect'],
-  },
   {
     id: 'rec-proxy-switchyomega',
     name: 'Proxy SwitchyOmega',

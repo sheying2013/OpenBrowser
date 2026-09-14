@@ -18,6 +18,10 @@ const MANAGED_PREFERENCE_KEYS = Object.freeze([
   'intl.selected_languages',
 ]);
 
+const MANAGED_LOCAL_STATE_KEYS = Object.freeze([
+  'intl.app_locale',
+]);
+
 // These groups are intentionally left to the browser. Writing guessed values for
 // them creates a difference between the file and the native preference layer.
 const NATIVE_MANAGED_PREFERENCE_KEYS = Object.freeze([
@@ -48,12 +52,28 @@ function languagePreferenceChain(language) {
   return chain.join(',');
 }
 
+function primaryProfileLocale(language) {
+  const primary = String(language || 'en-US')
+    .split(',')[0]
+    .trim();
+  return primary || 'en-US';
+}
+
 function expectedLanguagePreferences(profile = {}) {
   const acceptLanguages = languagePreferenceChain(profile.language);
   return {
     intl: {
       accept_languages: acceptLanguages,
       selected_languages: acceptLanguages,
+    },
+  };
+}
+
+function expectedLocalState(profile = {}) {
+  const appLocale = primaryProfileLocale(profile.language);
+  return {
+    intl: {
+      app_locale: appLocale,
     },
   };
 }
@@ -66,12 +86,31 @@ function applyLanguagePreferences(prefs, profile = {}) {
   return expected;
 }
 
+function applyLocalStateLanguage(state, profile = {}) {
+  const expected = expectedLocalState(profile);
+  state.intl ||= {};
+  state.intl.app_locale = expected.intl.app_locale;
+  return expected;
+}
+
 function verifyLanguagePreferences(prefs, profile = {}) {
   const expected = expectedLanguagePreferences(profile);
   const issues = [];
   for (const key of MANAGED_PREFERENCE_KEYS) {
     const [, leaf] = key.split('.');
     const actual = prefs?.intl?.[leaf];
+    const wanted = expected.intl[leaf];
+    if (actual !== wanted) issues.push({ key, expected: wanted, actual: actual ?? null });
+  }
+  return issues;
+}
+
+function verifyLocalStateLanguage(state, profile = {}) {
+  const expected = expectedLocalState(profile);
+  const issues = [];
+  for (const key of MANAGED_LOCAL_STATE_KEYS) {
+    const [, leaf] = key.split('.');
+    const actual = state?.intl?.[leaf];
     const wanted = expected.intl[leaf];
     if (actual !== wanted) issues.push({ key, expected: wanted, actual: actual ?? null });
   }
@@ -103,12 +142,34 @@ async function syncProfileLanguagePreferences(root, profile = {}) {
   return { file, expected, issues };
 }
 
+async function syncProfileLocalState(root, profile = {}) {
+  const file = path.join(root, 'Local State');
+  const state = await readPreferences(file);
+  const expected = applyLocalStateLanguage(state, profile);
+  await writeRawAtomically(file, JSON.stringify(state), 0o600);
+  const persisted = await readPreferences(file);
+  const issues = verifyLocalStateLanguage(persisted, profile);
+  if (issues.length) {
+    const error = new Error('Profile local state readback mismatch');
+    error.code = 'PROFILE_LOCAL_STATE_MISMATCH';
+    error.issues = issues;
+    throw error;
+  }
+  return { file, expected, issues };
+}
+
 module.exports = {
   MANAGED_PREFERENCE_KEYS,
+  MANAGED_LOCAL_STATE_KEYS,
   NATIVE_MANAGED_PREFERENCE_KEYS,
   languagePreferenceChain,
+  primaryProfileLocale,
   expectedLanguagePreferences,
+  expectedLocalState,
   applyLanguagePreferences,
+  applyLocalStateLanguage,
   verifyLanguagePreferences,
+  verifyLocalStateLanguage,
   syncProfileLanguagePreferences,
+  syncProfileLocalState,
 };

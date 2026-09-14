@@ -210,6 +210,12 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
   };
 
   const nativeSource = new WeakMap();
+  const rawStyleText = new WeakMap();
+  const rawCssText = new WeakMap();
+  const rawRuleText = new WeakMap();
+  const rawSrcMap = new WeakMap();
+
+
   const originalToString = Function.prototype.toString;
 
   const nativeLike = (wrapper, original, nameOverride, lengthOverride, isConstructor = false) => {
@@ -630,11 +636,21 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
   if (typeof CSSStyleSheet !== 'undefined' && CSSStyleSheet.prototype && typeof CSSStyleSheet.prototype.insertRule === 'function') {
     const origInsertRule = CSSStyleSheet.prototype.insertRule;
     const cleanInsertRule = nativeLike(function insertRule(rule, index) {
-      const cleanRule = sanitizeCss(String(rule));
-      if (arguments.length > 1) {
-        return origInsertRule.call(this, cleanRule, index);
-      }
-      return origInsertRule.call(this, cleanRule);
+      const originalRule = String(rule);
+      const cleanRule = sanitizeCss(originalRule);
+      const idx = arguments.length > 1
+        ? origInsertRule.call(this, cleanRule, index)
+        : origInsertRule.call(this, cleanRule);
+      try {
+        const inserted = this.cssRules && this.cssRules[idx];
+        if (inserted) {
+          rawRuleText.set(inserted, originalRule);
+          if (inserted.style) {
+            rawCssText.set(inserted.style, originalRule);
+          }
+        }
+      } catch (_) {}
+      return idx;
     }, origInsertRule, 'insertRule', 1, false);
     try {
       Object.defineProperty(CSSStyleSheet.prototype, 'insertRule', {
@@ -650,11 +666,21 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
   if (typeof CSSGroupingRule !== 'undefined' && CSSGroupingRule.prototype && typeof CSSGroupingRule.prototype.insertRule === 'function') {
     const origGroupingInsert = CSSGroupingRule.prototype.insertRule;
     const cleanGroupingInsert = nativeLike(function insertRule(rule, index) {
-      const cleanRule = sanitizeCss(String(rule));
-      if (arguments.length > 1) {
-        return origGroupingInsert.call(this, cleanRule, index);
-      }
-      return origGroupingInsert.call(this, cleanRule);
+      const originalRule = String(rule);
+      const cleanRule = sanitizeCss(originalRule);
+      const idx = arguments.length > 1
+        ? origGroupingInsert.call(this, cleanRule, index)
+        : origGroupingInsert.call(this, cleanRule);
+      try {
+        const inserted = this.cssRules && this.cssRules[idx];
+        if (inserted) {
+          rawRuleText.set(inserted, originalRule);
+          if (inserted.style) {
+            rawCssText.set(inserted.style, originalRule);
+          }
+        }
+      } catch (_) {}
+      return idx;
     }, origGroupingInsert, 'insertRule', 1, false);
     try {
       Object.defineProperty(CSSGroupingRule.prototype, 'insertRule', {
@@ -664,6 +690,27 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
         value: cleanGroupingInsert,
       });
     } catch (_) {}
+  }
+
+  // 1b. CSSRule.prototype.cssText
+  if (typeof CSSRule !== 'undefined' && CSSRule.prototype) {
+    const origRuleCssDesc = Object.getOwnPropertyDescriptor(CSSRule.prototype, 'cssText');
+    if (origRuleCssDesc && typeof origRuleCssDesc.get === 'function') {
+      const origRuleCssGet = origRuleCssDesc.get;
+      const wrappedRuleCssGet = nativeLike(function get_cssText() {
+        if (rawRuleText.has(this)) return rawRuleText.get(this);
+        return origRuleCssGet.call(this);
+      }, origRuleCssGet, 'get cssText', 0, false);
+      nativeSource.set(wrappedRuleCssGet, 'function get cssText() { [native code] }');
+      try {
+        Object.defineProperty(CSSRule.prototype, 'cssText', {
+          configurable: origRuleCssDesc.configurable,
+          enumerable: origRuleCssDesc.enumerable,
+          get: wrappedRuleCssGet,
+          set: origRuleCssDesc.set,
+        });
+      } catch (_) {}
+    }
   }
 
   // 2. CSSStyleSheet.prototype.replaceSync
@@ -705,11 +752,14 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
     const origGet = origNodeTextContent.get;
     const wrappedSet = nativeLike(function set_textContent(val) {
       if (isStyleElement(this)) {
-        return origSet.call(this, sanitizeCss(String(val)));
+        const original = String(val);
+        rawStyleText.set(this, original);
+        return origSet.call(this, sanitizeCss(original));
       }
       return origSet.call(this, val);
     }, origSet, 'set textContent', 1, false);
     const wrappedGet = nativeLike(function get_textContent() {
+      if (isStyleElement(this) && rawStyleText.has(this)) return rawStyleText.get(this);
       return origGet.call(this);
     }, origGet, 'get textContent', 0, false);
     nativeSource.set(wrappedSet, 'function set textContent() { [native code] }');
@@ -731,7 +781,9 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
     const origGet = origElementInnerHTML.get;
     const wrappedSet = nativeLike(function set_innerHTML(val) {
       if (isStyleElement(this)) {
-        return origSet.call(this, sanitizeCss(String(val)));
+        const original = String(val);
+        rawStyleText.set(this, original);
+        return origSet.call(this, sanitizeCss(original));
       }
       let cleanHtml = val;
       if (typeof val === 'string' && val.includes('<link') && (val.includes('data:') || val.includes('blob:'))) {
@@ -744,6 +796,7 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
       return origSet.call(this, cleanHtml);
     }, origSet, 'set innerHTML', 1, false);
     const wrappedGet = nativeLike(function get_innerHTML() {
+      if (isStyleElement(this) && rawStyleText.has(this)) return rawStyleText.get(this);
       return origGet.call(this);
     }, origGet, 'get innerHTML', 0, false);
     nativeSource.set(wrappedSet, 'function set innerHTML() { [native code] }');
@@ -766,11 +819,14 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
       const origGet = origInnerText.get;
       const wrappedSet = nativeLike(function set_innerText(val) {
         if (isStyleElement(this)) {
-          return origSet.call(this, sanitizeCss(String(val)));
+          const original = String(val);
+          rawStyleText.set(this, original);
+          return origSet.call(this, sanitizeCss(original));
         }
         return origSet.call(this, val);
       }, origSet, 'set innerText', 1, false);
       const wrappedGet = nativeLike(function get_innerText() {
+        if (isStyleElement(this) && rawStyleText.has(this)) return rawStyleText.get(this);
         return origGet.call(this);
       }, origGet, 'get innerText', 0, false);
       nativeSource.set(wrappedSet, 'function set innerText() { [native code] }');
@@ -1015,6 +1071,7 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
       const cleanSetProperty = nativeLike(function setProperty(property, value, priority) {
         let cleanValue = value;
         if (typeof property === 'string' && property.trim().toLowerCase() === 'src') {
+          rawSrcMap.set(this, String(value));
           cleanValue = sanitizeSrcValue(String(value));
         }
         if (arguments.length > 2) {
@@ -1032,6 +1089,25 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
       } catch (_) {}
     }
 
+    const origGetPropertyValue = CSSStyleDeclaration.prototype.getPropertyValue;
+    if (typeof origGetPropertyValue === 'function') {
+      const cleanGetPropertyValue = nativeLike(function getPropertyValue(property) {
+        if (typeof property === 'string' && property.trim().toLowerCase() === 'src' && rawSrcMap.has(this)) {
+          return rawSrcMap.get(this);
+        }
+        return origGetPropertyValue.call(this, property);
+      }, origGetPropertyValue, 'getPropertyValue', 1, false);
+      nativeSource.set(cleanGetPropertyValue, 'function getPropertyValue() { [native code] }');
+      try {
+        Object.defineProperty(CSSStyleDeclaration.prototype, 'getPropertyValue', {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: cleanGetPropertyValue,
+        });
+      } catch (_) {}
+    }
+
     const origCssTextDesc = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, 'cssText');
     if (origCssTextDesc && typeof origCssTextDesc.set === 'function') {
       const origCssTextSet = origCssTextDesc.set;
@@ -1039,11 +1115,13 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
       const wrappedSet = nativeLike(function set_cssText(val) {
         let cleanVal = val;
         if (typeof val === 'string' && val.toLowerCase().includes('local(')) {
+          rawCssText.set(this, String(val));
           cleanVal = sanitizeSrcValue(val);
         }
         return origCssTextSet.call(this, cleanVal);
       }, origCssTextSet, 'set cssText', 1, false);
       const wrappedGet = nativeLike(function get_cssText() {
+        if (rawCssText.has(this)) return rawCssText.get(this);
         return origCssTextGet.call(this);
       }, origCssTextGet, 'get cssText', 0, false);
       nativeSource.set(wrappedSet, 'function set cssText() { [native code] }');

@@ -502,21 +502,122 @@ function chooseFullscreenFrame(frameTree, payload = {}) {
 
 function environmentMarker(id, master) { const text = (master ? '\u4e3b\u63a7 | ' : '') + '\u73af\u5883\u7f16\u53f7: ' + id; const color = master ? '#123a8c' : '#334155'; return `(() => { const host = location.hostname; if (host && host !== \x27127.0.0.1\x27 && host !== \x27localhost\x27 && !host.endsWith(\x27.local\x27)) return; const install=()=>{if(!document.documentElement)return requestAnimationFrame(install);let e=document.getElementById(\x27openbrowser-environment-marker\x27);if(!e){e=document.createElement('div');e.id='openbrowser-environment-marker';document.documentElement.appendChild(e);}e.textContent=${JSON.stringify(text)};e.style.cssText='position:fixed;right:12px;top:12px;z-index:2147483646;background:${color};color:white;padding:7px 12px;border-radius:8px;font:700 13px Segoe UI,sans-serif;box-shadow:0 4px 16px #0004;pointer-events:none';};install();})()`; }
 
-const ALLOWED_INTERNAL_PAGES = new RegExp("^" + "(chrome|edge)://(newtab|new-tab-page|extensions|settings|downloads|history|flags|version|bookmarks|about)", "i");
+function isEnvironmentStartUrl(value) {
+  const s = String(value || '');
+  if (/openbrowser-start\.html/i.test(s)) return true;
+  if (/openbrowser-start|openbrowser-native/i.test(s)) return true;
+  if (/https?:\/\/127\.0\.0\.1:5032[6-9]\/?/i.test(s)) return true;
+  return false;
+}
+
+// --- Internal Browser Page Synchronization Rules ---
+const BLOCKED_INTERNAL_SCHEMES = Object.freeze([
+  'javascript:',
+  'data:',
+  'file:',
+  'vbscript:',
+  'chrome-devtools:',
+  'devtools:',
+  'view-source:',
+]);
+
+const BLOCKED_INTERNAL_HOSTS = Object.freeze(new Set([
+  'crash',
+  'kill',
+  'quit',
+  'restart',
+  'hang',
+  'shorthang',
+  'gpuclean',
+  'gpucrash',
+  'gpuhang',
+  'memory-exhaust',
+  'inducebrowsercrashforrealz',
+  'badcastcrash',
+  'dcheck_failure',
+  'inspect',
+]));
+
+const ALLOWED_INTERNAL_HOSTS = Object.freeze(new Set([
+  'extensions',
+  'settings',
+  'downloads',
+  'history',
+  'version',
+  'bookmarks',
+  'flags',
+  'about',
+  'chrome-urls',
+  'gpu',
+  'newtab',
+  'new-tab-page',
+  'management',
+  'system',
+  'components',
+  'policy',
+  'credits',
+  'terms',
+  'favorites',
+]));
+
+const ALLOWED_INTERNAL_PAGES = new RegExp(
+  "^(?:chrome|edge)://(" +
+  Array.from(ALLOWED_INTERNAL_HOSTS).join('|') +
+  ")(?=[/?#]|$)",
+  "i"
+);
+
+function isNavigableInternalUrl(url) {
+  if (typeof url !== 'string' || !url) return false;
+  const lower = url.trim().toLowerCase();
+  if (!lower.startsWith('chrome://') && !lower.startsWith('edge://')) return false;
+  const match = lower.match(/^(?:chrome|edge):\/\/([^/?#]+)/);
+  if (!match) return false;
+  const host = match[1];
+  if (BLOCKED_INTERNAL_HOSTS.has(host)) return false;
+  return ALLOWED_INTERNAL_HOSTS.has(host);
+}
+
+function isDangerousOrBlockedInternalUrl(url) {
+  if (typeof url !== 'string' || !url) return true;
+  const lower = url.trim().toLowerCase();
+  for (const scheme of BLOCKED_INTERNAL_SCHEMES) {
+    if (lower.startsWith(scheme)) return true;
+  }
+  const match = lower.match(/^(?:chrome|edge):\/\/([^/?#]+)/);
+  if (match && BLOCKED_INTERNAL_HOSTS.has(match[1])) return true;
+  return false;
+}
+
+function canMirrorTabUrl(url) {
+  if (typeof url !== 'string' || !url) return false;
+  const trimmed = url.trim();
+  if (isDangerousOrBlockedInternalUrl(trimmed)) return false;
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return true;
+  if (lower === 'about:blank' || isEnvironmentStartUrl(trimmed)) return true;
+  if (isNavigableInternalUrl(trimmed)) return true;
+  return false;
+}
+
+function canDomLiveSyncTabUrl(url) {
+  if (!canMirrorTabUrl(url)) return false;
+  if (isNavigableInternalUrl(url)) return false;
+  return true;
+}
+
 function managedTabs(values) {
   return (values || []).filter((tab) => {
     if (!tab || !tab.url) return false;
     if (/^(devtools|chrome-extension|edge-extension):/i.test(tab.url)) return false;
-    if (/^(chrome|edge):/i.test(tab.url)) return ALLOWED_INTERNAL_PAGES.test(tab.url);
-    return true;
+    return canMirrorTabUrl(tab.url);
   });
 }
 function normalTabs(values) {
   return (values || []).filter((tab) => {
     if (!tab || !tab.url) return false;
     if (/^(devtools|chrome-extension|edge-extension):/i.test(tab.url)) return false;
-    if (/^(chrome|edge):/i.test(tab.url)) return ALLOWED_INTERNAL_PAGES.test(tab.url);
-    return true;
+    return canMirrorTabUrl(tab.url);
   });
 }
 function extensionPages(values) { return values.filter((tab) => ['page', 'iframe', 'other', 'background_page'].includes(String(tab.type || 'page')) && /^(chrome|edge)-extension:\/\//i.test(String(tab.url || ''))); }
@@ -527,13 +628,6 @@ function extensionPageKey(tab) {
 function extensionHost(tab) {
   try { return new URL(String(tab.url || '')).hostname.toLowerCase(); }
   catch (_) { return ''; }
-}
-function isEnvironmentStartUrl(value) {
-  const s = String(value || '');
-  if (/openbrowser-start\.html/i.test(s)) return true;
-  if (/openbrowser-start|openbrowser-native/i.test(s)) return true;
-  if (/https?:\/\/127\.0\.0\.1:5032[6-9]\/?/i.test(s)) return true;
-  return false;
 }
 function environmentStartUrl(engine, id) {
   const running = engine.running.get(id);
@@ -825,6 +919,8 @@ class LiveSyncController extends LiveSyncV4 {
   }
 
   enqueueForward(tabId, payload, action = 'forward') {
+    const masterTab = this.masterTabs?.find((t) => t.id === tabId);
+    if (masterTab && !canDomLiveSyncTabUrl(masterTab.url)) return;
     const windowGate = this.acceptWindowEvent(tabId, payload);
     if (!windowGate.accept) {
       this.forwardStats.dropped += 1;
@@ -873,6 +969,8 @@ class LiveSyncController extends LiveSyncV4 {
     const sessionIsCurrent = () => generation === this.syncGeneration
       && (!session || this.syncSession === session);
     if (!sessionIsCurrent()) return;
+    const masterTab = this.masterTabs?.find((t) => t.id === tabId);
+    if (masterTab && !canDomLiveSyncTabUrl(masterTab.url)) return;
     if (payload?.type === 'fullscreen') return this.syncFullscreen(tabId, payload);
     // Protocol gate: operate flags (click+move / scroll+move / keyboard)
     const plan = this.planProtocolFanout(payload);
@@ -954,6 +1052,7 @@ class LiveSyncController extends LiveSyncV4 {
 
   async attach(tab) {
     if (!tab?.webSocketDebuggerUrl) return;
+    if (!canDomLiveSyncTabUrl(tab.url)) return;
     const connection = new cdp.PersistentConnection(tab.webSocketDebuggerUrl, {
       onEvent: (event) => this.handle(tab.id, event),
     });
@@ -1213,9 +1312,19 @@ class LiveSyncController extends LiveSyncV4 {
     const live = new Set(tabs.map((tab) => tab.id));
 
     for (const [id, value] of this.connections) {
-      if (!live.has(id) || value.connection.socket?.readyState !== 1) {
+      const currentTab = tabs.find((t) => t.id === id);
+      const isLiveSyncEligible = currentTab && canDomLiveSyncTabUrl(currentTab.url);
+      if (!live.has(id) || !isLiveSyncEligible || value.connection.socket?.readyState !== 1) {
         value.connection.close(); this.connections.delete(id);
-        if (!live.has(id)) { this.forgetWindow(id, value); await this.closeMappedTabs(id); this.tabMap.delete(id); this.clearFullscreenState(id, 'tab-closed'); }
+        if (!live.has(id)) {
+          this.forgetWindow(id, value);
+          await this.closeMappedTabs(id);
+          this.tabMap.delete(id);
+          this.clearFullscreenState(id, 'tab-closed');
+        } else if (!isLiveSyncEligible) {
+          this.forgetWindow(id, value);
+          this.clearFullscreenState(id, 'internal-page');
+        }
       }
     }
 
@@ -1418,7 +1527,12 @@ class LiveSyncController extends LiveSyncV4 {
     if (closed) this.emit({ type: 'live-sync-tab-reconcile', masterTabs: masterTabs.length, closed });
   }
 
-  async markSlave(tab, id) { const source = environmentMarker(environmentNumber(this.engine, id), false); await cdp.call(tab.webSocketDebuggerUrl, 'Page.addScriptToEvaluateOnNewDocument', { source }).catch(() => {}); await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', { expression: source }).catch(() => {}); }
+  async markSlave(tab, id) {
+    if (!canDomLiveSyncTabUrl(tab?.url)) return;
+    const source = environmentMarker(environmentNumber(this.engine, id), false);
+    await cdp.call(tab.webSocketDebuggerUrl, 'Page.addScriptToEvaluateOnNewDocument', { source }).catch(() => {});
+    await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', { expression: source }).catch(() => {});
+  }
 
   async closeMappedTabs(masterTabId) {
     const mapping = this.tabMap.get(masterTabId); if (!mapping) return;
@@ -2055,6 +2169,7 @@ class LiveSyncController extends LiveSyncV4 {
   }
 
   async pollTabState(value, options = {}) {
+    if (!canDomLiveSyncTabUrl(value?.tab?.url)) return;
     const heavy = options.heavy !== false;
     const result = await value.connection.command('Runtime.evaluate', { expression: "({x:scrollX,y:scrollY,visible:document.visibilityState==='visible',focused:typeof document.hasFocus!=='function'||document.hasFocus(),url:location.href})", returnByValue: true });
     const state = result.result?.value; if (!state) return;
@@ -2076,7 +2191,7 @@ class LiveSyncController extends LiveSyncV4 {
     if (foreground) {
       // Drive navigation only when the master URL actually changed.
       const urlKey = this.urlKey(state.url);
-      const isAllowedNav = state.url && (ALLOWED_INTERNAL_PAGES.test(state.url) || !/^(chrome|edge|devtools|chrome-extension|edge-extension):/i.test(state.url));
+      const isAllowedNav = state.url && canMirrorTabUrl(state.url);
       if (isAllowedNav && value.lastSyncedUrl !== urlKey) {
         value.lastSyncedUrl = urlKey;
         this.markActivity?.();
@@ -2096,4 +2211,15 @@ class LiveSyncController extends LiveSyncV4 {
   }
 }
 
-module.exports = { LiveSyncController, __test: { fullscreenInjection, fullscreenExpression } };
+module.exports = {
+  LiveSyncController,
+  isNavigableInternalUrl,
+  isDangerousOrBlockedInternalUrl,
+  canMirrorTabUrl,
+  canDomLiveSyncTabUrl,
+  ALLOWED_INTERNAL_PAGES,
+  ALLOWED_INTERNAL_HOSTS,
+  BLOCKED_INTERNAL_HOSTS,
+  BLOCKED_INTERNAL_SCHEMES,
+  __test: { fullscreenInjection, fullscreenExpression },
+};

@@ -305,12 +305,32 @@ async function runProxyPolicies(engineBlock, BrowserEngine) {
   engineDirect.testProxy = async () => {
     throw Object.assign(new Error('dead'), { errorClass: 'unreachable' });
   };
+  // Fail-closed: notReadyPolicy 'direct' WITHOUT explicit allowDirectFallback must BLOCK.
+  let blockedError = null;
+  try {
+    await engineDirect.prepareProfileProxyForStart({
+      id: 'prof_stability_6',
+      name: 'direct-fallback-blocked',
+      networkMode: 'proxy',
+      proxy: 'socks5://127.0.0.1:1',
+      proxyMeta: { checkOnStart: true, notReadyPolicy: 'direct', requireReady: true },
+      privacy: {},
+    });
+  } catch (error) {
+    blockedError = error;
+  }
+  assert.ok(blockedError, 'implicit direct fallback must be blocked by default');
+  assert.ok(events2.some((e) => e.type === 'proxy-error' && e.code === 'proxy-direct-fallback-blocked'));
+  assert.ok(!events2.some((e) => e.type === 'proxy-fallback'), 'no silent direct fallback event may be emitted');
+
+  // Explicit opt-in: allowDirectFallback: true keeps the (deliberate, high-risk) fallback ability.
+  events2.length = 0;
   const direct = await engineDirect.prepareProfileProxyForStart({
-    id: 'prof_stability_6',
-    name: 'direct-fallback',
+    id: 'prof_stability_6b',
+    name: 'direct-fallback-opted-in',
     networkMode: 'proxy',
     proxy: 'socks5://127.0.0.1:1',
-    proxyMeta: { checkOnStart: true, notReadyPolicy: 'direct', requireReady: true },
+    proxyMeta: { checkOnStart: true, notReadyPolicy: 'direct', allowDirectFallback: true, requireReady: true },
     privacy: {},
   });
   assert.strictEqual(direct.networkMode, 'direct');

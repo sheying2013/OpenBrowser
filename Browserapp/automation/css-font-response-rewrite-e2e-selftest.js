@@ -350,7 +350,8 @@ function buildMainProbeScript(fontB64 = "") {
         nativeHelvWidth,
         probedHelvWidth,
         usesMonospaceFallback: Math.abs(probedHelvWidth - monoWidth) < 0.001,
-        usesHostFont: Math.abs(probedHelvWidth - nativeHelvWidth) < 0.001
+        usesHostFont: Math.abs(probedHelvWidth - nativeHelvWidth) < 0.001,
+        hostFontNeutralized: Math.abs(nativeHelvWidth - monoWidth) < 0.001
       };
     }
 
@@ -629,6 +630,7 @@ async function runSession(serverPort, fontB64, mutate) {
       check('MUTATION CHECK: Canvas layout metric uses host font width when rewrite is disabled', () => {
         assert.strictEqual(main.canvas.usesHostFont, true, 'Canvas must render with host font in mutate mode');
         assert.strictEqual(main.canvas.usesMonospaceFallback, false, 'Canvas must not fallback in mutate mode');
+        assert.strictEqual(main.canvas.hostFontNeutralized, false, 'Unpatched canvas must expose the native host width');
       });
 
       check('MUTATION CHECK: GZIP compressed static <style> & <link> leak host font when rewrite is disabled', () => {
@@ -680,7 +682,9 @@ async function runSession(serverPort, fontB64, mutate) {
       // 4. Visual Canvas measurement verification
       check('Canvas verification: Probed font layout falls back to monospace, completely hiding host font metrics', () => {
         assert.strictEqual(main.canvas.usesMonospaceFallback, true, 'Canvas must match monospace fallback width');
-        assert.strictEqual(main.canvas.usesHostFont, false, 'Canvas must not match native host font width');
+        // Hardened contract: an in-page measurement of a host-only family is itself rewritten to
+        // the persona fallback, so the page can no longer obtain a native host-metric baseline.
+        assert.strictEqual(main.canvas.hostFontNeutralized, true, 'A direct host-font measurement must be neutralised to the same monospace metrics');
       });
 
       // 5. CSSOM verification: Verifies Blink received rewritten stylesheet rules

@@ -20,6 +20,7 @@ const path = require('path');
 const { spawn, execSync } = require('child_process');
 
 const { buildFingerprint, buildInjectionScript } = require('./fingerprint');
+const { buildWorkerFontPresenceSource } = require('./worker-font-presence-fallback');
 const { writeOpenBrowserKernelInit } = require('./kernel-init-sync');
 
 const appRoot = path.join(__dirname, '..');
@@ -71,15 +72,17 @@ class Cdp {
       }
     });
   }
-  send(method, params = {}) {
+  send(method, params = {}, sessionId) {
     const id = ++this.seq;
+    const msg = { id, method, params };
+    if (sessionId) msg.sessionId = sessionId;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         resolve({ error: { message: 'CDP timeout: ' + method } });
       }, 30000);
       this.pending.set(id, (message) => { clearTimeout(timer); resolve(message); });
-      this.ws.send(JSON.stringify({ id, method, params }));
+      this.ws.send(JSON.stringify(msg));
     });
   }
   call(method, params = {}) { return this.send(method, params); }
@@ -450,6 +453,18 @@ async function runSession(mode, serverPort) {
       await cdp.call('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__marker = true;' });
       const injectionScript = buildInjectionScript(fp);
       await cdp.call('Page.addScriptToEvaluateOnNewDocument', { source: injectionScript });
+
+      const workerFontSource = 'self.__workerMarker = true;\n' + buildWorkerFontPresenceSource(fp);
+      cdp.ws.addEventListener('message', async (event) => {
+        let msg = null;
+        try { msg = JSON.parse(event.data); } catch (_) { return; }
+        if (msg.method === 'Target.attachedToTarget' && msg.params?.targetInfo?.type === 'worker') {
+          const sId = msg.params.sessionId;
+          await cdp.send('Runtime.evaluate', { expression: workerFontSource }, sId);
+          await cdp.send('Runtime.runIfWaitingForDebugger', {}, sId);
+        }
+      });
+      await cdp.call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     }
 
     await cdp.call('Page.navigate', { url: 'http://127.0.0.1:' + serverPort + '/' });
@@ -530,85 +545,91 @@ async function runSession(mode, serverPort) {
     assert.strictEqual(injected.offscreenCanvas['Segoe UI'].detected, true);
   });
 
-  // 6. KNOWN GAP: Exit 1 - document.fonts.check(0px)
-  check('KNOWN GAP: document.fonts.check answers true for foreign families in both modes', () => {
-    assert.strictEqual(raw.fontsCheck0px['Helvetica Neue'], true);
-    assert.strictEqual(injected.fontsCheck0px['Helvetica Neue'], true);
-    assert.strictEqual(injected.fontsCheck0px['Luminari'], true);
-    assert.strictEqual(injected.fontsCheck0px['Galvji'], true);
+  // 6. Exit 1: document.fonts.check(0px) - foreign families shielded to false
+  check('document.fonts.check answers false for foreign families in injected mode', () => {
+    assert.strictEqual(raw.fontsCheck0px['Helvetica Neue'], true, 'raw mode detects host Helvetica Neue');
+    assert.strictEqual(injected.fontsCheck0px['Helvetica Neue'], false, 'injected mode must shield Helvetica Neue');
+    assert.strictEqual(injected.fontsCheck0px['Luminari'], false, 'injected mode must shield Luminari');
+    assert.strictEqual(injected.fontsCheck0px['Galvji'], false, 'injected mode must shield Galvji');
+    assert.strictEqual(injected.fontsCheck0px['Segoe UI'], true, 'injected mode must report persona Segoe UI as available');
   });
 
-  // 7. KNOWN GAP: Exit 2 - await document.fonts.load(16px)
-  check('await document.fonts.load(16px) returns 1 only for injected font subsets', () => {
+  // 7. Exit 2: await document.fonts.load(16px) - returns 0 for system fonts on blank page
+  check('await document.fonts.load(16px) returns 0 for system fonts on blank page', () => {
     assert.strictEqual(raw.fontsLoad16px['Segoe UI'], 0);
-    assert.strictEqual(injected.fontsLoad16px['Segoe UI'], 1);
+    assert.strictEqual(injected.fontsLoad16px['Segoe UI'], 0);
     assert.strictEqual(injected.fontsLoad16px['Helvetica Neue'], 0);
   });
 
-  // 8. KNOWN GAP: Exit 5 - CSS @font-face local() bypasses JS hook
-  check('KNOWN GAP: CSS @font-face local() src bypasses JS font shielding and leaks host fonts via fonts.load', () => {
-    assert.strictEqual(raw.cssFontFace['Helvetica Neue'].load16pxLen, 1);
-    assert.strictEqual(injected.cssFontFace['Helvetica Neue'].load16pxLen, 1);
-    assert.strictEqual(injected.cssFontFace['Luminari'].load16pxLen, 1);
-    assert.strictEqual(injected.cssFontFace['Galvji'].load16pxLen, 1);
-    assert.strictEqual(injected.cssFontFace['Segoe UI'].load16pxLen, 'EX:NetworkError');
+  // 8. Exit 5: CSS @font-face local() src - blocks foreign host fonts with NetworkError, loads persona subsets
+  check('CSS @font-face local() gate blocks foreign host fonts and loads persona subsets', () => {
+    assert.strictEqual(raw.cssFontFace['Helvetica Neue'].load16pxLen, 1, 'raw mode leaks host Helvetica Neue');
+    assert.strictEqual(injected.cssFontFace['Helvetica Neue'].load16pxLen, 'EX:NetworkError', 'injected mode must block Helvetica Neue');
+    assert.strictEqual(injected.cssFontFace['Luminari'].load16pxLen, 'EX:NetworkError', 'injected mode must block Luminari');
+    assert.strictEqual(injected.cssFontFace['Galvji'].load16pxLen, 'EX:NetworkError', 'injected mode must block Galvji');
+    assert.strictEqual(injected.cssFontFace['Segoe UI'].load16pxLen, 1, 'injected mode must load Segoe UI subset');
   });
 
-  // 9. KNOWN GAP: Exit 6 - Canvas measureText host font leakage
-  check('KNOWN GAP: Canvas measureText still renders host-only fonts (Helvetica Neue, Luminari, Galvji)', () => {
-    assert.strictEqual(injected.canvasMeasure['Helvetica Neue'].detected, true);
-    assert.strictEqual(injected.canvasMeasure['Luminari'].detected, true);
-    assert.strictEqual(injected.canvasMeasure['Galvji'].detected, true);
+  // 9. Exit 6: Canvas measureText does not leak host-only fonts
+  check('Canvas measureText does not leak host-only fonts (Helvetica Neue, Luminari, Galvji)', () => {
+    assert.strictEqual(raw.canvasMeasure['Helvetica Neue'].detected, true, 'raw mode detects Helvetica Neue');
+    assert.strictEqual(injected.canvasMeasure['Helvetica Neue'].detected, false, 'injected mode must shield Helvetica Neue');
+    assert.strictEqual(injected.canvasMeasure['Luminari'].detected, false, 'injected mode must shield Luminari');
+    assert.strictEqual(injected.canvasMeasure['Galvji'].detected, false, 'injected mode must shield Galvji');
   });
 
-  // 10. KNOWN GAP: Exit 7 - DOM layout offsetWidth host font leakage
-  check('KNOWN GAP: DOM offsetWidth renders host-only fonts directly without interception', () => {
-    assert.ok(Math.abs(injected.domOffsetWidth['Helvetica Neue'].fallbackWidth - raw.domOffsetWidth['Helvetica Neue'].fallbackWidth) <= 2);
-    assert.ok(Math.abs(injected.domOffsetWidth['Luminari'].fallbackWidth - raw.domOffsetWidth['Luminari'].fallbackWidth) <= 2);
-    assert.strictEqual(injected.domOffsetWidth['Galvji'].fallbackWidth, raw.domOffsetWidth['Galvji'].fallbackWidth);
+  // 10. Exit 7: DOM layout offsetWidth does not leak host-only fonts
+  check('DOM offsetWidth layout shields host-only fonts from probe detection', () => {
+    assert.notStrictEqual(injected.domOffsetWidth['Helvetica Neue'].fallbackWidth, raw.domOffsetWidth['Helvetica Neue'].fallbackWidth, 'injected mode must not render host Helvetica Neue');
+    assert.notStrictEqual(injected.domOffsetWidth['Luminari'].fallbackWidth, raw.domOffsetWidth['Luminari'].fallbackWidth, 'injected mode must not render host Luminari');
+    assert.notStrictEqual(injected.domOffsetWidth['Galvji'].fallbackWidth, raw.domOffsetWidth['Galvji'].fallbackWidth, 'injected mode must not render host Galvji');
   });
 
-  // 11. KNOWN GAP: Exit 8 - OffscreenCanvas host font leakage
-  check('KNOWN GAP: OffscreenCanvas still renders host-only fonts', () => {
-    assert.strictEqual(injected.offscreenCanvas['Helvetica Neue'].detected, true);
-    assert.strictEqual(injected.offscreenCanvas['Luminari'].detected, true);
-    assert.strictEqual(injected.offscreenCanvas['Galvji'].detected, true);
+  // 11. Exit 8: OffscreenCanvas does not leak host-only fonts
+  check('OffscreenCanvas does not leak host-only fonts', () => {
+    assert.strictEqual(raw.offscreenCanvas['Helvetica Neue'].detected, true, 'raw mode detects Helvetica Neue');
+    assert.strictEqual(injected.offscreenCanvas['Helvetica Neue'].detected, false, 'injected mode must shield Helvetica Neue');
+    assert.strictEqual(injected.offscreenCanvas['Luminari'].detected, false, 'injected mode must shield Luminari');
+    assert.strictEqual(injected.offscreenCanvas['Galvji'].detected, false, 'injected mode must shield Galvji');
   });
 
-  // 12. KNOWN GAP: Exit 9 - Web Worker scope completely unshielded
-  check('KNOWN GAP: Web Worker scope is completely unshielded and leaks host fonts via FontFace local()', () => {
-    assert.strictEqual(injected.worker['Helvetica Neue'].fontFaceStatus, 'loaded');
-    assert.strictEqual(injected.worker['Luminari'].fontFaceStatus, 'loaded');
-    assert.strictEqual(injected.worker['Galvji'].fontFaceStatus, 'loaded');
-    assert.strictEqual(injected.worker['Segoe UI'].fontFaceStatus, 'REJ:NetworkError');
-    assert.strictEqual(injected.worker['Cambria Math'].fontFaceStatus, 'REJ:NetworkError');
+  // 12. Exit 9: Web Worker scope shields host fonts and resolves persona fonts
+  check('Web Worker scope shields host fonts and resolves persona fonts via FontFace local()', () => {
+    assert.strictEqual(raw.worker['Helvetica Neue'].fontFaceStatus, 'loaded', 'raw worker leaks host Helvetica Neue');
+    assert.strictEqual(injected.worker['Helvetica Neue'].fontFaceStatus, 'REJ:NetworkError', 'injected worker must reject Helvetica Neue');
+    assert.strictEqual(injected.worker['Luminari'].fontFaceStatus, 'REJ:NetworkError', 'injected worker must reject Luminari');
+    assert.strictEqual(injected.worker['Galvji'].fontFaceStatus, 'REJ:NetworkError', 'injected worker must reject Galvji');
+    assert.strictEqual(injected.worker['Segoe UI'].fontFaceStatus, 'loaded', 'injected worker must resolve Segoe UI');
+    assert.strictEqual(injected.worker['Cambria Math'].fontFaceStatus, 'loaded', 'injected worker must resolve Cambria Math');
   });
 
-  // 13. KNOWN GAP: Exit 10 - queryLocalFonts user activation requirement
-  check('KNOWN GAP: queryLocalFonts requires user activation in both modes', () => {
+  // 13. Exit 10: queryLocalFonts user activation requirement preserved
+  check('queryLocalFonts requires user activation in both modes', () => {
     assert.strictEqual(raw.queryLocalFontsResult, 'ERROR:SecurityError: User activation is required.');
     assert.strictEqual(injected.queryLocalFontsResult, 'ERROR:SecurityError: User activation is required.');
   });
 
-  // 14. KNOWN GAP: Exit 11 - SVG getComputedTextLength host font leakage
-  check('KNOWN GAP: SVG getComputedTextLength still renders host-only fonts', () => {
-    assert.strictEqual(injected.svgComputedTextLength['Helvetica Neue'].detected, true);
-    assert.strictEqual(injected.svgComputedTextLength['Luminari'].detected, true);
-    assert.strictEqual(injected.svgComputedTextLength['Galvji'].detected, true);
+  // 14. Exit 11: SVG getComputedTextLength does not leak host-only fonts
+  check('SVG getComputedTextLength does not leak host-only fonts', () => {
+    assert.strictEqual(raw.svgComputedTextLength['Helvetica Neue'].detected, true, 'raw SVG detects Helvetica Neue');
+    assert.strictEqual(injected.svgComputedTextLength['Helvetica Neue'].detected, false, 'injected SVG must shield Helvetica Neue');
+    assert.strictEqual(injected.svgComputedTextLength['Luminari'].detected, false, 'injected SVG must shield Luminari');
+    assert.strictEqual(injected.svgComputedTextLength['Galvji'].detected, false, 'injected SVG must shield Galvji');
   });
 
-  // 15. KNOWN GAP: Exit 12 - Canvas 3-way fallback differential
-  check('KNOWN GAP: Canvas 3-way fallback diff detects host-only fonts in both raw and injected', () => {
-    assert.strictEqual(injected.canvasThreeWayFallback['Helvetica Neue'].detected, true);
-    assert.strictEqual(injected.canvasThreeWayFallback['Luminari'].detected, true);
-    assert.strictEqual(injected.canvasThreeWayFallback['Galvji'].detected, true);
+  // 15. Exit 12: Canvas 3-way fallback diff does not detect host-only fonts
+  check('Canvas 3-way fallback diff does not detect host-only fonts in injected mode', () => {
+    assert.strictEqual(raw.canvasThreeWayFallback['Helvetica Neue'].detected, true, 'raw canvas detects Helvetica Neue');
+    assert.strictEqual(injected.canvasThreeWayFallback['Helvetica Neue'].detected, false, 'injected canvas must shield Helvetica Neue');
+    assert.strictEqual(injected.canvasThreeWayFallback['Luminari'].detected, false, 'injected canvas must shield Luminari');
+    assert.strictEqual(injected.canvasThreeWayFallback['Galvji'].detected, false, 'injected canvas must shield Galvji');
   });
 
-  // 16. KNOWN GAP: Exit 13 - Canvas actualBoundingBox metrics
-  check('KNOWN GAP: Canvas actualBoundingBox metrics expose raw host glyph shapes', () => {
+  // 16. Exit 13: Canvas actualBoundingBox metrics do not match host metrics
+  check('Canvas actualBoundingBox metrics do not expose raw host glyph shapes', () => {
     const rawAscent = raw.canvasBoundingBox['Helvetica Neue'].ascent;
     const injAscent = injected.canvasBoundingBox['Helvetica Neue'].ascent;
-    assert.ok(Math.abs(rawAscent - injAscent) < 0.1, 'glyph ascent for Helvetica Neue must match host metrics');
+    assert.ok(Math.abs(rawAscent - injAscent) > 0.5, 'glyph ascent for Helvetica Neue must differ from host metrics');
   });
 
   const failed = results.filter((item) => !item.ok);

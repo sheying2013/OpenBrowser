@@ -9,8 +9,8 @@ const { mergeFlags, appendFlagValue, LIST_VALUE_FLAGS } = require('./automation/
 const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
 const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
-const { resolveProfileLanguage, localeFromCountryCode } = require('./automation/locale-from-country');
-const { applyLanguagePreferences, verifyLanguagePreferences } = require('./automation/profile-file-consistency');
+const { resolveProfileLanguage, resolveProfileTimezone, localeFromCountryCode } = require('./automation/locale-from-country');
+const { applyLanguagePreferences, verifyLanguagePreferences, syncProfileLocalState } = require('./automation/profile-file-consistency');
 const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
 const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = require('./automation/env-icon');
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
@@ -1057,6 +1057,23 @@ class BrowserEngine {
       // Shared-file chain: resetZoom then applyProfilePreferences, ordered.
       (async () => { await this.resetZoom(root); await this.applyProfilePreferences(root, profile); })(),
       this.enforceDataRetention(root, profile),
+      (async () => {
+        try {
+          await syncProfileLocalState(root, profile);
+        } catch (err) {
+          if (typeof this.emit === 'function') {
+            this.emit({
+              type: 'profile-file-sync-error',
+              id: profile.id,
+              key: 'local_state',
+              code: err.code || 'PROFILE_LOCAL_STATE_MISMATCH',
+              message: err.message,
+              issues: err.issues,
+            });
+          }
+          throw err;
+        }
+      })(),
     ];
     if (!restoreSession) jobs.push(this.resetTabs(root));
     if (profile.advanced.clearCacheOnStart) jobs.push(this.clearProfileCache(root));
@@ -1744,6 +1761,8 @@ class BrowserEngine {
     };
     const privacy = { ...(profile.privacy || {}) };
     const language = resolveProfileLanguage(profile, network);
+    const resolvedTimezone = resolveProfileTimezone(profile, network);
+    const tzMode = String(privacy.timezoneMode || 'ip').trim().toLowerCase();
     const next = {
       ...profile,
       language,
@@ -1754,12 +1773,12 @@ class BrowserEngine {
       },
       exitIp: network.ip || profile.exitIp || '',
       exitCountryCode: network.countryCode || profile.exitCountryCode || '',
-      exitTimezone: network.timezone || profile.exitTimezone || '',
+      exitTimezone: tzMode === 'real' ? '' : (resolvedTimezone || network.timezone || profile.exitTimezone || ''),
       exitLatitude: network.latitude ?? profile.exitLatitude,
       exitLongitude: network.longitude ?? profile.exitLongitude,
     };
-    if ((privacy.timezoneMode === 'ip' || !privacy.timezoneMode) && network.timezone) {
-      next.privacy = { ...next.privacy, timezone: network.timezone };
+    if ((tzMode === 'ip' || tzMode === 'custom') && resolvedTimezone) {
+      next.privacy = { ...next.privacy, timezone: resolvedTimezone };
     }
     if ((privacy.geoMode === 'ip' || privacy.geoMode === 'allow' || !privacy.geoMode)
       && Number.isFinite(Number(network.latitude))
@@ -3117,8 +3136,10 @@ class BrowserEngine {
           effectiveTimezone = userExplicitTz;
         }
       } else if (!isRealTimezone) {
+        const resolvedTz = resolveProfileTimezone(profile, pageNetwork);
         const candidateTz = String(
-          profile.exitTimezone
+          resolvedTz
+          || profile.exitTimezone
           || pageNetwork?.timezone
           || (profile.privacy?.timezoneMode === 'custom' ? profile.privacy.timezone : '')
           || profile.privacy?.timezone
@@ -3319,26 +3340,42 @@ class BrowserEngine {
         logFile: fingerprintLogPath(),
       });
       this.emitStartProgress(profile.id, 'inject', 88, '正在注入指纹与运行时…');
-      // Pre-inject is best-effort: must NEVER block start-page navigation.
-      try {
-        item.fingerprint = await this.applyRuntimeSettings(item.port, profile, injectFp, {
-          appliedTargetIds: item.fpAppliedTargets,
-          appliedFingerprintHash: item.fpAppliedHash,
-          trackOn: item,
-          phase: 'pre-startpage',
-        }) || fingerprint;
-      } catch (preInjectError) {
+      let injectSucceeded = false;
+      let injectError = null;
+
+      // Fail-closed pre-inject with bounded retries (2 retries, total 3 attempts)
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          item.fingerprint = await this.applyRuntimeSettings(item.port, profile, injectFp, {
+            appliedTargetIds: item.fpAppliedTargets,
+            appliedFingerprintHash: item.fpAppliedHash,
+            trackOn: item,
+            phase: 'pre-startpage',
+          }) || fingerprint;
+          injectSucceeded = true;
+          injectError = null;
+          break;
+        } catch (err) {
+          injectError = err;
+          await fpLog('start.pre-inject-fail-attempt', {
+            profileId: profile.id,
+            attempt,
+            error: String(err?.message || err),
+          });
+          if (attempt < 3) {
+            await new Promise((resolve) => setTimeout(resolve, 120));
+          }
+        }
+      }
+
+      if (!injectSucceeded) {
         item.fingerprint = fingerprint;
         await fpLog('start.pre-inject-fail', {
           profileId: profile.id,
-          error: String(preInjectError.message || preInjectError),
-        });
-        this.emit({
-          type: 'fingerprint-injection-failed',
-          id: profile.id,
-          message: 'pre-startpage inject: ' + preInjectError.message,
+          error: String(injectError?.message || injectError),
         });
       }
+
       // Keep reported modes as profile intent (not the stripped inject payload)
       if (item.nativeKernelFingerprint && fingerprint) {
         item.fingerprint = {
@@ -3353,13 +3390,56 @@ class BrowserEngine {
           deviceMemory: fingerprint.deviceMemory,
         };
       }
-      await this.startWorkerFingerprintInjection(item, injectFp).catch(async (error) => {
-        item.workerFingerprintError = error.message;
-        await fpLog('worker.inject-fail', { profileId: profile.id, error: String(error.message || error) });
-        this.emit({ type: 'worker-fingerprint-injection-failed', id: profile.id, message: error.message });
-      });
-      // Always open the welcome/start page (even if inject failed).
-      if (!restoreSession && startUrl) {
+
+      // Worker fingerprint injection with bounded retries
+      let workerSucceeded = false;
+      let workerError = null;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          await this.startWorkerFingerprintInjection(item, injectFp);
+          workerSucceeded = true;
+          workerError = null;
+          break;
+        } catch (err) {
+          workerError = err;
+          if (attempt < 3) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        }
+      }
+
+      if (!workerSucceeded) {
+        item.workerFingerprintError = workerError?.message || String(workerError);
+        await fpLog('worker.inject-fail', { profileId: profile.id, error: String(workerError?.message || workerError) });
+        this.emit({ type: 'worker-fingerprint-injection-failed', id: profile.id, message: workerError?.message || String(workerError) });
+      }
+
+      const injectionFailed = !injectSucceeded || !workerSucceeded;
+
+      if (injectionFailed) {
+        const failureDetails = [
+          !injectSucceeded ? ('Pre-inject 失败: ' + (injectError?.message || injectError || '未知错误')) : '',
+          !workerSucceeded ? ('Worker inject 失败: ' + (workerError?.message || workerError || '未知错误')) : '',
+        ].filter(Boolean).join('; ');
+
+        this.emit({
+          type: 'fingerprint-injection-failed',
+          id: profile.id,
+          message: failureDetails,
+          blocked: true,
+        });
+
+        // Fail-Closed: DO NOT navigate to target site or startUrl.
+        // Navigate to a safe local error page to prevent real fingerprint exposure.
+        const safeErrorHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>指纹注入失败 - 启动已阻断</title><style>body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:40px;background:#18181b;color:#f4f4f5;}h1{color:#ef4444;font-size:22px;margin-top:0;}.card{background:#27272a;border:1px solid #3f3f46;border-radius:8px;padding:24px;max-width:620px;margin:40px auto;box-shadow:0 4px 6px -1px rgba(0,0,0,.3);}.desc{color:#a1a1aa;font-size:14px;line-height:1.6;}.err{background:#09090b;padding:12px;border-radius:6px;font-family:monospace;font-size:13px;color:#f87171;word-break:break-all;white-space:pre-wrap;margin:16px 0;}.hint{font-size:13px;color:#71717a;}</style></head><body><div class="card"><h1>⚠️ 指纹防护注入未就绪</h1><p class="desc">为避免原生环境及真实指纹泄露至目标站点，系统已触发 Fail-Closed 安全屏障，中止访问目标地址。</p><div class="err">` + String(failureDetails).replace(/[<>&"]/g, (c) => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])) + `</div><p class="hint">请关闭该浏览器窗口，检查内核状态或代理配置后重试。</p></div></body></html>`;
+        const safeErrorUrl = `data:text/html;charset=utf-8,${encodeURIComponent(safeErrorHtml)}`;
+        await fpLog('start.navigate-barrier-errorpage', { profileId: profile.id, failureDetails });
+        try {
+          await this.keepDefaultTab(item.port, safeErrorUrl);
+        } catch (navError) {
+          await fpLog('start.navigate-barrier-fail', { profileId: profile.id, error: String(navError.message || navError) });
+        }
+      } else if (!restoreSession && startUrl) {
         await fpLog('start.navigate-startpage', { profileId: profile.id, startUrl });
         try {
           await this.keepDefaultTab(item.port, startUrl);
@@ -3766,19 +3846,21 @@ class BrowserEngine {
       ...profile,
       privacy: { ...privacy, languageMode: privacy.languageMode || 'ip' },
     }, network);
+    const timezone = resolveProfileTimezone(profile, network);
+    const tzMode = String(privacy.timezoneMode || 'ip').trim().toLowerCase();
     const patch = {
       exitIp: network.ip || '',
       exitCountryCode: network.countryCode || '',
-      exitTimezone: network.timezone || '',
+      exitTimezone: tzMode === 'real' ? '' : (timezone || network.timezone || ''),
       exitLatitude: network.latitude ?? null,
       exitLongitude: network.longitude ?? null,
       exitCheckedAt: network.checkedAt || new Date().toISOString(),
       language,
       privacy: { ...privacy },
     };
-    if ((privacy.timezoneMode === 'ip' || !privacy.timezoneMode) && network.timezone) {
-      patch.privacy.timezoneMode = 'ip';
-      patch.privacy.timezone = network.timezone;
+    if ((tzMode === 'ip' || tzMode === 'custom') && timezone) {
+      patch.privacy.timezoneMode = privacy.timezoneMode || 'ip';
+      patch.privacy.timezone = timezone;
     }
     if ((privacy.languageMode === 'ip' || privacy.langFromIp !== false) && language) {
       patch.privacy.languageMode = privacy.languageMode || 'ip';
@@ -3895,6 +3977,9 @@ class BrowserEngine {
   async prepareProfileProxyForStart(profile) {
     let working = this.resolveStoredProxyProfile(this.sanitizeProfile(profile));
     const meta = working.proxyMeta || {};
+    if (profile?.proxyMeta?.allowDirectFallback !== undefined) {
+      meta.allowDirectFallback = Boolean(profile.proxyMeta.allowDirectFallback);
+    }
     const hasProxy = working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy));
     const extractUrl = String(meta.apiExtractUrl || '').trim();
     // Align with refreshProfileProxy: refresh first (rotate IP), then extract current endpoint.
@@ -3959,8 +4044,27 @@ class BrowserEngine {
         const message = '启动前代理未就绪：' + (lastError.message || lastError);
         this.emit({ type: 'proxy-error', id: working.id, code: 'proxy-not-ready', message, policy });
         if (policy === 'direct') {
-          working = this.sanitizeProfile({ ...working, networkMode: 'direct', proxy: 'Direct' });
-          this.emit({ type: 'proxy-fallback', id: working.id, message: '代理未就绪，已按策略回落直连' });
+          const isExplicitOptIn = meta.allowDirectFallback === true || profile?.proxyMeta?.allowDirectFallback === true;
+          if (isExplicitOptIn) {
+            working = this.sanitizeProfile({ ...working, networkMode: 'direct', proxy: 'Direct' });
+            this.emit({
+              type: 'proxy-fallback',
+              id: working.id,
+              danger: true,
+              level: 'danger',
+              message: '【高危警告】代理未就绪，已按显式授权策略回落直连（存在真实公网IP暴露风险）',
+            });
+          } else {
+            const blockMsg = message + '（代理未就绪且未显式配置 allowDirectFallback: true，已默认阻断启动以防止真实IP暴露）';
+            this.emit({
+              type: 'proxy-error',
+              id: working.id,
+              code: 'proxy-direct-fallback-blocked',
+              message: blockMsg,
+              policy: 'block',
+            });
+            throw new Error(blockMsg);
+          }
         } else if (policy === 'continue') {
           this.emit({ type: 'proxy-warn', id: working.id, message: message + '（continue 策略，继续启动）' });
         } else {

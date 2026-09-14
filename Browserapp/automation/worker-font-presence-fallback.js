@@ -143,14 +143,21 @@ function buildWorkerFontPresenceSource(fp) {
       return promise;
     };
 
+    const parseLocalSourceFamily = (source) => {
+      const text = String(source === undefined || source === null ? '' : source).trim();
+      const match = text.match(/^local\\s*\\(\\s*(?:"([^"]*)"|'([^']*)'|([^)'"]*))\\s*\\)$/i);
+      if (!match) return null;
+      return String(match[1] ?? match[2] ?? match[3] ?? '').trim();
+    };
     const nativeCtor = function FontFace(family, source, descriptors) {
       if (!new.target) {
         throw new TypeError("Failed to construct 'FontFace': Please use the 'new' operator, this DOM object cannot be initialized without it.");
       }
       const face = Reflect.construct(NativeFontFace, [family, source, descriptors], new.target);
       try {
-        if (isPlainLocalSource(source)) {
-          localOnlyFamily.set(face, String(family));
+        const localTarget = parseLocalSourceFamily(source);
+        if (localTarget !== null) {
+          localOnlyFamily.set(face, localTarget);
         }
       } catch (_) {}
       return face;
@@ -206,12 +213,10 @@ function buildWorkerFontPresenceSource(fp) {
       const replacedLoadedGet = nativeLike(function () {
         const family = localOnlyFamily.get(this);
         if (family === undefined) return nativeLoadedGet.call(this);
-        if (ownFamilies.has(family.toLowerCase())) {
-          forcedStatus.set(this, 'loaded');
-          return resolvedFor(this);
-        }
-        forcedStatus.set(this, 'error');
-        return rejectedFor(this);
+        const forced = forcedStatus.get(this);
+        if (forced === 'loaded') return resolvedFor(this);
+        if (forced === 'error') return rejectedFor(this);
+        return nativeLoadedGet.call(this);
       }, nativeLoadedGet, 'get loaded', 0, false);
       Object.defineProperty(NativeFontFace.prototype, 'loaded', {
         configurable: true,
@@ -235,6 +240,67 @@ function buildWorkerFontPresenceSource(fp) {
         get: replacedStatusGet,
         set: nativeStatusDesc.set,
       });
+    }
+
+    const NativeFontFaceSet = globalObj.FontFaceSet;
+    const fontSetProto = (NativeFontFaceSet && NativeFontFaceSet.prototype) ||
+      (globalObj.fonts && Object.getPrototypeOf(globalObj.fonts));
+    if (fontSetProto) {
+      const origCheck = fontSetProto.check;
+      if (typeof origCheck === 'function') {
+        const cleanCheck = nativeLike(function check(font, text) {
+          try {
+            const css = String(font || '');
+            const match = css.match(/(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9][A-Za-z0-9 _-]*))\s*$/);
+            const family = match ? String(match[1] || match[2] || match[3] || '').trim().toLowerCase() : '';
+            const generic = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace']);
+            if (family && !generic.has(family) && !ownFamilies.has(family)) {
+              let authorFace = false;
+              for (const face of this) {
+                if (String(face.family || '').trim().toLowerCase() === family) { authorFace = true; break; }
+              }
+              if (!authorFace) return false;
+            }
+          } catch (_) {}
+          return origCheck.apply(this, arguments);
+        }, origCheck, 'check', 1, false);
+        try {
+          Object.defineProperty(fontSetProto, 'check', {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value: cleanCheck,
+          });
+        } catch (_) {}
+      }
+
+      const origLoad = fontSetProto.load;
+      if (typeof origLoad === 'function') {
+        const cleanLoad = nativeLike(function load(font, text) {
+          try {
+            const css = String(font || '');
+            const match = css.match(/(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9][A-Za-z0-9 _-]*))\s*$/);
+            const family = match ? String(match[1] || match[2] || match[3] || '').trim().toLowerCase() : '';
+            const generic = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace']);
+            if (family && !generic.has(family) && !ownFamilies.has(family)) {
+              let authorFace = false;
+              for (const face of this) {
+                if (String(face.family || '').trim().toLowerCase() === family) { authorFace = true; break; }
+              }
+              if (!authorFace) return Promise.resolve([]);
+            }
+          } catch (_) {}
+          return origLoad.apply(this, arguments);
+        }, origLoad, 'load', 1, false);
+        try {
+          Object.defineProperty(fontSetProto, 'load', {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value: cleanLoad,
+          });
+        } catch (_) {}
+      }
     }
   } catch (_) {}
 })();`;

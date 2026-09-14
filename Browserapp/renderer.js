@@ -327,6 +327,10 @@ function normalizeProfileSettings(profile) {
       notReadyPolicy: ['block', 'direct', 'continue'].includes(String(proxyMeta.notReadyPolicy || ''))
         ? String(proxyMeta.notReadyPolicy)
         : (proxyMeta.requireReady === false ? 'continue' : 'block'),
+      // Persisted profiles with an explicit 'direct' policy record a real user choice, so they
+      // carry the opt-in; anything else must NOT be allowed to reach the network directly.
+      allowDirectFallback: proxyMeta.allowDirectFallback === true
+        || (String(proxyMeta.notReadyPolicy || '') === 'direct' && proxyMeta.allowDirectFallback !== false),
       tlsProfile: ['auto', 'chrome', 'chrome_legacy', 'node', 'off'].includes(String(proxyMeta.tlsProfile || ''))
         ? String(proxyMeta.tlsProfile)
         : 'auto',
@@ -2304,6 +2308,9 @@ function editorDraft(strict = true) {
       fillFingerprint: $('#editor-proxy-fill-fingerprint')?.checked !== false,
       requireReady: $('#editor-proxy-require-ready')?.checked !== false,
       notReadyPolicy: $('#editor-proxy-not-ready-policy')?.value || 'block',
+      // "回退直连" is a deliberate, high-risk escape hatch. The engine refuses implicit direct
+      // fallback (see proxy-direct-fallback-blocked), so choosing it here IS the explicit opt-in.
+      allowDirectFallback: ($('#editor-proxy-not-ready-policy')?.value || 'block') === 'direct',
       tlsProfile: $('#editor-proxy-tls-profile')?.value || 'auto',
       tlsChromeMajor: (() => {
         const raw = ($('#editor-proxy-tls-chrome-major')?.value || '').trim();
@@ -6018,6 +6025,9 @@ async function initialize() {
   renderRuntimeInfo(info);
   const closeActionCard = document.getElementById('close-action-card');
   if (closeActionCard) {
+    if (info?.platform === 'darwin') {
+      closeActionCard.hidden = true;
+    }
     const currentAction = info?.closeAction || 'tray';
     const radio = closeActionCard.querySelector(`input[name="close-action-radio"][value="${currentAction}"]`);
     if (radio) radio.checked = true;

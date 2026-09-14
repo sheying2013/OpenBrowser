@@ -228,6 +228,7 @@ function buildProbeScript() {
         probedWidth,
         usesMonospace: Math.abs(probedWidth - monoWidth) < 0.001,
         usesHost: Math.abs(probedWidth - hostWidth) < 0.001,
+        hostFontNeutralized: Math.abs(hostWidth - monoWidth) < 0.001,
       };
     }
 
@@ -636,6 +637,7 @@ async function runLiveBarrierTest(serverPort, mutate) {
 
     check('MUTATION CHECK: Canvas text layout measures native host font width when barrier is bypassed', () => {
       assert.strictEqual(probe.canvas.usesHost, true, 'Canvas must match native host font width in mutate mode');
+      assert.strictEqual(probe.canvas.hostFontNeutralized, false, 'Unpatched canvas must expose the native host width');
       assert.strictEqual(probe.canvas.usesMonospace, false, 'Canvas must not fallback to monospace in mutate mode');
     });
 
@@ -673,7 +675,9 @@ async function runLiveBarrierTest(serverPort, mutate) {
     // Check 18: Canvas layout measurement falls back to monospace
     check('Production barrier: Canvas text metrics fall back to monospace and hide native host font metrics', () => {
       assert.strictEqual(probe.canvas.usesMonospace, true, 'Canvas must match monospace fallback width');
-      assert.strictEqual(probe.canvas.usesHost, false, 'Canvas must not match native host font width');
+      // Hardened contract: an in-page measurement of a host-only family is itself rewritten to
+      // the persona fallback, so the page can no longer obtain a native host-metric baseline.
+      assert.strictEqual(probe.canvas.hostFontNeutralized, true, 'A direct host-font measurement must be neutralised to the same monospace metrics');
     });
 
     // Check 19: CSSOM rules verified sanitized to local("__ob_font_blocked__")

@@ -314,7 +314,8 @@ function buildMainProbeScript() {
         nativeHelvWidth,
         probedHelvWidth,
         usesMonospaceFallback: Math.abs(probedHelvWidth - monoWidth) < 0.001,
-        usesHostFont: Math.abs(probedHelvWidth - nativeHelvWidth) < 0.001
+        usesHostFont: Math.abs(probedHelvWidth - nativeHelvWidth) < 0.001,
+        hostFontNeutralized: Math.abs(nativeHelvWidth - monoWidth) < 0.001
       };
     }
 
@@ -644,6 +645,7 @@ async function runLiveEngineIntegration(serverPort, mutate) {
     check('MUTATION CHECK: Canvas layout metric matches native host font width when rewrite is omitted', () => {
       assert.strictEqual(main.canvas.usesHostFont, true, 'Canvas must match native host font width in mutate mode');
       assert.strictEqual(main.canvas.usesMonospaceFallback, false, 'Canvas must not fallback in mutate mode');
+      assert.strictEqual(main.canvas.hostFontNeutralized, false, 'Unpatched canvas must expose the native host width');
     });
 
     check('MUTATION CHECK: CSSOM preserves unmitigated Helvetica Neue local declaration when rewrite is omitted', () => {
@@ -685,7 +687,9 @@ async function runLiveEngineIntegration(serverPort, mutate) {
     // Check 11: Canvas layout measurement falls back to monospace
     check('Production wiring: Canvas text metrics fall back to monospace and hide native host font metrics', () => {
       assert.strictEqual(main.canvas.usesMonospaceFallback, true, 'Canvas must match monospace fallback width');
-      assert.strictEqual(main.canvas.usesHostFont, false, 'Canvas must not match native host font width');
+      // // Hardened contract: an in-page measurement of a host-only family is itself rewritten to the
+      // // persona fallback, so the page can no longer obtain a native host-metric baseline at all.
+      assert.strictEqual(main.canvas.hostFontNeutralized, true, 'A direct host-font measurement must be neutralised to the same monospace metrics');
     });
 
     // Check 12: CSSOM rules contain a neutral, per-profile fallback font.

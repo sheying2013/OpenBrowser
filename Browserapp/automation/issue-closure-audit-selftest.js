@@ -1207,11 +1207,16 @@ const workerSrcReal = buildWorkerInjectionScript({
   webgpu: { mode: 'real' },
 });
 
+// The Worker WebGPU layer must disguise through prototype accessors backed by a WeakMap. Proxy
+// objects are NOT acceptable: a Proxy around a WebIDL interface breaks the internal private slots,
+// so `GPUAdapter.prototype.info.call(adapter)` throws "Illegal invocation" — a loud tell.
 const intelConfigured =
   workerSrcIntel.includes('"mode":"webgl"') &&
   workerSrcIntel.includes('"vendor":"intel"') &&
-  workerSrcIntel.includes('wrapAdapter') &&
-  workerSrcIntel.includes('requestAdapterInfo');
+  workerSrcIntel.includes('requestAdapterInfo') &&
+  workerSrcIntel.includes('GPUAdapterInfo') &&
+  workerSrcIntel.includes('WeakMap') &&
+  !workerSrcIntel.includes('new Proxy');
 
 const blockedConfigured =
   workerSrcBlocked.includes('"mode":"blocked"') &&

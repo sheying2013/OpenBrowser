@@ -148,6 +148,7 @@ function buildFontMetricsScript(platformKey, options = {}) {
     if (!fontData || !fontData.length) return;
 
     const internalFaces = new WeakSet();
+    const personaFamilySet = new Set(fontData.map((item) => String(item.family || '').trim().toLowerCase()).filter(Boolean));
     const shieldedFontsMap = new WeakMap();
     const boundMethodCache = new Map();
     const nativeMap = new WeakMap();
@@ -195,18 +196,83 @@ function buildFontMetricsScript(platformKey, options = {}) {
                 }
               };
             }
+            if (prop === 'check') {
+              let bound = boundMethodCache.get('check');
+              if (!bound) {
+                const targetCheck = target.check;
+                bound = function check(font, text) {
+                  try {
+                    const css = String(font || '');
+                    const match = css.match(/(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9][A-Za-z0-9 _-]*))\s*$/);
+                    const family = match ? String(match[1] || match[2] || match[3] || '').trim().toLowerCase() : '';
+                    const generic = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace']);
+                    if (family && !generic.has(family) && !personaFamilySet.has(family)) {
+                      let authorFace = false;
+                      for (const face of target) {
+                        if (internalFaces.has(face)) continue;
+                        if (String(face.family || '').trim().toLowerCase() === family) { authorFace = true; break; }
+                      }
+                      if (!authorFace) return false;
+                    }
+                  } catch (_) {}
+                  return targetCheck.apply(target, arguments);
+                };
+                try { Object.defineProperty(bound, 'name', { value: 'check', configurable: true }); } catch (_) {}
+                try { Object.defineProperty(bound, 'length', { value: targetCheck ? targetCheck.length : 1, configurable: true }); } catch (_) {}
+                nativeMap.set(bound, 'function check() { [native code] }');
+                boundMethodCache.set('check', bound);
+              }
+              return bound;
+            }
+            if (prop === 'load') {
+              let bound = boundMethodCache.get('load');
+              if (!bound) {
+                const targetLoad = target.load;
+                bound = function load(font, text) {
+                  let pending;
+                  try { pending = targetLoad.apply(target, arguments); } catch (error) { return Promise.reject(error); }
+                  return Promise.resolve(pending).then((faces) => {
+                    if (!Array.isArray(faces)) return faces;
+                    return faces.filter((face) => !internalFaces.has(face));
+                  });
+                };
+                try { Object.defineProperty(bound, 'name', { value: 'load', configurable: true }); } catch (_) {}
+                try { Object.defineProperty(bound, 'length', { value: targetLoad ? targetLoad.length : 1, configurable: true }); } catch (_) {}
+                nativeMap.set(bound, 'function load() { [native code] }');
+                boundMethodCache.set('load', bound);
+              }
+              return bound;
+            }
             if (prop === 'delete') {
-              return function delete_(face) {
-                if (internalFaces.has(face)) return false;
-                return target.delete(face);
-              };
+              let bound = boundMethodCache.get('delete');
+              if (!bound) {
+                const targetDelete = target.delete;
+                bound = function delete_(face) {
+                  if (internalFaces.has(face)) return false;
+                  return targetDelete.call(target, face);
+                };
+                try { Object.defineProperty(bound, 'name', { value: 'delete', configurable: true }); } catch (_) {}
+                try { Object.defineProperty(bound, 'length', { value: targetDelete ? targetDelete.length : 1, configurable: true }); } catch (_) {}
+                nativeMap.set(bound, 'function delete() { [native code] }');
+                boundMethodCache.set('delete', bound);
+              }
+              return bound;
             }
             if (prop === 'clear') {
-              return function clear() {
-                for (const face of Array.from(target)) {
-                  if (!internalFaces.has(face)) target.delete(face);
-                }
-              };
+              let bound = boundMethodCache.get('clear');
+              if (!bound) {
+                const targetClear = target.clear;
+                bound = function clear() {
+                  for (const face of Array.from(target)) {
+                    if (!internalFaces.has(face)) target.delete(face);
+                  }
+                };
+                try { Object.defineProperty(bound, 'name', { value: 'clear', configurable: true }); } catch (_) {}
+                try { Object.defineProperty(bound, 'length', { value: targetClear ? targetClear.length : 0, configurable: true }); } catch (_) {}
+                nativeMap.set(bound, 'function clear() { [native code] }');
+                boundMethodCache.set('clear', bound);
+              }
+              return bound;
             }
             const val = Reflect.get(target, prop, target);
             if (typeof val === 'function') {
@@ -490,7 +556,19 @@ function listIncludesHost(list, host) {
 /**
  * Resolve site-aware canvas/webgl stability.
  * mode: off | auto | force
- * On high-risk hosts (not skipped): reduced noise amplitude for tighter consistency.
+ *
+ * 【稳定性策略与 skipHosts 语义设计说明】
+ * 1. stability 目标：高风控站点（如电商、金融、社交）往往对 Canvas / WebGL 做重复采样比对，
+ *    若每次采样结果波动则判为指纹浏览器。
+ *    因此当 stability 命中（active === true）时，将噪声振幅 noiseAmplitude 压缩为 1。
+ *    根据 delta = Math.floor(noise * amp) - Math.floor(amp / 2)，当 amp=1 时 delta 恒为 0（零噪声，最大一致性）。
+ * 2. skipHosts 含义：例外名单（DEFAULT_STABILITY_SKIP_HOSTS 包括 sephora.com, cdn.*, static.* 等）。
+ *    其语义是“即使父域命中 stability 策略，这些主机也保留常规噪声”的例外表（not skipped 即保留降噪），
+ *    绝不是“跳过指纹伪造”。命中 skipHosts 时 active 为 false，保留默认常规噪声（amp=3，delta ∈ {-1,0,1}）。
+ * 3. mode 三态语义：
+ *    - 'force': 强制开启 stability（除 skipHosts 外全部 active=true，零噪声）
+ *    - 'off': 关闭 stability（active 恒为 false，全部保留常规噪声 amp=3）
+ *    - 'auto' / 默认: 仅当 host 命中 stability.hosts 且未被 skipHosts 排除时 active=true（零噪声），其余站点保留常规噪声。
  */
 function resolveStabilityPolicy(privacy = {}, options = {}) {
   const fpIn = (privacy.fingerprint && typeof privacy.fingerprint === 'object' ? privacy.fingerprint : null) || (options.fingerprint && typeof options.fingerprint === 'object' ? options.fingerprint : {});
@@ -1719,6 +1797,10 @@ function buildInjectionScript(fp) {
   const currentHost = () => {
     try { return normalizeHost(location && location.hostname); } catch (_) { return ''; }
   };
+  // stability 策略动态判定：
+  // - active === true (稳定性生效): noiseAmplitude = 1 -> delta 恒为 0 (零噪声，最大一致性)
+  // - active === false (常规噪声或 skipHosts 例外): noiseAmplitude = 3 -> delta ∈ {-1, 0, 1}
+  // - skipHosts 是保留常规噪声的例外表，不可短路返回原生真实数据
   const stabilityActiveNow = () => {
     const st = CFG.stability || {};
     if (st.mode === 'force') {
@@ -1787,6 +1869,11 @@ function buildInjectionScript(fp) {
   };
   const nativeSource = new WeakMap();
   const subWindowSyncHooks = [];
+  // Assigned by the font-shield block below when a profile declares foreign families. The
+  // clientRects patch wraps its measurement in this scope so both layers live in ONE bridge
+  // wrapper: two independent nativeLike wrappers would make replaceMethod treat the second
+  // one as an existing bridge and silently skip it.
+  let sanitizeElementFontScope = (element, callback) => callback();
   const originalToString = Function.prototype.toString;
   const BRIDGE_TOKEN = ${JSON.stringify(bridgeToken)};
   const inspectBridge = (fn) => {
@@ -2739,9 +2826,18 @@ function buildInjectionScript(fp) {
           return promise;
         };
 
+        const parseLocalSourceFamily = (source) => {
+          const text = String(source === undefined || source === null ? '' : source).trim();
+          const match = text.match(/^local\\s*\\(\\s*(?:"([^"]*)"|'([^']*)'|([^)'"]*))\\s*\\)$/i);
+          if (!match) return null;
+          return String(match[1] ?? match[2] ?? match[3] ?? '').trim();
+        };
         const nativeCtor = function FontFace(family, source, descriptors) {
           const face = new NativeFontFace(family, source, descriptors);
-          try { if (isPlainLocalSource(source)) localOnlyFamily.set(face, String(family)); } catch (_) {}
+          try {
+            const localTarget = parseLocalSourceFamily(source);
+            if (localTarget !== null) localOnlyFamily.set(face, localTarget);
+          } catch (_) {}
           return face;
         };
         const cleanCtor = nativeLike(nativeCtor, NativeFontFace, 'FontFace', 2, true);
@@ -2776,12 +2872,12 @@ function buildInjectionScript(fp) {
           const replacedLoadedGet = nativeLike(function () {
             const family = localOnlyFamily.get(this);
             if (family === undefined) return nativeLoadedGet.call(this);
-            if (ownFamilies.has(family.toLowerCase())) {
-              forcedStatus.set(this, 'loaded');
-              return resolvedFor(this);
-            }
-            forcedStatus.set(this, 'error');
-            return rejectedFor(this);
+            const forced = forcedStatus.get(this);
+            if (forced === 'loaded') return resolvedFor(this);
+            if (forced === 'error') return rejectedFor(this);
+            // Reading .loaded must not run the load algorithm or mutate .status; keep the engine's
+            // own pending promise until load() is explicitly called.
+            return nativeLoadedGet.call(this);
           }, nativeLoadedGet, 'get loaded', 0, false);
           Object.defineProperty(NativeFontFace.prototype, 'loaded', {
             configurable: true,
@@ -2807,6 +2903,180 @@ function buildInjectionScript(fp) {
           });
         }
       }
+    } catch (_) {}
+  }
+
+  // --- foreign-platform font measurement shielding ---
+  // A persona must not answer font probes through host-only families. The local-font gates cover
+  // @font-face and queryLocalFonts, but Canvas and layout metrics still resolve system fonts
+  // directly. Rewrite only families that belong to another platform before the native rasterizer
+  // sees them, so a Windows persona on macOS gets the same fallback a real Windows build would.
+  if (CFG.fonts && Array.isArray(CFG.fonts.foreign) && CFG.fonts.foreign.length) {
+    try {
+      const foreignFontSet = new Set(CFG.fonts.foreign
+        .map((name) => String(name || '').trim().toLowerCase())
+        .filter(Boolean));
+      const splitFamilyList = (value) => {
+        const out = [];
+        let current = '';
+        let quote = null;
+        for (let i = 0; i < value.length; i += 1) {
+          const ch = value[i];
+          if (quote) {
+            current += ch;
+            if (ch === quote && value[i - 1] !== '\\\\') quote = null;
+            continue;
+          }
+          if (ch === '"' || ch === "'") {
+            quote = ch;
+            current += ch;
+            continue;
+          }
+          if (ch === ',') {
+            out.push(current.trim());
+            current = '';
+            continue;
+          }
+          current += ch;
+        }
+        if (current.trim()) out.push(current.trim());
+        return out;
+      };
+      const stripFamily = (token) => String(token || '').trim()
+        .replace(/^(['"])([\\s\\S]*)\\1$/, '$2')
+        .trim();
+      const isForeignFamily = (token) => foreignFontSet.has(stripFamily(token).toLowerCase());
+      const sanitizeFamilyList = (families) => {
+        const kept = families.filter((token) => !isForeignFamily(token));
+        return kept.length ? kept.join(', ') : 'monospace';
+      };
+      const fontFamilyPart = (font) => {
+        const match = String(font || '').match(/^([\\s\\S]*?\\d+(?:\\.\\d+)?(?:px|pt|em|rem|%)(?:\\s*\\/\\s*[^\\s,]+)?\\s+)([\\s\\S]+)$/i);
+        return match ? { prefix: match[1], families: splitFamilyList(match[2]) } : null;
+      };
+      const sanitizeFontShorthand = (font) => {
+        const text = String(font || '');
+        const parsed = fontFamilyPart(text);
+        if (!parsed) return text;
+        const clean = sanitizeFamilyList(parsed.families);
+        return clean === parsed.families.join(', ') ? text : parsed.prefix + clean;
+      };
+      const sanitizeFamilyOnly = (value) => sanitizeFamilyList(splitFamilyList(String(value || '')));
+      const familyHasForeign = (value) => splitFamilyList(String(value || '')).some(isForeignFamily);
+
+      const patchCanvasFont = (proto) => {
+        if (!proto) return;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'font');
+        if (!descriptor || typeof descriptor.get !== 'function' || typeof descriptor.set !== 'function') return;
+        const nativeGet = descriptor.get;
+        const nativeSet = descriptor.set;
+        const originals = new WeakMap();
+        Object.defineProperty(proto, 'font', {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          get: nativeLike(function font() {
+            const original = originals.get(this);
+            if (original !== undefined) return original;
+            return nativeGet.call(this);
+          }, nativeGet, 'get font', 0),
+          set: nativeLike(function font(value) {
+            const original = String(value);
+            const clean = sanitizeFontShorthand(original);
+            if (clean === original) {
+              originals.delete(this);
+              return nativeSet.call(this, value);
+            }
+            originals.set(this, original);
+            return nativeSet.call(this, clean);
+          }, nativeSet, 'set font', 1),
+        });
+      };
+      patchCanvasFont(globalThis.CanvasRenderingContext2D && globalThis.CanvasRenderingContext2D.prototype);
+      patchCanvasFont(globalThis.OffscreenCanvasRenderingContext2D && globalThis.OffscreenCanvasRenderingContext2D.prototype);
+
+      sanitizeElementFontScope = (element, callback) => {
+        const modified = [];
+        let curr = element;
+        try {
+          while (curr && curr.nodeType === 1) {
+            let style = null;
+            let originalInline = '';
+            try { style = curr.style; originalInline = style ? style.fontFamily : ''; } catch (_) {}
+            let originalAttr = null;
+            try { originalAttr = curr.getAttribute ? curr.getAttribute('font-family') : null; } catch (_) {}
+            const raw = originalInline || originalAttr || '';
+            if (raw && familyHasForeign(raw)) {
+              const clean = sanitizeFamilyOnly(raw);
+              if (style) {
+                style.fontFamily = clean;
+                modified.push({ style, originalInline });
+              } else if (curr.setAttribute) {
+                curr.setAttribute('font-family', clean);
+                modified.push({ element: curr, originalAttr });
+              }
+            }
+            curr = curr.parentElement;
+          }
+          return callback();
+        } finally {
+          for (let i = modified.length - 1; i >= 0; i -= 1) {
+            const item = modified[i];
+            try {
+              if (item.style) {
+                if (item.originalInline) item.style.fontFamily = item.originalInline;
+                else item.style.removeProperty('font-family');
+              } else if (item.element) {
+                if (item.originalAttr !== null && item.originalAttr !== undefined) item.element.setAttribute('font-family', item.originalAttr);
+                else if (item.element.removeAttribute) item.element.removeAttribute('font-family');
+              }
+            } catch (_) {}
+          }
+        }
+      };
+
+      const patchElementMetric = (proto, key) => {
+        if (!proto) return;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, key);
+        if (!descriptor || typeof descriptor.get !== 'function') return;
+        const nativeGet = descriptor.get;
+        Object.defineProperty(proto, key, {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          get: nativeLike(function measuredValue() {
+            return sanitizeElementFontScope(this, () => nativeGet.call(this));
+          }, nativeGet, 'get ' + key, 0),
+        });
+      };
+      if (globalThis.HTMLElement) {
+        for (const key of ['offsetWidth', 'offsetHeight', 'scrollWidth', 'scrollHeight', 'clientWidth', 'clientHeight']) {
+          patchElementMetric(globalThis.HTMLElement.prototype, key);
+        }
+      }
+
+      // NOTE: Element/Range getBoundingClientRect and getClientRects are intentionally NOT wrapped
+      // here. patchClientRectsForWindow() owns those methods and runs the measurement inside
+      // sanitizeElementFontScope(), so the font shield and the clientRects noise share a single
+      // bridge wrapper instead of racing for the same slot.
+
+      const patchSvgMetric = (proto) => {
+        if (!proto) return;
+        for (const key of ['getComputedTextLength', 'getSubStringLength', 'getBBox']) {
+          const descriptor = Object.getOwnPropertyDescriptor(proto, key);
+          if (!descriptor || typeof descriptor.value !== 'function') continue;
+          const nativeMethod = descriptor.value;
+          Object.defineProperty(proto, key, {
+            configurable: descriptor.configurable,
+            enumerable: descriptor.enumerable,
+            writable: descriptor.writable,
+            value: nativeLike(function measuredSvgValue() {
+              const args = arguments;
+              return sanitizeElementFontScope(this, () => nativeMethod.apply(this, args));
+            }, nativeMethod, nativeMethod.name, nativeMethod.length),
+          });
+        }
+      };
+      patchSvgMetric(globalThis.SVGTextContentElement && globalThis.SVGTextContentElement.prototype);
+      patchSvgMetric(globalThis.SVGGraphicsElement && globalThis.SVGGraphicsElement.prototype);
     } catch (_) {}
   }
 
@@ -3769,34 +4039,51 @@ function buildInjectionScript(fp) {
           return list;
         };
 
-        const patchRect = (proto, method) => {
+        // A Range measures its commonAncestorContainer; an Element measures itself. Both must be
+        // font-sanitised so a foreign family cannot leak host metrics through layout probes.
+        const scopeTargetFor = (receiver, isRange) => {
+          if (!isRange) return receiver;
+          try {
+            const c = receiver && receiver.commonAncestorContainer;
+            if (!c) return null;
+            return c.nodeType === 1 ? c : (c.parentElement || null);
+          } catch (_) { return null; }
+        };
+
+        const patchRect = (proto, method, isRange = false) => {
           if (!proto || !proto[method]) return;
           replaceMethod(proto, method, (original) => function() {
-            const rect = original.apply(this, arguments);
-            if (!rect) return rect;
-            try {
-              const x = rect.x + noisePx, y = rect.y + noisePx;
-              const width = rect.width + noiseSize, height = rect.height + noiseSize;
-              return TargetDOMRect && TargetDOMRect.fromRect ? TargetDOMRect.fromRect({ x, y, width, height }) : rect;
-            } catch (_) { return rect; }
+            const run = () => {
+              const rect = original.apply(this, arguments);
+              if (!rect) return rect;
+              try {
+                const x = rect.x + noisePx, y = rect.y + noisePx;
+                const width = rect.width + noiseSize, height = rect.height + noiseSize;
+                return TargetDOMRect && TargetDOMRect.fromRect ? TargetDOMRect.fromRect({ x, y, width, height }) : rect;
+              } catch (_) { return rect; }
+            };
+            return sanitizeElementFontScope(scopeTargetFor(this, isRange), run);
           });
         };
 
-        const patchList = (proto, method) => {
+        const patchList = (proto, method, isRange = false) => {
           if (!proto || !proto[method]) return;
           replaceMethod(proto, method, (original) => function() {
-            const list = original.apply(this, arguments);
-            if (!list) return list;
-            try {
-              const rects = [];
-              for (let i = 0; i < list.length; i += 1) {
-                const rect = list[i];
-                rects.push(TargetDOMRect && TargetDOMRect.fromRect
-                  ? TargetDOMRect.fromRect({ x: rect.x + noisePx, y: rect.y + noisePx, width: rect.width + noiseSize, height: rect.height + noiseSize })
-                  : rect);
-              }
-              return makeRectList(rects);
-            } catch (_) { return list; }
+            const run = () => {
+              const list = original.apply(this, arguments);
+              if (!list) return list;
+              try {
+                const rects = [];
+                for (let i = 0; i < list.length; i += 1) {
+                  const rect = list[i];
+                  rects.push(TargetDOMRect && TargetDOMRect.fromRect
+                    ? TargetDOMRect.fromRect({ x: rect.x + noisePx, y: rect.y + noisePx, width: rect.width + noiseSize, height: rect.height + noiseSize })
+                    : rect);
+                }
+                return makeRectList(rects);
+              } catch (_) { return list; }
+            };
+            return sanitizeElementFontScope(scopeTargetFor(this, isRange), run);
           });
         };
 
@@ -3806,8 +4093,8 @@ function buildInjectionScript(fp) {
             patchList(Element.prototype, 'getClientRects');
           }
           if (globalThis.Range) {
-            patchRect(Range.prototype, 'getBoundingClientRect');
-            patchList(Range.prototype, 'getClientRects');
+            patchRect(Range.prototype, 'getBoundingClientRect', true);
+            patchList(Range.prototype, 'getClientRects', true);
           }
         } else {
           if (targetWin.Element) {
@@ -3815,8 +4102,8 @@ function buildInjectionScript(fp) {
             patchList(targetWin.Element.prototype, 'getClientRects');
           }
           if (targetWin.Range) {
-            patchRect(targetWin.Range.prototype, 'getBoundingClientRect');
-            patchList(targetWin.Range.prototype, 'getClientRects');
+            patchRect(targetWin.Range.prototype, 'getBoundingClientRect', true);
+            patchList(targetWin.Range.prototype, 'getClientRects', true);
           }
         }
       };
@@ -4348,6 +4635,153 @@ function buildInjectionScript(fp) {
       } else if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
         replaceMethod(navigator.mediaDevices, 'enumerateDevices', (original) => guardReceiver(original, isRealMediaDevices, serveDevices));
       }
+
+      // MediaStreamTrack label & getSettings shielding:
+      // Prevent getUserMedia from leaking native hardware device labels or deviceIds.
+      const trackInfoMap = new WeakMap();
+      const trackProto = typeof MediaStreamTrack !== 'undefined' ? MediaStreamTrack.prototype : null;
+      if (trackProto) {
+        const origLabelDesc = Object.getOwnPropertyDescriptor(trackProto, 'label');
+        if (origLabelDesc && typeof origLabelDesc.get === 'function') {
+          const nativeLabelGet = origLabelDesc.get;
+          Object.defineProperty(trackProto, 'label', {
+            configurable: origLabelDesc.configurable,
+            enumerable: origLabelDesc.enumerable,
+            get: nativeLike(function label() {
+              const info = trackInfoMap.get(this);
+              if (info && info.label !== undefined) return info.label;
+              return nativeLabelGet.call(this);
+            }, nativeLabelGet, 'get label', 0),
+          });
+        }
+
+        const origGetSettings = trackProto.getSettings;
+        if (typeof origGetSettings === 'function') {
+          Object.defineProperty(trackProto, 'getSettings', {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value: nativeLike(function getSettings() {
+              const settings = origGetSettings.apply(this, arguments);
+              const info = trackInfoMap.get(this);
+              if (info && settings && typeof settings === 'object') {
+                if (info.deviceId !== undefined) settings.deviceId = info.deviceId;
+                if (info.groupId !== undefined) settings.groupId = info.groupId;
+              }
+              return settings;
+            }, origGetSettings, 'getSettings', 0),
+          });
+        }
+
+        const origTrackClone = trackProto.clone;
+        if (typeof origTrackClone === 'function') {
+          Object.defineProperty(trackProto, 'clone', {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value: nativeLike(function clone() {
+              const cloned = origTrackClone.apply(this, arguments);
+              const info = trackInfoMap.get(this);
+              if (info && cloned) trackInfoMap.set(cloned, info);
+              return cloned;
+            }, origTrackClone, 'clone', 0),
+          });
+        }
+      }
+
+      if (typeof MediaStream !== 'undefined' && MediaStream.prototype) {
+        const origStreamClone = MediaStream.prototype.clone;
+        if (typeof origStreamClone === 'function') {
+          Object.defineProperty(MediaStream.prototype, 'clone', {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value: nativeLike(function clone() {
+              const clonedStream = origStreamClone.apply(this, arguments);
+              if (clonedStream && typeof clonedStream.getTracks === 'function') {
+                const origTracks = typeof this.getTracks === 'function' ? this.getTracks() : [];
+                const newTracks = clonedStream.getTracks();
+                for (let i = 0; i < newTracks.length; i += 1) {
+                  const origT = origTracks[i];
+                  const info = origT ? trackInfoMap.get(origT) : null;
+                  if (info && newTracks[i]) trackInfoMap.set(newTracks[i], info);
+                }
+              }
+              return clonedStream;
+            }, origStreamClone, 'clone', 0),
+          });
+        }
+      }
+
+      const audioDevices = CFG.mediaDevices.devices.filter((d) => d.kind === 'audioinput');
+      const videoDevices = CFG.mediaDevices.devices.filter((d) => d.kind === 'videoinput');
+      const nativeToSpoofedMap = new Map();
+
+      const assignTrackInfo = (track, constraints) => {
+        if (!track || typeof track.kind !== 'string') return;
+        const isAudio = track.kind === 'audio';
+        const candidates = isAudio ? audioDevices : videoDevices;
+        if (!candidates.length) return;
+
+        let reqId = null;
+        try {
+          const trackConstraint = isAudio ? constraints?.audio : constraints?.video;
+          if (trackConstraint && typeof trackConstraint === 'object') {
+            reqId = trackConstraint.deviceId?.exact || trackConstraint.deviceId?.ideal || trackConstraint.deviceId;
+            if (typeof reqId === 'object' && reqId) reqId = reqId.exact || reqId.ideal;
+          }
+        } catch (_) {}
+
+        let matched = null;
+        if (reqId && typeof reqId === 'string') {
+          matched = candidates.find((c) => c.deviceId === reqId);
+        }
+
+        if (!matched) {
+          let nativeDevId = '';
+          try {
+            const settings = trackProto?.getSettings ? trackProto.getSettings.call(track) : {};
+            nativeDevId = settings.deviceId || '';
+          } catch (_) {}
+          const mapKey = track.kind + ':' + nativeDevId;
+          if (nativeToSpoofedMap.has(mapKey)) {
+            matched = nativeToSpoofedMap.get(mapKey);
+          } else {
+            const usedCount = Array.from(nativeToSpoofedMap.keys()).filter((k) => k.startsWith(track.kind + ':')).length;
+            matched = candidates[usedCount % candidates.length];
+            nativeToSpoofedMap.set(mapKey, matched);
+          }
+        }
+
+        if (matched) {
+          trackInfoMap.set(track, {
+            label: String(matched.label || ''),
+            deviceId: String(matched.deviceId || ''),
+            groupId: String(matched.groupId || ''),
+          });
+        }
+      };
+
+      const wrapGetUserMedia = (origGUM) => {
+        if (typeof origGUM !== 'function') return origGUM;
+        return nativeLike(async function getUserMedia(constraints) {
+          const stream = await origGUM.call(this, constraints);
+          try {
+            if (stream && typeof stream.getTracks === 'function') {
+              for (const track of stream.getTracks()) {
+                assignTrackInfo(track, constraints);
+              }
+            }
+          } catch (_) {}
+          return stream;
+        }, origGUM, 'getUserMedia', origGUM.length);
+      };
+
+      if (mdProto && mdProto.getUserMedia) {
+        replaceMethod(mdProto, 'getUserMedia', (original) => wrapGetUserMedia(original));
+      } else if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        replaceMethod(navigator.mediaDevices, 'getUserMedia', (original) => wrapGetUserMedia(original));
+      }
     } catch (_) {}
   }
 
@@ -4713,6 +5147,7 @@ function buildWorkerInjectionScript(fp) {
     try { return normalizeHost(self && self.location && self.location.hostname); } catch (_) { return ''; }
   };
   // Match main-thread stabilityActiveNow: evaluate host at noise-time, not only at launch.
+  // active === true 时 noiseAmplitude = 1 (零噪声)，skipHosts 命中时 active === false (保留常规噪声 amp=3)
   const stabilityActiveNow = () => {
     const st = CFG.stability || {};
     if (st.mode === 'force') return !listHasHost(st.skipHosts, currentHost());
@@ -5568,9 +6003,8 @@ function buildWorkerInjectionScript(fp) {
   if (CFG.webgpu) {
     try {
       const gpuMode = String(CFG.webgpu.mode || "real");
-      const navProto = globalThis.WorkerNavigator?.prototype;
-      const origGpuDesc = navProto && Object.getOwnPropertyDescriptor(navProto, "gpu");
-      const nativeGpuGet = origGpuDesc && typeof origGpuDesc.get === "function" ? origGpuDesc.get : null;
+      const navGpu = (() => { try { return navigator.gpu || null; } catch (_) { return null; } })();
+      const gpuProto = (typeof GPU !== 'undefined' && GPU.prototype) || (navGpu && Object.getPrototypeOf(navGpu));
 
       const gpuInfo = CFG.webgpu.gpu && (CFG.webgpu.gpu.vendor || CFG.webgpu.gpu.architecture)
         ? {
@@ -5581,123 +6015,110 @@ function buildWorkerInjectionScript(fp) {
         }
         : null;
 
-      if (gpuMode === "blocked" && navProto && nativeGpuGet) {
-        let gpuProxy = null;
-        const wrapGpu = (realGpu) => {
-          if (!realGpu) return realGpu;
-          const p = new Proxy(realGpu, {
-            get(target, prop, receiver) {
-              if (prop === "requestAdapter") {
-                return nativeLike(async function requestAdapter(...args) {
-                  if (this !== p && this !== target) {
-                    await target.requestAdapter.apply(this, args);
-                  }
-                  return null;
-                }, target.requestAdapter, "requestAdapter", target.requestAdapter.length);
-              }
-              const val = Reflect.get(target, prop, target);
-              if (typeof val === "function") return val.bind(target);
-              return val;
-            }
-          });
-          return p;
-        };
-
-        Object.defineProperty(navProto, "gpu", {
-          configurable: origGpuDesc.configurable,
-          enumerable: origGpuDesc.enumerable,
-          get: nativeLike(function gpu() {
-            const real = nativeGpuGet.call(this);
-            if (!gpuProxy && real) gpuProxy = wrapGpu(real);
-            return gpuProxy || real;
-          }, nativeGpuGet, "get gpu", 0)
-        });
-
-        if (globalThis.GPU?.prototype) {
-          const origReq = globalThis.GPU.prototype.requestAdapter;
-          if (typeof origReq === "function") {
-            globalThis.GPU.prototype.requestAdapter = nativeLike(async function requestAdapter(...args) {
+      if (gpuMode === "blocked" && gpuProto) {
+        replace(gpuProto, 'requestAdapter', (origReq) => async function requestAdapter(...args) {
+          if (typeof origReq === 'function') {
+            try {
               await origReq.apply(this, args);
-              return null;
-            }, origReq, "requestAdapter", origReq.length);
+            } catch (err) {
+              if (err instanceof TypeError) throw err;
+            }
           }
-        }
-      } else if (gpuMode === "webgl" && gpuInfo && navProto && nativeGpuGet) {
-        const wrapInfo = (realInfo) => {
-          if (!realInfo) return realInfo;
-          return new Proxy(realInfo, {
-            get(target, prop, receiver) {
-              if (prop in gpuInfo) return gpuInfo[prop];
-              return Reflect.get(target, prop, target);
-            }
-          });
-        };
-
-        const wrapAdapter = (realAdapter) => {
-          if (!realAdapter) return realAdapter;
-          let cachedInfo = null;
-          return new Proxy(realAdapter, {
-            get(target, prop, receiver) {
-              if (prop === "info") {
-                if (!cachedInfo) {
-                  cachedInfo = wrapInfo(target.info);
-                }
-                return cachedInfo;
-              }
-              if (prop === "requestAdapterInfo") {
-                return nativeLike(async function requestAdapterInfo() {
-                  return wrapInfo(await target.requestAdapterInfo());
-                }, target.requestAdapterInfo, "requestAdapterInfo", 0);
-              }
-              const val = Reflect.get(target, prop, target);
-              if (typeof val === "function") return val.bind(target);
-              return val;
-            }
-          });
-        };
-
-        let gpuProxy = null;
-        const wrapGpu = (realGpu) => {
-          if (!realGpu) return realGpu;
-          const p = new Proxy(realGpu, {
-            get(target, prop, receiver) {
-              if (prop === "requestAdapter") {
-                return nativeLike(async function requestAdapter(...args) {
-                  const raw = await target.requestAdapter.apply(target, args);
-                  return wrapAdapter(raw);
-                }, target.requestAdapter, "requestAdapter", target.requestAdapter.length);
-              }
-              const val = Reflect.get(target, prop, target);
-              if (typeof val === "function") return val.bind(target);
-              return val;
-            }
-          });
-          return p;
-        };
-
-        Object.defineProperty(navProto, "gpu", {
-          configurable: origGpuDesc.configurable,
-          enumerable: origGpuDesc.enumerable,
-          get: nativeLike(function gpu() {
-            const real = nativeGpuGet.call(this);
-            if (!gpuProxy && real) gpuProxy = wrapGpu(real);
-            return gpuProxy || real;
-          }, nativeGpuGet, "get gpu", 0)
+          return null;
         });
+      } else if (gpuMode === "webgl" && gpuInfo && gpuProto) {
+        const infoOverrides = new WeakMap();
+        const adapterInfos = new WeakMap();
+        const patchedInfoKeys = new Set();
+        let adapterProtoPatched = false;
 
-        if (globalThis.GPU?.prototype) {
-          const origReq = globalThis.GPU.prototype.requestAdapter;
-          if (typeof origReq === "function") {
-            globalThis.GPU.prototype.requestAdapter = nativeLike(async function requestAdapter(...args) {
-              const raw = await origReq.apply(this, args);
-              return wrapAdapter(raw);
-            }, origReq, "requestAdapter", origReq.length);
+        const patchInfoAccessors = (iProto) => {
+          if (!iProto) return;
+          for (const key of Object.keys(gpuInfo)) {
+            if (patchedInfoKeys.has(key)) continue;
+            const desc = Object.getOwnPropertyDescriptor(iProto, key);
+            if (!desc || typeof desc.get !== 'function') continue;
+            const natGet = desc.get;
+            Object.defineProperty(iProto, key, {
+              configurable: desc.configurable,
+              enumerable: desc.enumerable,
+              get: nativeLike(function adapterInfoValue() {
+                const val = infoOverrides.get(this);
+                if (val && Object.prototype.hasOwnProperty.call(val, key)) return val[key];
+                return natGet.call(this);
+              }, natGet, 'get ' + key, 0),
+              set: desc.set,
+            });
+            patchedInfoKeys.add(key);
           }
+        };
+
+        const patchAdapterProto = (aProto) => {
+          if (adapterProtoPatched || !aProto) return;
+          adapterProtoPatched = true;
+          const infoDesc = Object.getOwnPropertyDescriptor(aProto, 'info');
+          if (infoDesc && typeof infoDesc.get === 'function') {
+            const natInfoGet = infoDesc.get;
+            Object.defineProperty(aProto, 'info', {
+              configurable: infoDesc.configurable,
+              enumerable: infoDesc.enumerable,
+              get: nativeLike(function info() {
+                const spoofed = adapterInfos.get(this);
+                return spoofed || natInfoGet.call(this);
+              }, natInfoGet, 'get info', 0),
+              set: infoDesc.set,
+            });
+          }
+
+          if (typeof aProto.requestAdapterInfo === 'function') {
+            replace(aProto, 'requestAdapterInfo', (origReqInfo) => async function requestAdapterInfo(...args) {
+              const info = await origReqInfo.apply(this, args);
+              if (!info || typeof info !== 'object') return info;
+              const iProto = (typeof GPUAdapterInfo !== 'undefined' && GPUAdapterInfo.prototype) || Object.getPrototypeOf(info);
+              patchInfoAccessors(iProto);
+              infoOverrides.set(info, gpuInfo);
+              adapterInfos.set(this, info);
+              return info;
+            });
+          }
+        };
+
+        // Pre-patch if global prototypes exist
+        if (typeof GPUAdapterInfo !== 'undefined' && GPUAdapterInfo.prototype) {
+          patchInfoAccessors(GPUAdapterInfo.prototype);
         }
+        if (typeof GPUAdapter !== 'undefined' && GPUAdapter.prototype) {
+          patchAdapterProto(GPUAdapter.prototype);
+        }
+
+        const prepareInfo = (adapter) => {
+          if (!adapter) return;
+          const aProto = (typeof GPUAdapter !== 'undefined' && GPUAdapter.prototype) || Object.getPrototypeOf(adapter);
+          patchAdapterProto(aProto);
+
+          let info = null;
+          try { info = adapter.info; } catch (_) {}
+          if (!info || typeof info !== 'object') return;
+
+          const iProto = (typeof GPUAdapterInfo !== 'undefined' && GPUAdapterInfo.prototype) || Object.getPrototypeOf(info);
+          patchInfoAccessors(iProto);
+
+          infoOverrides.set(info, gpuInfo);
+          adapterInfos.set(adapter, info);
+        };
+
+        replace(gpuProto, 'requestAdapter', (origReq) => async function requestAdapter(...args) {
+          const adapter = await origReq.apply(this, args);
+          if (!adapter) return adapter;
+          prepareInfo(adapter);
+          return adapter;
+        });
       }
     } catch (_) {}
   }
-})();`;
+})
+
+();`;
 }
 
 function chromeArgsForFingerprint(fp, profile = {}) {
