@@ -91,7 +91,9 @@ const PROBE = `(async () => {
 
   // 5. WebGL
   try {
-    const gl = document.createElement("canvas").getContext("webgl");
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl", { failIfMajorPerformanceCaveat: false })
+      || canvas.getContext("experimental-webgl");
     if (gl) {
       const ext = gl.getExtension("WEBGL_debug_renderer_info");
       out.webglVendor = ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) : null;
@@ -211,7 +213,13 @@ async function runBrowserSession(fp, profile) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ob-mobile-"));
   await writeOpenBrowserKernelInit(dir, { fingerprint: fp, profile, templatePath: path.join(kernelRoot, "init_template.json") });
 
-  const child = spawn(launcher, [dir, "--headless=new"], { cwd: kernelRoot, detached: true, stdio: "ignore" });
+  // Hosted macOS Intel runners have no hardware GPU. Match the repository's other WebGL E2E
+  // harnesses so the strict mobile-GPU persona assertions execute against a SwiftShader context.
+  const child = spawn(launcher, [dir, "--headless=new", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--enable-webgl"], {
+    cwd: kernelRoot,
+    detached: true,
+    stdio: "ignore",
+  });
   child.unref();
 
   let port = null;

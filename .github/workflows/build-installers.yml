@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.22'
+        default: 'v1.0.23'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -38,17 +38,18 @@ env:
   OPENBROWSER_PACKAGE_VARIANT: with-kernel
   OPENBROWSER_BUNDLE_KERNEL: 'true'
   RELEASE_NOTES: |
-    ## OpenBrowser ${{ inputs.release_tag }} (**v1.0.22**)
+    ## OpenBrowser ${{ inputs.release_tag }} (**v1.0.23**)
 
     ### 中文
 
-    - **版本标识与同步**：本发布版本统一为 **v1.0.22**，严格同步前端界面显示版本、npm 包版本、Windows 可执行文件与产品版本元数据、项目文档徽章及 CI/CD 工作流定义。
+    - **版本标识与同步**：本发布版本统一为 **v1.0.23**，严格同步前端界面显示版本、npm 包版本、Windows 可执行文件与产品版本元数据、项目文档徽章及 CI/CD 工作流定义。
     - **跨表面一致性防御（WebGPU / Canvas / Audio / ClientRects）**：防护能力全面覆盖主页面、DedicatedWorker、iframe、srcdoc 以及动态 `about:blank` 上下文；统一 OffscreenCanvas 与 DOM Canvas 噪音生成幅度；加固透明像素、0×0 边界尺寸、`getImageData` 非法接收者与异常参数防御；补齐 `AudioBuffer` 与 `DOMRectList` 原型链及属性描述符对齐。
     - **首导航与 Worker 网络头泄漏修复（UA-CH / Accept-Language）**：彻底修复首次主框架导航（Main Frame Navigation）泄露宿主真实 Client Hints 的时序空窗；修复 DedicatedWorker 内 `fetch()` 请求泄露宿主系统 `Accept-Language` 的缺陷；重构 `RequestHeaderRewriter` 与 CSS 响应重写为请求与响应双阶段隔离架构，支持高熵 Client Hints、大写去重、CORS OPTIONS 与 WebSocket 链路。
     - **移动端真实人设支持（Android / iOS）**：补全 Android 与 iOS 移动端人设覆盖，修复 Android 人设异常回退到 Windows / Win32 的逻辑缺陷；严格单向自洽对齐 User-Agent、Client Hints、`navigator.platform`、Touch 触控事件、屏幕尺寸、设备像素比（DPR）、GPU 渲染器及 Worker 执行环境。
     - **本地字体与 CSS 探测防护（170 份真实字体资产）**：严密拦截 CSS `@font-face src: local()`、`FontFace(local())` 与 Worker 字体探测侧信道；支持静态 HTML、外链样式表、CSSOM、adoptedStyleSheets、`data:`/`blob:` 样式注入清洗；`queryLocalFonts()` 与 `FontData.blob()` 均返回清洗去标识的真实 WOFF2 二进制数据；内置 170 份 WOFF2 字体资产（Windows 60 份、macOS 76 份、Linux 24 份、Android 10 份）。
     - **页面侧安装痕迹清零与跨 Realm 幂等**：移除字体、CSS、WebRTC 与 Worker 注入链路中可由页面反射枚举的安装标记和注册符号；以配置派生的私有桥接协议识别已注入函数，主页面与同源 iframe、srcdoc、动态 `about:blank`、DedicatedWorker 保持单层一致扰动，避免重复包装造成 Canvas、Audio 与 ClientRects 不一致；CSSOM 中的拒绝占位符改为每个配置独立的中性名称。
     - **WebGL 宿主能力动态协商**：动态适配宿主底层图形驱动（如 macOS Metal），收敛 `ALIASED_POINT_SIZE_RANGE`（如 `[1, 511]`）与纹理上限（如 `MAX_TEXTURE_SIZE` 16K），防止宣称参数与物理分配能力矛盾导致内核崩溃；规范 WebGL 扩展列表，严格按设定的人设过滤跨厂商专属扩展。
+    - **无 GPU 云端移动 WebGL 验证**：移动端人设端到端测试在无物理 GPU 的 macOS Intel 云端环境显式启用 SwiftShader 与 WebGL 后备上下文；仍保持 Android 移动 GPU 与 iOS Apple GPU 的严格断言，不以跳过或放宽掩盖渲染器回归。
     - **Issue #19 UI 渲染与多窗口同步修复**：操作栏 4 个操作按钮改用内联同步 SVG fallback，彻底解决异步图标字体加载失败导致文字空白的问题；浏览器图标替换为完整 256×256 矢量 SVG 居中呈现，消除裁切现象；多窗口层叠同步采用屏幕工作区边界模运算折返与吸附，适配负坐标副屏与超大窗口；注入 Windows DPI 缩放因子（`--force-device-scale-factor=1`）；白名单放行 `chrome://` 安全镜像导航。
     - **Issue #21 时区推导与内核时间同步**：建立 111 个国家到 IANA 时区与首都映射推导体系；针对 Windows Chromium 注入 `--time-zone-for-testing` C++ 内核参数；直连网络刷新失败时安全保留已有配置时区，避免意外回退重置；打通 Date、Intl、Cookie 格式化与 Worker 全链路时区一致性。
     - **Issue #22 SOCKS5 代理全面合规与稳定性重构**：严格遵循 RFC 1928 / RFC 1929 规范，握手强制校验协议版本 0x05 及认证子协议 0x01；修复非 URL 代理配置中密码含有 `#` 字符被误判为备注截断的问题；代理转发器并发队列扩容至 128 并发，完善建连与取消时的 Abort listener 即时注销；支持可即时中断唤醒的指数退避重试；完善 4 阶段连接重置（Reset）异常捕获与已销毁 Socket 资源安全回收。
@@ -57,13 +58,14 @@ env:
 
     ### English
 
-    - **Version Alignment & Synchronization**: Formally released as **v1.0.22**, synchronized end-to-end across UI display labels, npm package definitions, Windows PE file and product version metadata, documentation badges, and CI/CD workflow manifests.
+    - **Version Alignment & Synchronization**: Formally released as **v1.0.23**, synchronized end-to-end across UI display labels, npm package definitions, Windows PE file and product version metadata, documentation badges, and CI/CD workflow manifests.
     - **Cross-Surface Defense Consistency (WebGPU / Canvas / Audio / ClientRects)**: Comprehensive protection across main frames, DedicatedWorkers, standard iframes, srcdoc, and dynamic `about:blank` contexts; aligned OffscreenCanvas and DOM Canvas noise generation amplitudes; hardened transparent pixel handling, 0x0 dimensions, and wrong-receiver/malformed-argument contracts for `getImageData`; fully aligned `AudioBuffer` and `DOMRectList` prototype chains and descriptors.
     - **Initial Navigation & Worker Header Leak Fixes (UA-CH / Accept-Language)**: Eliminated timing races on initial Main Frame navigations that previously leaked host Client Hints; resolved DedicatedWorker `fetch()` leaking host `Accept-Language` headers; restructured `RequestHeaderRewriter` and CSS response rewriting into two-phase request/response isolation supporting high-entropy Client Hints, header casing deduplication, CORS OPTIONS, and WebSockets.
     - **Authentic Mobile Persona Support (Android / iOS)**: Added complete Android and iOS persona matrices, resolving bugs where Android profiles defaulted back to Windows / Win32; synchronized User-Agent, Client Hints, `navigator.platform`, Touch event APIs, screen geometries, devicePixelRatio, GPU renderers, and Worker execution environments.
     - **CSS Local Font Shielding & 170 Real Font Assets**: Fully blocked local font enumeration side channels via CSS `@font-face src: local()`, `FontFace(local())`, and Worker FontFace APIs; sanitized static HTML, external stylesheets, CSSOM mutations, adoptedStyleSheets, and `data:`/`blob:` stylesheet injections; ensured `queryLocalFonts()` and `FontData.blob()` return de-identified, authentic WOFF2 font binaries; bundled 170 real WOFF2 font subset assets (Windows: 60, macOS: 76, Linux: 24, Android: 10).
     - **Zero Page-Visible Install Traces & Cross-Realm Idempotence**: Removed page-reflectable installer flags and registered symbols from font, CSS, WebRTC, and Worker injection paths; a configuration-derived private bridge recognizes prior wrappers so the main page, same-origin iframes, srcdoc, dynamic `about:blank`, and DedicatedWorkers retain one consistent noise layer rather than double wrapping Canvas, Audio, or ClientRects; CSSOM denial placeholders are now neutral and profile-specific.
     - **WebGL Host Capability Negotiation**: Dynamically harmonized persona parameters with host GPU capabilities (such as macOS Metal), converging `ALIASED_POINT_SIZE_RANGE` (e.g. `[1, 511]`) and texture ceilings (e.g. `MAX_TEXTURE_SIZE` 16K) to avoid allocation crashes caused by impossible profile declarations; normalized WebGL extension catalogs to filter cross-vendor proprietary extensions.
+    - **GPU-less Hosted macOS Mobile WebGL Verification**: Mobile-persona E2E tests now explicitly enable SwiftShader and a WebGL fallback context on macOS Intel cloud runners without physical GPU access; Android mobile-GPU and iOS Apple-GPU assertions remain strict rather than being skipped or weakened.
     - **Issue #19 UI Rendering & Multi-Window Sync**: Replaced action bar buttons with synchronous inline SVG fallbacks, eliminating blank buttons caused by asynchronous font loading; upgraded browser icons to full unclipped 256x256 vector SVGs; constrained multi-window cascade layouts within screen workspace boundaries using modulo foldback, properly handling negative-offset multi-monitor setups; injected Windows DPI scaling factor (`--force-device-scale-factor=1`); whitelisted safe `chrome://` mirror navigation.
     - **Issue #21 Timezone Derivation & Kernel Sync**: Built a 111-country mapping database for IANA timezones and national capitals; injected `--time-zone-for-testing` into Windows Chromium C++ kernel; preserved user-configured timezones when network status checks fail, preventing accidental fallbacks; ensured strict timezone consistency across Date, Intl, Cookie formatters, and Worker scopes.
     - **Issue #22 SOCKS5 RFC 1928/1929 Compliance & Reliability**: Full compliance with RFC 1928 and RFC 1929, enforcing version 0x05 handshakes and 0x01 authentication subnegotiation; protected passwords containing `#` characters in non-URL proxy configurations from remark truncation; expanded proxy forwarder capacity to 128 concurrent connections with immediate Abort listener deregistration; implemented interruptible exponential backoff retry; robustly caught 4-stage connection reset conditions and recycled destroyed sockets.
