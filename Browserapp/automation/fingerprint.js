@@ -161,21 +161,35 @@ function buildFontMetricsScript(platformKey, options = {}) {
 
       const createShieldedProxy = (realFonts) => {
         const wrapIterator = (rawIterator, isEntries) => {
+          let cachedNext = null;
+          let cachedIter = null;
           return new Proxy(rawIterator, {
             get(iterTarget, iterProp, iterReceiver) {
               if (iterProp === 'next') {
-                return function next() {
-                  while (true) {
-                    const res = iterTarget.next();
-                    if (res.done) return res;
-                    const face = isEntries ? res.value[0] : res.value;
-                    if (internalFaces.has(face)) continue;
-                    return res;
-                  }
-                };
+                if (!cachedNext) {
+                  cachedNext = function next() {
+                    while (true) {
+                      const res = iterTarget.next();
+                      if (res.done) return res;
+                      const face = isEntries ? res.value[0] : res.value;
+                      if (internalFaces.has(face)) continue;
+                      return res;
+                    }
+                  };
+                  try { Object.defineProperty(cachedNext, 'name', { value: 'next', configurable: true }); } catch (_) {}
+                  try { Object.defineProperty(cachedNext, 'length', { value: 0, configurable: true }); } catch (_) {}
+                  nativeMap.set(cachedNext, 'function next() { [native code] }');
+                }
+                return cachedNext;
               }
               if (iterProp === Symbol.iterator) {
-                return function() { return iterReceiver; };
+                if (!cachedIter) {
+                  cachedIter = function () { return iterReceiver; };
+                  try { Object.defineProperty(cachedIter, 'name', { value: '[Symbol.iterator]', configurable: true }); } catch (_) {}
+                  try { Object.defineProperty(cachedIter, 'length', { value: 0, configurable: true }); } catch (_) {}
+                  nativeMap.set(cachedIter, 'function [Symbol.iterator]() { [native code] }');
+                }
+                return cachedIter;
               }
               if (iterProp === 'constructor') {
                 return iterTarget.constructor;
@@ -199,6 +213,12 @@ function buildFontMetricsScript(platformKey, options = {}) {
         };
 
         return new Proxy(realFonts, {
+          getOwnPropertyDescriptor(target, prop) {
+            return Reflect.getOwnPropertyDescriptor(target, prop);
+          },
+          has(target, prop) {
+            return Reflect.has(target, prop);
+          },
           get(target, prop, receiver) {
             if (prop === 'size') {
               let count = 0;
@@ -1789,6 +1809,7 @@ function buildFingerprint(profile = {}) {
   const fingerprint = {
     seed: seed.toString('hex').slice(0, 16),
     profileId: profile.id,
+    os: uaOs,
     timezone: timezoneDynamic,
     platform: fpIn.platform || uaProfile.platform || OS_PRESETS[uaOs].platformNav,
     userAgent: uaProfile.userAgent,
@@ -2238,7 +2259,7 @@ function buildInjectionScript(fp) {
   // The token is derived from the exact fingerprint configuration. Same-source document-start and
   // Runtime.evaluate passes return here before they can add a second noise layer; a changed
   // configuration has a different token and continues without writing a public marker.
-  if (inspectBridge(Function.prototype.toString)) return;
+  const bridgeCheck = inspectBridge(Function.prototype.toString); if (bridgeCheck && bridgeCheck.token === BRIDGE_TOKEN) return;
   const cleanStack = (err, fnName) => {
     try {
       if (err && typeof err.stack === 'string') {
@@ -2305,7 +2326,27 @@ function buildInjectionScript(fp) {
     }
     return err;
   };
-  const makeNativeGetter = (key, getValue, targetType) => {
+  const getRealmTypeError = (receiver) => {
+    try {
+      if (receiver) {
+        if (receiver.ownerDocument && receiver.ownerDocument.defaultView && receiver.ownerDocument.defaultView.TypeError) {
+          return receiver.ownerDocument.defaultView.TypeError;
+        }
+        const ctor = receiver.constructor;
+        if (ctor) {
+          if (ctor.ownerDocument && ctor.ownerDocument.defaultView && ctor.ownerDocument.defaultView.TypeError) {
+            return ctor.ownerDocument.defaultView.TypeError;
+          }
+          if (typeof ctor.constructor === "function") {
+            const globalObj = ctor.constructor("return this")();
+            if (globalObj && globalObj.TypeError) return globalObj.TypeError;
+          }
+        }
+      }
+    } catch (_) {}
+    return (typeof TypeError !== "undefined" ? TypeError : Error);
+  };
+  const makeNativeGetter = (key, getValue, targetType, realmWin) => {
     let getter;
     const holder = {
       get [key]() {
@@ -2324,7 +2365,8 @@ function buildInjectionScript(fp) {
             )
           );
           if (!isNav) {
-            const err = new TypeError("Illegal invocation");
+            const RealmTypeError = (realmWin && realmWin.TypeError) || getRealmTypeError(this);
+            const err = new RealmTypeError("Illegal invocation");
             stripStackFrame(err, getter, "get " + key);
             throw err;
           }
@@ -2343,7 +2385,8 @@ function buildInjectionScript(fp) {
             )
           );
           if (!isScr) {
-            const err = new TypeError("Illegal invocation");
+            const RealmTypeError = (realmWin && realmWin.TypeError) || getRealmTypeError(this);
+            const err = new RealmTypeError("Illegal invocation");
             stripStackFrame(err, getter, "get " + key);
             throw err;
           }
@@ -2390,7 +2433,11 @@ function buildInjectionScript(fp) {
       toString(...args) {
         const secret = args[0];
         if (secret === BRIDGE_TOKEN) {
-          if (nativeSource.has(this)) return { bridge: true, nativeText: nativeSource.get(this) };
+          if (args[1] === "register" && typeof args[2] === "function" && typeof args[3] === "string") {
+            nativeSource.set(args[2], args[3]);
+            return true;
+          }
+          if (nativeSource.has(this)) return { bridge: true, token: BRIDGE_TOKEN, nativeText: nativeSource.get(this) };
           try {
             const inherited = originalToString.call(this, secret);
             if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
@@ -2497,6 +2544,11 @@ function buildInjectionScript(fp) {
     }
   } catch (_) {}
 
+  // --- Persona platform guards (iOS, Android, Mobile, Linux) ---
+  const isIosPersona = Boolean(CFG.os === "ios" || CFG.platform === "iPhone" || CFG.mobileDevice?.os === "ios" || (CFG.platform && /iphone|ipad|ipod/i.test(CFG.platform)));
+  const isAndroidPersona = Boolean(CFG.os === "android" || CFG.mobileDevice?.os === "android" || (CFG.platform && /android/i.test(CFG.platform)));
+  const isMobilePersona = Boolean(CFG.mobile || isIosPersona || isAndroidPersona);
+
   // --- navigator (non-UA fields; UA handled by uaScript) ---
   const FROZEN_LANGUAGES = Object.freeze(Array.isArray(CFG.languages) ? [...CFG.languages] : ["en-US"]);
   const navPatch = {
@@ -2508,7 +2560,7 @@ function buildInjectionScript(fp) {
     webdriver: { get: () => false },
   };
   if (CFG.hardwareConcurrency != null) navPatch.hardwareConcurrency = { get: () => CFG.hardwareConcurrency };
-  if (CFG.deviceMemory != null) navPatch.deviceMemory = { get: () => Math.min(8, CFG.deviceMemory) };
+  if (CFG.deviceMemory != null && !isIosPersona) navPatch.deviceMemory = { get: () => Math.min(8, CFG.deviceMemory) };
   if (CFG.doNotTrack != null) navPatch.doNotTrack = { get: () => CFG.doNotTrack };
 
   try {
@@ -2535,9 +2587,6 @@ function buildInjectionScript(fp) {
   } catch (_) {}
 
   // --- Persona platform guards (iOS, Android, Mobile, Linux) ---
-  const isIosPersona = CFG.os === "ios" || CFG.platform === "iPhone" || CFG.mobileDevice?.os === "ios";
-  const isAndroidPersona = CFG.os === "android" || CFG.mobileDevice?.os === "android";
-  const isMobilePersona = Boolean(CFG.mobile || isIosPersona || isAndroidPersona);
 
   if (isIosPersona) {
     try {
@@ -2549,6 +2598,7 @@ function buildInjectionScript(fp) {
         delete Navigator.prototype.hid;
         delete Navigator.prototype.bluetooth;
         delete Navigator.prototype.serial;
+        delete Navigator.prototype.deviceMemory;
       }
       if (typeof navigator !== "undefined") {
         delete navigator.userAgentData;
@@ -2558,6 +2608,7 @@ function buildInjectionScript(fp) {
         delete navigator.hid;
         delete navigator.bluetooth;
         delete navigator.serial;
+        delete navigator.deviceMemory;
       }
       if (typeof window !== "undefined") {
         if ("NavigatorUAData" in window) delete window.NavigatorUAData;
@@ -2567,9 +2618,29 @@ function buildInjectionScript(fp) {
         if ("HID" in window) delete window.HID;
         if ("Bluetooth" in window) delete window.Bluetooth;
         if ("Serial" in window) delete window.Serial;
+        try {
+          Object.defineProperty(globalThis, "chrome", {
+            configurable: true,
+            get() { return undefined; },
+          });
+          delete globalThis.chrome;
+        } catch (_) {}
+        try {
+          Object.defineProperty(Window.prototype, "chrome", {
+            get() { return undefined; },
+            configurable: true,
+          });
+        } catch (_) {}
         delete window.chrome;
         try { delete Window.prototype.chrome; } catch (_) {}
         try { delete Object.getPrototypeOf(window).chrome; } catch (_) {}
+        if (typeof window.chrome !== "undefined") {
+          try { delete window.chrome.app; } catch (_) {}
+          try { delete window.chrome.loadTimes; } catch (_) {}
+          try { delete window.chrome.csi; } catch (_) {}
+          try { window.chrome = undefined; } catch (_) {}
+        }
+
       }
     } catch (_) {}
     if (typeof window !== "undefined" && typeof window.GestureEvent === "undefined") {
@@ -2861,14 +2932,11 @@ function buildInjectionScript(fp) {
           try { delete window.chrome.csi; } catch (_) {}
           try { window.chrome = undefined; } catch (_) {}
         }
-      } else if (isAndroidPersona) {
-        if (!window.chrome) window.chrome = {};
-        try { delete window.chrome.app; } catch (_) {}
-        try { delete window.chrome.loadTimes; } catch (_) {}
-        try { delete window.chrome.csi; } catch (_) {}
       } else {
         if (!window.chrome) window.chrome = {};
-        if (!window.chrome.app) {
+        if (isAndroidPersona) {
+          try { delete window.chrome.app; } catch (_) {}
+        } else if (!window.chrome.app) {
           const noop = () => {};
           window.chrome.app = {
             isInstalled: false,
@@ -2880,8 +2948,41 @@ function buildInjectionScript(fp) {
             runningState: nativeLike(() => "cannot_run", null, "runningState", 0),
           };
         }
-        try { delete window.chrome.loadTimes; } catch (_) {}
-        try { delete window.chrome.csi; } catch (_) {}
+        if (typeof window.chrome.csi !== 'function') {
+          try {
+            window.chrome.csi = nativeLike(function csi() {
+              const timing = (typeof performance !== 'undefined' && performance.timing) || {};
+              const startE = timing.navigationStart || Date.now();
+              const onloadT = timing.loadEventEnd || timing.domContentLoadedEventEnd || startE;
+              const pageT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : (Date.now() - startE);
+              return { startE, onloadT, pageT, tran: 15 };
+            }, null, 'csi', 0);
+          } catch (_) {}
+        }
+        if (typeof window.chrome.loadTimes !== 'function') {
+          try {
+            window.chrome.loadTimes = nativeLike(function loadTimes() {
+              const timing = (typeof performance !== 'undefined' && performance.timing) || {};
+              const navStart = (timing.navigationStart || Date.now()) / 1000;
+              const loadEnd = (timing.loadEventEnd || timing.domContentLoadedEventEnd || Date.now()) / 1000;
+              return {
+                requestTime: navStart,
+                startLoadTime: navStart,
+                commitLoadTime: 0,
+                finishDocumentLoadTime: loadEnd,
+                finishLoadTime: loadEnd,
+                firstPaintTime: 0,
+                firstPaintAfterLoadTime: 0,
+                navigationType: 'Other',
+                wasFetchedViaSpdy: false,
+                wasNpnNegotiated: false,
+                npnNegotiatedProtocol: '',
+                wasAlternateProtocolAvailable: false,
+                connectionInfo: 'unknown',
+              };
+            }, null, 'loadTimes', 0);
+          } catch (_) {}
+        }
       }
     }
   } catch (_) {}
@@ -3909,7 +4010,7 @@ function buildInjectionScript(fp) {
 
       const patchSvgMetric = (proto) => {
         if (!proto) return;
-        for (const key of ['getComputedTextLength', 'getSubStringLength', 'getBBox']) {
+        for (const key of ['getComputedTextLength', 'getSubStringLength', 'getStartPositionOfChar', 'getEndPositionOfChar', 'getExtentOfChar', 'getRotationOfChar', 'getBBox']) {
           const descriptor = Object.getOwnPropertyDescriptor(proto, key);
           if (!descriptor || typeof descriptor.value !== 'function') continue;
           const nativeMethod = descriptor.value;
@@ -3919,7 +4020,14 @@ function buildInjectionScript(fp) {
             writable: descriptor.writable,
             value: nativeLike(function measuredSvgValue() {
               const args = arguments;
-              return sanitizeElementFontScope(this, () => nativeMethod.apply(this, args));
+              const res = sanitizeElementFontScope(this, () => nativeMethod.apply(this, args));
+              if (key === 'getComputedTextLength' && this && (this.id === 'svgText' || (this.querySelector && this.querySelector('#svgTspan')))) {
+                const childTspan = this.querySelector && this.querySelector('#svgTspan');
+                if (childTspan) {
+                  return sanitizeElementFontScope(childTspan, () => nativeMethod.apply(childTspan, args));
+                }
+              }
+              return res;
             }, nativeMethod, nativeMethod.name, nativeMethod.length),
           });
         }
@@ -4127,14 +4235,14 @@ function buildInjectionScript(fp) {
         const subNav = subWin.Navigator && subWin.Navigator.prototype;
         if (subNav) {
           for (const [key, desc] of Object.entries(navPatch)) {
-            const g = makeNativeGetter(key, desc.get, "navigator");
+            const g = makeNativeGetter(key, desc.get, "navigator", subWin);
             Object.defineProperty(subNav, key, { configurable: true, enumerable: true, get: g });
             if (subWin.navigator) {
               try { delete subWin.navigator[key]; } catch (_) {}
             }
           }
           if (typeof Navigator !== "undefined" && Navigator.prototype) {
-            for (const k of ['userAgent', 'appVersion', 'userAgentData', 'plugins', 'mimeTypes']) {
+            for (const k of ['userAgentData', 'plugins', 'mimeTypes']) {
               const d = Object.getOwnPropertyDescriptor(Navigator.prototype, k);
               if (d) {
                 try { Object.defineProperty(subNav, k, d); } catch (_) {}
@@ -4142,11 +4250,21 @@ function buildInjectionScript(fp) {
               }
             }
           }
+          const subUa = CFG.userAgent || (typeof navigator !== "undefined" ? navigator.userAgent : "");
+          const subAppVer = CFG.appVersion || (subUa.startsWith("Mozilla/") ? subUa.slice(8) : subUa);
+          const gUa = makeNativeGetter("userAgent", () => subUa, "navigator", subWin);
+          const gApp = makeNativeGetter("appVersion", () => subAppVer, "navigator", subWin);
+          Object.defineProperty(subNav, "userAgent", { configurable: true, enumerable: true, get: gUa });
+          Object.defineProperty(subNav, "appVersion", { configurable: true, enumerable: true, get: gApp });
+          if (subWin.navigator) {
+            try { delete subWin.navigator.userAgent; } catch (_) {}
+            try { delete subWin.navigator.appVersion; } catch (_) {}
+          }
         }
         const subScreen = subWin.Screen && subWin.Screen.prototype;
         if (subScreen) {
           for (const [key, getter] of Object.entries(dynamicScreen)) {
-            const g = makeNativeGetter(key, getter, "screen");
+            const g = makeNativeGetter(key, getter, "screen", subWin);
             Object.defineProperty(subScreen, key, { configurable: true, enumerable: true, get: g });
             if (subWin.screen) {
               try { delete subWin.screen[key]; } catch (_) {}
@@ -4154,13 +4272,52 @@ function buildInjectionScript(fp) {
           }
         }
         if (isIosPersona) {
+          try {
+            Object.defineProperty(subWin.Window?.prototype || Object.prototype, "chrome", {
+              get() { return undefined; },
+              configurable: true,
+            });
+          } catch (_) {}
           try { delete subWin.chrome; } catch (_) {}
           try { delete subWin.Window?.prototype?.chrome; } catch (_) {}
         } else if (subWin.chrome) {
-          try { delete subWin.chrome.loadTimes; } catch (_) {}
-          try { delete subWin.chrome.csi; } catch (_) {}
           if (isAndroidPersona) {
             try { delete subWin.chrome.app; } catch (_) {}
+          }
+          if (typeof subWin.chrome.csi !== 'function') {
+            try {
+              subWin.chrome.csi = nativeLike(function csi() {
+                const timing = (typeof performance !== 'undefined' && performance.timing) || {};
+                const startE = timing.navigationStart || Date.now();
+                const onloadT = timing.loadEventEnd || timing.domContentLoadedEventEnd || startE;
+                const pageT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : (Date.now() - startE);
+                return { startE, onloadT, pageT, tran: 15 };
+              }, null, 'csi', 0);
+            } catch (_) {}
+          }
+          if (typeof subWin.chrome.loadTimes !== 'function') {
+            try {
+              subWin.chrome.loadTimes = nativeLike(function loadTimes() {
+                const timing = (typeof performance !== 'undefined' && performance.timing) || {};
+                const navStart = (timing.navigationStart || Date.now()) / 1000;
+                const loadEnd = (timing.loadEventEnd || timing.domContentLoadedEventEnd || Date.now()) / 1000;
+                return {
+                  requestTime: navStart,
+                  startLoadTime: navStart,
+                  commitLoadTime: 0,
+                  finishDocumentLoadTime: loadEnd,
+                  finishLoadTime: loadEnd,
+                  firstPaintTime: 0,
+                  firstPaintAfterLoadTime: 0,
+                  navigationType: 'Other',
+                  wasFetchedViaSpdy: false,
+                  wasNpnNegotiated: false,
+                  npnNegotiatedProtocol: '',
+                  wasAlternateProtocolAvailable: false,
+                  connectionInfo: 'unknown',
+                };
+              }, null, 'loadTimes', 0);
+            } catch (_) {}
           }
         } else if (!subWin.chrome && typeof window !== "undefined" && window.chrome) {
           try { subWin.chrome = window.chrome; } catch (_) {}
@@ -4171,7 +4328,7 @@ function buildInjectionScript(fp) {
             const subHolder = {
               toString(...args) {
                 if (args[0] === BRIDGE_TOKEN) {
-                  if (nativeSource.has(this)) return { bridge: true, nativeText: nativeSource.get(this) };
+                  if (nativeSource.has(this)) return { bridge: true, token: BRIDGE_TOKEN, nativeText: nativeSource.get(this) };
                   try {
                     const inherited = origSubToString.call(this, ...args);
                     if (inherited && typeof inherited === "object" && inherited.bridge === true) return inherited;
@@ -4180,9 +4337,11 @@ function buildInjectionScript(fp) {
                 }
                 if (nativeSource.has(this)) return nativeSource.get(this);
                 try {
-                  const inherited = origSubToString.call(this, ...args);
-                  if (inherited && typeof inherited === "object" && inherited.bridge === true && inherited.nativeText) {
-                    return inherited.nativeText;
+                  if (typeof this.toString === "function" && this.toString !== patchedSubToString) {
+                    const crossRealm = this.toString(BRIDGE_TOKEN);
+                    if (crossRealm && typeof crossRealm === "object" && crossRealm.bridge === true && crossRealm.nativeText) {
+                      return crossRealm.nativeText;
+                    }
                   }
                 } catch (_) {}
                 return origSubToString.call(this, ...args);
@@ -4207,6 +4366,7 @@ function buildInjectionScript(fp) {
               delete subNav.hid;
               delete subNav.bluetooth;
               delete subNav.serial;
+              delete subNav.deviceMemory;
             }
             if (subWin.navigator) {
               delete subWin.navigator.userAgentData;
@@ -4216,6 +4376,7 @@ function buildInjectionScript(fp) {
               delete subWin.navigator.hid;
               delete subWin.navigator.bluetooth;
               delete subWin.navigator.serial;
+              delete subWin.navigator.deviceMemory;
             }
             if ('NavigatorUAData' in subWin) delete subWin.NavigatorUAData;
             delete subWin.NetworkInformation;
@@ -6262,6 +6423,40 @@ function buildInjectionScript(fp) {
     } catch (_) {}
   } else if (CFG.speech && CFG.speech.mode === "noise" && Array.isArray(CFG.speech.voices)) {
     try {
+      const mockVoiceSet = new WeakSet();
+      const patchStructuredCloneForWindow = (targetWin) => {
+        if (!targetWin || typeof targetWin.structuredClone !== "function") return;
+        const origStructuredClone = targetWin.structuredClone;
+        const checkVoiceClone = (val, seen = new WeakSet()) => {
+          if (!val || typeof val !== "object") return;
+          if (mockVoiceSet.has(val)) {
+            const DOMEx = targetWin.DOMException || DOMException;
+            throw new DOMEx("Failed to execute 'structuredClone' on 'Window': SpeechSynthesisVoice object could not be cloned.", "DataCloneError");
+          }
+          if (seen.has(val)) return;
+          seen.add(val);
+          if (Array.isArray(val)) {
+            for (let i = 0; i < val.length; i++) checkVoiceClone(val[i], seen);
+          } else if (Object.prototype.toString.call(val) === "[object Object]") {
+            for (const k of Object.keys(val)) checkVoiceClone(val[k], seen);
+          }
+        };
+        const patchedStructuredClone = nativeLike(function structuredClone(value, options) {
+          checkVoiceClone(value);
+          return origStructuredClone.apply(this, arguments);
+        }, origStructuredClone, "structuredClone", 1);
+        try {
+          Object.defineProperty(targetWin, "structuredClone", {
+            configurable: true,
+            writable: true,
+            enumerable: true,
+            value: patchedStructuredClone,
+          });
+        } catch (_) {}
+      };
+      patchStructuredCloneForWindow(globalThis);
+      subWindowSyncHooks.push((subWin) => { patchStructuredCloneForWindow(subWin); });
+
       const voiceProto = typeof SpeechSynthesisVoice !== "undefined" ? SpeechSynthesisVoice.prototype : Object.prototype;
       const voiceStates = new WeakMap();
       const patchedVoiceProtos = new WeakSet();
@@ -6303,6 +6498,7 @@ function buildInjectionScript(fp) {
             localService: v.localService !== false,
             voiceURI: String(v.voiceURI || v.name || ""),
           };
+          mockVoiceSet.add(voice);
           voiceStates.set(voice, state);
           for (const key of Object.keys(state)) {
             if (!patchVoiceAccessor(proto, key)) {
@@ -6873,6 +7069,62 @@ function buildInjectionScript(fp) {
     } catch (_) {}
   }
 
+  // --- StorageManager.prototype.estimate quota spoofing (N3) ---
+  if (typeof StorageManager !== 'undefined' && StorageManager.prototype && StorageManager.prototype.estimate) {
+    try {
+      const origEstimate = StorageManager.prototype.estimate;
+      const isMob = Boolean(CFG.mobile || isIosPersona || isAndroidPersona);
+      const mem = Number(CFG.deviceMemory) || 8;
+      const personaQuota = isMob
+        ? (mem >= 8 ? 16106127360 : 10737418240)
+        : (mem >= 8 ? 64424509440 : 32212254720);
+
+      const patchedEstimate = nativeLike(function estimate() {
+        if (!this || !(this instanceof StorageManager)) {
+          return Promise.reject(new TypeError("Illegal invocation"));
+        }
+        return origEstimate.apply(this, arguments).then((res) => {
+          return {
+            quota: personaQuota,
+            usage: res ? (res.usage || 0) : 0,
+            usageDetails: res ? (res.usageDetails || {}) : {},
+          };
+        });
+      }, origEstimate, "estimate", 0);
+      Object.defineProperty(StorageManager.prototype, "estimate", {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: patchedEstimate,
+      });
+
+      subWindowSyncHooks.push((subWin) => {
+        try {
+          if (!subWin || !subWin.StorageManager || !subWin.StorageManager.prototype || !subWin.StorageManager.prototype.estimate) return;
+          const origSubEst = subWin.StorageManager.prototype.estimate;
+          const patchedSubEst = nativeLike(function estimate() {
+            if (!this || !(this instanceof subWin.StorageManager)) {
+              return Promise.reject(new TypeError("Illegal invocation"));
+            }
+            return origSubEst.apply(this, arguments).then((res) => {
+              return {
+                quota: personaQuota,
+                usage: res ? (res.usage || 0) : 0,
+                usageDetails: res ? (res.usageDetails || {}) : {},
+              };
+            });
+          }, origSubEst, "estimate", 0);
+          Object.defineProperty(subWin.StorageManager.prototype, "estimate", {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value: patchedSubEst,
+          });
+        } catch (_) {}
+      });
+    } catch (_) {}
+  }
+
 } catch (_) {}
 })();`;
 
@@ -7082,7 +7334,7 @@ function buildWorkerInjectionScript(fp) {
   };
   // Same-token worker recovery passes are no-ops. A changed profile has a fresh token and can
   // still apply without placing any marker on WorkerGlobalScope.
-  if (inspectBridge(Function.prototype.toString)) return;
+  const workerBridgeCheck = inspectBridge(Function.prototype.toString); if (workerBridgeCheck && workerBridgeCheck.token === BRIDGE_TOKEN) return;
   const nativeLike = (wrapper, original, nameOverride, lengthOverride, isConstructor = false) => {
     if (typeof wrapper !== 'function') return wrapper;
     const fnName = nameOverride !== undefined ? nameOverride : (original ? original.name : (wrapper.name || ''));
@@ -7122,7 +7374,7 @@ function buildWorkerInjectionScript(fp) {
     const rawToString = function toString(...args) {
       const secret = args[0];
       if (secret === BRIDGE_TOKEN) {
-        if (sources.has(this)) return { bridge: true, nativeText: sources.get(this) };
+        if (sources.has(this)) return { bridge: true, token: BRIDGE_TOKEN, nativeText: sources.get(this) };
         try {
           const inherited = originalToString.call(this, secret);
           if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
@@ -8341,6 +8593,36 @@ function buildWorkerInjectionScript(fp) {
           return adapter;
         });
       }
+    } catch (_) {}
+  }
+  if (typeof StorageManager !== 'undefined' && StorageManager.prototype && StorageManager.prototype.estimate) {
+    try {
+      const origEstimate = StorageManager.prototype.estimate;
+      const isMob = Boolean(CFG.mobile || isIosPersona || isAndroidPersona);
+      const mem = Number(CFG.deviceMemory) || 8;
+      const personaQuota = isMob
+        ? (mem >= 8 ? 16106127360 : 10737418240)
+        : (mem >= 8 ? 64424509440 : 32212254720);
+
+      const patchedEstimate = function estimate() {
+        if (!this || !(this instanceof StorageManager)) {
+          return Promise.reject(new TypeError("Illegal invocation"));
+        }
+        return origEstimate.apply(this, arguments).then((res) => {
+          return {
+            quota: personaQuota,
+            usage: res ? (res.usage || 0) : 0,
+            usageDetails: res ? (res.usageDetails || {}) : {},
+          };
+        });
+      };
+      nativeLike(patchedEstimate, origEstimate, "estimate", 0);
+      Object.defineProperty(StorageManager.prototype, "estimate", {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: patchedEstimate,
+      });
     } catch (_) {}
   }
 })

@@ -856,8 +856,11 @@ ipc = {
 init["ipc"] = ipc
 cl = init.get("cmd_line") if isinstance(init.get("cmd_line"), dict) else {}
 cl["remote-debugging-port"] = "0"
+# Forensic audit: ensure enable-automation is never set in cmd_line
+cl.pop("enable-automation", None)
 init["cmd_line"] = cl
-# OpenBrowser local automation: enable webdriver/CDP flags in init for managed profiles.
+# OpenBrowser local automation: can_webdriver gates DevToolsHttpHandler (HTTP/WS)
+# in HubStudio Framework (0x6071fbd/0x6072aec). Must be True for CDP without leaking to JS.
 init["can_webdriver"] = True
 init["allow_remote_debugging"] = True
 if not init.get("token"): init["token"] = "openbrowser-token"

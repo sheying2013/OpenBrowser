@@ -520,7 +520,11 @@ function applySafetyFields(init) {
   // A bypass list whose feature switch is off is a latent direct-connection path: hosts in it would
   // skip the proxy if any layer read the list on its own. The list is cleared with the switch.
   init.async_proxy_data_exception_list = [];
-  // Local managed profiles keep CDP / automation flags enabled in init.json.
+  // Forensic audit (bundled kernel reverse engineering):
+  // can_webdriver gates DevToolsHttpHandler::OnHttpRequest (0x6071fbd) and
+  // OnWebSocketRequest (0x6072aec). If false, CDP HTTP/WS connections are rejected.
+  // It does NOT affect Blink or JS navigator.webdriver. Keep true for local CDP/RPA.
+  // allow_remote_debugging (0x2796fa3) controls DevTools binding (0.0.0.0 vs 127.0.0.1).
   init.can_webdriver = true;
   init.allow_remote_debugging = true;
   init.is_debug = 1;
@@ -718,9 +722,17 @@ function applyFingerprintFields(init, fields) {
     }
   }
   cl['remote-debugging-port'] = '0';
-  // Keep CDP reachable for Local API / RPA / window sync regardless of template defaults.
-  if (cl['enable-automation'] === undefined) cl['enable-automation'] = '';
+  // Forensic audit: Never inject or allow 'enable-automation' into cmd_line.
+  // In Chromium, --enable-automation enables Blink's AutomationControlled feature,
+  // causes navigator.webdriver=true in C++, shows the automation infobar,
+  // and is a primary trigger for bot-detection mechanisms (e.g. Google BotGuard).
+  // CDP connectivity only requires remote-debugging-port and init.can_webdriver=true.
+  delete cl['enable-automation'];
   init.cmd_line = cl;
+  // Forensic audit (bundled kernel reverse engineering):
+  // can_webdriver gates DevToolsHttpHandler::OnHttpRequest (0x6071fbd) and
+  // OnWebSocketRequest (0x6072aec). If false, CDP HTTP/WS connections are rejected.
+  // It does NOT affect Blink or JS navigator.webdriver. Keep true for local CDP/RPA.
   init.can_webdriver = true;
   init.allow_remote_debugging = true;
   if (fields._browserTitle) init.browser_title = String(fields._browserTitle).slice(0, 120);
@@ -946,6 +958,12 @@ function validateKernelInitInvariants(init) {
     if (JSON.stringify(init.canvas_fingerprint_skip_hosts) !== JSON.stringify(init.webgl_fingerprint_skip_hosts)) {
       issues.push('canvas_fingerprint_skip_hosts and webgl_fingerprint_skip_hosts must have identical items');
     }
+  }
+
+  // 4. Automation flag invariant: cmd_line must never carry enable-automation
+  // (Chromium's --enable-automation enables Blink AutomationControlled / navigator.webdriver=true)
+  if (init.cmd_line && typeof init.cmd_line === 'object' && 'enable-automation' in init.cmd_line) {
+    issues.push('cmd_line must not carry enable-automation (triggers Blink AutomationControlled)');
   }
 
   // 3. WebRTC 互洽不变量校验

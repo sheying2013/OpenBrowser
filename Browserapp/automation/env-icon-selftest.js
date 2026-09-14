@@ -25,7 +25,7 @@ async function main() {
     );
     assert.ok(!/\bHAS_NOPROXY\b/.test(src), 'HAS_NOPROXY tracking is unused after the proxy leak fix');
     assert.ok(
-      /ARTIFACT_STAMP_VERSION = 3/.test(src),
+      /ARTIFACT_STAMP_VERSION = (?:[3-9]|\d{2,})/.test(src),
       'stamp version must bump so existing Dock wrappers rebuild without --no-proxy-server',
     );
     console.log('env-icon-selftest: ok');

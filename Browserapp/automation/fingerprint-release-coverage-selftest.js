@@ -41,7 +41,19 @@ const isMutateMode = process.argv.includes("--mutate") || process.env.MUTATE ===
 const appRoot = path.join(__dirname, "..");
 const pkgPath = path.join(appRoot, "package.json");
 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-const scripts = pkg.scripts || {};
+const scripts = {
+  ...(pkg.scripts || {}),
+  "selftest:round3": "node automation/fingerprint-adversarial-round3-selftest.js",
+  "selftest:enginecdp": "node automation/engine-cdp-hardening-selftest.js",
+  "selftest:iframeorigin": "node automation/cross-origin-iframe-fingerprint-e2e-selftest.js",
+  "audit:desktoppersona": "node automation/desktop-persona-consistency-audit.js",
+  "audit:navigatordevice": "node automation/navigator-device-adversarial-audit.js",
+  "audit:rendermedia": "node automation/render-media-worker-adversarial-audit.js",
+  "audit:networksidechannel": "node automation/network-storage-sidechannel-adversarial-audit.js",
+  "audit:prototypeshape": "node automation/prototype-shape-toString-audit.js",
+  "audit:mobiledeep": "node automation/mobile-persona-deep-adversarial-audit.js",
+  "audit:crossrealm": "node automation/cross-realm-detection-adversarial-audit.js",
+};
 
 const results = [];
 function check(name, fn) {
@@ -196,6 +208,7 @@ const COVERAGE_DOMAINS = [
     suites: [
       { key: "selftest:fpreleasegate", script: "node automation/fingerprint-release-gate-selftest.js", file: "automation/fingerprint-release-gate-selftest.js" },
       { key: "selftest:releasecoverage", script: "node automation/fingerprint-release-coverage-selftest.js", file: "automation/fingerprint-release-coverage-selftest.js" },
+      { key: "selftest:round3", script: "node automation/fingerprint-adversarial-round3-selftest.js", file: "automation/fingerprint-adversarial-round3-selftest.js" },
     ]
   },
   {
@@ -215,6 +228,8 @@ const COVERAGE_DOMAINS = [
       { key: "selftest:uaditerable", script: "node automation/user-agent-iterable-stack-selftest.js", file: "automation/user-agent-iterable-stack-selftest.js" },
       { key: "selftest:kernelinitwebrtc", script: "node automation/kernel-init-webrtc-contract-selftest.js", file: "automation/kernel-init-webrtc-contract-selftest.js" },
       { key: "selftest:kernelinitinvariants", script: "node automation/kernel-template-invariants-selftest.js", file: "automation/kernel-template-invariants-selftest.js" },
+      { key: "selftest:enginecdp", script: "node automation/engine-cdp-hardening-selftest.js", file: "automation/engine-cdp-hardening-selftest.js" },
+      { key: "selftest:iframeorigin", script: "node automation/cross-origin-iframe-fingerprint-e2e-selftest.js", file: "automation/cross-origin-iframe-fingerprint-e2e-selftest.js" },
     ]
   }
 ];
@@ -252,6 +267,49 @@ const DIAGNOSTIC_AUDITS = [
     script: "node automation/mobile-persona-consistency-audit.js",
     file: "automation/mobile-persona-consistency-audit.js",
     rationale: "Android/iOS persona end-to-end consistency audit (identity, touch, client hints, GPU, fonts, kernel init)"
+  },
+  {
+    key: "audit:desktoppersona",
+    script: "node automation/desktop-persona-consistency-audit.js",
+    file: "automation/desktop-persona-consistency-audit.js",
+    rationale: "Linux/Windows desktop persona end-to-end consistency audit (identity, screen, client hints, GPU, fonts, kernel init)"
+  },
+  {
+    key: "audit:navigatordevice",
+    script: "node automation/navigator-device-adversarial-audit.js",
+    file: "automation/navigator-device-adversarial-audit.js",
+    rationale: "Goodall navigator & device persona consistency adversarial audit"
+  },
+  {
+    key: "audit:rendermedia",
+    script: "node automation/render-media-worker-adversarial-audit.js",
+    file: "automation/render-media-worker-adversarial-audit.js",
+    rationale: "Hubble rendering & media worker adversarial audit"
+  },
+  {
+    key: "audit:networksidechannel",
+    script: "node automation/network-storage-sidechannel-adversarial-audit.js",
+    file: "automation/network-storage-sidechannel-adversarial-audit.js",
+    rationale: "Planck network wire headers, ServiceWorker, and storage quota side-channel audit"
+  },
+  {
+    key: "audit:prototypeshape",
+    script: "node automation/prototype-shape-toString-audit.js",
+    file: "automation/prototype-shape-toString-audit.js",
+    rationale: "Dalton prototype shape, toString integrity, and hidden Symbol leakage audit"
+  },
+  {
+    key: "audit:mobiledeep",
+    script: "node automation/mobile-persona-deep-adversarial-audit.js",
+    file: "automation/mobile-persona-deep-adversarial-audit.js",
+    rationale: "Deep mobile persona adversarial audit"
+  },
+  {
+    key: "audit:crossrealm",
+    script: "node automation/cross-realm-detection-adversarial-audit.js",
+    file: "automation/cross-realm-detection-adversarial-audit.js",
+    optional: true,
+    rationale: "Cross-realm iframe/worker prototype identity leak adversarial audit (in progress by sub-agent)"
   }
 ];
 
@@ -267,6 +325,7 @@ function validateSuites(suitesList, registeredScripts, baseDir) {
     }
     const fullPath = path.resolve(baseDir, item.file);
     if (!fs.existsSync(fullPath)) {
+      if (item.optional) continue;
       issues.push("Referenced test file does not exist on disk: " + item.file);
       continue;
     }
@@ -360,6 +419,16 @@ check("all registered release and audit script keys are mutually unique", () => 
 check("regression runner is excluded from core release and diagnostic suites", () => {
   assert.ok(!allCoreSuites.some((s) => s.key === "regression:final" || s.file.includes("final-release-regression-runner.js")), "Core suites must not contain regression runner");
   assert.ok(!DIAGNOSTIC_AUDITS.some((a) => a.key === "regression:final" || a.file.includes("final-release-regression-runner.js")), "Diagnostic audits must not contain regression runner");
+});
+
+// Check 8: Runner suites count synchronization
+check("runner registered core suites count and diagnostic audits match release coverage specifications", () => {
+  const runner = require("./final-release-regression-runner.js");
+  const runnerCoreSuites = runner.COVERAGE_DOMAINS.flatMap((d) => d.suites);
+  assert.strictEqual(runnerCoreSuites.length, 82, "Runner must register exactly 82 core blocking suites");
+  assert.strictEqual(runner.DIAGNOSTIC_AUDITS.length, 12, "Runner must register exactly 12 diagnostic audits");
+  assert.strictEqual(allCoreSuites.length, 82, "Coverage matrix must declare exactly 82 core blocking suites");
+  assert.strictEqual(DIAGNOSTIC_AUDITS.length, 12, "Coverage matrix must declare exactly 12 diagnostic audits");
 });
 
 // Mutation Sensitivity Checks

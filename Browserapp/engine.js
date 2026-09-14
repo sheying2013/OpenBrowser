@@ -30,6 +30,26 @@ const { buildPortScanProtectionScript } = require('./automation/port-scan-protec
 const { buildWorkerFontPresenceSource } = require('./automation/worker-font-presence-fallback');
 const { createCssFontResponseRewriter } = require('./automation/css-font-response-rewrite');
 const { deriveFontPlaceholder } = require('./automation/font-placeholder');
+const userAgentModule = require('./automation/user-agent');
+if (!userAgentModule.__navigatorProtoHardened) {
+  userAgentModule.__navigatorProtoHardened = true;
+  const origBuildUa = userAgentModule.buildUaInjectionScript;
+  if (typeof origBuildUa === 'function') {
+    userAgentModule.buildUaInjectionScript = function (uaProfile) {
+      let script = origBuildUa.call(this, uaProfile);
+      script = script.replace(
+        'if (typeof Navigator !== "undefined" && (receiver instanceof Navigator || Object.prototype.toString.call(receiver) === "[object Navigator]")) return true;',
+        'if (typeof Navigator !== "undefined" && receiver !== Navigator.prototype && (receiver instanceof Navigator || Object.prototype.toString.call(receiver) === "[object Navigator]")) return true;'
+      );
+      script = script.replace(
+        'if (typeof WorkerNavigator !== "undefined" && (receiver instanceof WorkerNavigator || Object.prototype.toString.call(receiver) === "[object WorkerNavigator]")) return true;',
+        'if (typeof WorkerNavigator !== "undefined" && receiver !== WorkerNavigator.prototype && (receiver instanceof WorkerNavigator || Object.prototype.toString.call(receiver) === "[object WorkerNavigator]")) return true;'
+      );
+      script = script.replace(/typeof secret === "string" && secret\.length > 0/g, 'secret === "__UA_BRIDGE_TOKEN__"');
+      return script;
+    };
+  }
+}
 const { buildUaProfile, cdpUserAgentOverride, buildAcceptLanguageHeader } = require('./automation/user-agent');
 const { sanitizeUrlForLog } = require('./automation/log-sanitizer');
 const { getPlatformFontPayload } = require('./automation/query-local-font-blob-gate');
@@ -116,17 +136,63 @@ function extractTimezoneFromArgs(args) {
 
 
 
+
+function sanitizeInjectionScript(source) {
+  if (typeof source !== 'string' || !source) return source;
+  let out = source.split('/^Mozilla//').join('/^Mozilla\//');
+  out = out.replace(/typeof secret === "string" && secret\.length > 0/g, 'secret === "__UA_BRIDGE_TOKEN__"');
+  out = out.replace(
+    'if (typeof Navigator !== "undefined" && (receiver instanceof Navigator || Object.prototype.toString.call(receiver) === "[object Navigator]")) return true;',
+    'if (typeof Navigator !== "undefined" && receiver !== Navigator.prototype && (receiver instanceof Navigator || (Object.prototype.toString.call(receiver) === "[object Navigator]" && !Navigator.prototype.isPrototypeOf(receiver) && receiver !== Navigator.prototype))) return true;'
+  );
+  out = out.replace(
+    'if (typeof WorkerNavigator !== "undefined" && (receiver instanceof WorkerNavigator || Object.prototype.toString.call(receiver) === "[object WorkerNavigator]")) return true;',
+    'if (typeof WorkerNavigator !== "undefined" && receiver !== WorkerNavigator.prototype && (receiver instanceof WorkerNavigator || (Object.prototype.toString.call(receiver) === "[object WorkerNavigator]" && !WorkerNavigator.prototype.isPrototypeOf(receiver) && receiver !== WorkerNavigator.prototype))) return true;'
+  );
+  return out;
+}
+
+if (!cdp.__scriptSanitized) {
+  cdp.__scriptSanitized = true;
+  const origCdpCall = cdp.call;
+  if (typeof origCdpCall === 'function') {
+    cdp.call = function (webSocketUrl, method, params = {}, timeout) {
+      if (method === 'Page.addScriptToEvaluateOnNewDocument' && params && typeof params.source === 'string') {
+        params.source = sanitizeInjectionScript(params.source);
+      }
+      if (method === 'Runtime.evaluate' && params && typeof params.expression === 'string') {
+        params.expression = sanitizeInjectionScript(params.expression);
+      }
+      return origCdpCall.call(this, webSocketUrl, method, params, timeout);
+    };
+  }
+  if (cdp.PersistentConnection && cdp.PersistentConnection.prototype) {
+    const origCommand = cdp.PersistentConnection.prototype.command;
+    cdp.PersistentConnection.prototype.command = function (method, params = {}, options = {}) {
+      if (method === 'Page.addScriptToEvaluateOnNewDocument' && params && typeof params.source === 'string') {
+        params.source = sanitizeInjectionScript(params.source);
+      }
+      if (method === 'Runtime.evaluate' && params && typeof params.expression === 'string') {
+        params.expression = sanitizeInjectionScript(params.expression);
+      }
+      return origCommand.call(this, method, params, options);
+    };
+  }
+}
+
 if (!cdp.__serviceWorkerHardened) {
   cdp.__serviceWorkerHardened = true;
   const origConnect = cdp.connect;
   cdp.connect = async function (webSocketUrl, options = {}) {
     const originalOnEvent = options.onEvent;
     const attachedWorkerTargets = new Set();
+    const sessionToTargetId = new Map();
     const wrappedOptions = { ...options };
     wrappedOptions.onEvent = async (event, conn) => {
       if (event?.method === 'Target.attachedToTarget') {
         const { sessionId, targetInfo = {}, waitingForDebugger } = event.params || {};
         const targetId = targetInfo.targetId;
+        if (sessionId && targetId) sessionToTargetId.set(sessionId, targetId);
         if (sessionId && targetInfo.type === 'service_worker') {
           if (targetId && attachedWorkerTargets.has(targetId)) {
             if (waitingForDebugger) {
@@ -139,13 +205,42 @@ if (!cdp.__serviceWorkerHardened) {
           if (fp) {
             try {
               const source = buildWorkerInjectionScript(fp);
-              await conn.command('Runtime.evaluate', { expression: source }, { sessionId, timeout: 2000 }).catch(() => {});
-            } catch (_) {}
+              await conn.command('Runtime.evaluate', { expression: source }, { sessionId, timeout: 2000 }).catch((evalErr) => {
+                const rewriter = RequestHeaderRewriter.latestInstance;
+                if (rewriter?.logger) {
+                  rewriter.logger({
+                    type: 'fingerprint-injection-failed',
+                    id: RequestHeaderRewriter.latestProfile?.id,
+                    targetType: 'service_worker',
+                    stage: 'worker-inject',
+                    operation: 'sw-evaluate',
+                    message: evalErr?.message || String(evalErr),
+                  });
+                }
+              });
+            } catch (err) {
+              const rewriter = RequestHeaderRewriter.latestInstance;
+              if (rewriter?.logger) {
+                rewriter.logger({
+                  type: 'fingerprint-injection-failed',
+                  id: RequestHeaderRewriter.latestProfile?.id,
+                  targetType: 'service_worker',
+                  stage: 'worker-inject',
+                  operation: 'sw-evaluate',
+                  message: err?.message || String(err),
+                });
+              }
+            }
           }
         }
       } else if (event?.method === 'Target.detachedFromTarget') {
-        const detachedTargetId = event.params?.targetId;
-        if (detachedTargetId) attachedWorkerTargets.delete(detachedTargetId);
+        const sid = event.params?.sessionId;
+        const tid = event.params?.targetId || (sid ? sessionToTargetId.get(sid) : null);
+        if (tid) attachedWorkerTargets.delete(tid);
+        if (sid) sessionToTargetId.delete(sid);
+      } else if (event?.method === 'Target.targetDestroyed') {
+        const tid = event.params?.targetId;
+        if (tid) attachedWorkerTargets.delete(tid);
       }
       if (typeof originalOnEvent === 'function') {
         return originalOnEvent(event, conn);
@@ -1567,9 +1662,9 @@ class BrowserEngine {
         continue;
       }
       try {
-        const fontBlobBridge = fp?.fontBlobBridge || item?.fontBlobBridge || options?.trackOn?.fontBlobBridge;
+        const fontBlobBridge = fp?.fontBlobBridge || options?.trackOn?.fontBlobBridge || options?.trackOn?.fingerprint?.fontBlobBridge;
         if (fontBlobBridge?.channelName && tab.webSocketDebuggerUrl) {
-          if (options?.trackOn && !options.trackOn.fontBlobBridge) options.trackOn.fontBlobBridge = fontBlobBridge;
+          if (options?.trackOn) { options.trackOn.fontBlobBridge = fontBlobBridge; options.trackOn.fingerprint = fp; }
           try {
             await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.enable', {}).catch(() => {});
             await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.addBinding', { name: fontBlobBridge.channelName }).catch((err) => {
@@ -1814,9 +1909,18 @@ class BrowserEngine {
         targetType: targetInfo.type || '',
         message: error.message,
       });
+      this.emit({
+        type: 'fingerprint-injection-failed',
+        id: item.profile?.id,
+        targetType: targetInfo.type || '',
+        stage: 'worker-inject',
+        operation: 'worker-inject',
+        message: error.message,
+      });
     };
 
     // Tracking for initial pre-existing target attach and fetch enablement barrier
+    const workerSessionToTargetId = new Map();
     const pendingInitialTargets = new Set();
     const completedInitialTargets = new Set();
     let barrierResolve;
@@ -1846,7 +1950,7 @@ class BrowserEngine {
     const onAttached = (event, connection) => {
       // Font payload lazy-load host bridge (consumer side)
       if (event?.method === 'Runtime.bindingCalled') {
-        const bridge = fingerprint?.fontBlobBridge || item?.fontBlobBridge || item?.fingerprint?.fontBlobBridge;
+        const bridge = item?.fontBlobBridge || item?.fingerprint?.fontBlobBridge || fingerprint?.fontBlobBridge;
         if (bridge?.channelName && event.params?.name === bridge.channelName) {
           (async () => {
             try {
@@ -1857,14 +1961,30 @@ class BrowserEngine {
                 return;
               }
               const { action, platform, token, wanted } = parsed || {};
-              // 安全校验：action 必须是 getFontBytes 且 token 必须匹配 bridge.token
-              if (action !== 'getFontBytes' || token !== bridge.token) {
+              const validTokens = new Set([
+                bridge?.token,
+                item?.fontBlobBridge?.token,
+                item?.fingerprint?.fontBlobBridge?.token,
+                fingerprint?.fontBlobBridge?.token,
+              ].filter(Boolean));
+              const isTokenValid = Boolean(token && (
+                validTokens.has(token) ||
+                (bridge?.channelName && bridge.channelName.startsWith('_') && token.startsWith(bridge.channelName.slice(1))) ||
+                (event.params?.name && event.params.name.startsWith('_') && token.startsWith(event.params.name.slice(1)))
+              ));
+              // 安全校验：action 必须是 getFontBytes 且 token 必须有效
+              if (action !== 'getFontBytes' || !isTokenValid) {
                 return;
               }
-              const targetPlatform = platform || bridge.platform;
+              const targetPlatform = platform || bridge.platform || 'windows';
               const targetWanted = wanted || bridge.wanted || undefined;
               const payload = getPlatformFontPayload(targetPlatform, { wanted: targetWanted });
-              const expr = `try { Function.prototype.toString.call(FontData.prototype.blob, ${JSON.stringify(bridge.token)}, 'provideBytes', ${JSON.stringify(payload)}); } catch (_) {}`;
+              const expr = `try {
+                const targetFn = (typeof FontData !== 'undefined' && FontData?.prototype?.blob)
+                  ? FontData.prototype.blob
+                  : Function.prototype.toString;
+                Function.prototype.toString.call(targetFn, ${JSON.stringify(token)}, 'provideBytes', ${JSON.stringify(payload)});
+              } catch (_) {}`;
               const targetSessionId = event.sessionId;
               const cmdOptions = targetSessionId ? { sessionId: targetSessionId, timeout: 8000 } : { timeout: 8000 };
               const evalParams = {
@@ -1904,7 +2024,12 @@ class BrowserEngine {
       // Clean up in-flight requests when a target session detaches or closes
       if (event?.method === 'Target.detachedFromTarget') {
         const detachedSessionId = event.params?.sessionId;
+        const detachedTargetId = event.params?.targetId || (detachedSessionId ? workerSessionToTargetId.get(detachedSessionId) : null);
+        if (detachedTargetId && item.attachedWorkerTargets) {
+          item.attachedWorkerTargets.delete(detachedTargetId);
+        }
         if (detachedSessionId) {
+          workerSessionToTargetId.delete(detachedSessionId);
           try { requestHeaderRewriter.cleanupSession(detachedSessionId); } catch (_) {}
           try { fontResponseRewriter.cleanupSession?.(detachedSessionId); } catch (_) {}
         }
@@ -1914,6 +2039,9 @@ class BrowserEngine {
       // If an initial target closes before attaching, unblock barrier without hanging
       if (event?.method === 'Target.targetDestroyed') {
         const destroyedId = event.params?.targetId;
+        if (destroyedId && item.attachedWorkerTargets) {
+          item.attachedWorkerTargets.delete(destroyedId);
+        }
         if (destroyedId && pendingInitialTargets.has(destroyedId)) {
           pendingInitialTargets.delete(destroyedId);
           if (pendingInitialTargets.size === 0) {
@@ -1927,6 +2055,7 @@ class BrowserEngine {
       const { sessionId, targetInfo = {}, waitingForDebugger } = event.params || {};
       if (!sessionId) return;
       const targetId = targetInfo.targetId;
+      if (targetId) workerSessionToTargetId.set(sessionId, targetId);
       const isInitial = Boolean(targetId && pendingInitialTargets.has(targetId));
 
       (async () => {
@@ -1961,6 +2090,9 @@ class BrowserEngine {
               if (pendingInitialTargets.size === 0) {
                 settleBarrier();
               }
+            }
+            if (waitingForDebugger) {
+              await connection.command('Runtime.runIfWaitingForDebugger', {}, { sessionId }).catch(() => {});
             }
           } else if (workerTypes.has(targetInfo.type) && !internalUrl.test(String(targetInfo.url || ''))) {
             if (!item.attachedWorkerTargets) item.attachedWorkerTargets = new Set();
@@ -3479,6 +3611,7 @@ class BrowserEngine {
         if (preflight.warnings.length) this.emit({ type: 'platform-preflight', ok: preflight.ok, warnings: preflight.warnings });
       } catch (_) {}
     }
+    let currentStage = 'prepare';
     this.emitStartProgress(profile.id, 'prepare', 6, '正在准备环境…');
     // Hoisted so the outer catch can release these if start throws after they are
     // acquired. The profile lock is keyed on the live Electron pid, so a leaked lock
@@ -3503,7 +3636,7 @@ class BrowserEngine {
       profile = await this.prepareProfileProxyForStart(profile);
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     this.profiles.set(profile.id, profile);
-    this.emitStartProgress(profile.id, 'proxy', 18, '正在检测代理与出口…');
+    currentStage = 'proxy'; this.emitStartProgress(profile.id, 'proxy', 18, '正在检测代理与出口…');
     await this.ensureExitNetworkForLocale(profile).catch(() => {});
     profile = this.applyResolvedLocale(profile);
     this.profiles.set(profile.id, profile);
@@ -3512,7 +3645,7 @@ class BrowserEngine {
     // must not leave the renderer's redacted copy as the durable state.
     await this.persist();
     const extensions = this.assignedExtensions(profile.id);
-    this.emitStartProgress(profile.id, 'kernel', 30, '正在准备浏览器内核…');
+    currentStage = 'kernel'; this.emitStartProgress(profile.id, 'kernel', 30, '正在准备浏览器内核…');
     if (!this.kernelStatus().installed && this.preferIndependentKernel) {
       // Resolve integrated seed only — never download a remote kernel at start time.
       await this.ensureKernelBootstrap();
@@ -3774,7 +3907,7 @@ class BrowserEngine {
     let connection;
     let port;
     try {
-      this.emitStartProgress(profile.id, 'spawn', 62, '正在启动浏览器进程…');
+      currentStage = 'spawn'; this.emitStartProgress(profile.id, 'spawn', 62, '正在启动浏览器进程…');
       this.assertStartGenerationActive(profile.id, lifecycleGeneration);
       await ensureKernelReadyForLaunch(browser);
       this.assertStartGenerationActive(profile.id, lifecycleGeneration);
@@ -3997,7 +4130,7 @@ class BrowserEngine {
         injectFp: summarizeFp(injectFp),
         logFile: fingerprintLogPath(),
       });
-      this.emitStartProgress(profile.id, 'inject', 88, '正在注入指纹与运行时…');
+      currentStage = 'inject'; this.emitStartProgress(profile.id, 'inject', 88, '正在注入指纹与运行时…');
       let injectSucceeded = false;
       let injectError = null;
 
@@ -4099,7 +4232,7 @@ class BrowserEngine {
         }
       } else {
         // Fail-Closed: Verify actual delivered fingerprint via CDP probe before target navigation
-        this.emitStartProgress(profile.id, 'verify', 92, '正在校验指纹交付…');
+        currentStage = 'verify'; this.emitStartProgress(profile.id, 'verify', 92, '正在校验指纹交付…');
         let deliveryResult = { ok: true, blocked: false, mismatches: [], warnings: [] };
         try {
           deliveryResult = await this.verifyStartupFingerprintDelivery(item, profile, item.fingerprint || fingerprint);
@@ -4178,9 +4311,9 @@ class BrowserEngine {
     // Detect user closing browser with X (process may stay alive; CDP/pages are source of truth)
     this.startRunningWatch(item);
     if (item.verificationBlocked) {
-      this.emitStartProgress(profile.id, 'blocked', 100, '指纹校验失败，已阻止访问目标站点');
+      currentStage = 'blocked'; this.emitStartProgress(profile.id, 'blocked', 100, '指纹校验失败，已阻止访问目标站点');
     } else {
-      this.emitStartProgress(profile.id, 'ready', 100, '启动完成');
+      currentStage = 'ready'; this.emitStartProgress(profile.id, 'ready', 100, '启动完成');
     }
     this.emit({ type: 'status', id: profile.id, running: true, blocked: Boolean(item.verificationBlocked), ...this.publicRunning(profile.id) });
     return this.publicRunning(profile.id);
@@ -4207,10 +4340,21 @@ class BrowserEngine {
           this.retainBlockedStartup(profile, startupResources, error, lifecycleGeneration, cleanupResult);
         }
       }
+      const kernelVer = browser?.version || (isOpenBrowser148(browser) ? '148' : 'system');
+      if (error && typeof error === 'object') {
+        error.profileId = profile.id;
+        error.stage = currentStage;
+        error.phase = currentStage;
+        error.kernelVersion = kernelVer;
+        error.operation = 'start';
+      }
       this.emit({
         type: 'profile-start-progress',
         id: profile.id,
         phase: 'error',
+        stage: currentStage,
+        kernelVersion: kernelVer,
+        operation: 'start',
         percent: 0,
         message: error?.message || String(error || '启动失败'),
         starting: false,
@@ -4924,6 +5068,7 @@ class BrowserEngine {
 
 module.exports = {
   BrowserEngine,
+  sanitizeInjectionScript,
   appendDiagnosticOutput,
   formatBrowserStartupError,
   writeBrowserStartupDiagnostic,

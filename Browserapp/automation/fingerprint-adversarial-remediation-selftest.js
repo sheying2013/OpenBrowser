@@ -333,12 +333,18 @@ function check(name, fn) {
     assert.ok(script.includes("powerEfficient: false"), "Linux must force powerEfficient: false for hevc");
   });
 
-  // [31] V7: window.chrome.loadTimes & chrome.csi removed
-  check("[P2] V7: window.chrome.loadTimes & chrome.csi removed", () => {
-    const fp = buildFingerprint({ os: "windows" });
-    const script = buildInjectionScript(fp);
-    assert.ok(script.includes("delete window.chrome.loadTimes"), "Must delete window.chrome.loadTimes");
-    assert.ok(script.includes("delete window.chrome.csi"), "Must delete window.chrome.csi");
+  // [31] V7 / P0: window.chrome.csi & chrome.loadTimes preserved on Desktop, absent on iOS
+  check("[P0] window.chrome.csi & chrome.loadTimes preserved on Desktop, absent on iOS", () => {
+    const fpWin = buildFingerprint({ os: "windows" });
+    const scriptWin = buildInjectionScript(fpWin);
+    assert.ok(scriptWin.includes("window.chrome.csi"), "Must ensure window.chrome.csi exists on desktop");
+    assert.ok(scriptWin.includes("window.chrome.loadTimes"), "Must ensure window.chrome.loadTimes exists on desktop");
+    assert.ok(!scriptWin.includes("delete window.chrome.csi;\n      }"), "Desktop branch must not delete csi");
+    assert.ok(!scriptWin.includes("delete window.chrome.loadTimes;\n      }"), "Desktop branch must not delete loadTimes");
+
+    const fpIos = buildFingerprint({ os: "ios", platform: "iPhone" });
+    const scriptIos = buildInjectionScript(fpIos);
+    assert.ok(scriptIos.includes("delete window.chrome;"), "Must delete window.chrome on iOS");
   });
 
   // [32] H1: document.fonts iterator wraps native iterator instead of function* generator
@@ -416,6 +422,39 @@ function check(name, fn) {
     const lazySrc = buildInjectionScript(fp);
     const reduction = (inlineSrc.length - lazySrc.length) / inlineSrc.length;
     assert.ok(reduction > 0.5, "Lazy payload must reduce injection script size significantly");
+  });
+
+  // [41] R1: document.fonts iterator next and Symbol.iterator native shape and caching
+  check("[P0] R1: document.fonts iterator next and Symbol.iterator native shape and caching", () => {
+    const fp = buildFingerprint({ os: "windows", privacy: { deviceProfile: "persona" } });
+    const script = buildInjectionScript(fp);
+    assert.ok(script.includes("function next() { [native code] }"), "Must register native code string for next");
+    assert.ok(script.includes("function [Symbol.iterator]() { [native code] }"), "Must register native code string for Symbol.iterator");
+    assert.ok(script.includes("cachedNext") && script.includes("cachedIter"), "Must cache next and iterator instances per wrapper");
+  });
+
+  // [42] R2: makeNativeGetter throws receiver realm TypeError
+  check("[P0] R2: makeNativeGetter throws receiver realm TypeError", () => {
+    const fp = buildFingerprint({ os: "windows" });
+    const script = buildInjectionScript(fp);
+    assert.ok(script.includes("getRealmTypeError"), "Must define getRealmTypeError");
+    assert.ok(script.includes("const RealmTypeError = getRealmTypeError(this)"), "Must throw RealmTypeError");
+  });
+
+  // [43] R3: SpeechSynthesisVoice cannot be cloned by structuredClone
+  check("[P0] R3: SpeechSynthesisVoice cannot be cloned by structuredClone", () => {
+    const fp = buildFingerprint({ os: "windows" });
+    const script = buildInjectionScript(fp);
+    assert.ok(script.includes("mockVoiceSet"), "Must maintain mockVoiceSet");
+    assert.ok(script.includes("SpeechSynthesisVoice object could not be cloned."), "Must throw DataCloneError on clone");
+  });
+
+  // [44] R4: document.fonts Proxy traps getOwnPropertyDescriptor and has
+  check("[P1] R4: document.fonts Proxy traps getOwnPropertyDescriptor and has", () => {
+    const fp = buildFingerprint({ os: "windows", privacy: { deviceProfile: "persona" } });
+    const script = buildInjectionScript(fp);
+    assert.ok(script.includes("getOwnPropertyDescriptor(target, prop)"), "Must implement getOwnPropertyDescriptor trap");
+    assert.ok(script.includes("has(target, prop)"), "Must implement has trap");
   });
 
   console.log(`\nAll ${results.filter(r => r.ok).length}/${results.length} remediation assertions passed.`);

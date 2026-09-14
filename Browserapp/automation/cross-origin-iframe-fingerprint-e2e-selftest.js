@@ -30,7 +30,7 @@ const {
   createSpeechVoicesFromSeed,
 } = require('./fingerprint');
 const { writeOpenBrowserKernelInit } = require('./kernel-init-sync');
-const { BrowserEngine } = require('../engine');
+const { BrowserEngine, sanitizeInjectionScript } = require('../engine');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -834,10 +834,19 @@ async function runMultiTierIframeTest(profile, inject = true) {
       const pDpr = { ...winProfile };
       const fp = buildFingerprint(pDpr);
       fp.screen.devicePixelRatio = 1.5;
-      const script = buildInjectionScript(fp);
+      let script = buildInjectionScript(fp);
+      if (typeof sanitizeInjectionScript === "function") {
+        script = sanitizeInjectionScript(script);
+      }
 
       await cdp.send("Page.enable", {}, sid);
       await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: script }, sid);
+      await cdp.send("Emulation.setDeviceMetricsOverride", {
+        width: 0,
+        height: 0,
+        deviceScaleFactor: 1.5,
+        mobile: false,
+      }, sid);
       await cdp.send("Page.navigate", { url: `http://localhost:${testPort}/` }, sid);
       await sleep(800);
 

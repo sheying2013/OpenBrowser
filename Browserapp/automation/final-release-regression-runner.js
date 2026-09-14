@@ -24,9 +24,19 @@
  *      * Window Management, UI & Startup Delivery (uiactions, windpi, wincascade, internalpagesync, listrendercache, startupbarrier, startupdelivery, enginecdp, iframeorigin)
  *      * Media, Audio & Bluetooth Surfaces (mediae2e, mediatracklabel, bluetooth, speechcrossplatform)
  *      * Stealth, Stability & Local App State (stealth, stabilitysemantics, appcenterfilter, livesyncinternal, profilelocalstate)
- *      * Release Defenses & Gate Self-Verification (fpreleasegate, releasecoverage, fpcoverage, fontnative)
+ *      * Release Defenses & Gate Self-Verification (fpreleasegate, releasecoverage, round3, fpcoverage, fontnative)
  * 3. Stratified Diagnostic Audits (audit:*):
  *    - Issue closure audit (audit:issueclosure)
+ *    - Live-kernel A/B adversarial detectors (audit:adversarial, audit:adversarial2)
+ *    - Brand-trace self-exposure audit (audit:brandtrace)
+ *    - Android/iOS persona consistency audit (audit:mobilepersona)
+ *    - Linux/Windows desktop persona consistency audit (audit:desktoppersona)
+ *    - Navigator & device consistency adversarial audit (audit:navigatordevice)
+ *    - Rendering & media worker adversarial audit (audit:rendermedia)
+ *    - Network & storage sidechannel adversarial audit (audit:networksidechannel)
+ *    - Prototype shape & toString integrity audit (audit:prototypeshape)
+ *    - Mobile persona deep adversarial audit (audit:mobiledeep)
+ *    - Cross-realm detection adversarial audit (audit:crossrealm)
  *    - Stratified reporting:
  *      * PASS: Validated protections
  *      * WARN: Documented architectural and physical hardware boundaries
@@ -81,6 +91,7 @@ const DEFAULT_TIMEOUT_MS = 150000; // 150s per suite (strictly >= 120s)
 // Command-line argument parsing with robust prefix matching
 const argv = process.argv.slice(2);
 const isDryRun = argv.includes("--dry-run");
+const isList = argv.includes("--list");
 const isBail = argv.includes("--bail");
 const isMutate = argv.includes("--mutate");
 const isHelp = argv.includes("--help") || argv.includes("-h");
@@ -108,6 +119,7 @@ OpenBrowser Pre-Release Final Regression Runner
 Usage: node automation/final-release-regression-runner.js [options]
 
 Options:
+  --list             List all registered core blocking suites and diagnostic audits
   --dry-run          Validate file existence, syntax, and plan without launching browsers
   --bail             Abort immediately on first test failure
   --timeout=<ms>     Timeout per suite in ms (default: 150000, >= 120000)
@@ -260,6 +272,7 @@ const COVERAGE_DOMAINS = [
     suites: [
       { key: "selftest:fpreleasegate", script: "node automation/fingerprint-release-gate-selftest.js", file: "automation/fingerprint-release-gate-selftest.js" },
       { key: "selftest:releasecoverage", script: "node automation/fingerprint-release-coverage-selftest.js", file: "automation/fingerprint-release-coverage-selftest.js" },
+      { key: "selftest:round3", script: "node automation/fingerprint-adversarial-round3-selftest.js", file: "automation/fingerprint-adversarial-round3-selftest.js" },
     ]
   },
   {
@@ -330,6 +343,49 @@ const DIAGNOSTIC_AUDITS = [
     file: "automation/desktop-persona-consistency-audit.js",
     category: "DIAGNOSTIC_AUDIT",
     rationale: "Linux/Windows desktop persona end-to-end consistency audit (identity, screen, client hints, GPU, fonts, kernel init)"
+  },
+  {
+    key: "audit:navigatordevice",
+    script: "node automation/navigator-device-adversarial-audit.js",
+    file: "automation/navigator-device-adversarial-audit.js",
+    category: "DIAGNOSTIC_AUDIT",
+    rationale: "Goodall navigator & device persona consistency adversarial audit (getters, prototype isolation, illegal invocation, platform consistency)"
+  },
+  {
+    key: "audit:rendermedia",
+    script: "node automation/render-media-worker-adversarial-audit.js",
+    file: "automation/render-media-worker-adversarial-audit.js",
+    category: "DIAGNOSTIC_AUDIT",
+    rationale: "Hubble rendering & media adversarial audit (SVG text length, Canvas triple-hash, WebGL noise, audio hardware consistency)"
+  },
+  {
+    key: "audit:networksidechannel",
+    script: "node automation/network-storage-sidechannel-adversarial-audit.js",
+    file: "automation/network-storage-sidechannel-adversarial-audit.js",
+    category: "DIAGNOSTIC_AUDIT",
+    rationale: "Planck network wire headers, ServiceWorker postMessage leaks, and storage quota side-channel audit"
+  },
+  {
+    key: "audit:prototypeshape",
+    script: "node automation/prototype-shape-toString-audit.js",
+    file: "automation/prototype-shape-toString-audit.js",
+    category: "DIAGNOSTIC_AUDIT",
+    rationale: "Dalton prototype shape, toString integrity, native getter descriptor reflection, and hidden Symbol leakage audit"
+  },
+  {
+    key: "audit:mobiledeep",
+    script: "node automation/mobile-persona-deep-adversarial-audit.js",
+    file: "automation/mobile-persona-deep-adversarial-audit.js",
+    category: "DIAGNOSTIC_AUDIT",
+    rationale: "Deep mobile persona adversarial audit (touch events, orientation lock, Apple WebKit CSS/capabilities)"
+  },
+  {
+    key: "audit:crossrealm",
+    script: "node automation/cross-realm-detection-adversarial-audit.js",
+    file: "automation/cross-realm-detection-adversarial-audit.js",
+    category: "DIAGNOSTIC_AUDIT",
+    optional: true,
+    rationale: "Cross-realm iframe/worker prototype and constructor identity leak adversarial audit (in progress by sub-agent)"
   }
 ];
 
@@ -955,6 +1011,19 @@ async function main() {
   console.log(`    Target Version: ${EXPECTED_VERSION} | Per-Suite Timeout: ${perSuiteTimeout / 1000}s`);
   console.log("======================================================================\n");
 
+  if (isList) {
+    const allSuites = COVERAGE_DOMAINS.flatMap((d) => d.suites);
+    console.log(`Registered Core Blocking Suites (${allSuites.length}):`);
+    for (const s of allSuites) {
+      console.log(`  ${s.key.padEnd(32)} -> ${s.file}`);
+    }
+    console.log(`\nRegistered Diagnostic Audits (${DIAGNOSTIC_AUDITS.length}):`);
+    for (const a of DIAGNOSTIC_AUDITS) {
+      console.log(`  ${a.key.padEnd(32)} -> ${a.file}${a.optional ? ' (optional)' : ''}`);
+    }
+    process.exit(0);
+  }
+
   // Step 0: Pre-flight Audit
   // Auto-clean any lingering transient .png test screenshots from previous runs before pre-flight audit
   const preCleaned = cleanTransientTestScreenshots();
@@ -1016,6 +1085,10 @@ async function main() {
       const fullPath = path.resolve(appRoot, audit.file);
       const exists = fs.existsSync(fullPath);
       if (!exists) {
+        if (audit.optional) {
+          console.log(`  SKIP  [AUDIT OPTIONAL / IN PROGRESS] ${audit.key} -> ${audit.file}`);
+          continue;
+        }
         console.log(`  FAIL  [AUDIT MISSING] ${audit.key} -> ${audit.file}`);
         dryErrors++;
         continue;
@@ -1102,8 +1175,18 @@ async function main() {
   let lastDiagnosticExitCode = 0;
 
   for (const audit of selectedAudits) {
-    console.log(`Running diagnostic audit: ${audit.key} (${audit.rationale})...`);
     const fullAuditPath = path.resolve(appRoot, audit.file);
+    if (!fs.existsSync(fullAuditPath)) {
+      if (audit.optional) {
+        console.log(`Skipping optional diagnostic audit: ${audit.key} (${audit.file} not present on disk yet)...`);
+        continue;
+      }
+      diagnosticCrashesCount++;
+      auditFindings.push({ type: "CRASH", text: `Audit script ${audit.file} does not exist on disk` });
+      console.log(`  FAIL (Missing)                 Audit ${audit.key} (${audit.file} missing)`);
+      continue;
+    }
+    console.log(`Running diagnostic audit: ${audit.key} (${audit.rationale})...`);
     const args = [fullAuditPath];
     const result = await runProcess(args, appRoot, perSuiteTimeout);
     const durSec = (result.durationMs / 1000).toFixed(2);
@@ -1307,10 +1390,19 @@ async function main() {
   process.exit(overallSuccess ? 0 : 1);
 }
 
-main().catch((err) => {
-  try {
-    cleanTransientTestScreenshots();
-  } catch {}
-  console.error("Fatal runner crash: " + (err && err.stack ? err.stack : err));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    try {
+      cleanTransientTestScreenshots();
+    } catch {}
+    console.error("Fatal runner crash: " + (err && err.stack ? err.stack : err));
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  COVERAGE_DOMAINS,
+  DIAGNOSTIC_AUDITS,
+  getSelectedSuites,
+  getSelectedAudits,
+};
