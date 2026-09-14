@@ -688,7 +688,8 @@ async function runSession(serverPort, fontB64, mutate) {
         const rules = main.cssom.inlineStyleRules || [];
         const helvRule = rules.find((r) => r.includes('p_html_helv'));
         assert.ok(helvRule, 'Rule for p_html_helv must exist in CSSOM');
-        assert.ok(helvRule.includes('__ob_font_blocked__'), 'CSSOM rule must contain __ob_font_blocked__');
+        assert.match(helvRule, /LocalFontFallback[0-9a-f]{24}/, 'CSSOM rule must contain a neutral fallback family');
+        assert.ok(!/__ob_|openbrowser/i.test(helvRule), 'CSSOM rule must not contain a product marker');
         assert.ok(!helvRule.includes('Helvetica Neue'), 'CSSOM rule must not contain Helvetica Neue');
       });
 

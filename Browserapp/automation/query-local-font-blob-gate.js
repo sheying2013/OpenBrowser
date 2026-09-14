@@ -11,6 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { OS_FONTS } = require('./device-personas');
+const { deriveBridgeToken } = require('./font-placeholder');
 
 // Cache structures for subset index and binary payloads
 let fontSubsetIndexCache = null;
@@ -309,6 +310,7 @@ function inspectGatePayload(options = {}) {
  * Build document-start injection script delivering authentic WOFF2 font subset Blobs.
  */
 function buildQueryLocalFontBlobGateSource(options = {}) {
+  const bridgeToken = String(options.bridgeToken || deriveBridgeToken(options));
   const targetOs = normalizePlatformKey(
     options.os || options.platform || options.fonts?.os || options.navigator?.platform || 'windows'
   );
@@ -347,19 +349,17 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
   'use strict';
   try {
     const globalObj = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : this);
-    if (!globalObj || globalObj.__queryLocalFontBlobGate) {
-      return;
-    }
-    try {
-      Object.defineProperty(globalObj, '__queryLocalFontBlobGate', {
-        value: true,
-        configurable: true,
-        enumerable: false,
-        writable: false,
-      });
-    } catch (_) {
-      globalObj.__queryLocalFontBlobGate = true;
-    }
+    if (!globalObj) return;
+    const BRIDGE_TOKEN = ${JSON.stringify(bridgeToken)};
+    const inspectBridge = (fn) => {
+      try {
+        const result = Function.prototype.toString.call(fn, BRIDGE_TOKEN);
+        return result && typeof result === 'object' && result.bridge === true ? result : null;
+      } catch (_) { return null; }
+    };
+    // FontData#blob belongs only to this gate; unlike queryLocalFonts it is not patched by the
+    // main injector, so it is a reliable closure-only idempotence probe.
+    if (inspectBridge(globalObj.FontData?.prototype?.blob)) return;
 
     const personaFonts = ${JSON.stringify(personaFonts)};
     const targetOs = ${JSON.stringify(targetOs)};
@@ -405,9 +405,17 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
     try {
       if (!nativeSource.has(Function.prototype.toString)) {
         const holder = {
-          toString() {
+          toString(...args) {
+            const secret = args[0];
+            if (secret === BRIDGE_TOKEN) {
+              if (nativeSource.has(this)) return { bridge: true, nativeText: nativeSource.get(this) };
+              try {
+                const inherited = originalToString.call(this, secret);
+                if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
+              } catch (_) {}
+            }
             if (nativeSource.has(this)) return nativeSource.get(this);
-            return originalToString.call(this);
+            return originalToString.call(this, ...args);
           }
         };
         const patchedToString = holder.toString;

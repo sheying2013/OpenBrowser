@@ -80,27 +80,37 @@ function fontPack(platformDir) {
 }
 
 /** Which kernels in this checkout advertise the native font layer, and with what assets. */
+function inspectKernel(platform, base) {
+  let natives = 0;
+  const stack = [base];
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { stack.push(full); continue; }
+      if (!/(Framework|chrome\.dll|chrome\.exe|libskit|^chrome$)/.test(entry.name)) continue;
+      let size = 0; try { size = fs.statSync(full).size; } catch (_) { continue; }
+      if (size < 1e6) continue;
+      if (fileHasMarker(full, FONT_CONTROL_MARKER)) natives += 1;
+    }
+  }
+  return { platform, natives, fonts: fontPack(base) };
+}
+
 function kernelMatrix() {
   const matrix = [];
   for (const platform of ['macos-x64', 'macos-arm64', 'windows-x64', 'linux-x64']) {
     const base = path.join(kernelsRoot, platform);
-    if (!fs.existsSync(base)) continue;
-    let natives = 0;
-    const stack = [base];
-    while (stack.length) {
-      const dir = stack.pop();
-      let entries = [];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
-      for (const entry of entries) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) { stack.push(full); continue; }
-        if (!/(Framework|chrome\.dll|chrome\.exe|libskit)/.test(entry.name)) continue;
-        let size = 0; try { size = fs.statSync(full).size; } catch (_) { continue; }
-        if (size < 1e6) continue;
-        if (fileHasMarker(full, FONT_CONTROL_MARKER)) natives += 1;
-      }
-    }
-    matrix.push({ platform, natives, fonts: fontPack(base) });
+    if (fs.existsSync(base)) matrix.push(inspectKernel(platform, base));
+  }
+  // Ubuntu CI obtains its packaged browser through prepare:linux-kernel, which installs
+  // Google Chrome Stable under kernels/chrome-stable rather than kernels/linux-x64.
+  // Include that real packaged runtime so the architecture audit stays meaningful on Linux.
+  const chromeStable = path.join(kernelsRoot, 'chrome-stable');
+  if (!matrix.some((entry) => entry.platform === 'linux-x64') && fs.existsSync(chromeStable)) {
+    matrix.push(inspectKernel('linux-x64', chromeStable));
   }
   return matrix;
 }

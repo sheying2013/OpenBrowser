@@ -6,13 +6,14 @@
  * Intercepts incoming Document (HTML) and Stylesheet (CSS) network responses at the CDP
  * Fetch layer (Response stage) before Blink tokenization and style resolution.
  * Rewrites foreign local() font family declarations outside the allowed persona whitelist
- * to local("__ob_font_blocked__"), neutralizing static <style> and external <link> font leaks
+ * to a neutral nonexistent local family, neutralizing static <style> and external <link> font leaks
  * while leaving external url(), data: font sources, and persona fonts intact.
  */
 
 const crypto = require('crypto');
+const { deriveFontPlaceholder } = require('./font-placeholder');
 
-const DEFAULT_BLOCKED_FONT = '__ob_font_blocked__';
+const DEFAULT_BLOCKED_FONT = deriveFontPlaceholder('response-rewrite-default');
 const DEFAULT_MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB limit to prevent excessive memory usage
 
 /**
@@ -44,7 +45,7 @@ function normalizePersonaFontSet(personaFonts) {
  * Sanitize @font-face local() sources within CSS text.
  *
  * Replaces any local("ForeignFont") that is not in the allowedFamilies set
- * with local("__ob_font_blocked__"). Web fonts with url(...) and data:...
+ * with a neutral nonexistent local family. Web fonts with url(...) and data:...
  * remain untouched.
  *
  * @param {string} css - Raw CSS stylesheet content.
@@ -170,7 +171,7 @@ class CssFontResponseRewriter {
   constructor(options = {}) {
     this.allowedFamilies = normalizePersonaFontSet(options.personaFonts);
     this.maxBodySize = Number(options.maxBodySize) || DEFAULT_MAX_BODY_SIZE;
-    this.blockedFont = options.blockedFont || DEFAULT_BLOCKED_FONT;
+    this.blockedFont = options.blockedFont || deriveFontPlaceholder(options.fingerprint || options.seed || options.personaFonts || DEFAULT_BLOCKED_FONT);
     this.enabled = options.enabled !== false;
     this.logger = typeof options.logger === 'function' ? options.logger : null;
     this.inFlightRequests = new Set();

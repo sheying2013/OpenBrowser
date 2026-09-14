@@ -403,6 +403,7 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
     if (!pageSession) throw new Error('Failed to attach to page target');
 
     await cdp.send('Page.enable', {}, pageSession);
+    await cdp.send('Runtime.enable', {}, pageSession);
 
     // Grant localFonts permissions to allow Local Font Access API probe
     await cdp.send('Browser.grantPermissions', {
@@ -421,8 +422,9 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
       ? 'self.__workerMutated = true;'
       : (buildWorkerInjectionScript(fp) + '\n' + (typeof buildWorkerFontPresenceSource === 'function' ? buildWorkerFontPresenceSource(fp) : ''));
 
-    // Handle worker attach events to inject worker fingerprint script
+    // Handle worker attach events to inject worker fingerprint script and preserve runtime failures.
     cdp.events = [];
+    const runtimeExceptions = [];
     const handleAttached = async (ev) => {
       if (ev.method === 'Target.attachedToTarget' && ev.params?.targetInfo?.type === 'worker') {
         const wSession = ev.params.sessionId;
@@ -434,6 +436,11 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
     const eventInterval = setInterval(() => {
       while (cdp.events.length) {
         const ev = cdp.events.shift();
+        if (ev.method === 'Runtime.exceptionThrown') {
+          const details = ev.params?.exceptionDetails || {};
+          runtimeExceptions.push(String(details.exception?.description || details.text || 'Runtime exception'));
+          continue;
+        }
         handleAttached(ev);
       }
     }, 40);
@@ -767,6 +774,7 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
       fp,
       windows: winProbeRes?.result?.result?.value,
       worker: workerProbeRes?.result?.result?.value,
+      runtimeExceptions,
     };
   } finally {
     if (ws) {
@@ -800,6 +808,10 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
       const winWorker = winAudit.worker;
 
       assert.ok(winMain && winSame && winSrcdoc && winBlank && winWorker, 'All surfaces must yield probe data');
+
+      check('Windows persona: document injection emits no runtime exceptions across window frames', () => {
+        assert.deepStrictEqual(winAudit.runtimeExceptions, [], `Windows injection exceptions: ${winAudit.runtimeExceptions.join(' | ')}`);
+      });
 
       check('Windows persona: navigator.platform is Win32 across all 5 surfaces', () => {
         for (const s of [winMain, winSame, winSrcdoc, winBlank, { nav: winWorker.nav }]) {
@@ -959,6 +971,10 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
       const macWorker = macAudit.worker;
 
       assert.ok(macMain && macSame && macSrcdoc && macBlank && macWorker, 'All macOS surfaces must yield probe data');
+
+      check('macOS persona: document injection emits no runtime exceptions across window frames', () => {
+        assert.deepStrictEqual(macAudit.runtimeExceptions, [], `macOS injection exceptions: ${macAudit.runtimeExceptions.join(' | ')}`);
+      });
 
       check('macOS persona: navigator.platform is MacIntel across all 5 surfaces', () => {
         for (const s of [macMain, macSame, macSrcdoc, macBlank, { nav: macWorker.nav }]) {

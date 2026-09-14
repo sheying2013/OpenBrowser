@@ -151,8 +151,13 @@ async function startTestServer() {
             items[family] = await probe(family);
           }
 
+          const forbidden = [
+            '__workerPersonaFontProbe', '__obPersonaFontProbe', '__system_fonts_registered__',
+            '__queryLocalFontBlobGate', '__cssFontLocalGateActive', '__webrtcFallbackInstalled',
+          ];
           self.postMessage({
-            marker: Boolean(self.__workerPersonaFontProbe),
+            forbiddenOwnProperties: forbidden.filter((key) => Object.getOwnPropertyNames(self).includes(key)),
+            forbiddenReflectProperties: forbidden.filter((key) => Reflect.has(self, key)),
             isDedicated: typeof WorkerGlobalScope !== 'undefined' && (self instanceof DedicatedWorkerGlobalScope),
             items,
           });
@@ -297,7 +302,8 @@ async function runBrowserIntegration(serverPort, fingerprint, profile) {
     const sample = buildWorkerFontPresenceSource({ fonts: { list: ['Segoe UI', 'Arial'] } });
     assert.strictEqual(typeof sample, 'string', 'must return string for valid list');
     assert.ok(sample.length > 100, 'must return substantial script');
-    assert.ok(sample.includes('__workerPersonaFontProbe'), 'must include probe guard marker');
+    assert.ok(!sample.includes('__workerPersonaFontProbe'), 'must not expose a worker probe marker');
+    assert.ok(sample.includes('BRIDGE_TOKEN'), 'must include closure-only idempotence bridge');
     assert.ok(sample.includes('FontFace'), 'must reference FontFace');
     assert.ok(sample.includes('segoe ui'), 'must include lowercased family names');
     assert.ok(sample.includes('isPlainLocalSource'), 'must include plain local source validator');
@@ -379,7 +385,7 @@ async function runBrowserIntegration(serverPort, fingerprint, profile) {
 
     const basePos = composed.indexOf('WorkerNavigator');
     const portPos = composed.indexOf('local port probe blocked');
-    const fontPos = composed.indexOf('__workerPersonaFontProbe');
+    const fontPos = composed.indexOf('const NativeFontFace');
 
     assert.ok(basePos !== -1 && portPos !== -1 && fontPos !== -1, 'all three modules must appear in composed source');
     assert.ok(basePos < portPos, 'base script must precede port scan protection in composed output');
@@ -435,7 +441,8 @@ async function runBrowserIntegration(serverPort, fingerprint, profile) {
           evalCalled = true;
           assert.strictEqual(resumeCalled, false, 'Runtime.evaluate must be called before resume');
           assert.ok(typeof params.expression === 'string', 'evaluate must pass expression');
-          assert.ok(params.expression.includes('__workerPersonaFontProbe'), 'evaluated source must contain font probe helper');
+          assert.ok(!params.expression.includes('__workerPersonaFontProbe'), 'evaluated source must not expose font probe marker');
+          assert.ok(params.expression.includes('const NativeFontFace'), 'evaluated source must contain font presence helper');
           assert.ok(params.expression.includes('WorkerNavigator'), 'evaluated source must contain worker base');
         }
         if (method === 'Runtime.runIfWaitingForDebugger') {
@@ -497,7 +504,8 @@ async function runBrowserIntegration(serverPort, fingerprint, profile) {
       assert.ok(runResult, 'runResult must be defined');
       const probe = runResult.probe;
       assert.ok(probe, 'worker probe must return data');
-      assert.strictEqual(probe.marker, true, 'worker probe must have marker: true');
+      assert.deepStrictEqual(probe.forbiddenOwnProperties, [], 'worker global scope must not expose forbidden own properties');
+      assert.deepStrictEqual(probe.forbiddenReflectProperties, [], 'worker global scope must not expose forbidden reflected properties');
       assert.strictEqual(probe.isDedicated, true, 'worker probe must run in DedicatedWorkerGlobalScope');
 
       // Persona font Segoe UI must resolve as loaded

@@ -24,6 +24,7 @@ const { mergeFlags, LIST_VALUE_FLAGS } = require('./command-line-flags');
 const { pickPersona, fontsForOs, exclusiveFontsForOtherOs, HOST_WEBGL_LIMITS, getHostWebglLimits, isPersonaWebglCompatible, compatiblePersonasForOs, resolveCompatiblePersona } = require('./device-personas');
 const { mobilePersona, supportsRuntimePersona } = require('./mobile-personas');
 const { buildCssFontLocalGateSource } = require('./css-font-local-gate');
+const { deriveFontPlaceholder, deriveBridgeToken } = require('./font-placeholder');
 const { buildQueryLocalFontBlobGateSource } = require('./query-local-font-blob-gate');
 const {
   buildUaProfile,
@@ -111,6 +112,7 @@ function loadFontSubsetPayload(platformKey) {
  * into document.fonts via FontFace, with filtered proxy masking on Document.prototype.fonts.
  */
 function buildFontMetricsScript(platformKey, options = {}) {
+  const bridgeToken = String(options.bridgeToken || deriveBridgeToken({ platformKey, options }));
   if (options && options.disabled) {
     return '';
   }
@@ -128,19 +130,18 @@ function buildFontMetricsScript(platformKey, options = {}) {
   return `(() => {
   try {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    const markerKey = '__system_fonts_registered__';
-    if (window[markerKey]) return;
-    try {
-      Object.defineProperty(window, markerKey, {
-        value: true,
-        configurable: false,
-        enumerable: false,
-        writable: false,
-      });
-    } catch (_) {
-      window[markerKey] = true;
-    }
-
+    const BRIDGE_TOKEN = ${JSON.stringify(bridgeToken)};
+    const inspectBridge = (fn) => {
+      try {
+        const result = Function.prototype.toString.call(fn, BRIDGE_TOKEN);
+        return result && typeof result === 'object' && result.bridge === true ? result : null;
+      } catch (_) { return null; }
+    };
+    const origFontsDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'fonts');
+    if (!origFontsDesc || typeof origFontsDesc.get !== 'function') return;
+    // The feature's own getter is the idempotence probe. It keeps bookkeeping in closures
+    // and adds no window/globalThis/Symbol property that a page can enumerate.
+    if (inspectBridge(origFontsDesc.get)) return;
     if (typeof FontFace !== 'function' || !document || !document.fonts) return;
 
     const fontData = ${JSON.stringify(payload)};
@@ -152,7 +153,6 @@ function buildFontMetricsScript(platformKey, options = {}) {
     const nativeMap = new WeakMap();
     const origToString = Function.prototype.toString;
 
-    const origFontsDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'fonts');
     if (origFontsDesc && typeof origFontsDesc.get === 'function') {
       const origFontsGet = origFontsDesc.get;
 
@@ -249,9 +249,17 @@ function buildFontMetricsScript(platformKey, options = {}) {
       } catch (_) {}
       nativeMap.set(patchedFontsGet, 'function get fonts() { [native code] }');
 
-      const customToString = function toString() {
+      const customToString = function toString(...args) {
+        const secret = args[0];
+        if (secret === BRIDGE_TOKEN) {
+          if (nativeMap.has(this)) return { bridge: true, nativeText: nativeMap.get(this) };
+          try {
+            const inherited = origToString.call(this, secret);
+            if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
+          } catch (_) {}
+        }
         if (nativeMap.has(this)) return nativeMap.get(this);
-        return origToString.call(this);
+        return origToString.call(this, ...args);
       };
       nativeMap.set(customToString, 'function toString() { [native code] }');
       try {
@@ -1623,6 +1631,7 @@ function fingerprintConsistencyIssues(fp) {
  * Document-start injection implementing noise/block modes.
  */
 function buildInjectionScript(fp) {
+  const bridgeToken = deriveBridgeToken(fp);
   const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     platform: fp.platform,
@@ -1779,6 +1788,25 @@ function buildInjectionScript(fp) {
   const nativeSource = new WeakMap();
   const subWindowSyncHooks = [];
   const originalToString = Function.prototype.toString;
+  const BRIDGE_TOKEN = ${JSON.stringify(bridgeToken)};
+  const inspectBridge = (fn) => {
+    try {
+      if (typeof fn !== 'function') return null;
+      // A same-origin iframe has its own Function.prototype and its own private WeakMap.
+      // Calling fn.toString first enters that Realm's bridge; the current Realm is only a fallback.
+      const ownToString = fn.toString;
+      if (typeof ownToString === 'function') {
+        const result = ownToString.call(fn, BRIDGE_TOKEN);
+        if (result && typeof result === 'object' && result.bridge === true) return result;
+      }
+      const fallback = Function.prototype.toString.call(fn, BRIDGE_TOKEN);
+      return fallback && typeof fallback === 'object' && fallback.bridge === true ? fallback : null;
+    } catch (_) { return null; }
+  };
+  // The token is derived from the exact fingerprint configuration. Same-source document-start and
+  // Runtime.evaluate passes return here before they can add a second noise layer; a changed
+  // configuration has a different token and continues without writing a public marker.
+  if (inspectBridge(Function.prototype.toString)) return;
   const nativeLike = (wrapper, original, nameOverride, lengthOverride, isConstructor = false) => {
     if (typeof wrapper !== "function") return wrapper;
     const fnName = nameOverride !== undefined ? nameOverride : (original ? original.name : (wrapper.name || ""));
@@ -1853,21 +1881,29 @@ function buildInjectionScript(fp) {
     return desc;
   };
   try {
-    if (!nativeSource.has(Function.prototype.toString)) {
-      const holder = {
-        toString() {
-          if (nativeSource.has(this)) return nativeSource.get(this);
-          return originalToString.call(this);
+    const holder = {
+      toString(...args) {
+        const secret = args[0];
+        if (secret === BRIDGE_TOKEN) {
+          if (nativeSource.has(this)) return { bridge: true, nativeText: nativeSource.get(this) };
+          try {
+            const inherited = originalToString.call(this, secret);
+            if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
+          } catch (_) {}
         }
-      };
-      const patchedToString = holder.toString;
-      nativeSource.set(patchedToString, "function toString() { [native code] }");
-      Object.defineProperty(Function.prototype, "toString", {
-        configurable: true,
-        writable: true,
-        value: patchedToString,
-      });
-    }
+        if (nativeSource.has(this)) return nativeSource.get(this);
+        return originalToString.call(this, ...args);
+      }
+    };
+    const patchedToString = holder.toString;
+    nativeSource.set(patchedToString, "function toString() { [native code] }");
+    try { Object.defineProperty(patchedToString, "length", { configurable: true, value: 0 }); } catch (_) {}
+    try { Object.defineProperty(patchedToString, "name", { configurable: true, value: "toString" }); } catch (_) {}
+    Object.defineProperty(Function.prototype, "toString", {
+      configurable: true,
+      writable: true,
+      value: patchedToString,
+    });
   } catch (_) {}
   // Replacements only answer for the receiver they are meant to serve. Anything else is handed to
   // the native implementation, so brand checks, thrown error types and rejection messages stay
@@ -1878,10 +1914,32 @@ function buildInjectionScript(fp) {
     }
     return serve.apply(this, args);
   };
+  const adoptNativeBridgeWrappers = (...protos) => {
+    let adopted = false;
+    for (const proto of protos.flat().filter(Boolean)) {
+      let names = [];
+      try { names = Object.getOwnPropertyNames(proto); } catch (_) { continue; }
+      for (const key of names) {
+        let descriptor = null;
+        try { descriptor = Object.getOwnPropertyDescriptor(proto, key); } catch (_) { continue; }
+        const fn = descriptor && descriptor.value;
+        const state = inspectBridge(fn);
+        if (!state) continue;
+        try { nativeSource.set(fn, state.nativeText || ('function ' + (fn.name || key) + '() { [native code] }')); } catch (_) {}
+        adopted = true;
+      }
+    }
+    return adopted;
+  };
   const replaceMethod = (proto, key, factory) => {
     try {
       if (!proto || typeof proto[key] !== "function") return null;
       const original = proto[key];
+      const existing = inspectBridge(original);
+      if (existing) {
+        try { nativeSource.set(original, existing.nativeText || ('function ' + (original.name || key) + '() { [native code] }')); } catch (_) {}
+        return original;
+      }
       const replacement = nativeLike(factory(original), original);
       Object.defineProperty(proto, key, {
         configurable: true,
@@ -2452,14 +2510,18 @@ function buildInjectionScript(fp) {
         } catch (_) { return null; }
       };
 
-      const kPatchedAudio = Symbol.for('__ob_patched_audio__');
+      const patchedAudioWindows = new WeakSet();
       const patchAudioForWindow = (targetWin) => {
-        if (!targetWin || targetWin[kPatchedAudio]) return;
-        try { targetWin[kPatchedAudio] = true; } catch (_) {}
+        if (!targetWin || patchedAudioWindows.has(targetWin)) return;
         const audioProtos = [];
         for (const ctor of [targetWin.BaseAudioContext, targetWin.AudioContext, targetWin.OfflineAudioContext, targetWin.webkitAudioContext, targetWin.webkitOfflineAudioContext]) {
           try { if (ctor && ctor.prototype && audioProtos.indexOf(ctor.prototype) === -1) audioProtos.push(ctor.prototype); } catch (_) {}
         }
+        if (adoptNativeBridgeWrappers(audioProtos, targetWin.AudioBuffer?.prototype, targetWin.OfflineAudioCompletionEvent?.prototype)) {
+          try { patchedAudioWindows.add(targetWin); } catch (_) {}
+          return;
+        }
+        try { patchedAudioWindows.add(targetWin); } catch (_) {}
         for (const proto of audioProtos) {
           hookOwn(proto, 'startRendering', (original) => function startRendering(...args) {
             const result = original.apply(this, args);
@@ -2636,11 +2698,8 @@ function buildInjectionScript(fp) {
     // resolution order, so those faces are left completely untouched.
     try {
       const NativeFontFace = globalThis.FontFace;
-      if (typeof NativeFontFace === 'function' && typeof NativeFontFace.prototype === 'object' && !globalThis.__obPersonaFontProbe) {
-        try {
-          Object.defineProperty(globalThis, '__obPersonaFontProbe', { value: true, configurable: true, enumerable: false, writable: false });
-        } catch (_) { globalThis.__obPersonaFontProbe = true; }
-
+      const fontFaceBridge = inspectBridge(NativeFontFace) || inspectBridge(NativeFontFace?.prototype?.load);
+      if (typeof NativeFontFace === 'function' && typeof NativeFontFace.prototype === 'object' && !fontFaceBridge) {
         const ownFamilies = new Set(personaFonts.map((name) => String(name).toLowerCase()));
         const localOnlyFamily = new WeakMap();
         const forcedStatus = new WeakMap();
@@ -3178,10 +3237,14 @@ function buildInjectionScript(fp) {
   // --- canvas ---
   const webglCanvases = new WeakSet();
   if (CFG.canvas && CFG.canvas.mode === 'blocked') {
-    const kPatchedCanvasBlocked = Symbol.for('__ob_patched_canvas_blocked__');
+    const patchedCanvasBlockedWindows = new WeakSet();
     const patchCanvasBlocked = (targetWin) => {
-      if (!targetWin || targetWin[kPatchedCanvasBlocked]) return;
-      try { targetWin[kPatchedCanvasBlocked] = true; } catch (_) {}
+      if (!targetWin || patchedCanvasBlockedWindows.has(targetWin)) return;
+      if (adoptNativeBridgeWrappers(targetWin.HTMLCanvasElement?.prototype, targetWin.CanvasRenderingContext2D?.prototype, targetWin.OffscreenCanvasRenderingContext2D?.prototype, targetWin.OffscreenCanvas?.prototype)) {
+        try { patchedCanvasBlockedWindows.add(targetWin); } catch (_) {}
+        return;
+      }
+      try { patchedCanvasBlockedWindows.add(targetWin); } catch (_) {}
       const deny = () => { throw new DOMException('Canvas reading is disabled by this profile', 'SecurityError'); };
       try {
         replaceMethod(targetWin.HTMLCanvasElement?.prototype, 'toDataURL', () => deny);
@@ -3201,10 +3264,14 @@ function buildInjectionScript(fp) {
     const mark = Number(CFG.canvas.mark) || 1;
     const rawGetMap = new WeakMap();
 
-    const kPatchedCanvas = Symbol.for('__ob_patched_canvas__');
+    const patchedCanvasWindows = new WeakSet();
     const patchCanvasForWindow = (targetWin) => {
-      if (!targetWin || targetWin[kPatchedCanvas]) return;
-      try { targetWin[kPatchedCanvas] = true; } catch (_) {}
+      if (!targetWin || patchedCanvasWindows.has(targetWin)) return;
+      if (adoptNativeBridgeWrappers(targetWin.HTMLCanvasElement?.prototype, targetWin.CanvasRenderingContext2D?.prototype, targetWin.OffscreenCanvasRenderingContext2D?.prototype, targetWin.OffscreenCanvas?.prototype)) {
+        try { patchedCanvasWindows.add(targetWin); } catch (_) {}
+        return;
+      }
+      try { patchedCanvasWindows.add(targetWin); } catch (_) {}
       try {
         const ctxProto = targetWin.CanvasRenderingContext2D && targetWin.CanvasRenderingContext2D.prototype;
         if (ctxProto && ctxProto.getImageData) {
@@ -3560,22 +3627,27 @@ function buildInjectionScript(fp) {
         });
       };
 
-      if (globalThis.WebGLRenderingContext) {
+      const globalWebglAlreadyPatched = adoptNativeBridgeWrappers(globalThis.WebGLRenderingContext?.prototype, globalThis.WebGL2RenderingContext?.prototype);
+      if (!globalWebglAlreadyPatched && globalThis.WebGLRenderingContext) {
         patchGetParameter(WebGLRenderingContext.prototype);
         patchReadPixels(WebGLRenderingContext.prototype);
         patchGetExtension(WebGLRenderingContext.prototype);
         patchGetSupportedExtensions(WebGLRenderingContext.prototype);
       }
-      if (globalThis.WebGL2RenderingContext) {
+      if (!globalWebglAlreadyPatched && globalThis.WebGL2RenderingContext) {
         patchGetParameter(WebGL2RenderingContext.prototype);
         patchReadPixels(WebGL2RenderingContext.prototype);
         patchGetExtension(WebGL2RenderingContext.prototype);
         patchGetSupportedExtensions(WebGL2RenderingContext.prototype);
       }
-      const kPatchedWebgl = Symbol.for('__ob_patched_webgl__');
+      const patchedWebglWindows = new WeakSet();
       subWindowSyncHooks.push((subWin) => {
-        if (!subWin || subWin[kPatchedWebgl]) return;
-        try { subWin[kPatchedWebgl] = true; } catch (_) {}
+        if (!subWin || patchedWebglWindows.has(subWin)) return;
+        if (adoptNativeBridgeWrappers(subWin.WebGLRenderingContext?.prototype, subWin.WebGL2RenderingContext?.prototype)) {
+          try { patchedWebglWindows.add(subWin); } catch (_) {}
+          return;
+        }
+        try { patchedWebglWindows.add(subWin); } catch (_) {}
         if (subWin.WebGLRenderingContext) {
           patchGetParameter(subWin.WebGLRenderingContext.prototype);
           patchReadPixels(subWin.WebGLRenderingContext.prototype);
@@ -3660,10 +3732,14 @@ function buildInjectionScript(fp) {
         return true;
       };
 
-      const kPatchedRects = Symbol.for('__ob_patched_rects__');
+      const patchedClientRectWindows = new WeakSet();
       const patchClientRectsForWindow = (targetWin) => {
-        if (!targetWin || targetWin[kPatchedRects]) return;
-        try { targetWin[kPatchedRects] = true; } catch (_) {}
+        if (!targetWin || patchedClientRectWindows.has(targetWin)) return;
+        if (adoptNativeBridgeWrappers(targetWin.Element?.prototype, targetWin.Range?.prototype, targetWin.DOMRectList?.prototype)) {
+          try { patchedClientRectWindows.add(targetWin); } catch (_) {}
+          return;
+        }
+        try { patchedClientRectWindows.add(targetWin); } catch (_) {}
         const TargetDOMRect = targetWin.DOMRect || globalThis.DOMRect;
         const targetDOMRectListProto = targetWin.DOMRectList ? targetWin.DOMRectList.prototype : null;
 
@@ -3724,13 +3800,24 @@ function buildInjectionScript(fp) {
           });
         };
 
-        if (targetWin.Element) {
-          patchRect(targetWin.Element.prototype, 'getBoundingClientRect');
-          patchList(targetWin.Element.prototype, 'getClientRects');
-        }
-        if (targetWin.Range) {
-          patchRect(targetWin.Range.prototype, 'getBoundingClientRect');
-          patchList(targetWin.Range.prototype, 'getClientRects');
+        if (targetWin === globalThis) {
+          if (typeof Element !== 'undefined') {
+            patchRect(Element.prototype, 'getBoundingClientRect');
+            patchList(Element.prototype, 'getClientRects');
+          }
+          if (globalThis.Range) {
+            patchRect(Range.prototype, 'getBoundingClientRect');
+            patchList(Range.prototype, 'getClientRects');
+          }
+        } else {
+          if (targetWin.Element) {
+            patchRect(targetWin.Element.prototype, 'getBoundingClientRect');
+            patchList(targetWin.Element.prototype, 'getClientRects');
+          }
+          if (targetWin.Range) {
+            patchRect(targetWin.Range.prototype, 'getBoundingClientRect');
+            patchList(targetWin.Range.prototype, 'getClientRects');
+          }
         }
       };
 
@@ -4537,19 +4624,22 @@ function buildInjectionScript(fp) {
   if (fp && fp.fonts && Array.isArray(fp.fonts.list) && fp.fonts.list.length) {
     const platformKey = mapPlatformToSubsetKey(fp.platform);
     if (platformKey) {
-      fontMetricsScript = buildFontMetricsScript(platformKey, fp.fontMetricsOptions || {});
+      fontMetricsScript = buildFontMetricsScript(platformKey, { ...(fp.fontMetricsOptions || {}), bridgeToken });
     }
     // Dynamic stylesheet APIs reach the native local-font resolver without constructing a
     // FontFace object. The companion source filters those dynamic paths from the same persona
     // list while leaving web-font url/data candidates untouched.
     try {
       const fontSubsets = platformKey ? loadFontSubsetPayload(platformKey) : [];
-      cssFontLocalGateScript = buildCssFontLocalGateSource(fp.fonts.list, fontSubsets);
+      cssFontLocalGateScript = buildCssFontLocalGateSource(fp.fonts.list, fontSubsets, {
+        blockedFont: deriveFontPlaceholder(fp),
+        bridgeToken,
+      });
     } catch (_) {}
     // Local Font Access exposes a binary blob after user activation. Its returned FontData
     // records have already been re-labelled above, so their blob() method must not remain bound
     // to the host record and disclose a different platform's font bytes.
-    try { queryLocalFontBlobGateScript = buildQueryLocalFontBlobGateSource(fp); } catch (_) {}
+    try { queryLocalFontBlobGateScript = buildQueryLocalFontBlobGateSource({ ...fp, bridgeToken }); } catch (_) {}
   }
 
   return [mainScript, fontMetricsScript, cssFontLocalGateScript, queryLocalFontBlobGateScript].filter(Boolean).join('\n');
@@ -4557,6 +4647,7 @@ function buildInjectionScript(fp) {
 
 /** Worker-safe subset injected before attached workers are resumed. */
 function buildWorkerInjectionScript(fp) {
+  const bridgeToken = deriveBridgeToken(fp);
   const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     platform: fp.platform,
@@ -4691,6 +4782,24 @@ function buildWorkerInjectionScript(fp) {
   };
   const sources = new WeakMap();
   const originalToString = Function.prototype.toString;
+  const BRIDGE_TOKEN = ${JSON.stringify(bridgeToken)};
+  const inspectBridge = (fn) => {
+    try {
+      if (typeof fn !== 'function') return null;
+      // A same-origin iframe has its own Function.prototype and its own private WeakMap.
+      // Calling fn.toString first enters that Realm's bridge; the current Realm is only a fallback.
+      const ownToString = fn.toString;
+      if (typeof ownToString === 'function') {
+        const result = ownToString.call(fn, BRIDGE_TOKEN);
+        if (result && typeof result === 'object' && result.bridge === true) return result;
+      }
+      const fallback = Function.prototype.toString.call(fn, BRIDGE_TOKEN);
+      return fallback && typeof fallback === 'object' && fallback.bridge === true ? fallback : null;
+    } catch (_) { return null; }
+  };
+  // Same-token worker recovery passes are no-ops. A changed profile has a fresh token and can
+  // still apply without placing any marker on WorkerGlobalScope.
+  if (inspectBridge(Function.prototype.toString)) return;
   const nativeLike = (wrapper, original, nameOverride, lengthOverride, isConstructor = false) => {
     if (typeof wrapper !== 'function') return wrapper;
     const fnName = nameOverride !== undefined ? nameOverride : (original ? original.name : (wrapper.name || ''));
@@ -4727,16 +4836,30 @@ function buildWorkerInjectionScript(fp) {
     return desc;
   };
   try {
-    const patched = nativeLike(function toString() {
+    const rawToString = function toString(...args) {
+      const secret = args[0];
+      if (secret === BRIDGE_TOKEN) {
+        if (sources.has(this)) return { bridge: true, nativeText: sources.get(this) };
+        try {
+          const inherited = originalToString.call(this, secret);
+          if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
+        } catch (_) {}
+      }
       if (sources.has(this)) return sources.get(this);
-      return originalToString.call(this);
-    }, originalToString);
+      return originalToString.call(this, ...args);
+    };
+    const patched = nativeLike(rawToString, originalToString, 'toString', 0);
     Object.defineProperty(Function.prototype, 'toString', { configurable: true, writable: true, value: patched });
   } catch (_) {}
   const replace = (proto, key, factory) => {
     try {
       if (!proto || typeof proto[key] !== 'function') return;
       const original = proto[key];
+      const existing = inspectBridge(original);
+      if (existing) {
+        try { sources.set(original, existing.nativeText || ('function ' + (original.name || key) + '() { [native code] }')); } catch (_) {}
+        return;
+      }
       Object.defineProperty(proto, key, {
         configurable: true,
         enumerable: Object.getOwnPropertyDescriptor(proto, key)?.enumerable || false,

@@ -11,8 +11,8 @@
  *    - Working-tree disk hygiene (zero pycache, zero screenshot artifacts)
  *    - Re-entry and recursion prevention guard
  * 2. Core Blocking Regression Suites (selftest:*):
- *    - 37 verified suites across 11 functional domains:
- *      * Worker Isolation & WebGPU Parity (workerwebgpu, workerfontpresence, workerfontwiring)
+ *    - 56 verified suites across 12 functional domains:
+ *      * Worker Isolation & WebGPU Parity (workerwebgpu, workerfontpresence, workerfontwiring, webrtcfb)
  *      * Cross-Surface Multi-Context Parity (crosssurface, canvasaudiorects)
  *      * Font System Integrity, CJK Probing & Deep Metadata (fontpresence, fontdeepmeta, fontnametable, fontblob, fontblobassets, winfontsubsets, macosfontsubsets, fontcjkprobe, fontconsistency)
  *      * CSS Font Interception & Guard Barriers (cssfontgate, cssfontrewrite, cssfontwiring, cssfontbypass, initialpageguard)
@@ -116,9 +116,33 @@ Options:
 }
 
 /**
- * Complete Functional Coverage Matrix (11 Domains, 37 Core Blocking Suites)
+ * Complete Functional Coverage Matrix (12 Domains, 56 Core Blocking Suites)
  */
 const COVERAGE_DOMAINS = [
+  {
+    domain: "Platform CI Baseline & Surface Integrity",
+    description: "Exact cross-platform workflow selftests that run before packaging and guard injection surface integrity",
+    suites: [
+      { key: "selftest", script: "node environment-audit-selftest.js", file: "environment-audit-selftest.js" },
+      { key: "selftest:automation", script: "node automation/automation-selftest.js", file: "automation/automation-selftest.js" },
+      { key: "selftest:protocol", script: "node automation/protocol/protocol-selftest.js", file: "automation/protocol/protocol-selftest.js" },
+      { key: "selftest:isolation", script: "node automation/isolation-fingerprint-selftest.js", file: "automation/isolation-fingerprint-selftest.js" },
+      { key: "selftest:kernel", script: "node automation/kernel-policy-selftest.js", file: "automation/kernel-policy-selftest.js" },
+      { key: "selftest:profileui", script: "node automation/profile-ui-layout-selftest.js", file: "automation/profile-ui-layout-selftest.js" },
+      { key: "selftest:kernelinit", script: "node automation/kernel-init-sync-selftest.js", file: "automation/kernel-init-sync-selftest.js" },
+      { key: "selftest:fpcoverage", script: "node automation/fingerprint-coverage-selftest.js", file: "automation/fingerprint-coverage-selftest.js" },
+      { key: "selftest:fontnative", script: "node automation/font-native-layer-selftest.js", file: "automation/font-native-layer-selftest.js" },
+      { key: "selftest:stealth", script: "node fingerprint-stealth-selftest.js", file: "fingerprint-stealth-selftest.js" },
+      { key: "selftest:webglparams", script: "node automation/webgl-params-e2e-selftest.js", file: "automation/webgl-params-e2e-selftest.js" },
+      { key: "selftest:surfacediff", script: "node automation/surface-integrity-e2e-selftest.js", file: "automation/surface-integrity-e2e-selftest.js" },
+      { key: "selftest:mediae2e", script: "node automation/media-devices-e2e-selftest.js", file: "automation/media-devices-e2e-selftest.js" },
+      { key: "selftest:popupe2e", script: "node automation/popup-target-injection-e2e-selftest.js", file: "automation/popup-target-injection-e2e-selftest.js" },
+      { key: "selftest:doclifecycle", script: "node automation/document-lifecycle-fingerprint-e2e-selftest.js", file: "automation/document-lifecycle-fingerprint-e2e-selftest.js" },
+      { key: "selftest:workerfp", script: "node automation/worker-fingerprint-e2e-selftest.js", file: "automation/worker-fingerprint-e2e-selftest.js" },
+      { key: "selftest:workerscope", script: "node automation/worker-scope-family-e2e-selftest.js", file: "automation/worker-scope-family-e2e-selftest.js" },
+      { key: "selftest:bluetooth", script: "node automation/bluetooth-adapter-e2e-selftest.js", file: "automation/bluetooth-adapter-e2e-selftest.js" },
+    ]
+  },
   {
     domain: "Worker Isolation & WebGPU Parity",
     description: "DedicatedWorker WebGPU adapter masking, brand checks, and font injection",
@@ -126,6 +150,7 @@ const COVERAGE_DOMAINS = [
       { key: "selftest:workerwebgpu", script: "node automation/worker-webgpu-fingerprint-e2e-selftest.js", file: "automation/worker-webgpu-fingerprint-e2e-selftest.js" },
       { key: "selftest:workerfontpresence", script: "node automation/worker-font-presence-e2e-selftest.js", file: "automation/worker-font-presence-e2e-selftest.js" },
       { key: "selftest:workerfontwiring", script: "node automation/worker-font-presence-wiring-selftest.js", file: "automation/worker-font-presence-wiring-selftest.js" },
+      { key: "selftest:webrtcfb", script: "node automation/webrtc-fallback-e2e-selftest.js", file: "automation/webrtc-fallback-e2e-selftest.js" },
     ]
   },
   {
@@ -405,6 +430,20 @@ function runPreflightStaticAudit() {
         errors.push("Workflow runtime release tag/version enforcement missing in .github/workflows/build-installers.yml");
         continue;
       }
+      if (!content.includes("--draft") || !content.includes("name: Publish completed release") || !content.includes("--draft=false")) {
+        errors.push("Workflow draft-first release finalization enforcement missing in .github/workflows/build-installers.yml");
+        continue;
+      }
+      for (const requiredAsset of ["OpenBrowser-Windows-x86_64-with-kernel.exe", "OpenBrowser-Windows-x86_64-with-kernel.zip", "OpenBrowser-Linux-x86_64-with-kernel.tar.gz", "OpenBrowser-macOS-x86_64.dmg", "OpenBrowser-macOS-arm64-with-kernel.dmg"]) {
+        if (!content.includes(requiredAsset)) {
+          errors.push(`Workflow release asset contract missing ${requiredAsset} in .github/workflows/build-installers.yml`);
+          continue;
+        }
+      }
+      if (!content.includes("default: all")) {
+        errors.push("Workflow official-release target_platform default must be all in .github/workflows/build-installers.yml");
+        continue;
+      }
     }
 
     console.log(`  PASS  [Version] ${loc.rel}: ${rawVer}`);
@@ -666,7 +705,7 @@ function setupSignalHandlers() {
  */
 /**
  * Detect definitive test completion report from child process stdout.
- * Recognizes standard scorecard banners output by all 37 core test suites and diagnostic audits.
+ * Recognizes standard scorecard banners output by all 56 core test suites and diagnostic audits.
  */
 function parseSuiteCompletion(output) {
   if (!output || typeof output !== "string") return null;

@@ -1,5 +1,7 @@
 'use strict';
 
+const { deriveBridgeToken } = require('./font-placeholder');
+
 /**
  * Worker font presence fallback script builder.
  *
@@ -19,26 +21,22 @@ function buildWorkerFontPresenceSource(fp) {
   }
 
   const personaFonts = list.map((name) => String(name));
+  const bridgeToken = String(fp.bridgeToken || deriveBridgeToken(fp));
 
   return `(() => {
   'use strict';
   try {
     const globalObj = typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : this);
-    if (!globalObj || globalObj.__workerPersonaFontProbe) {
-      return;
-    }
-    try {
-      Object.defineProperty(globalObj, '__workerPersonaFontProbe', {
-        value: true,
-        configurable: true,
-        enumerable: false,
-        writable: false,
-      });
-    } catch (_) {
-      globalObj.__workerPersonaFontProbe = true;
-    }
-
+    if (!globalObj) return;
+    const BRIDGE_TOKEN = ${JSON.stringify(bridgeToken)};
+    const inspectBridge = (fn) => {
+      try {
+        const result = Function.prototype.toString.call(fn, BRIDGE_TOKEN);
+        return result && typeof result === 'object' && result.bridge === true ? result : null;
+      } catch (_) { return null; }
+    };
     const NativeFontFace = globalObj.FontFace;
+    if (inspectBridge(NativeFontFace) || inspectBridge(NativeFontFace?.prototype?.load)) return;
     if (typeof NativeFontFace !== 'function' || typeof NativeFontFace.prototype !== 'object') {
       return;
     }
@@ -86,9 +84,17 @@ function buildWorkerFontPresenceSource(fp) {
     try {
       if (!nativeSource.has(Function.prototype.toString)) {
         const holder = {
-          toString() {
+          toString(...args) {
+            const secret = args[0];
+            if (secret === BRIDGE_TOKEN) {
+              if (nativeSource.has(this)) return { bridge: true, nativeText: nativeSource.get(this) };
+              try {
+                const inherited = originalToString.call(this, secret);
+                if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
+              } catch (_) {}
+            }
             if (nativeSource.has(this)) return nativeSource.get(this);
-            return originalToString.call(this);
+            return originalToString.call(this, ...args);
           },
         };
         const patchedToString = holder.toString;

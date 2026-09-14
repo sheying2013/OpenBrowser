@@ -13,6 +13,10 @@ const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
 const { PersistentConnection } = require('../cdp');
+const { buildWorkerFontPresenceSource } = require('./worker-font-presence-fallback');
+const { buildCssFontLocalGateSource } = require('./css-font-local-gate');
+const { buildQueryLocalFontBlobGateSource } = require('./query-local-font-blob-gate');
+const { createWebRtcFallbackSource } = require('./webrtc-fallback');
 
 const {
   buildFingerprint,
@@ -254,6 +258,40 @@ async function main() {
     assert.ok(!marker.test(markerScript), `injected payload must not expose ${marker}`);
   }
   pass('no page-readable surface carries a product marker');
+
+  // All independently injected document and worker helpers must obey the same zero-public-marker
+  // rule. These sources are executed in page-controlled realms, so a non-enumerable global is
+  // still a complete fingerprint leak through Reflect/Object.getOwnPropertyNames.
+  const fontMarkerFp = buildFingerprint({
+    id: 'env-font-marker', name: 'env-font-marker', os: 'Windows', language: 'en-US',
+    privacy: { deviceProfile: 'persona', canvas: 'noise', webgl: 'noise' },
+  });
+  const generatedSources = [
+    buildInjectionScript(fontMarkerFp),
+    buildWorkerInjectionScript(fontMarkerFp),
+    buildWorkerFontPresenceSource(fontMarkerFp),
+    buildCssFontLocalGateSource(fontMarkerFp.fonts.list, [], { seed: fontMarkerFp.seed }),
+    buildQueryLocalFontBlobGateSource(fontMarkerFp),
+    createWebRtcFallbackSource({ publicIp: fontMarkerFp.webrtcAddress, localIp: fontMarkerFp.webrtcLocalIp }),
+  ];
+  const forbiddenRuntimeMarkers = [
+    '__system_fonts_registered__',
+    '__obPersonaFontProbe',
+    '__workerPersonaFontProbe',
+    '__webrtcFallbackInstalled',
+    '__queryLocalFontBlobGate',
+    '__cssFontLocalGateActive',
+    '__ob_font_blocked__',
+    'Symbol.for',
+  ];
+  for (const source of generatedSources) {
+    for (const marker of forbiddenRuntimeMarkers) {
+      assert.ok(!source.includes(marker), `generated injection source must not expose ${marker}`);
+    }
+    assert.ok(!/__ob_/i.test(source), 'generated injection source must not expose an __ob_ marker');
+    assert.ok(!/openbrowser/i.test(source), 'generated injection source must not expose a product marker');
+  }
+  pass('all page and worker injection helpers are free of public state markers');
   assert.ok(voices.some((v) => v.default === true));
   assert.ok(voices.some((v) => String(v.lang || '').startsWith('zh')));
   const deviceA = createDeviceNameFromSeed('env-aaa', { mode: 'noise' });
@@ -410,10 +448,15 @@ async function main() {
   assert.ok(!scriptA.includes('__openbrowserFingerprint'));
   assert.ok(!scriptA.includes('__openbrowserUaPatched'));
   assert.ok(!scriptA.includes('Symbol.for'));
+  assert.ok(!scriptA.includes('__ob_'));
   assert.ok(!scriptA.includes('ob.fp'));
   assert.ok(scriptA.includes("patchList(Element.prototype, 'getClientRects')"));
   assert.ok(scriptA.includes("patchList(Range.prototype, 'getClientRects')"));
-  pass('fingerprint injection avoids public __openbrowserFingerprint marker');
+  assert.ok(scriptA.includes("patchList(targetWin.Element.prototype, 'getClientRects')"));
+  assert.ok(scriptA.includes("patchList(targetWin.Range.prototype, 'getClientRects')"));
+  assert.ok(scriptA.includes('patchClientRectsForWindow(globalThis)'));
+  assert.ok(scriptA.includes('patchClientRectsForWindow(subWin)'));
+  pass('fingerprint injection avoids public markers and covers main and dynamic window client rects');
 
   // locks
   const firstLock = await acquireProfileLock(p1, { profileId: 'p1' });

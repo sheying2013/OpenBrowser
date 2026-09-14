@@ -1,5 +1,7 @@
 'use strict';
 
+const { deriveBridgeToken } = require('./font-placeholder');
+
 /**
  * WebRTC document-level fallback injector.
  *
@@ -13,26 +15,22 @@ function createWebRtcFallbackSource(options) {
   const opts = options || {};
   const publicIp = String(opts.publicIp || opts.webrtcAddress || '203.0.113.9');
   const localIp = String(opts.localIp || '192.168.1.100');
+  const bridgeToken = String(opts.bridgeToken || deriveBridgeToken({ publicIp, localIp }));
 
   return `(() => {
   'use strict';
 
   const globalObj = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : this);
-  if (!globalObj || globalObj.__webrtcFallbackInstalled) {
-    return;
-  }
-  try {
-    Object.defineProperty(globalObj, '__webrtcFallbackInstalled', {
-      value: true,
-      configurable: true,
-      enumerable: false,
-      writable: false,
-    });
-  } catch (_) {
-    globalObj.__webrtcFallbackInstalled = true;
-  }
-
+  if (!globalObj) return;
+  const BRIDGE_TOKEN = ${JSON.stringify(bridgeToken)};
+  const inspectBridge = (fn) => {
+    try {
+      const result = Function.prototype.toString.call(fn, BRIDGE_TOKEN);
+      return result && typeof result === 'object' && result.bridge === true ? result : null;
+    } catch (_) { return null; }
+  };
   const OrigRTCPeerConnection = globalObj.RTCPeerConnection || globalObj.webkitRTCPeerConnection;
+  if (inspectBridge(OrigRTCPeerConnection)) return;
   if (typeof OrigRTCPeerConnection !== 'function') {
     return;
   }
@@ -76,9 +74,17 @@ function createWebRtcFallbackSource(options) {
 
   try {
     if (!nativeSource.has(Function.prototype.toString)) {
-      const patchedToString = function toString() {
+      const patchedToString = function toString(...args) {
+        const secret = args[0];
+        if (secret === BRIDGE_TOKEN) {
+          if (nativeSource.has(this)) return { bridge: true, nativeText: nativeSource.get(this) };
+          try {
+            const inherited = originalFunctionToString.call(this, secret);
+            if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
+          } catch (_) {}
+        }
         if (nativeSource.has(this)) return nativeSource.get(this);
-        return originalFunctionToString.call(this);
+        return originalFunctionToString.call(this, ...args);
       };
       makeNativeLike(patchedToString, 'toString', 0);
       Object.defineProperty(Function.prototype, 'toString', {

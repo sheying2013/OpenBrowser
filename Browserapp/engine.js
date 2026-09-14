@@ -29,6 +29,7 @@ const { fpLog, summarizeFp, LIVE_PROBE_EXPRESSION, logPath: fingerprintLogPath }
 const { buildPortScanProtectionScript } = require('./automation/port-scan-protection');
 const { buildWorkerFontPresenceSource } = require('./automation/worker-font-presence-fallback');
 const { createCssFontResponseRewriter } = require('./automation/css-font-response-rewrite');
+const { deriveFontPlaceholder } = require('./automation/font-placeholder');
 const { buildUaProfile, cdpUserAgentOverride, buildAcceptLanguageHeader } = require('./automation/user-agent');
 const { sanitizeUrlForLog } = require('./automation/log-sanitizer');
 
@@ -1336,6 +1337,8 @@ class BrowserEngine {
     // stylesheet. It complements the document gate, which only sees dynamic DOM/CSSOM writes.
     const fontResponseRewriter = createCssFontResponseRewriter({
       personaFonts: fingerprint?.fonts?.list || [],
+      fingerprint,
+      blockedFont: deriveFontPlaceholder(fingerprint),
       logger: (details) => {
         if (details?.type === 'handle-error' || details?.type === 'enable-error') {
           const errMsg = String(details?.error || '');

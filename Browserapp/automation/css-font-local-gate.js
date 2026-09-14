@@ -16,7 +16,7 @@
  * - Blob constructor and URL.createObjectURL / URL.revokeObjectURL for text/css Blobs
  *
  * Foreign local() font requests outside the persona whitelist are rewritten to
- * local("__ob_font_blocked__"), triggering NetworkError on document.fonts.load().
+ * a neutral nonexistent local family, triggering NetworkError on document.fonts.load().
  * Whitelisted persona fonts are augmented with authentic platform font subset WOFF2 payloads
  * so that cross-platform requests (e.g. Segoe UI on non-Windows hosts) load genuine font data.
  * Web fonts (url/data) remain completely untouched.
@@ -24,6 +24,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { deriveFontPlaceholder, deriveBridgeToken } = require('./font-placeholder');
 
 function resolveFontSubsetRoot() {
   const candidates = [
@@ -73,7 +74,7 @@ function loadSubsetsForGate(platformOrSubsets) {
   }
 }
 
-function buildCssFontLocalGateSource(personaFonts, fontSubsets) {
+function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
   let list = [];
   let platform = 'windows';
   if (Array.isArray(personaFonts)) {
@@ -114,25 +115,26 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets) {
   }
 
   const fontSubsetsJson = JSON.stringify(subsetMap);
+  const blockedFont = String(options.blockedFont || deriveFontPlaceholder(options.seed || allowedList.join('|')));
+  const bridgeToken = String(options.bridgeToken || deriveBridgeToken({ allowedList, blockedFont }));
 
   return `(() => {
   'use strict';
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
-  if (window.__cssFontLocalGateActive) return;
-  try {
-    Object.defineProperty(window, '__cssFontLocalGateActive', {
-      value: true,
-      configurable: true,
-      enumerable: false,
-      writable: false,
-    });
-  } catch (_) {
-    window.__cssFontLocalGateActive = true;
-  }
+  const BRIDGE_TOKEN = ${JSON.stringify(bridgeToken)};
+  const inspectBridge = (fn) => {
+    try {
+      const result = Function.prototype.toString.call(fn, BRIDGE_TOKEN);
+      return result && typeof result === 'object' && result.bridge === true ? result : null;
+    } catch (_) { return null; }
+  };
+  // appendChild is wrapped only by this dynamic CSS gate, so this retains idempotence without
+  // creating a page-readable state property on window, document, a DOM prototype, or Symbol.
+  if (inspectBridge(Node?.prototype?.appendChild)) return;
 
   const allowedFamilies = new Set(${allowedSetJson});
   const fontSubsets = ${fontSubsetsJson};
-  const BLOCKED_FONT = '__ob_font_blocked__';
+  const BLOCKED_FONT = ${JSON.stringify(blockedFont)};
 
   function sanitizeCss(css) {
     if (typeof css !== 'string') return css;
@@ -244,9 +246,17 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets) {
 
   try {
     const holder = {
-      toString() {
+      toString(...args) {
+        const secret = args[0];
+        if (secret === BRIDGE_TOKEN) {
+          if (nativeSource.has(this)) return { bridge: true, nativeText: nativeSource.get(this) };
+          try {
+            const inherited = originalToString.call(this, secret);
+            if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
+          } catch (_) {}
+        }
         if (nativeSource.has(this)) return nativeSource.get(this);
-        return originalToString.call(this);
+        return originalToString.call(this, ...args);
       },
     };
     const patchedToString = holder.toString;

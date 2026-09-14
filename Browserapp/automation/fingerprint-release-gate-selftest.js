@@ -74,6 +74,24 @@ assert.ok(
 );
 
 const CORE_SCRIPTS = [
+  { key: "selftest", script: "node environment-audit-selftest.js", file: "environment-audit-selftest.js" },
+  { key: "selftest:automation", script: "node automation/automation-selftest.js", file: "automation/automation-selftest.js" },
+  { key: "selftest:protocol", script: "node automation/protocol/protocol-selftest.js", file: "automation/protocol/protocol-selftest.js" },
+  { key: "selftest:isolation", script: "node automation/isolation-fingerprint-selftest.js", file: "automation/isolation-fingerprint-selftest.js" },
+  { key: "selftest:kernel", script: "node automation/kernel-policy-selftest.js", file: "automation/kernel-policy-selftest.js" },
+  { key: "selftest:profileui", script: "node automation/profile-ui-layout-selftest.js", file: "automation/profile-ui-layout-selftest.js" },
+  { key: "selftest:kernelinit", script: "node automation/kernel-init-sync-selftest.js", file: "automation/kernel-init-sync-selftest.js" },
+  { key: "selftest:fpcoverage", script: "node automation/fingerprint-coverage-selftest.js", file: "automation/fingerprint-coverage-selftest.js" },
+  { key: "selftest:fontnative", script: "node automation/font-native-layer-selftest.js", file: "automation/font-native-layer-selftest.js" },
+  { key: "selftest:stealth", script: "node fingerprint-stealth-selftest.js", file: "fingerprint-stealth-selftest.js" },
+  { key: "selftest:webglparams", script: "node automation/webgl-params-e2e-selftest.js", file: "automation/webgl-params-e2e-selftest.js" },
+  { key: "selftest:surfacediff", script: "node automation/surface-integrity-e2e-selftest.js", file: "automation/surface-integrity-e2e-selftest.js" },
+  { key: "selftest:mediae2e", script: "node automation/media-devices-e2e-selftest.js", file: "automation/media-devices-e2e-selftest.js" },
+  { key: "selftest:popupe2e", script: "node automation/popup-target-injection-e2e-selftest.js", file: "automation/popup-target-injection-e2e-selftest.js" },
+  { key: "selftest:doclifecycle", script: "node automation/document-lifecycle-fingerprint-e2e-selftest.js", file: "automation/document-lifecycle-fingerprint-e2e-selftest.js" },
+  { key: "selftest:workerfp", script: "node automation/worker-fingerprint-e2e-selftest.js", file: "automation/worker-fingerprint-e2e-selftest.js" },
+  { key: "selftest:workerscope", script: "node automation/worker-scope-family-e2e-selftest.js", file: "automation/worker-scope-family-e2e-selftest.js" },
+  { key: "selftest:bluetooth", script: "node automation/bluetooth-adapter-e2e-selftest.js", file: "automation/bluetooth-adapter-e2e-selftest.js" },
   { key: "selftest:fontpresence", script: "node automation/font-presence-local-e2e-selftest.js", file: "automation/font-presence-local-e2e-selftest.js" },
   { key: "selftest:workerfontpresence", script: "node automation/worker-font-presence-e2e-selftest.js", file: "automation/worker-font-presence-e2e-selftest.js" },
   { key: "selftest:workerfontwiring", script: "node automation/worker-font-presence-wiring-selftest.js", file: "automation/worker-font-presence-wiring-selftest.js" },
@@ -330,6 +348,15 @@ function checkSevenVersionLocations(targetVersion = EXPECTED_VERSION, baseRepo =
     }
     if (!content.includes("Release tag must match Browserapp/package.json version")) {
       issues.push({ location: 7, file: ".github/workflows/build-installers.yml", message: "workflow runtime release tag/version enforcement missing" });
+    }
+    if (!content.includes("--draft") || !content.includes("name: Publish completed release") || !content.includes("--draft=false")) {
+      issues.push({ location: 7, file: ".github/workflows/build-installers.yml", message: "workflow draft-first release finalization enforcement missing" });
+    }
+    for (const requiredAsset of ["OpenBrowser-Windows-x86_64-with-kernel.exe", "OpenBrowser-Windows-x86_64-with-kernel.zip", "OpenBrowser-Linux-x86_64-with-kernel.tar.gz", "OpenBrowser-macOS-x86_64.dmg", "OpenBrowser-macOS-arm64-with-kernel.dmg"]) {
+      if (!content.includes(requiredAsset)) issues.push({ location: 7, file: ".github/workflows/build-installers.yml", message: `workflow release asset contract missing ${requiredAsset}` });
+    }
+    if (!content.includes("default: all")) {
+      issues.push({ location: 7, file: ".github/workflows/build-installers.yml", message: "workflow official-release target_platform default must be all" });
     }
   } catch (err) {
     issues.push({ location: 7, file: ".github/workflows/build-installers.yml", message: err.message });

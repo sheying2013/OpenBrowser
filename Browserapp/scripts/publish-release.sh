@@ -21,7 +21,7 @@ fi
 
 asset_id_by_name() {
   local name=$1
-  gh api "repos/$repo/releases/tags/$release_tag" \
+  gh release view "$release_tag" --repo "$repo" --json assets \
     --jq ".assets[] | select(.name == \"$name\") | .id" 2>/dev/null | head -n 1 || true
 }
 
@@ -42,7 +42,7 @@ upload_one() {
     # Large uploads can time out after the server already stored the bytes;
     # clearing the stale record first keeps retries idempotent.
     delete_asset "$(asset_id_by_name "$name")"
-    if gh release upload "$release_tag" "$asset" --clobber; then
+    if gh release upload "$release_tag" "$asset" --repo "$repo" --clobber; then
       return 0
     fi
     echo "upload attempt $attempt failed for $name" >&2
@@ -56,4 +56,4 @@ for asset in "$@"; do
   upload_one "$asset"
 done
 
-gh release edit "$release_tag" --notes-file "$notes_file"
+# Release notes and publication state are finalized once by the workflow terminal job after every required asset exists.

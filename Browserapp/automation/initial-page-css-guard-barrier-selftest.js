@@ -682,10 +682,12 @@ async function runLiveBarrierTest(serverPort, mutate) {
       const styleRule = rules.find((r) => r.includes('foreign_style'));
       const linkRule = rules.find((r) => r.includes('foreign_link'));
       assert.ok(styleRule, 'foreign_style rule must exist in CSSOM');
-      assert.ok(styleRule.includes('__ob_font_blocked__'), 'foreign_style must be rewritten to blocked placeholder');
+      assert.match(styleRule, /LocalFontFallback[0-9a-f]{24}/, 'foreign_style must use neutral fallback placeholder');
+      assert.ok(!/__ob_|openbrowser/i.test(styleRule), 'foreign_style must not expose a product marker');
       assert.ok(!styleRule.includes('Helvetica Neue'), 'foreign_style must not contain Helvetica Neue');
       assert.ok(linkRule, 'foreign_link rule must exist in CSSOM');
-      assert.ok(linkRule.includes('__ob_font_blocked__'), 'foreign_link must be rewritten to blocked placeholder');
+      assert.match(linkRule, /LocalFontFallback[0-9a-f]{24}/, 'foreign_link must use neutral fallback placeholder');
+      assert.ok(!/__ob_|openbrowser/i.test(linkRule), 'foreign_link must not expose a product marker');
       assert.ok(!linkRule.includes('Helvetica Neue'), 'foreign_link must not contain Helvetica Neue');
     });
 

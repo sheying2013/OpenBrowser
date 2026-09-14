@@ -160,7 +160,10 @@ async function startTestServer(fontBuf) {
           self.postMessage({
             platform: navigator.platform,
             userAgent: navigator.userAgent,
-            hasFontProbe: Boolean(self.__workerPersonaFontProbe),
+            forbiddenOwnProperties: [
+              '__workerPersonaFontProbe', '__obPersonaFontProbe', '__system_fonts_registered__',
+              '__queryLocalFontBlobGate', '__cssFontLocalGateActive', '__webrtcFallbackInstalled',
+            ].filter((key) => Object.getOwnPropertyNames(self).includes(key)),
           });
         };
       `);
@@ -685,17 +688,19 @@ async function runLiveEngineIntegration(serverPort, mutate) {
       assert.strictEqual(main.canvas.usesHostFont, false, 'Canvas must not match native host font width');
     });
 
-    // Check 12: CSSOM rules contain placeholder font
-    check('Production wiring: CSSOM rules verified sanitized to local("__ob_font_blocked__") without host font', () => {
+    // Check 12: CSSOM rules contain a neutral, per-profile fallback font.
+    check('Production wiring: CSSOM rules use neutral per-profile fallback without host or product marker', () => {
       const rules = main.cssom.rules || [];
       const htmlHelv = rules.find((r) => r.includes('foreign_html'));
       const extHelv = rules.find((r) => r.includes('foreign_ext'));
       assert.ok(htmlHelv, 'foreign_html rule must exist in CSSOM');
-      assert.ok(htmlHelv.includes('__ob_font_blocked__'), 'foreign_html must be rewritten to blocked placeholder');
+      assert.match(htmlHelv, /LocalFontFallback[0-9a-f]{24}/, 'foreign_html must use neutral fallback');
       assert.ok(!htmlHelv.includes('Helvetica Neue'), 'foreign_html must not contain Helvetica Neue');
+      assert.ok(!/__ob_|openbrowser/i.test(htmlHelv), 'foreign_html CSSOM must not expose a product marker');
       assert.ok(extHelv, 'foreign_ext rule must exist in CSSOM');
-      assert.ok(extHelv.includes('__ob_font_blocked__'), 'foreign_ext must be rewritten to blocked placeholder');
+      assert.match(extHelv, /LocalFontFallback[0-9a-f]{24}/, 'foreign_ext must use neutral fallback');
       assert.ok(!extHelv.includes('Helvetica Neue'), 'foreign_ext must not contain Helvetica Neue');
+      assert.ok(!/__ob_|openbrowser/i.test(extHelv), 'foreign_ext CSSOM must not expose a product marker');
     });
 
     // Check 13: GZIP compressed response handling
@@ -729,7 +734,7 @@ async function runLiveEngineIntegration(serverPort, mutate) {
       assert.ok(worker, 'Worker probe must return data');
       assert.strictEqual(worker.platform, 'Win32', 'Worker navigator.platform must match Windows persona');
       assert.strictEqual(worker.userAgent, WINDOWS_UA, 'Worker navigator.userAgent must match persona');
-      assert.strictEqual(worker.hasFontProbe, true, 'Worker font presence probe marker must be active');
+      assert.deepStrictEqual(worker.forbiddenOwnProperties, [], 'Worker must not expose fingerprint installer markers');
     });
   }
 
