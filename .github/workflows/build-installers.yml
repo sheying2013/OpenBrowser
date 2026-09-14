@@ -11,7 +11,7 @@ on:
       release_tag:
         description: 'Release tag to create, for example v1.0.2'
         required: true
-        default: 'v1.0.25'
+        default: 'v1.0.21'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -38,11 +38,11 @@ env:
   OPENBROWSER_PACKAGE_VARIANT: with-kernel
   OPENBROWSER_BUNDLE_KERNEL: 'true'
   RELEASE_NOTES: |
-    ## OpenBrowser ${{ inputs.release_tag }} (**v1.0.25**)
+    ## OpenBrowser ${{ inputs.release_tag }} (**v1.0.21**)
 
     ### 中文
 
-    - **版本标识与同步**：本发布版本统一为 **v1.0.25**，严格同步前端界面显示版本、npm 包版本、Windows 可执行文件与产品版本元数据、项目文档徽章及 CI/CD 工作流定义。
+    - **版本标识与同步**：本发布版本统一为 **v1.0.21**，严格同步前端界面显示版本、npm 包版本、Windows 可执行文件与产品版本元数据、项目文档徽章及 CI/CD 工作流定义。
     - **字体指纹出口全面闭环（P0）**：Canvas 与 OffscreenCanvas 的 `measureText`、DOM 元素尺寸（`offsetWidth`/`getBoundingClientRect`/`getClientRects`）、Range 布局测量、SVG `getComputedTextLength`/`getBBox`、`document.fonts.check` 与 `document.fonts.load` 全部纳入外平台字体脱敏；修复 `FontFace` 构造函数按 `local()` 真实目标名解析的致命反转（此前误用外层别名判定，导致正规字体被拒、宿主专属字体反而放行）；消除读取 `FontFace.loaded` 时突变 `status` 的规范违规副作用。
     - **CSSOM 回显保真**：`style.textContent`/`innerHTML`/`innerText`、`CSSRule.cssText`、`CSSStyleDeclaration.cssText` 与 `getPropertyValue('src')` 一律回显调用方原始输入，杜绝被改写的内部占位符反向暴露注入痕迹；DedicatedWorker 字体层与主线程语义完全同构。
     - **媒体轨道标签防泄漏（P0）**：`MediaStreamTrack.label`、`getSettings().deviceId`、`track.clone()`/`stream.clone()` 与 `enumerateDevices()` 严格同源，彻底封堵 `getUserMedia` 返回真实物理硬件名称的穿透路径，同时保持 WebIDL 品牌检查与 `Illegal invocation` 错误类型不变。
@@ -60,7 +60,7 @@ env:
 
     ### English
 
-    - **Version Alignment & Synchronization**: Formally released as **v1.0.25**, synchronized end-to-end across UI display labels, npm package definitions, Windows PE file and product version metadata, documentation badges, and CI/CD workflow manifests.
+    - **Version Alignment & Synchronization**: Formally released as **v1.0.21**, synchronized end-to-end across UI display labels, npm package definitions, Windows PE file and product version metadata, documentation badges, and CI/CD workflow manifests.
     - **Font Fingerprint Exit Closure (P0)**: Canvas/OffscreenCanvas `measureText`, DOM element metrics (`offsetWidth`/`getBoundingClientRect`/`getClientRects`), Range layout measurement, SVG `getComputedTextLength`/`getBBox`, and `document.fonts.check`/`load` are now all shielded against foreign-platform families. Fixed a critical inversion where the `FontFace` constructor matched the outer alias instead of the real `local()` target (foreign fonts were admitted while legitimate persona fonts were rejected); removed the spec-violating side effect where merely reading `FontFace.loaded` mutated `status`.
     - **CSSOM Echo Fidelity**: `style.textContent`/`innerHTML`/`innerText`, `CSSRule.cssText`, `CSSStyleDeclaration.cssText`, and `getPropertyValue('src')` now echo the caller's original input, so rewritten internal placeholders can no longer expose the injection layer; DedicatedWorker font behaviour is strictly isomorphic to the main thread.
     - **Media Track Label Containment (P0)**: `MediaStreamTrack.label`, `getSettings().deviceId`, `track.clone()`/`stream.clone()` are sourced from the same persona table as `enumerateDevices()`, closing the path where `getUserMedia` returned real physical hardware names, while preserving WebIDL brand checks and native `Illegal invocation` error types.
