@@ -435,6 +435,22 @@ function buildUaInjectionScript(uaProfile) {
       return false;
     } catch (_) { return false; }
   };
+  const stripStackFrame = (err, fn, frameName) => {
+    if (!err) return err;
+    if (typeof Error.captureStackTrace === "function" && typeof fn === "function") {
+      try { Error.captureStackTrace(err, fn); } catch (_) {}
+    }
+    if (typeof err.stack === "string") {
+      const nl = String.fromCharCode(10);
+      const lines = err.stack.split(nl);
+      const baseName = (frameName && frameName.indexOf("get ") === 0) ? frameName.slice(4) : "";
+      if (lines.length > 2 && lines[1] && ((frameName && lines[1].indexOf(frameName) !== -1) || (baseName && lines[1].indexOf(baseName) !== -1))) {
+        lines.splice(1, 1);
+        try { err.stack = lines.join(nl); } catch (_) {}
+      }
+    }
+    return err;
+  };
   const define = (obj, key, getter) => {
     if (sameValue(obj, key, getter())) return true;
     let originalGetter = null;
@@ -445,15 +461,26 @@ function buildUaInjectionScript(uaProfile) {
         cursor = Object.getPrototypeOf(cursor);
       }
     } catch (_) {}
+    let nativeGetter;
     const holder = {
       get [key]() {
         if (!isNav(this)) {
-          throw new TypeError("Illegal invocation");
+          if (originalGetter) {
+            try {
+              return originalGetter.call(this);
+            } catch (err) {
+              stripStackFrame(err, nativeGetter, "get " + key);
+              throw err;
+            }
+          }
+          const err = new TypeError("Illegal invocation");
+          stripStackFrame(err, nativeGetter, "get " + key);
+          throw err;
         }
         return getter();
       }
     };
-    const nativeGetter = Object.getOwnPropertyDescriptor(holder, key).get;
+    nativeGetter = Object.getOwnPropertyDescriptor(holder, key).get;
     try { Object.defineProperty(nativeGetter, "name", { configurable: true, value: originalGetter?.name || ("get " + key) }); } catch (_) {}
     try { Object.defineProperty(nativeGetter, "length", { configurable: true, value: 0 }); } catch (_) {}
     try { nativeSource.set(nativeGetter, originalGetter ? originalToString.call(originalGetter) : ("function get " + key + "() { [native code] }")); } catch (_) {}
@@ -512,19 +539,46 @@ function buildUaInjectionScript(uaProfile) {
       wow64: Boolean(U.wow64),
       uaFullVersion: String(U.fullVersion || ""),
     };
+    const parseHints = (hints, targetMethod) => {
+      if (hints === null || hints === undefined || typeof hints === "number" || typeof hints === "boolean" || typeof hints === "string" || typeof hints === "symbol" || typeof hints === "bigint") {
+        throw new TypeError("Failed to execute '" + targetMethod + "' on 'NavigatorUAData': The provided value cannot be converted to a sequence.");
+      }
+      if (typeof hints[Symbol.iterator] !== "function") {
+        throw new TypeError("Failed to execute '" + targetMethod + "' on 'NavigatorUAData': The object must have a callable @@iterator property.");
+      }
+      return Array.from(hints, (item) => String(item));
+    };
+
     if (typeof NavigatorUAData !== "undefined") {
       const targetProto = NavigatorUAData.prototype;
       const makeUaGetter = (prop, fn) => {
+        let originalGetter = null;
+        try {
+          originalGetter = Object.getOwnPropertyDescriptor(targetProto, prop)?.get || null;
+        } catch (_) {}
+        let g;
         const h = {
           get [prop]() {
             if (!(this instanceof NavigatorUAData) && Object.prototype.toString.call(this) !== "[object NavigatorUAData]") {
-              throw new TypeError("Illegal invocation");
+              if (originalGetter) {
+                try {
+                  return originalGetter.call(this);
+                } catch (err) {
+                  stripStackFrame(err, g, "get " + prop);
+                  throw err;
+                }
+              }
+              const err = new TypeError("Illegal invocation");
+              stripStackFrame(err, g, "get " + prop);
+              throw err;
             }
             return fn.call(this);
           }
         };
-        const g = Object.getOwnPropertyDescriptor(h, prop).get;
-        nativeSource.set(g, "function get " + prop + "() { [native code] }");
+        g = Object.getOwnPropertyDescriptor(h, prop).get;
+        try { Object.defineProperty(g, "name", { configurable: true, value: originalGetter?.name || ("get " + prop) }); } catch (_) {}
+        try { Object.defineProperty(g, "length", { configurable: true, value: 0 }); } catch (_) {}
+        nativeSource.set(g, originalGetter ? originalToString.call(originalGetter) : ("function get " + prop + "() { [native code] }"));
         return g;
       };
       Object.defineProperty(targetProto, "brands", { get: makeUaGetter("brands", () => Object.freeze(brands)), enumerable: true, configurable: true });
@@ -538,13 +592,27 @@ function buildUaInjectionScript(uaProfile) {
             || Object.prototype.toString.call(receiver) === "[object NavigatorUAData]";
         } catch (_) { return false; }
       };
-      const geh = {
+      let geh;
+      const gehHolder = {
         getHighEntropyValues(hints) {
           if (!isUaReceiver(this)) {
             if (typeof nativeGeh === "function") return nativeGeh.apply(this, arguments);
-            return Promise.reject(new TypeError("Illegal invocation"));
+            const err = new TypeError("Failed to execute 'getHighEntropyValues' on 'NavigatorUAData': Illegal invocation");
+            stripStackFrame(err, geh, "getHighEntropyValues");
+            return Promise.reject(err);
           }
-          const want = Array.isArray(hints) ? hints : [];
+          if (arguments.length < 1) {
+            const err = new TypeError("Failed to execute 'getHighEntropyValues' on 'NavigatorUAData': 1 argument required, but only 0 present.");
+            stripStackFrame(err, geh, "getHighEntropyValues");
+            return Promise.reject(err);
+          }
+          let want;
+          try {
+            want = parseHints(hints, "getHighEntropyValues");
+          } catch (err) {
+            stripStackFrame(err, geh, "getHighEntropyValues");
+            return Promise.reject(err);
+          }
           const out = { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
           for (const h of want) {
             if (h in highEntropy) out[h] = highEntropy[h];
@@ -552,18 +620,30 @@ function buildUaInjectionScript(uaProfile) {
           }
           return Promise.resolve(out);
         }
-      }.getHighEntropyValues;
+      };
+      geh = gehHolder.getHighEntropyValues;
       nativeSource.set(geh, "function getHighEntropyValues() { [native code] }");
       Object.defineProperty(targetProto, "getHighEntropyValues", { configurable: true, writable: true, enumerable: true, value: geh });
-      const tj = {
+      let tj;
+      const tjHolder = {
         toJSON() {
           if (!isUaReceiver(this)) {
-            if (typeof nativeToJSON === "function") return nativeToJSON.apply(this, arguments);
-            throw new TypeError("Illegal invocation");
+            if (typeof nativeToJSON === "function") {
+              try {
+                return nativeToJSON.apply(this, arguments);
+              } catch (err) {
+                stripStackFrame(err, tj, "toJSON");
+                throw err;
+              }
+            }
+            const err = new TypeError("Illegal invocation");
+            stripStackFrame(err, tj, "toJSON");
+            throw err;
           }
           return { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
         }
-      }.toJSON;
+      };
+      tj = tjHolder.toJSON;
       nativeSource.set(tj, "function toJSON() { [native code] }");
       Object.defineProperty(targetProto, "toJSON", { configurable: true, writable: true, enumerable: true, value: tj });
 
@@ -585,27 +665,46 @@ function buildUaInjectionScript(uaProfile) {
     } else {
       const uaData = {};
       const makeUaGetter = (prop, fn) => {
+        let g;
         const h = {
           get [prop]() {
             if (this !== uaData) {
-              throw new TypeError("Illegal invocation");
+              const err = new TypeError("Illegal invocation");
+              stripStackFrame(err, g, "get " + prop);
+              throw err;
             }
             return fn.call(this);
           }
         };
-        const g = Object.getOwnPropertyDescriptor(h, prop).get;
+        g = Object.getOwnPropertyDescriptor(h, prop).get;
+        try { Object.defineProperty(g, "name", { configurable: true, value: "get " + prop }); } catch (_) {}
+        try { Object.defineProperty(g, "length", { configurable: true, value: 0 }); } catch (_) {}
         nativeSource.set(g, "function get " + prop + "() { [native code] }");
         return g;
       };
       Object.defineProperty(uaData, "brands", { get: makeUaGetter("brands", () => Object.freeze(brands)), enumerable: true, configurable: true });
       Object.defineProperty(uaData, "mobile", { get: makeUaGetter("mobile", () => Boolean(U.mobile)), enumerable: true, configurable: true });
       Object.defineProperty(uaData, "platform", { get: makeUaGetter("platform", () => String(U.chPlatform || "")), enumerable: true, configurable: true });
-      const geh = {
+      let geh;
+      const gehHolder = {
         getHighEntropyValues(hints) {
           if (this !== uaData) {
-            return Promise.reject(new TypeError("Illegal invocation"));
+            const err = new TypeError("Failed to execute 'getHighEntropyValues' on 'NavigatorUAData': Illegal invocation");
+            stripStackFrame(err, geh, "getHighEntropyValues");
+            return Promise.reject(err);
           }
-          const want = Array.isArray(hints) ? hints : [];
+          if (arguments.length < 1) {
+            const err = new TypeError("Failed to execute 'getHighEntropyValues' on 'NavigatorUAData': 1 argument required, but only 0 present.");
+            stripStackFrame(err, geh, "getHighEntropyValues");
+            return Promise.reject(err);
+          }
+          let want;
+          try {
+            want = parseHints(hints, "getHighEntropyValues");
+          } catch (err) {
+            stripStackFrame(err, geh, "getHighEntropyValues");
+            return Promise.reject(err);
+          }
           const out = { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
           for (const h of want) {
             if (h in highEntropy) out[h] = highEntropy[h];
@@ -613,17 +712,22 @@ function buildUaInjectionScript(uaProfile) {
           }
           return Promise.resolve(out);
         }
-      }.getHighEntropyValues;
+      };
+      geh = gehHolder.getHighEntropyValues;
       nativeSource.set(geh, "function getHighEntropyValues() { [native code] }");
       Object.defineProperty(uaData, "getHighEntropyValues", { configurable: true, writable: true, enumerable: true, value: geh });
-      const tj = {
+      let tj;
+      const tjHolder = {
         toJSON() {
           if (this !== uaData) {
-            throw new TypeError("Illegal invocation");
+            const err = new TypeError("Illegal invocation");
+            stripStackFrame(err, tj, "toJSON");
+            throw err;
           }
           return { brands, mobile: Boolean(U.mobile), platform: String(U.chPlatform || "") };
         }
-      }.toJSON;
+      };
+      tj = tjHolder.toJSON;
       nativeSource.set(tj, "function toJSON() { [native code] }");
       Object.defineProperty(uaData, "toJSON", { configurable: true, writable: true, enumerable: true, value: tj });
       if (contextExposesClientHints()) {

@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const dns = require('dns');
 const net = require('net');
 const { normalizeLatitude, normalizeLongitude } = require('./automation/input-validation');
@@ -672,8 +673,11 @@ async function startHttpToSocks5Bridge(config, onStatus) {
         client.pipe(upstream); upstream.pipe(client); client.resume();
       })().catch((error) => {
         if (controller.signal.aborted) { client.destroy(); return; }
-        notify(error.message.includes('authentication') ? 'AUTH_FAILED' : 'UPSTREAM_CONNECT_FAILED', (target?.host ? target.host + ':' + target.port + ' - ' : '') + error.message);
-        if (!client.destroyed) client.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+        const isAuth = /authentication/i.test(error.message);
+        notify(isAuth ? 'AUTH_FAILED' : 'UPSTREAM_CONNECT_FAILED', (target?.host ? target.host + ':' + target.port + ' - ' : '') + error.message);
+        if (!client.destroyed) {
+          client.end('HTTP/1.1 502 Bad Gateway\r\nX-Proxy-Error: ' + (isAuth ? 'AUTH_FAILED' : 'UPSTREAM_CONNECT_FAILED') + ': ' + error.message + '\r\nConnection: close\r\n\r\n');
+        }
       });
     };
     client.on('data', receiveHeader);
@@ -767,7 +771,7 @@ async function startHttpBridge(config, onStatus) {
       client.removeListener('data', receiveHeader); client.pause();
       const header = pending.subarray(0, marker + 4).toString('latin1'); const remainder = pending.subarray(marker + 4);
       const isConnect = /^CONNECT\s+/i.test(header.split('\r\n', 1)[0]); let upstream;
-      const fail = (message) => { notify('UPSTREAM_CONNECT_FAILED', message); if (!client.destroyed) client.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n'); };
+      const fail = (message) => { notify('UPSTREAM_CONNECT_FAILED', message); if (!client.destroyed) client.end('HTTP/1.1 502 Bad Gateway\r\nX-Proxy-Error: ' + (message || 'UPSTREAM_CONNECT_FAILED') + '\r\nConnection: close\r\n\r\n'); };
       try {
         upstream = connectHttpUpstream(config, () => {
           upstream.write(forwardedHeader(header, config), 'latin1');
@@ -832,8 +836,17 @@ async function connectBridge(bridge, hostname, port) {
   const socket = await connectSocket('127.0.0.1', bridge.port); const reader = new BufferedReader(socket);
   if (bridge.protocol === 'http') {
     socket.write('CONNECT ' + hostname + ':' + port + ' HTTP/1.1\r\nHost: ' + hostname + ':' + port + '\r\nConnection: close\r\n\r\n');
-    const header = await reader.readUntil('\r\n\r\n'); const status = Number(header.toString('latin1').split('\r\n', 1)[0].match(/\s(\d{3})(?:\s|$)/)?.[1] || 0);
-    if (status !== 200) throw new Error('Proxy test tunnel failed with HTTP ' + status);
+    const header = await reader.readUntil('\r\n\r\n');
+    const headerStr = header.toString('latin1');
+    const status = Number(headerStr.split('\r\n', 1)[0].match(/\s(\d{3})(?:\s|$)/)?.[1] || 0);
+    if (status !== 200) {
+      const proxyErrorMatch = headerStr.match(/^X-Proxy-Error:\s*([^\r\n]+)/mi);
+      const detail = proxyErrorMatch ? ' (' + proxyErrorMatch[1] + ')' : '';
+      if (status === 407 || (proxyErrorMatch && /AUTH_FAILED|authentication/i.test(proxyErrorMatch[1]))) {
+        throw new Error('Proxy authentication failed' + detail);
+      }
+      throw new Error('Proxy test tunnel failed with HTTP ' + status + detail);
+    }
   } else {
     socket.write(Buffer.from([5, 1, 0])); const greeting = await reader.read(2); if (greeting[1] !== 0) throw new Error('Local SOCKS5 bridge rejected no-auth mode');
     socket.write(Buffer.concat([Buffer.from([5, 1, 0]), encodeSocksAddress(hostname), Buffer.from([port >> 8, port & 255])]));
@@ -862,16 +875,44 @@ async function requestProxyHttp(config, hostname, pathname) {
     const target = bridge.protocol === 'http' ? 'http://' + hostname + pathname : pathname;
     socket.write('GET ' + target + ' HTTP/1.1\r\nHost: ' + hostname + '\r\nAccept: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\nUser-Agent: OpenBrowser/2.0\r\n\r\n');
     const chunks = await new Promise((resolve, reject) => {
-      const values = []; const timer = setTimeout(() => { socket.destroy(); reject(new Error('Proxy exit lookup timed out')); }, 15000);
+      const values = [];
+      const timer = setTimeout(() => {
+        socket.destroy();
+        const timeoutErr = new Error('Proxy exit lookup timed out');
+        timeoutErr.code = 'probe-unavailable';
+        timeoutErr.probeUnavailable = true;
+        reject(timeoutErr);
+      }, 15000);
       socket.on('data', (chunk) => values.push(chunk));
       socket.once('end', () => { clearTimeout(timer); resolve(values); });
       socket.once('error', (error) => { clearTimeout(timer); reject(error); });
     });
     const response = Buffer.concat(chunks); const marker = response.indexOf('\r\n\r\n');
-    if (marker < 0) throw new Error('Invalid proxy exit lookup response');
+    if (marker < 0) {
+      const err = new Error('Invalid proxy exit lookup response');
+      err.code = 'probe-unavailable';
+      err.probeUnavailable = true;
+      throw err;
+    }
     const header = response.subarray(0, marker).toString('latin1');
+    const proxyErrorMatch = header.match(/^X-Proxy-Error:\s*([^\r\n]+)/mi);
+    if (proxyErrorMatch) {
+      const err = new Error('Proxy upstream connection failed: ' + proxyErrorMatch[1]);
+      err.errorClass = 'unreachable';
+      throw err;
+    }
     const status = Number(header.split('\r\n', 1)[0].match(/\s(\d{3})(?:\s|$)/)?.[1] || 0);
-    let body = response.subarray(marker + 4); if (/transfer-encoding:\s*chunked/i.test(header)) body = decodeChunked(body);
+    let body = response.subarray(marker + 4);
+    if (/transfer-encoding:\s*chunked/i.test(header)) {
+      try {
+        body = decodeChunked(body);
+      } catch (chunkErr) {
+        const err = new Error('Invalid chunked response: ' + chunkErr.message);
+        err.code = 'probe-unavailable';
+        err.probeUnavailable = true;
+        throw err;
+      }
+    }
     return { status, body };
   } finally {
     socket?.destroy(); await bridge.close().catch(() => {});
@@ -885,7 +926,13 @@ async function requestProxyHttps(config, hostname, pathname) {
     secure = tls.connect({ socket, servername: hostname, rejectUnauthorized: true });
     const response = await new Promise((resolve, reject) => {
       const chunks = [];
-      const timer = setTimeout(() => { secure.destroy(); reject(new Error('HTTPS proxy request timed out')); }, 15000);
+      const timer = setTimeout(() => {
+        secure.destroy();
+        const timeoutErr = new Error('HTTPS proxy request timed out');
+        timeoutErr.code = 'probe-unavailable';
+        timeoutErr.probeUnavailable = true;
+        reject(timeoutErr);
+      }, 15000);
       const cleanup = () => clearTimeout(timer);
       secure.once('secureConnect', () => {
         secure.write('GET ' + pathname + ' HTTP/1.1\r\nHost: ' + hostname + '\r\nAccept: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\nUser-Agent: OpenBrowser/2.0\r\n\r\n');
@@ -895,11 +942,25 @@ async function requestProxyHttps(config, hostname, pathname) {
       secure.once('error', (error) => { cleanup(); reject(error); });
     });
     const marker = response.indexOf('\r\n\r\n');
-    if (marker < 0) throw new Error('Invalid HTTPS proxy response');
+    if (marker < 0) {
+      const err = new Error('Invalid HTTPS proxy response');
+      err.code = 'probe-unavailable';
+      err.probeUnavailable = true;
+      throw err;
+    }
     const header = response.subarray(0, marker).toString('latin1');
     const status = Number(header.split('\r\n', 1)[0].match(/\s(\d{3})(?:\s|$)/)?.[1] || 0);
     let body = response.subarray(marker + 4);
-    if (/transfer-encoding:\s*chunked/i.test(header)) body = decodeChunked(body);
+    if (/transfer-encoding:\s*chunked/i.test(header)) {
+      try {
+        body = decodeChunked(body);
+      } catch (chunkErr) {
+        const err = new Error('Invalid chunked response: ' + chunkErr.message);
+        err.code = 'probe-unavailable';
+        err.probeUnavailable = true;
+        throw err;
+      }
+    }
     return { status, body };
   } finally {
     secure?.destroy(); socket?.destroy(); await bridge.close().catch(() => {});
@@ -1173,25 +1234,123 @@ function mergeNetworkLookups(parts = []) {
 async function raceSettledValues(tasks, { minWaitMs = 0, maxWaitMs = 10000 } = {}) {
   const started = Date.now();
   const results = [];
+  const errors = [];
   await Promise.all(tasks.map(async (task) => {
     try {
+      const timeoutErr = new Error('lookup timed out');
+      timeoutErr.code = 'probe-unavailable';
+      timeoutErr.probeUnavailable = true;
       const value = await Promise.race([
         task(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('lookup timed out')), maxWaitMs)),
+        new Promise((_, reject) => setTimeout(() => reject(timeoutErr), maxWaitMs)),
       ]);
       if (value) results.push(value);
-    } catch (_) { /* ignore single-source failure */ }
+    } catch (err) {
+      errors.push(err);
+    }
   }));
   const elapsed = Date.now() - started;
   if (minWaitMs > elapsed) {
     await new Promise((resolve) => setTimeout(resolve, minWaitMs - elapsed));
   }
+  results.errors = errors;
   return results;
 }
 
+function isProxyLinkError(error) {
+  if (!error) return false;
+  if (error.code === 'probe-unavailable' || error.errorClass === 'probe-unavailable' || error.probeUnavailable) {
+    return false;
+  }
+  const msg = String(error.message || error);
+
+  // Authentication failures are proxy link errors
+  if (/authentication failed|username or password|407|rejected available authentication|auth failed/i.test(msg)) {
+    return true;
+  }
+
+  // SOCKS5 protocol / upstream errors
+  if (/SOCKS5 (?:authentication|username|proxy selected|upstream|proxy test tunnel)|Local SOCKS5 bridge/i.test(msg)) {
+    return true;
+  }
+
+  // HTTP CONNECT tunnel failure
+  if (/Proxy test tunnel failed with HTTP/i.test(msg)) {
+    return true;
+  }
+
+  // Connection to proxy socket timed out
+  if (/Proxy connection timed out/i.test(msg)) {
+    return true;
+  }
+
+  // Upstream bridge failures
+  if (/UPSTREAM_CONNECT_FAILED|LOCAL_PROXY_FAILED|Proxy upstream connection failed/i.test(msg)) {
+    return true;
+  }
+
+  // Network / socket connection errors
+  if (/ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|ECONNRESET|EPIPE|EADDRNOTAVAIL/i.test(msg)) {
+    return true;
+  }
+
+  // Protocol invalid
+  if (/Unsupported proxy protocol|Invalid proxy protocol|Proxy configuration is required/i.test(msg)) {
+    return true;
+  }
+
+  return false;
+}
+
+function isProbeServiceError(error) {
+  if (!error) return false;
+  if (error.code === 'probe-unavailable' || error.errorClass === 'probe-unavailable' || error.probeUnavailable) {
+    return true;
+  }
+  if (isProxyLinkError(error)) return false;
+
+  const msg = String(error.message || error);
+
+  // HTTP 429 rate limit
+  if (/429|rate\s*limit|too many requests/i.test(msg)) {
+    return true;
+  }
+
+  // HTTP status from probe services (not 407)
+  if (/(?:Proxy exit lookup|Proxy edge probe|ifconfig\.me proxy check|lookup returned HTTP|returned HTTP)\s*(?!407)\d{3}/i.test(msg)) {
+    return true;
+  }
+
+  // Timeouts during probe request
+  if (/Proxy exit lookup timed out|HTTPS proxy request timed out|lookup timed out/i.test(msg)) {
+    return true;
+  }
+
+  // JSON parsing
+  if (error instanceof SyntaxError || /Unexpected token|Unexpected end of JSON|JSON parsing failed/i.test(msg)) {
+    return true;
+  }
+
+  // Incomplete / invalid probe response
+  if (/(?:response was incomplete|did not contain a valid IP address|edge location probe response|quota)/i.test(msg)) {
+    return true;
+  }
+
+  return false;
+}
+
 function classifyProxyError(error) {
-  const msg = String(error && error.message ? error.message : error || '');
+  if (!error) return 'unknown';
+  if (error.code === 'probe-unavailable' || error.errorClass === 'probe-unavailable' || error.probeUnavailable) {
+    return 'probe-unavailable';
+  }
+  const msg = String(error.message ? error.message : error || '');
+  if (/probe-unavailable|探测服务不可用/i.test(msg)) return 'probe-unavailable';
   if (/authentication failed|username or password|407|rejected available authentication/i.test(msg)) return 'auth';
+  if (/429|rate\s*limit|too many requests/i.test(msg)) return 'probe-unavailable';
+  if (/(?:Proxy exit lookup|Proxy edge probe|ifconfig\.me proxy check)\s*(?:returned HTTP\s*(?!407)\d{3}|timed out)/i.test(msg)) {
+    return 'probe-unavailable';
+  }
   if (/timed?\s*out|timeout/i.test(msg)) return 'timeout';
   if (/ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|socket hang up|connect/i.test(msg)) return 'unreachable';
   if (/Unsupported proxy protocol|Invalid proxy|SOCKS|protocol/i.test(msg)) return 'protocol';
@@ -1404,9 +1563,148 @@ async function invokeProxyRefresh(url) {
   };
 }
 
+const DEFAULT_PROBE_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes default
+const DEFAULT_PROBE_CACHE_MAX_ENTRIES = 1000;
+
+class ProbeMemoryCache {
+  constructor(maxEntries = DEFAULT_PROBE_CACHE_MAX_ENTRIES) {
+    this.maxEntries = Math.max(1, Number(maxEntries) || DEFAULT_PROBE_CACHE_MAX_ENTRIES);
+    this.entries = new Map();
+  }
+
+  get(key, { allowStale = false } = {}) {
+    if (!key) return null;
+    const hit = this.entries.get(key);
+    if (!hit) return null;
+    if (!allowStale && hit.expiresAt <= Date.now()) {
+      return null;
+    }
+    // Refresh recency for LRU eviction
+    this.entries.delete(key);
+    this.entries.set(key, hit);
+    return hit;
+  }
+
+  set(key, value, ttlMs) {
+    if (!key) return;
+    const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : DEFAULT_PROBE_CACHE_TTL_MS;
+    this.entries.delete(key);
+    this.entries.set(key, {
+      value,
+      storedAt: Date.now(),
+      expiresAt: Date.now() + ttl,
+    });
+    while (this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      this.entries.delete(oldest);
+    }
+  }
+
+  delete(key) {
+    return this.entries.delete(key);
+  }
+
+  clear() {
+    this.entries.clear();
+  }
+
+  get size() {
+    return this.entries.size;
+  }
+}
+
+const probeMemoryCache = new ProbeMemoryCache();
+
+function clearProbeCache() {
+  probeMemoryCache.clear();
+}
+
+function getProbeCacheStats() {
+  return {
+    size: probeMemoryCache.size,
+    maxEntries: probeMemoryCache.maxEntries,
+  };
+}
+
+function resolveProbeCacheTtl(options = {}) {
+  if (Number.isFinite(options.ttlMs) && options.ttlMs > 0) return options.ttlMs;
+  if (Number.isFinite(options.cacheTtlMs) && options.cacheTtlMs > 0) return options.cacheTtlMs;
+  const envVal = Number(process.env.OPENBROWSER_PROBE_CACHE_TTL_MS);
+  if (Number.isFinite(envVal) && envVal > 0) return envVal;
+  return DEFAULT_PROBE_CACHE_TTL_MS;
+}
+
+function getProbeCacheKey(config, ipChannel) {
+  let protocol = "http";
+  let host = "";
+  let port = "";
+  let username = "";
+  let password = "";
+
+  if (typeof config === "string") {
+    try {
+      const parsed = parseProxy(config);
+      if (parsed) {
+        protocol = parsed.protocol || "http";
+        host = parsed.host || "";
+        port = parsed.port || "";
+        username = parsed.username || "";
+        password = parsed.password || "";
+      }
+    } catch (_) {
+      host = String(config || "").trim();
+    }
+  } else if (config && typeof config === "object") {
+    protocol = String(config.protocol || config.type || "http").toLowerCase();
+    host = String(config.host || config.hostname || config.server || config.ip || "").toLowerCase().trim();
+    port = String(config.port || "");
+    username = String(config.username || config.user || config.login || "");
+    password = String(config.password || config.pass || "");
+  }
+
+  const channel = normalizeIpLookupChannel(ipChannel);
+  if (!port) {
+    if (protocol === "socks5") port = "1080";
+    else if (protocol === "https") port = "443";
+    else port = "80";
+  }
+
+  // Include irreversible digest of password to isolate credentials/sessions (e.g. residential proxies)
+  // while NEVER storing raw passwords in key/logs.
+  const passHash = password ? crypto.createHash("sha256").update(String(password)).digest("hex").slice(0, 16) : "";
+  const authPart = username || passHash
+    ? `${username ? encodeURIComponent(username) : ""}${passHash ? ":h_" + passHash : ""}@`
+    : "";
+  return `${protocol}://${authPart}${host}:${port}#channel=${channel}`;
+}
+
+function cloneLookupResult(value) {
+  if (!value || typeof value !== "object") return value;
+  const copy = { ...value };
+  if (Array.isArray(value.countries)) copy.countries = [...value.countries];
+  if (value.riskIntel && typeof value.riskIntel === "object") copy.riskIntel = { ...value.riskIntel };
+  if (value.ipPure && typeof value.ipPure === "object") copy.ipPure = { ...value.ipPure };
+  return copy;
+}
+
 async function lookupProxyCountry(config, options = {}) {
   const started = Date.now();
   const ipChannel = normalizeIpLookupChannel(options.ipChannel || options.channel);
+  const bypassCache = Boolean(options.force || options.refresh);
+  const cacheKey = getProbeCacheKey(config, ipChannel);
+  const ttlMs = resolveProbeCacheTtl(options);
+
+  if (!bypassCache) {
+    const cached = probeMemoryCache.get(cacheKey, { allowStale: false });
+    if (cached && cached.value && cached.value.ip) {
+      const cloned = cloneLookupResult(cached.value);
+      cloned.cached = true;
+      cloned.fromCache = true;
+      cloned.latencyMs = cached.value.latencyMs ?? (Date.now() - started);
+      return cloned;
+    }
+  }
+
   try {
     const fallbackLookups = [
       () => lookupProxyIpApi(config),
@@ -1420,19 +1718,116 @@ async function lookupProxyCountry(config, options = {}) {
       ? [() => lookupProxyIfconfigMe(config), ...fallbackLookups]
       : [...fallbackLookups, () => lookupProxyIfconfigMe(config)];
     const parts = await raceSettledValues(lookups, { maxWaitMs: 12000 });
-    if (!parts.length) throw new Error('Proxy exit lookup failed on all sources');
+
+    if (!parts.length) {
+      // All lookups failed. Check if any failure was a real proxy link failure.
+      const linkError = parts.errors?.find(isProxyLinkError);
+      if (linkError) {
+        // True proxy link failure -> fail closed
+        const err = new Error(linkError.message || String(linkError));
+        err.errorClass = classifyProxyError(linkError);
+        err.code = linkError.code || err.errorClass;
+        err.latencyMs = Date.now() - started;
+        throw err;
+      }
+
+      // No proxy link errors detected: all failures were probe service issues (429, timeouts, 5xx, parse errors)
+      // Check for previously successful results to reuse:
+      // 1. Check in-memory cache for prior/stale result for this proxy
+      const staleCached = probeMemoryCache.get(cacheKey, { allowStale: true });
+      if (staleCached && staleCached.value && staleCached.value.ip) {
+        const reused = cloneLookupResult(staleCached.value);
+        reused.cached = true;
+        reused.stale = true;
+        reused.fromCache = true;
+        reused.probeUnavailable = true;
+        reused.probeWarning = '探测服务不可用（限频/超时），复用此前缓存的探测结果';
+        reused.latencyMs = Date.now() - started;
+        return reused;
+      }
+
+      // 2. Check profile or options for existing exit details
+      const fallbackIp = options.exitIp
+        || options.previousResult?.ip
+        || options.fallback?.ip
+        || options.profile?.exitIp
+        || config?.exitIp;
+
+      if (fallbackIp && typeof fallbackIp === 'string' && fallbackIp.trim()) {
+        const ip = fallbackIp.trim();
+        const countryCode = String(
+          options.exitCountryCode
+          || options.previousResult?.countryCode
+          || options.fallback?.countryCode
+          || options.profile?.exitCountryCode
+          || config?.exitCountryCode
+          || ''
+        ).toUpperCase().slice(0, 2);
+
+        const fallbackResult = {
+          ip,
+          country: options.exitCountry || options.previousResult?.country || options.profile?.exitCountry || countryCode || '',
+          countryCode,
+          countries: countryCode ? [countryCode] : [],
+          countryUsage: '',
+          countryRegistered: '',
+          geoConflict: false,
+          countryNote: '',
+          region: options.exitRegion || options.previousResult?.region || options.profile?.exitRegion || '',
+          city: options.exitCity || options.previousResult?.city || options.profile?.exitCity || '',
+          zip: options.exitZip || options.previousResult?.zip || '',
+          timezone: options.exitTimezone || options.previousResult?.timezone || options.profile?.exitTimezone || '',
+          latitude: options.exitLatitude ?? options.previousResult?.latitude ?? options.profile?.exitLatitude ?? null,
+          longitude: options.exitLongitude ?? options.previousResult?.longitude ?? options.profile?.exitLongitude ?? null,
+          isp: options.previousResult?.isp || '',
+          organization: options.previousResult?.organization || '',
+          asn: options.previousResult?.asn || '',
+          asName: options.previousResult?.asName || '',
+          mobile: Boolean(options.previousResult?.mobile),
+          proxy: true,
+          hosting: Boolean(options.previousResult?.hosting),
+          colo: options.previousResult?.colo || '',
+          sourceCount: options.previousResult?.sourceCount || 1,
+          checkedAt: new Date().toISOString(),
+          ipChannel,
+          latencyMs: Date.now() - started,
+          networkType: 'proxy',
+          fallback: true,
+          probeUnavailable: true,
+          probeWarning: '探测服务不可用（限频/超时），复用既有配置的出口信息',
+        };
+        probeMemoryCache.set(cacheKey, fallbackResult, ttlMs);
+        return fallbackResult;
+      }
+
+      // 3. Truly nothing is known
+      const err = new Error('出口探测服务暂时不可用（公开查询源限频或超时），代理链路状态未知');
+      err.code = 'probe-unavailable';
+      err.errorClass = 'probe-unavailable';
+      err.probeUnavailable = true;
+      err.latencyMs = Date.now() - started;
+      err.probeErrors = parts.errors?.map((e) => e.message || String(e)) || [];
+      throw err;
+    }
+
     const result = mergeNetworkLookups(parts);
     const latencyMs = Date.now() - started;
-    return enrichWithIpPure({
+    const enriched = await enrichWithIpPure({
       ...result,
       ipChannel,
       latencyMs,
       networkType: networkTypeFromLookup(result),
     }, () => lookupIpPureProxy(config));
+
+    probeMemoryCache.set(cacheKey, enriched, ttlMs);
+    return enriched;
   } catch (error) {
     const err = new Error(error.message || String(error));
-    err.errorClass = classifyProxyError(error);
-    err.latencyMs = Date.now() - started;
+    err.code = error.code || (error.errorClass === 'probe-unavailable' ? 'probe-unavailable' : undefined);
+    err.errorClass = error.errorClass || classifyProxyError(error);
+    if (error.probeUnavailable) err.probeUnavailable = true;
+    if (error.probeErrors) err.probeErrors = error.probeErrors;
+    err.latencyMs = error.latencyMs ?? (Date.now() - started);
     throw err;
   }
 }
@@ -1522,25 +1917,84 @@ async function lookupDirectCountry() {
 async function lookupProxyIpApi(config) {
   const fields = 'status,message,country,countryCode,regionName,city,zip,timezone,lat,lon,isp,org,as,asname,mobile,proxy,hosting,query';
   const response = await requestProxyHttp(config, 'ip-api.com', '/json/?fields=' + fields);
-  if (response.status !== 200) throw new Error('Proxy exit lookup returned HTTP ' + response.status);
-  return normalizeIpApiResult(JSON.parse(response.body.toString('utf8')));
+  if (response.status !== 200) {
+    const err = new Error('Proxy exit lookup returned HTTP ' + response.status);
+    err.httpStatus = response.status;
+    if (response.status === 429 || (response.status >= 400 && response.status !== 407)) {
+      err.code = 'probe-unavailable';
+      err.probeUnavailable = true;
+    }
+    throw err;
+  }
+  let json;
+  try {
+    json = JSON.parse(response.body.toString('utf8'));
+  } catch (parseErr) {
+    const err = new Error('Proxy exit lookup JSON parsing failed: ' + parseErr.message);
+    err.code = 'probe-unavailable';
+    err.probeUnavailable = true;
+    throw err;
+  }
+  return normalizeIpApiResult(json);
 }
 
 async function lookupProxyIpWho(config) {
   const response = await requestProxyHttps(config, 'ipwho.is', '/');
-  if (response.status !== 200) throw new Error('Proxy exit lookup returned HTTP ' + response.status);
-  return normalizeIpWhoResult(JSON.parse(response.body.toString('utf8')));
+  if (response.status !== 200) {
+    const err = new Error('Proxy exit lookup returned HTTP ' + response.status);
+    err.httpStatus = response.status;
+    if (response.status === 429 || (response.status >= 400 && response.status !== 407)) {
+      err.code = 'probe-unavailable';
+      err.probeUnavailable = true;
+    }
+    throw err;
+  }
+  let json;
+  try {
+    json = JSON.parse(response.body.toString('utf8'));
+  } catch (parseErr) {
+    const err = new Error('Proxy exit lookup JSON parsing failed: ' + parseErr.message);
+    err.code = 'probe-unavailable';
+    err.probeUnavailable = true;
+    throw err;
+  }
+  return normalizeIpWhoResult(json);
 }
 
 async function lookupProxyIpInfo(config) {
   const response = await requestProxyHttps(config, 'ipinfo.io', '/json');
-  if (response.status !== 200) throw new Error('Proxy exit lookup returned HTTP ' + response.status);
-  return normalizeIpInfoResult(JSON.parse(response.body.toString('utf8')));
+  if (response.status !== 200) {
+    const err = new Error('Proxy exit lookup returned HTTP ' + response.status);
+    err.httpStatus = response.status;
+    if (response.status === 429 || (response.status >= 400 && response.status !== 407)) {
+      err.code = 'probe-unavailable';
+      err.probeUnavailable = true;
+    }
+    throw err;
+  }
+  let json;
+  try {
+    json = JSON.parse(response.body.toString('utf8'));
+  } catch (parseErr) {
+    const err = new Error('Proxy exit lookup JSON parsing failed: ' + parseErr.message);
+    err.code = 'probe-unavailable';
+    err.probeUnavailable = true;
+    throw err;
+  }
+  return normalizeIpInfoResult(json);
 }
 
 async function lookupProxyCloudflareTrace(config) {
   const response = await requestProxyHttps(config, 'www.cloudflare.com', '/cdn-cgi/trace');
-  if (response.status !== 200) throw new Error('Proxy edge probe returned HTTP ' + response.status);
+  if (response.status !== 200) {
+    const err = new Error('Proxy edge probe returned HTTP ' + response.status);
+    err.httpStatus = response.status;
+    if (response.status === 429 || (response.status >= 400 && response.status !== 407)) {
+      err.code = 'probe-unavailable';
+      err.probeUnavailable = true;
+    }
+    throw err;
+  }
   return parseCloudflareTrace(response.body.toString('utf8'));
 }
 
@@ -1563,7 +2017,15 @@ function normalizeIfconfigMeResult(value) {
 
 async function lookupProxyIfconfigMe(config) {
   const response = await requestProxyHttps(config, 'ifconfig.me', '/ip');
-  if (response.status !== 200) throw new Error('ifconfig.me proxy check returned HTTP ' + response.status);
+  if (response.status !== 200) {
+    const err = new Error('ifconfig.me proxy check returned HTTP ' + response.status);
+    err.httpStatus = response.status;
+    if (response.status === 429 || (response.status >= 400 && response.status !== 407)) {
+      err.code = 'probe-unavailable';
+      err.probeUnavailable = true;
+    }
+    throw err;
+  }
   return normalizeIfconfigMeResult(response.body.toString('utf8'));
 }
 
@@ -1628,4 +2090,11 @@ module.exports = {
   connectSocket,
   getProxyDohLookup,
   setProxyDohResolver,
+  clearProbeCache,
+  getProbeCacheStats,
+  getProbeCacheKey,
+  isProxyLinkError,
+  isProbeServiceError,
+  ProbeMemoryCache,
+  DEFAULT_PROBE_CACHE_TTL_MS,
 };

@@ -3,9 +3,19 @@
 /**
  * Local Font Access API FontData.blob() isolation gate.
  *
- * Provides real platform font subset WOFF2 payloads for Local Font Access API (queryLocalFonts)
- * FontData.blob() invocations, preventing cross-platform host font byte leakage while guaranteeing
- * authentic, parseable, and loadable OpenType font binaries.
+ * Provides real platform font subset SFNT binaries (.ttf / .otf) for Local Font Access API
+ * (queryLocalFonts) FontData.blob() invocations, preventing cross-platform host font byte
+ * leakage while guaranteeing authentic, parseable, and loadable OpenType font binaries.
+ *
+ * Prioritizes uncompressed SFNT binaries (TrueType 0x00010000 or OpenType CFF 'OTTO')
+ * with native empty MIME type (type === ''), falling back smoothly to existing .woff2
+ * assets when SFNT assets are absent.
+ *
+ * Supports both:
+ * 1. Default inline mode (embeds full platform asset payload at document-start)
+ * 2. Lazy payload mode (options.lazyPayload === true): embeds only lightweight font
+ *    metadata and on-demand loads binary bytes on first queryLocalFonts() invocation
+ *    via private bridge channel, reducing injected script size by >95%.
  */
 
 const fs = require('fs');
@@ -69,36 +79,110 @@ function getFontSubsetIndex() {
 }
 
 /**
- * Read and cache an individual WOFF2 font asset file.
- * Validates the wOF2 magic header (0x774f4632).
+ * Verify authentic font magic header:
+ * - WOFF2: 'wOF2' (0x774f4632)
+ * - TrueType: 0x00010000 (\x00\x01\x00\x00)
+ * - OpenType CFF: 'OTTO' (0x4f54544f)
+ * - TrueType Collection: 'ttcf' (0x74746366)
+ * - Apple TrueType: 'true' (0x74727565) / 'typ1' (0x74797031)
+ */
+function isAuthenticFontBuffer(buffer) {
+  if (!buffer || buffer.length < 4) return false;
+  const magic = buffer.subarray(0, 4).toString('ascii');
+  if (magic === 'wOF2' || magic === 'OTTO' || magic === 'ttcf' || magic === 'true' || magic === 'typ1') {
+    return true;
+  }
+  if (buffer[0] === 0x00 && buffer[1] === 0x01 && buffer[2] === 0x00 && buffer[3] === 0x00) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Resolves the preferred font asset filename for a given platform.
+ * Prioritizes SFNT binaries (.ttf / .otf / .sfnt) over .woff2.
+ * If no SFNT asset exists on disk, falls back smoothly to .woff2.
+ */
+function resolvePreferredAssetFile(platform, filename) {
+  if (!filename) return null;
+  const root = resolveFontSubsetRoot();
+  const dir = path.join(root, platform);
+
+  // If already specified as SFNT and physically exists, use it
+  if (/\.(ttf|otf|sfnt)$/i.test(filename)) {
+    if (fs.existsSync(path.join(dir, filename))) {
+      return filename;
+    }
+  }
+
+  // Look for sibling SFNT asset (.ttf, .otf, .sfnt)
+  const base = filename.replace(/\.(woff2|ttf|otf|sfnt)$/i, '');
+  for (const ext of ['.ttf', '.otf', '.sfnt']) {
+    const candidate = `${base}${ext}`;
+    if (fs.existsSync(path.join(dir, candidate))) {
+      return candidate;
+    }
+  }
+
+  // Fallback to WOFF2 if physically exists
+  const woff2Candidate = `${base}.woff2`;
+  if (fs.existsSync(path.join(dir, woff2Candidate))) {
+    return woff2Candidate;
+  }
+
+  // Fallback to original filename if physically exists
+  if (fs.existsSync(path.join(dir, filename))) {
+    return filename;
+  }
+
+  return null;
+}
+
+/**
+ * Read and cache an individual font asset file.
+ * Prioritizes SFNT binaries (.ttf / .otf), falling back to .woff2.
+ * Validates authentic font magic headers (SFNT family: 0x00010000, OTTO, ttcf, or wOF2).
  */
 function loadFontAsset(platform, filename) {
-  const cacheKey = `${platform}:${filename}`;
+  if (!filename) return null;
+  const preferredFile = resolvePreferredAssetFile(platform, filename) || filename;
+  const cacheKey = `${platform}:${preferredFile}`;
   if (fontAssetBase64Cache.has(cacheKey)) {
     return {
+      file: preferredFile,
       buffer: fontAssetBufferCache.get(cacheKey),
       base64: fontAssetBase64Cache.get(cacheKey),
     };
   }
 
   const root = resolveFontSubsetRoot();
-  const filePath = path.join(root, platform, filename);
+  let filePath = path.join(root, platform, preferredFile);
   if (!fs.existsSync(filePath)) {
-    return null;
+    filePath = path.join(root, platform, filename);
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
   }
 
   try {
     const buffer = fs.readFileSync(filePath);
-    if (buffer.length < 4 || buffer.subarray(0, 4).toString('ascii') !== 'wOF2') {
+    if (!isAuthenticFontBuffer(buffer)) {
       return null;
     }
     const base64 = buffer.toString('base64');
     fontAssetBufferCache.set(cacheKey, buffer);
     fontAssetBase64Cache.set(cacheKey, base64);
-    return { buffer, base64 };
+    return { file: preferredFile, buffer, base64 };
   } catch (_) {
     return null;
   }
+}
+
+/**
+ * PostScript name helper for family strings.
+ */
+function postscriptNameOf(family) {
+  return String(family || '').replace(/\s+/g, '');
 }
 
 /**
@@ -130,6 +214,7 @@ function deterministicHash(str) {
 
 /**
  * Retrieve all available verified assets for a given platform.
+ * Prioritizes SFNT assets (.ttf/.otf) while preserving .woff2 fallback.
  */
 function getPlatformAvailableAssets(platform) {
   const index = getFontSubsetIndex();
@@ -138,12 +223,14 @@ function getPlatformAvailableAssets(platform) {
   const list = [];
   for (const [family, entry] of Object.entries(platformData)) {
     if (!entry || !entry.file) continue;
-    const fullPath = path.join(root, platform, entry.file);
+    const preferred = resolvePreferredAssetFile(platform, entry.file) || entry.file;
+    const fullPath = path.join(root, platform, preferred);
     if (fs.existsSync(fullPath)) {
       list.push({
         family,
-        file: entry.file,
-        bytes: entry.bytes || fs.statSync(fullPath).size,
+        file: preferred,
+        rawFile: entry.file,
+        bytes: fs.statSync(fullPath).size,
         category: classifyFamilyStyle(family),
       });
     }
@@ -156,20 +243,21 @@ function getPlatformAvailableAssets(platform) {
  */
 function getDefaultFallbackAsset(platform, availableAssets) {
   const defaults = {
-    windows: 'segoe-ui.woff2',
-    macos: 'helvetica.woff2',
-    linux: 'liberation-sans.woff2',
-    android: 'roboto.woff2',
+    windows: 'segoe-ui',
+    macos: 'helvetica',
+    linux: 'liberation-sans',
+    android: 'roboto',
   };
-  const preferred = defaults[platform] || 'arial.woff2';
-  if (availableAssets.some((a) => a.file === preferred)) {
-    return preferred;
+  const preferredBase = defaults[platform] || 'arial';
+  const match = availableAssets.find((a) => a.file.replace(/\.(woff2|ttf|otf|sfnt)$/i, '') === preferredBase);
+  if (match) {
+    return match.file;
   }
-  return availableAssets.length > 0 ? availableAssets[0].file : 'arial.woff2';
+  return availableAssets.length > 0 ? availableAssets[0].file : (preferredBase + '.ttf');
 }
 
 /**
- * Map a requested font family to an authentic WOFF2 asset.
+ * Map a requested font family to an authentic font asset (prioritizing SFNT).
  * If exact asset exists, returns exact match.
  * If asset is missing, returns deterministic closest real font subset alias.
  */
@@ -180,9 +268,10 @@ function resolveFamilyAsset(family, platform, platformData, availableAssets) {
   // 1. Direct match in index.json
   if (platformData && platformData[cleanFamily] && platformData[cleanFamily].file) {
     const entry = platformData[cleanFamily];
+    const preferred = resolvePreferredAssetFile(platform, entry.file) || entry.file;
     return {
       family: cleanFamily,
-      assetFile: entry.file,
+      assetFile: preferred,
       isAlias: false,
       exact: true,
       category: classifyFamilyStyle(cleanFamily),
@@ -194,9 +283,10 @@ function resolveFamilyAsset(family, platform, platformData, availableAssets) {
   if (platformData) {
     for (const [key, entry] of Object.entries(platformData)) {
       if (key.toLowerCase() === lowerFamily && entry && entry.file) {
+        const preferred = resolvePreferredAssetFile(platform, entry.file) || entry.file;
         return {
           family: cleanFamily,
-          assetFile: entry.file,
+          assetFile: preferred,
           isAlias: false,
           exact: true,
           category: classifyFamilyStyle(cleanFamily),
@@ -221,7 +311,7 @@ function resolveFamilyAsset(family, platform, platformData, availableAssets) {
     targetFamily = chosen.family;
   } else {
     chosenAssetFile = getDefaultFallbackAsset(platform, availableAssets);
-    targetFamily = chosenAssetFile.replace(/\.woff2$/, '');
+    targetFamily = chosenAssetFile.replace(/\.(woff2|ttf|otf|sfnt)$/i, '');
   }
 
   return {
@@ -233,6 +323,91 @@ function resolveFamilyAsset(family, platform, platformData, availableAssets) {
     category,
     platform,
   };
+}
+
+/**
+ * Retrieve light metadata list for all persona fonts of a platform.
+ * Contains: family, fullName, postscriptName, style, assetId, byteLength, magicHex.
+ */
+function getFontMetadataList(platform, options = {}) {
+  const targetOs = normalizePlatformKey(
+    platform || options.os || options.platform || options.fonts?.os || options.navigator?.platform || 'windows'
+  );
+  const explicitList = (options && (options.list || options.fonts?.list || (Array.isArray(options.fonts) ? options.fonts : null))) || null;
+  const personaFonts = Array.isArray(explicitList) && explicitList.length > 0
+    ? explicitList.map((n) => String(n).trim())
+    : (OS_FONTS[targetOs] || []);
+
+  const index = getFontSubsetIndex();
+  const platformData = options.platformData || index.platforms?.[targetOs] || {};
+  const availableAssets = options.availableAssets || getPlatformAvailableAssets(targetOs);
+
+  const metadata = [];
+  for (const fam of personaFonts) {
+    const mapping = resolveFamilyAsset(fam, targetOs, platformData, availableAssets);
+    const assetFile = mapping.assetFile;
+    const loaded = loadFontAsset(targetOs, assetFile);
+    const byteLength = loaded ? loaded.buffer.length : 0;
+    const magicHex = (loaded && loaded.buffer.length >= 4)
+      ? Array.from(loaded.buffer.subarray(0, 4)).map((b) => b.toString(16).padStart(2, '0')).join(' ')
+      : '';
+
+    metadata.push({
+      family: fam,
+      fullName: fam,
+      postscriptName: postscriptNameOf(fam),
+      style: 'Regular',
+      assetId: assetFile,
+      byteLength,
+      magicHex,
+    });
+  }
+  return metadata;
+}
+
+/**
+ * Retrieve platform font asset payload ({ [filename]: base64 }) on demand.
+ * Can be filtered to wanted font families or postscript names.
+ */
+function getPlatformFontPayload(platform, options = {}) {
+  const targetOs = normalizePlatformKey(
+    platform || options.os || options.platform || options.fonts?.os || options.navigator?.platform || 'windows'
+  );
+  const explicitList = (options && (options.list || options.fonts?.list || (Array.isArray(options.fonts) ? options.fonts : null))) || null;
+  const personaFonts = Array.isArray(explicitList) && explicitList.length > 0
+    ? explicitList.map((n) => String(n).trim())
+    : (OS_FONTS[targetOs] || []);
+
+  const index = getFontSubsetIndex();
+  const platformData = options.platformData || index.platforms?.[targetOs] || {};
+  const availableAssets = options.availableAssets || getPlatformAvailableAssets(targetOs);
+
+  const neededAssetFiles = new Set();
+  const wantedSet = options.wanted && Array.isArray(options.wanted)
+    ? new Set(options.wanted.map((w) => String(w).trim().toLowerCase()))
+    : null;
+
+  for (const fam of personaFonts) {
+    const ps = postscriptNameOf(fam).toLowerCase();
+    const clean = fam.trim().toLowerCase();
+    if (wantedSet && !wantedSet.has(clean) && !wantedSet.has(ps)) {
+      continue;
+    }
+    const mapping = resolveFamilyAsset(fam, targetOs, platformData, availableAssets);
+    neededAssetFiles.add(mapping.assetFile);
+  }
+
+  const defaultFallback = getDefaultFallbackAsset(targetOs, availableAssets);
+  neededAssetFiles.add(defaultFallback);
+
+  const payload = {};
+  for (const file of neededAssetFiles) {
+    const loaded = loadFontAsset(targetOs, file);
+    if (loaded && !payload[file]) {
+      payload[file] = loaded.base64;
+    }
+  }
+  return payload;
 }
 
 /**
@@ -270,17 +445,17 @@ function inspectGatePayload(options = {}) {
   const defaultFallback = getDefaultFallbackAsset(targetOs, availableAssets);
   referencedAssetFiles.add(defaultFallback);
 
-  let totalWoff2Bytes = 0;
+  let totalBytes = 0;
   let totalBase64Chars = 0;
   const assetFileDetails = [];
 
   for (const file of referencedAssetFiles) {
     const asset = loadFontAsset(targetOs, file);
     if (asset) {
-      totalWoff2Bytes += asset.buffer.length;
+      totalBytes += asset.buffer.length;
       totalBase64Chars += asset.base64.length;
       assetFileDetails.push({
-        file,
+        file: asset.file || file,
         bytes: asset.buffer.length,
         base64Chars: asset.base64.length,
       });
@@ -291,6 +466,8 @@ function inspectGatePayload(options = {}) {
     ? (exactCount / personaFonts.length) * 100
     : 0;
 
+  const isLazy = Boolean(options.lazyPayload);
+
   return {
     platform: targetOs,
     totalFamilies: personaFonts.length,
@@ -298,16 +475,24 @@ function inspectGatePayload(options = {}) {
     aliasCount: aliasCount,
     coveragePercentage: Number(coveragePercent.toFixed(2)),
     uniqueAssetCount: referencedAssetFiles.size,
-    totalWoff2Bytes,
+    totalWoff2Bytes: totalBytes, // backward-compatibility alias
+    totalFontBytes: totalBytes,
     totalBase64Chars,
     familyMappings,
     assetFiles: assetFileDetails,
     missingAssetFamilies: familyMappings.filter((m) => m.isAlias),
+    lazyPayload: isLazy,
+    metadataCount: isLazy ? personaFonts.length : 0,
   };
 }
 
 /**
- * Build document-start injection script delivering authentic WOFF2 font subset Blobs.
+ * Build document-start injection script delivering authentic SFNT font subset Blobs.
+ *
+ * Supports options.lazyPayload === true:
+ * In lazy mode, font binary bytes are omitted from the initial document injection,
+ * embedding only lightweight family metadata. Font bytes are loaded on demand via
+ * private bridge when navigator.queryLocalFonts() is invoked for the first time.
  */
 function buildQueryLocalFontBlobGateSource(options = {}) {
   const bridgeToken = String(options.bridgeToken || deriveBridgeToken(options));
@@ -335,15 +520,33 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
   const defaultFallback = getDefaultFallbackAsset(targetOs, availableAssets);
   neededAssetFiles.add(defaultFallback);
 
+  const isLazy = Boolean(options.lazyPayload);
+  const timeoutMs = typeof options.timeoutMs === 'number' && options.timeoutMs > 0 ? options.timeoutMs : 1500;
+  const channelName = String(options.bridgeChannel || ('_' + bridgeToken.slice(0, 16)));
+
   const assetPayload = {};
-  for (const file of neededAssetFiles) {
-    const loaded = loadFontAsset(targetOs, file);
-    if (loaded) {
-      assetPayload[file] = loaded.base64;
+  let fontMetadata = null;
+
+  if (!isLazy) {
+    for (const file of neededAssetFiles) {
+      const loaded = loadFontAsset(targetOs, file);
+      if (loaded && !assetPayload[file]) {
+        assetPayload[file] = loaded.base64;
+      }
     }
+  } else {
+    fontMetadata = getFontMetadataList(targetOs, {
+      fonts: personaFonts,
+      platformData,
+      availableAssets,
+    });
   }
 
-  const blobType = options.blobType || options.mimeType || 'font/woff2';
+  // Native Chromium FontData.blob() returns Blob with type === '' (empty string).
+  // Options may explicitly override when testing, but default must be native shape ''.
+  const blobType = typeof options.blobType === 'string'
+    ? options.blobType
+    : (typeof options.mimeType === 'string' ? options.mimeType : '');
 
   return `(() => {
   'use strict';
@@ -361,12 +564,112 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
     // main injector, so it is a reliable closure-only idempotence probe.
     if (inspectBridge(globalObj.FontData?.prototype?.blob)) return;
 
+    const isLazy = ${JSON.stringify(isLazy)};
+    const timeoutMs = ${Number(timeoutMs)};
+    const channelName = ${JSON.stringify(channelName)};
     const personaFonts = ${JSON.stringify(personaFonts)};
     const targetOs = ${JSON.stringify(targetOs)};
     const assetPayload = ${JSON.stringify(assetPayload)};
     const familyToAsset = ${JSON.stringify(familyToAssetMap)};
     const defaultAsset = ${JSON.stringify(defaultFallback)};
+    const fontMetadata = ${JSON.stringify(fontMetadata)};
     const blobType = ${JSON.stringify(blobType)};
+
+    let payloadLoaded = !isLazy;
+    let pendingFetch = null;
+    let resolvePending = null;
+    let bridgeFn = null;
+
+    if (isLazy) {
+      if (typeof globalObj[channelName] === 'function') {
+        bridgeFn = globalObj[channelName];
+        try { delete globalObj[channelName]; } catch (_) {}
+      } else {
+        try {
+          Object.defineProperty(globalObj, channelName, {
+            configurable: true,
+            enumerable: false,
+            set(val) {
+              if (typeof val === 'function') {
+                bridgeFn = val;
+                if (pendingFetch && !payloadLoaded) {
+                  try {
+                    bridgeFn(JSON.stringify({
+                      action: 'getFontBytes',
+                      platform: targetOs,
+                      token: BRIDGE_TOKEN,
+                    }));
+                  } catch (_) {}
+                }
+                queueMicrotask(() => {
+                  try { delete globalObj[channelName]; } catch (_) {}
+                });
+              }
+            },
+            get() { return undefined; }
+          });
+        } catch (_) {}
+      }
+    }
+
+    function onPayloadReceived(payload) {
+      if (payload && typeof payload === 'object') {
+        for (const [k, v] of Object.entries(payload)) {
+          if (typeof v === 'string') {
+            assetPayload[k] = v;
+          }
+        }
+      }
+      payloadLoaded = true;
+      if (resolvePending) {
+        const cb = resolvePending;
+        resolvePending = null;
+        pendingFetch = null;
+        cb(assetPayload);
+      }
+    }
+
+    function ensureFontPayload(wanted) {
+      if (payloadLoaded) {
+        return Promise.resolve(assetPayload);
+      }
+      if (pendingFetch) {
+        return pendingFetch;
+      }
+
+      pendingFetch = new Promise((resolve) => {
+        resolvePending = resolve;
+
+        const timer = setTimeout(() => {
+          payloadLoaded = true;
+          if (resolvePending === resolve) {
+            resolvePending = null;
+            pendingFetch = null;
+            resolve(assetPayload);
+          }
+        }, timeoutMs);
+
+        if (typeof bridgeFn === 'function') {
+          try {
+            const req = JSON.stringify({
+              action: 'getFontBytes',
+              platform: targetOs,
+              token: BRIDGE_TOKEN,
+              wanted: Array.isArray(wanted) ? wanted : null,
+            });
+            bridgeFn(req);
+          } catch (_) {
+            clearTimeout(timer);
+            payloadLoaded = true;
+            resolvePending = null;
+            pendingFetch = null;
+            resolve(assetPayload);
+          }
+        }
+      });
+
+      return pendingFetch;
+    }
 
     const nativeSource = new WeakMap();
     const originalToString = Function.prototype.toString;
@@ -408,6 +711,18 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
           toString(...args) {
             const secret = args[0];
             if (secret === BRIDGE_TOKEN) {
+              const action = args[1];
+              if (action === 'provideBytes' || action === 'injectPayload') {
+                const payload = args[2];
+                onPayloadReceived(payload);
+                return { bridge: true, received: payload && typeof payload === 'object' ? Object.keys(payload).length : 0 };
+              }
+              if (action === 'getMetadata') {
+                return { bridge: true, metadata: fontMetadata, platform: targetOs };
+              }
+              if (action === 'status') {
+                return { bridge: true, lazy: isLazy, loaded: payloadLoaded, assets: Object.keys(assetPayload).length };
+              }
               if (nativeSource.has(this)) return { bridge: true, nativeText: nativeSource.get(this) };
               try {
                 const inherited = originalToString.call(this, secret);
@@ -429,7 +744,7 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
     } catch (_) {}
 
     function postscriptNameOf(family) {
-      return String(family || '').replace(/\\s+/g, '');
+      return String(family || "").replace(/\\s+/g, "");
     }
 
     const blobCache = new Map();
@@ -450,22 +765,32 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
       }
 
       let assetFile = familyToAsset[famKey];
-      if (!assetFile || !assetPayload[assetFile]) {
+      if (!assetFile) {
         const lower = famKey.toLowerCase();
         for (const [k, v] of Object.entries(familyToAsset)) {
-          if (k.toLowerCase() === lower && assetPayload[v]) {
+          if (k.toLowerCase() === lower) {
             assetFile = v;
             break;
           }
         }
       }
-      if (!assetFile || !assetPayload[assetFile]) {
-        assetFile = defaultAsset;
+
+      let base64 = assetFile ? assetPayload[assetFile] : null;
+      if (!base64 && assetFile) {
+        const base = assetFile.replace(/\.(woff2|ttf|otf|sfnt)$/i, '');
+        base64 = assetPayload[base + '.ttf'] ||
+                 assetPayload[base + '.otf'] ||
+                 assetPayload[base + '.woff2'];
       }
 
-      const base64 = assetPayload[assetFile];
+      // Fallback for unbundled/missing font assets: return native-shaped empty Blob
+      // rather than serving an incorrect fake WOFF2 or throwing an un-Chromium-like Error.
       if (!base64) {
-        throw new Error('Font asset not available for ' + famKey);
+        const emptyBlob = new Blob([], { type: blobType });
+        if (payloadLoaded) {
+          blobCache.set(famKey, emptyBlob);
+        }
+        return emptyBlob;
       }
 
       const bytes = base64ToUint8Array(base64);
@@ -503,6 +828,15 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
       const origQueryLocalFonts = globalObj.queryLocalFonts;
 
       const patchedQuery = nativeLike(async function queryLocalFonts(options) {
+        if (isLazy && !payloadLoaded) {
+          try {
+            const wantedList = options && Array.isArray(options.postscriptNames)
+              ? options.postscriptNames.map((n) => String(n))
+              : null;
+            await ensureFontPayload(wantedList);
+          } catch (_) {}
+        }
+
         const answered = await origQueryLocalFonts.apply(this || globalObj, arguments);
         if (!answered || !Array.isArray(answered)) return answered;
 
@@ -513,6 +847,9 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
         const wrapEntry = (entry, family) => {
           const actualFamily = family || entry.family || 'Arial';
           const syntheticBlobFn = nativeLike(function blob() {
+            if (isLazy && !payloadLoaded) {
+              return ensureFontPayload().then(() => getRealFontBlob(actualFamily));
+            }
             return Promise.resolve(getRealFontBlob(actualFamily));
           }, origProtoBlob || entry.blob, 'blob', 0);
 
@@ -523,7 +860,12 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
             }
           });
 
-          const resolver = () => Promise.resolve(getRealFontBlob(actualFamily));
+          const resolver = () => {
+            if (isLazy && !payloadLoaded) {
+              return ensureFontPayload().then(() => getRealFontBlob(actualFamily));
+            }
+            return Promise.resolve(getRealFontBlob(actualFamily));
+          };
           fakeBlobMap.set(proxy, resolver);
           fakeBlobMap.set(entry, resolver);
           return proxy;
@@ -590,4 +932,10 @@ module.exports = {
   buildQueryLocalFontBlobGateSource,
   inspectGatePayload,
   clearFontSubsetCaches,
+  resolvePreferredAssetFile,
+  loadFontAsset,
+  isAuthenticFontBuffer,
+  getPlatformFontPayload,
+  getFontMetadataList,
+  postscriptNameOf,
 };

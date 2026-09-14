@@ -972,8 +972,7 @@ class StartPageServer {
       host: this.host,
       port: this.port,
       url: this.port ? `http://${this.host}:${this.port}/` : null,
-      soft: 'OpenBrowser',
-      native: true,
+            native: true,
     };
   }
 
@@ -1126,7 +1125,7 @@ class StartPageServer {
     if (pathname === '/health' || pathname === '/api/health') {
       return this.#json(res, 200, {
         ok: true,
-        soft: 'OpenBrowser',
+        status: 'ready',
         native: true,
         port: this.port,
       });
@@ -1152,7 +1151,7 @@ class StartPageServer {
         res.writeHead(302, {
           Location: freshUrl,
           'Cache-Control': 'no-store',
-          'X-OpenBrowser-Start-Page': 'reissued',
+          'X-Start-Page': 'reissued',
         });
         res.end();
         return;
@@ -1174,7 +1173,7 @@ class StartPageServer {
 .card{max-width:520px;padding:28px 24px;border-radius:14px;background:#1c1f28;border:1px solid #2a3040;line-height:1.7}
 h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5fd}</style></head>
 <body><div class="card">
-<h1>OpenBrowser 启动页会话无效</h1>
+<h1>启动页会话无效</h1>
 <p>这个内部首页需要<strong>当次启动</strong>签发的 token，不能收藏后重复打开，也不能在 OpenBrowser 重启后继续用旧链接。</p>
 <p>请回到 OpenBrowser 客户端，<strong>停止环境后重新启动</strong>；不要手动粘贴旧的 <code>127.0.0.1:50326</code> 链接。</p>
 <p style="font-size:12px;color:#8b93a7">pid=${String(pid || '-')} · unauthorized session</p>
@@ -1182,7 +1181,7 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
         res.writeHead(401, {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'no-store',
-          'X-OpenBrowser-Start-Page': 'unauthorized',
+          'X-Start-Page': 'unauthorized',
         });
         res.end(html);
         return;
@@ -1327,14 +1326,14 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
         'Referrer-Policy': 'no-referrer',
         'X-Content-Type-Options': 'nosniff',
         'X-Frame-Options': 'DENY',
-        'X-OpenBrowser-Start-Page': 'native',
+        'X-Start-Page': 'native',
       });
       res.end(html);
       return;
     }
 
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('Not Found · OpenBrowser 启动页');
+    res.end('Not Found');
   }
 }
 

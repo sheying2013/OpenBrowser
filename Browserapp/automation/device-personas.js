@@ -234,6 +234,21 @@ const OS_FONTS = Object.freeze({
     "P052", "Standard Symbols PS", "Ubuntu", "Ubuntu Condensed", "Ubuntu Mono", "URW Bookman",
     "URW Gothic", "Z003",
   ]),
+  ios: Object.freeze([
+    "American Typewriter", "Arial", "Arial Black", "Arial Rounded MT Bold",
+    "Avenir", "Avenir Next", "Avenir Next Condensed", "Baskerville",
+    "Bodoni 72", "Bradley Hand", "Chalkboard SE", "Chalkduster", "Charter",
+    "Cochin", "Copperplate", "Courier", "Courier New", "Didot",
+    "DIN Alternate", "DIN Condensed", "Futura", "Galvji", "Georgia",
+    "Gill Sans", "Helvetica", "Helvetica Neue", "Hiragino Sans", "Hoefler Text",
+    "Impact", "InaiMathi Bold", "Kohinoor Devanagari Medium", "Marker Felt",
+    "MuktaMahee Regular", "Noteworthy", "Optima", "Palatino", "Papyrus",
+    "PingFang SC", "PingFang HK Light", "Rockwell", "Savoye LET",
+    "Snell Roundhand", "Times New Roman", "Trebuchet MS", "Verdana", "Zapfino",
+    "Apple SD Gothic Neo ExtraBold", "Noto Sans Canadian Aboriginal Regular",
+    "Noto Sans Gunjala Gondi Regular", "Noto Sans Masaram Gondi Regular",
+    "Noto Serif Yezidi Regular",
+  ]),
   android: Object.freeze([
     "Roboto", "Noto Sans", "Noto Serif", "Noto Color Emoji",
     "Droid Sans", "Droid Sans Mono", "Carrois Gothic", "Coming Soon",
@@ -241,11 +256,19 @@ const OS_FONTS = Object.freeze({
   ]),
 });
 
+// Real macOS/Apple host-exclusive families that have no bundled subset asset.
+// They must NOT enter fontsForOs() (that would mismatch the blob name table);
+// they only belong in the foreign/deny list so non-Apple personas block them.
+const APPLE_HOST_ONLY_FONTS = Object.freeze([
+  "Apple Color Emoji", "Apple Symbols",
+]);
+
 function fontsForOs(os) {
   const family = String(os || "").toLowerCase();
-  if (family.startsWith("macos") || family === "darwin") return OS_FONTS.macos;
-  if (family === "linux") return OS_FONTS.linux;
-  if (family === "android") return OS_FONTS.android;
+  if (family.includes("ios") || family.includes("iphone") || family.includes("ipad")) return OS_FONTS.ios;
+  if (family.startsWith("macos") || family === "darwin" || family.includes("mac")) return OS_FONTS.macos;
+  if (family.includes("linux")) return OS_FONTS.linux;
+  if (family.includes("android")) return OS_FONTS.android;
   return OS_FONTS.windows;
 }
 
@@ -255,25 +278,42 @@ function fontsForOs(os) {
  */
 function exclusiveFontsForOtherOs(os) {
   const family = String(os || "").toLowerCase();
-  const isMac = family.startsWith("macos") || family === "darwin";
-  const isLinux = family === "linux";
-  const isAndroid = family === "android";
+  const isIos = family.includes("ios") || family.includes("iphone") || family.includes("ipad");
+  const isMac = (family.startsWith("macos") || family === "darwin" || family.includes("mac")) && !isIos;
+  const isLinux = family.includes("linux") && !family.includes("android");
+  const isAndroid = family.includes("android");
   const mine = new Set(fontsForOs(os).map((name) => name.toLowerCase()));
   const others = [];
+  const seenOthers = new Set();
   for (const [key, list] of Object.entries(OS_FONTS)) {
+    const keyIsIos = key === "ios";
     const keyIsMac = key === "macos";
     const keyIsLinux = key === "linux";
     const keyIsAndroid = key === "android";
     if (
-      (isMac && keyIsMac) ||
+      (isIos && (keyIsIos || keyIsMac)) ||
+      (isMac && (keyIsMac || keyIsIos)) ||
       (isLinux && keyIsLinux) ||
       (isAndroid && keyIsAndroid) ||
-      (!isMac && !isLinux && !isAndroid && key === "windows")
+      (!isMac && !isIos && !isLinux && !isAndroid && key === "windows")
     ) {
       continue;
     }
     for (const name of list) {
-      if (!mine.has(name.toLowerCase())) others.push(name);
+      const lower = name.toLowerCase();
+      if (!mine.has(lower) && !seenOthers.has(lower)) {
+        seenOthers.add(lower);
+        others.push(name);
+      }
+    }
+  }
+  if (!isMac && !isIos) {
+    for (const name of APPLE_HOST_ONLY_FONTS) {
+      const lower = name.toLowerCase();
+      if (!mine.has(lower) && !seenOthers.has(lower)) {
+        seenOthers.add(lower);
+        others.push(name);
+      }
     }
   }
   return others;
@@ -288,7 +328,11 @@ const PERSONAS_BY_OS = Object.freeze({
 });
 
 function personasForOs(os) {
-  return PERSONAS_BY_OS[String(os || "").toLowerCase()] || WINDOWS_PERSONAS;
+  const k = String(os || "").toLowerCase();
+  if (k.includes("ios") || k.includes("iphone") || k.includes("ipad")) {
+    return PERSONAS_BY_OS.macos;
+  }
+  return PERSONAS_BY_OS[k] || WINDOWS_PERSONAS;
 }
 
 /**
@@ -331,7 +375,7 @@ const HOST_WEBGL_LIMITS = Object.freeze({
 
 function getHostWebglLimits(hostPlatform = process.platform) {
   const p = String(hostPlatform || "").toLowerCase().trim();
-  if (p === "darwin" || p === "macos") return HOST_WEBGL_LIMITS.macos;
+  if (p === "darwin" || p === "macos" || p === "ios") return HOST_WEBGL_LIMITS.macos;
   if (p === "linux") return HOST_WEBGL_LIMITS.linux;
   return HOST_WEBGL_LIMITS.windows;
 }
@@ -394,10 +438,11 @@ function isCoherent(persona) {
   if (cores >= 12 && memory < 8) return false;
   if (![24, 30].includes(colorDepth)) return false;
 
-  const maxDpr = os === "android" ? 4 : 3;
+  const maxDpr = (os === "android" || os === "ios") ? 4 : 3;
   if (!(devicePixelRatio >= 1 && devicePixelRatio <= maxDpr)) return false;
 
   if (String(os).startsWith("macos") && devicePixelRatio < 2) return false;
+  if (os === "ios" && devicePixelRatio < 2) return false;
 
   const renderer = String(webgl?.renderer || "");
   if (os === "windows" && !/D3D11/.test(renderer)) return false;
@@ -406,6 +451,10 @@ function isCoherent(persona) {
   if (os === "android") {
     if (!/OpenGL ES|Vulkan|Mali|Adreno|Xclipse/i.test(renderer)) return false;
     if (devicePixelRatio < 1.5 || devicePixelRatio > 4) return false;
+  }
+  if (os === "ios") {
+    if (!/Apple/i.test(renderer)) return false;
+    if (devicePixelRatio < 2 || devicePixelRatio > 3) return false;
   }
   return true;
 }
@@ -424,4 +473,5 @@ module.exports = {
   isCoherent,
   fontsForOs,
   exclusiveFontsForOtherOs,
+  APPLE_HOST_ONLY_FONTS,
 };

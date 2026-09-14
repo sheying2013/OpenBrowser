@@ -15,6 +15,21 @@ function tx(s) {
 }
 
 
+const loadedViews = new Set();
+const viewScrollPositions = new Map();
+
+function invalidateViewCache(views) {
+  if (!views) {
+    loadedViews.clear();
+    return;
+  }
+  if (Array.isArray(views)) {
+    for (const v of views) loadedViews.delete(v);
+    return;
+  }
+  loadedViews.delete(views);
+}
+
 const appUpdateState = { status: 'idle', result: null, message: '', progress: null };
 
 function applyVersionTrafficLight(payload) {
@@ -1686,6 +1701,7 @@ applyUiTheme(savedUiTheme, false);
 try {
   refreshLocaleChrome();
   window.OpenBrowserI18n?.onChange?.((resolved) => {
+    invalidateViewCache();
     refreshLocaleChrome();
     applyUiTheme(document.documentElement.dataset.uiTheme || 'pixel-workstation', false);
     const activeView = document.querySelector('.view.active')?.id?.replace(/^view-/, '') || 'profiles';
@@ -2426,8 +2442,18 @@ function renderEditorSummary() {
   }
 }
 
-function setEditorTab(tab) {
-  $$('[data-editor-tab]').forEach((button) => button.classList.toggle('active', button.dataset.editorTab === tab));
+function setEditorTab(tab, focus = false) {
+  const tabs = $$('[data-editor-tab]');
+  tabs.forEach((button) => {
+    const isActive = button.dataset.editorTab === tab;
+    button.classList.toggle('active', isActive);
+    button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    button.setAttribute('tabindex', isActive ? '0' : '-1');
+    if (!button.hasAttribute('role')) button.setAttribute('role', 'tab');
+    if (isActive && focus) {
+      try { button.focus(); } catch (_) {}
+    }
+  });
   $$('[data-editor-panel]').forEach((panel) => panel.classList.toggle('active', panel.dataset.editorPanel === tab));
 }
 
@@ -2920,6 +2946,13 @@ function renderProxyLibrarySelectors() {
 }
 
 function switchView(view) {
+  try {
+    const currentActive = document.querySelector('.view.active')?.id?.replace(/^view-/, '');
+    if (currentActive) {
+      viewScrollPositions.set(currentActive, window.scrollY || document.documentElement.scrollTop || 0);
+    }
+  } catch (_) {}
+
   $$('.nav').forEach((button) => {
     if (button.id === 'rpa-menu-toggle') {
       // parent group: active while any RPA sub-page is open
@@ -2936,20 +2969,55 @@ function switchView(view) {
   $$('.view').forEach((section) => section.classList.toggle('active', section.id === `view-${view}`));
   const meta = viewMetaFor(view);
   $('#page-title').textContent = meta[0]; $('#page-subtitle').textContent = meta[1];
-  if (view === 'sync') refreshSessions();
-  if (view === 'extensions') refreshExtensions();
-  if (view === 'proxies') refreshProxies();
-  if (view === 'groups') renderGroupsPage();
-  if (view === 'profiles') renderProfiles();
+  if (view === 'sync') {
+    if (!loadedViews.has('sync')) {
+      refreshSessions();
+    }
+  }
+  if (view === 'extensions') {
+    if (!loadedViews.has('extensions')) {
+      refreshExtensions();
+    }
+  }
+  if (view === 'proxies') {
+    if (!loadedViews.has('proxies')) {
+      refreshProxies();
+    }
+  }
+  if (view === 'groups') {
+    if (!loadedViews.has('groups')) {
+      renderGroupsPage();
+    }
+  }
+  if (view === 'profiles') {
+    if (!loadedViews.has('profiles')) {
+      renderProfiles();
+    }
+  }
   if (view === 'rpa') {
     const tab = arguments[1] || currentRpaTab || 'flows';
     showRpaPanel(tab);
-    refreshRpaPage();
+    if (!loadedViews.has('rpa')) {
+      refreshRpaPage();
+      loadedViews.add('rpa');
+    }
   } else {
     // leaving RPA does not force-collapse; user may re-open later
     document.getElementById('rpa-menu-toggle')?.classList.remove('open');
   }
-  if (view === 'api-mcp') refreshApiMcpPage();
+  if (view === 'api-mcp') {
+    if (!loadedViews.has('api-mcp')) {
+      refreshApiMcpPage();
+      loadedViews.add('api-mcp');
+    }
+  }
+
+  try {
+    const targetScroll = viewScrollPositions.get(view);
+    if (typeof targetScroll === 'number') {
+      window.scrollTo({ top: targetScroll, behavior: 'instant' });
+    }
+  } catch (_) {}
 }
 
 // ========== 分组管理 ==========
@@ -2961,6 +3029,7 @@ function renderGroupsPage() {
   table.replaceChildren();
   const groups = listGroups();
   if (countEl) countEl.textContent = String(groups.length);
+  const fragment = new DocumentFragment();
   // ungrouped row
   {
     const row = document.createElement('tr');
@@ -2974,7 +3043,7 @@ function renderGroupsPage() {
       element('td', '', t('groups.default')),
       element('td', '', '—')
     );
-    table.append(row);
+    fragment.append(row);
   }
   for (const g of groups) {
     const row = document.createElement('tr');
@@ -2999,10 +3068,12 @@ function renderGroupsPage() {
     actions.append(view, edit, del);
     const actionCell = document.createElement('td'); actionCell.append(actions);
     row.append(colorCell, nameCell, element('td', '', String(n)), element('td', '', (g.createdAt || '').replace('T', ' ').slice(0, 16) || '—'), actionCell);
-    table.append(row);
+    fragment.append(row);
   }
+  table.append(fragment);
   if (empty) empty.hidden = true;
   afterUiRender(document.getElementById('view-groups') || document);
+  loadedViews.add('groups');
 }
 
 function openGroupDialog(group = null) {
@@ -3053,6 +3124,7 @@ function saveGroupFromDialog() {
     }, listGroups().length));
   }
   save();
+  invalidateViewCache(['groups', 'profiles']);
   renderGroupsPage();
   renderProfiles();
   fillGroupSelect($('#editor-group'), $('#editor-group')?.value || UNGROUPED_ID);
@@ -3075,6 +3147,7 @@ async function deleteGroup(id) {
   ui.groups = ui.groups.filter((item) => item.id !== id);
   if (activeGroupFilter === id) activeGroupFilter = 'all';
   save();
+  invalidateViewCache(['groups', 'profiles']);
   window.ops.syncProfiles(ui.profiles).catch(() => {});
   renderGroupsPage();
   renderProfiles();
@@ -3112,6 +3185,7 @@ function renderProxies() {
   const q = ($('#proxy-search')?.value || '').trim().toLowerCase();
   const list = proxyLibrary.filter((item) => !q || [item.name, item.host, item.protocol, item.remark, item.lastIp, String(item.port)].join(' ').toLowerCase().includes(q));
   table.replaceChildren();
+  const fragment = new DocumentFragment();
   for (const item of list) {
     const row = document.createElement('tr');
     const checkCell = document.createElement('td');
@@ -3165,8 +3239,9 @@ function renderProxies() {
       element('td', '', item.remark || '—'),
       actionCell
     );
-    table.append(row);
+    fragment.append(row);
   }
+  table.append(fragment);
   if (empty) empty.hidden = list.length !== 0;
   if (countEl) countEl.textContent = t('rpa.store.count', { n: proxyLibrary.length }).replace('templates', tx('条')) + (q ? ` · ${t('profiles.search').split('/')[0].trim()} ${list.length}` : '');
   const selectAll = $('#proxy-select-all');
@@ -3177,6 +3252,7 @@ function renderProxies() {
     selectAll.indeterminate = n > 0 && n < ids.length;
   }
   if (typeof refreshIcons === 'function') refreshIcons();
+  loadedViews.add('proxies');
 }
 
 async function refreshProxies() {
@@ -3190,6 +3266,7 @@ async function refreshProxies() {
   renderProxyLibrarySelectors();
   renderProxies();
   afterUiRender(document.getElementById('view-proxies') || document);
+  loadedViews.add('proxies');
 }
 
 function openProxyDialog(item = null) {
@@ -3396,6 +3473,7 @@ async function cloneProfile(id) {
   ui.profiles.push(cloned);
   ui.nextProfileNumber = number + 1;
   save();
+  invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
   try {
     engineProfiles = await window.ops.syncProfiles(ui.profiles);
     renderProfiles();
@@ -3542,6 +3620,7 @@ function renderProfiles() {
   // Translate any remaining Chinese chrome text that was just injected
   afterUiRender(document.getElementById('view-profiles') || document);
   if (typeof refreshIcons === 'function') refreshIcons();
+  loadedViews.add('profiles');
 }
 
 function visibleProfilePageIds() {
@@ -3552,6 +3631,7 @@ function visibleProfilePageIds() {
 }
 
 async function refreshStatus() {
+  invalidateViewCache(['sync', 'profiles']);
   engineProfiles = await window.ops.profileStatus(); mergeEngineExitState(engineProfiles); renderProfiles();
 }
 
@@ -3607,6 +3687,7 @@ function scheduleSessionRefresh() {
 // -----------------------------------------------------------------------------------
 
 async function startProfile(id) {
+  invalidateViewCache(['sync', 'profiles']);
   const profile = ui.profiles.find((item) => item.id === id); if (!profile) return;
   if (profileEngine(id).running || startingProfiles.has(id)) return;
   const payload = {
@@ -3632,6 +3713,7 @@ async function startProfile(id) {
 }
 
 async function stopProfile(id) {
+  invalidateViewCache(['sync', 'profiles']);
   try { await window.ops.stopProfile(id); const profile = ui.profiles.find((item) => item.id === id); log('Browser', `${profile?.name || id} 已停止`); await refreshStatus(); await refreshSessions(); }
   catch (error) { log('Error', error.message); toast(tx(`停止失败：${error.message}`)); }
 }
@@ -3809,6 +3891,7 @@ async function refreshExtensions() {
   }
   renderExtensions();
   hydrateAppCenterIcons().catch(() => {});
+  loadedViews.add('extensions');
 }
 
 async function hydrateAppCenterIcons() {
@@ -3864,7 +3947,7 @@ function openAssign(id) {
 
 async function applyAssignment(enabled) {
   const ids = $$('#assign-profile-list input:checked').map((input) => input.value); if (!ids.length) return toast(tx('请先选择环境'));
-  const result = await window.ops.assignExtension(currentExtension.id, ids, enabled); $('#assign-dialog').close(); await refreshExtensions(); await refreshStatus();
+  const result = await window.ops.assignExtension(currentExtension.id, ids, enabled); $('#assign-dialog').close(); invalidateViewCache(['extensions', 'profiles', 'sync']); await refreshExtensions(); await refreshStatus();
   log('Extension', `${currentExtension.name} ${enabled ? '添加到' : '移出'} ${ids.length} 个环境`);
   toast(result.restartRequired?.length ? `已保存；${result.restartRequired.length} 个运行环境需重启` : '批量分配已生效');
 }
@@ -3951,6 +4034,7 @@ async function refreshSessions() {
       else selectedSessions = new Set([...previous].filter((id) => live.has(id)));
       sessionsInitialized = true; if (!selectedSessions.has(preferredMasterId)) preferredMasterId = orderedSelectedSessionIds()[0] || null;
       if (!syncState.active) pushSyncSelection(); renderSessions();
+      loadedViews.add('sync');
     } catch (error) { log('CDP', error.message); }
     finally {
       __refreshSessionsInFlight = null;
@@ -4339,8 +4423,8 @@ document.addEventListener('click', async (event) => {
   if (action?.dataset.action === 'select-sync') { selectedSessions.add(action.dataset.id); pushSyncSelection(); switchView('sync'); }
 
   const assign = event.target.closest('[data-extension-assign]'); if (assign) openAssign(assign.dataset.extensionAssign);
-  const reload = event.target.closest('[data-extension-reload]'); if (reload) { try { const updated = await window.ops.reloadExtension(reload.dataset.extensionReload); toast(tx('扩展已重新加载：') + (updated?.name || '') + ' v' + (updated?.version || '')); await refreshExtensions(); } catch (error) { toast(tx('重新加载失败：') + error.message); } }
-  const remove = event.target.closest('[data-extension-remove]'); if (remove) { try { await window.ops.removeExtension(remove.dataset.extensionRemove); await refreshExtensions(); } catch (error) { toast(error.message); } }
+  const reload = event.target.closest('[data-extension-reload]'); if (reload) { try { const updated = await window.ops.reloadExtension(reload.dataset.extensionReload); toast(tx('扩展已重新加载：') + (updated?.name || '') + ' v' + (updated?.version || '')); invalidateViewCache('extensions'); await refreshExtensions(); } catch (error) { toast(tx('重新加载失败：') + error.message); } }
+  const remove = event.target.closest('[data-extension-remove]'); if (remove) { try { await window.ops.removeExtension(remove.dataset.extensionRemove); invalidateViewCache(['extensions', 'profiles', 'sync']); await refreshExtensions(); } catch (error) { toast(error.message); } }
   const windowButton = event.target.closest('[data-window]');
   if (windowButton) {
     const action = windowButton.dataset.window;
@@ -4463,7 +4547,7 @@ document.addEventListener('close', (event) => {
 document.addEventListener('change', async (event) => {
   if (event.target.dataset.extensionToggle) {
     const input = event.target; input.disabled = true;
-    try { toast(input.checked ? '正在批量启用扩展并重启运行环境...' : '正在批量停用扩展并重启运行环境...'); const result = await window.ops.toggleExtensionAll(input.dataset.extensionToggle, input.checked); await refreshExtensions(); await refreshStatus(); await refreshSessions(); toast(tx(`已${input.checked ? '启用' : '停用'}，影响 ${result.affected} 个环境，重启 ${result.restarted} 个`)); }
+    try { toast(input.checked ? '正在批量启用扩展并重启运行环境...' : '正在批量停用扩展并重启运行环境...'); const result = await window.ops.toggleExtensionAll(input.dataset.extensionToggle, input.checked); invalidateViewCache(['extensions', 'profiles', 'sync']); await refreshExtensions(); await refreshStatus(); await refreshSessions(); toast(tx(`已${input.checked ? '启用' : '停用'}，影响 ${result.affected} 个环境，重启 ${result.restarted} 个`)); }
     catch (error) { input.checked = !input.checked; toast(error.message); } finally { input.disabled = false; }
   }
   if (event.target.dataset.profileSelect) { event.target.checked ? selectedProfiles.add(event.target.dataset.profileSelect) : selectedProfiles.delete(event.target.dataset.profileSelect); updateProfileSelectionUi(); }
@@ -4628,6 +4712,7 @@ $('#profile-form').addEventListener('submit', async (event) => {
   };
   const shouldSaveToLib = Boolean($('#create-proxy-save-to-library')?.checked);
   ui.profiles.push(profile); ui.nextProfileNumber = number + 1; save();
+  invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
   try {
     await window.ops.syncProfiles(ui.profiles); $('#profile-dialog').close(); form.reset();
     if (shouldSaveToLib && !isDirectProxy(proxy)) {
@@ -4665,7 +4750,25 @@ $('#profile-form').addEventListener('submit', async (event) => {
   }
 });
 
-$$('[data-editor-tab]').forEach((button) => button.addEventListener('click', () => setEditorTab(button.dataset.editorTab)));
+$$('[data-editor-tab]').forEach((button) => {
+  button.addEventListener('click', () => setEditorTab(button.dataset.editorTab));
+  button.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+    const tabs = $$('[data-editor-tab]');
+    if (!tabs.length) return;
+    const currentIndex = tabs.indexOf(button);
+    if (currentIndex < 0) return;
+    event.preventDefault();
+    const nextIndex = event.key === 'ArrowRight'
+      ? (currentIndex + 1) % tabs.length
+      : (currentIndex - 1 + tabs.length) % tabs.length;
+    const nextTabBtn = tabs[nextIndex];
+    if (nextTabBtn?.dataset?.editorTab) {
+      setEditorTab(nextTabBtn.dataset.editorTab, true);
+    }
+  });
+});
+setEditorTab('basic');
 $('#editor-back').addEventListener('click', () => { editingProfileId = null; editorNetworkResult = null; switchView('profiles'); });
 $('#editor-cancel').addEventListener('click', () => { editingProfileId = null; editorNetworkResult = null; switchView('profiles'); });
 $('#editor-test-proxy')?.addEventListener('click', testEditorProxy);
@@ -4810,6 +4913,7 @@ document.getElementById('editor-clear-cache-cookie')?.addEventListener('click', 
     if (idx >= 0) {
       ui.profiles[idx] = { ...ui.profiles[idx], cookies: '', updatedAt: new Date().toISOString() };
       save();
+      invalidateViewCache('profiles');
     }
     toast(tx('缓存及 Cookie 已清除'));
   } catch (error) { toast(error.message); }
@@ -4824,6 +4928,7 @@ $('#profile-editor-form').addEventListener('submit', async (event) => {
     draft.updatedAt = new Date().toISOString();
     ui.profiles[index] = draft;
     save();
+    invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
     const syncPayload = ui.profiles.slice();
     // This strict editor submission is an explicit replacement, including empty
     // Cookie/password/TOTP fields. Keep the action marker out of UI persistence.
@@ -4970,7 +5075,7 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
       const result = verified[index]; if (!result) return;
       profile.exitIp = result.ip; profile.exitCountryCode = result.countryCode; profile.exitTimezone = result.timezone || ''; profile.exitLatitude = result.latitude; profile.exitLongitude = result.longitude; profile.exitCheckedAt = result.checkedAt;
     });
-    ui.profiles.push(...created); ui.nextProfileNumber = start + created.length; save(); engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    ui.profiles.push(...created); ui.nextProfileNumber = start + created.length; save(); invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']); engineProfiles = await window.ops.syncProfiles(ui.profiles);
     selectedProfiles = new Set(created.map((item) => item.id)); $('#select-all-profiles').checked = false; $('#batch-add-dialog').close(); $('#batch-add-proxies').value = '';
     await refreshStatus(); await refreshExtensions(); renderProfiles();
     log('Batch', '批量新增 ' + created.length + ' 个环境 · ' + (networkMode === 'direct' ? '本地直连' : '代理'));
@@ -4996,6 +5101,7 @@ $('#batch-delete-form').addEventListener('submit', async (event) => {
     ui.profiles = ui.profiles.filter((item) => !ids.includes(item.id)); for (const id of ids) { selectedProfiles.delete(id); selectedSessions.delete(id); }
     if (!ui.profiles.length) ui.nextProfileNumber = 1;
     pendingDeleteProfiles = []; save(); $('#select-all-profiles').checked = false; $('#batch-delete-dialog').close();
+    invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
     await refreshStatus(); await refreshSessions(); await refreshExtensions(); renderProfiles(); log('Batch', '批量删除 ' + result.deleted + ' 个环境'); toast('已删除 ' + result.deleted + ' 个环境');
   } catch (error) { toast('批量删除失败：' + error.message); } finally { if (submitter) submitter.disabled = false; }
 });
@@ -5026,6 +5132,7 @@ $('#copy-selected')?.addEventListener('click', async () => {
   });
   try {
     ui.profiles.push(...created); ui.nextProfileNumber = previousNext + created.length; save();
+    invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
     engineProfiles = await window.ops.syncProfiles(ui.profiles);
     for (let index = 0; index < sources.length; index += 1) {
       const extensionIds = profileEngine(sources[index].id).assignedExtensions || [];
@@ -5059,6 +5166,7 @@ $('#renumber-profiles')?.addEventListener('click', async () => {
     });
     ui.nextProfileNumber = ui.profiles.length + 1;
     save();
+    invalidateViewCache('profiles');
     engineProfiles = await window.ops.syncProfiles(ui.profiles);
     renderProfiles();
     log('Profile', `已将 ${ui.profiles.length} 个环境重新编号为 1..${ui.profiles.length}`);
@@ -5073,7 +5181,7 @@ $('#cancel-add-app').addEventListener('click', () => $('#add-app-dialog').close(
 $('#choose-extension-folder').addEventListener('click', async () => {
   try {
     const result = await window.ops.addExtensionFolder();
-    if (!result.canceled) { await refreshExtensions(); await refreshStatus(); await refreshSessions(); $('#add-app-dialog').close(); log('Extension', `添加 ${result.extension.name}，默认分配 ${result.assigned || 0} 个环境，重启 ${result.restarted || 0} 个`); toast(tx(`已添加 ${result.extension.name}，默认启用 ${result.assigned || 0}/${ui.profiles.length}`)); }
+    if (!result.canceled) { invalidateViewCache(['extensions', 'profiles', 'sync']); await refreshExtensions(); await refreshStatus(); await refreshSessions(); $('#add-app-dialog').close(); log('Extension', `添加 ${result.extension.name}，默认分配 ${result.assigned || 0} 个环境，重启 ${result.restarted || 0} 个`); toast(tx(`已添加 ${result.extension.name}，默认启用 ${result.assigned || 0}/${ui.profiles.length}`)); }
   } catch (error) { toast(error.message); }
 });
 $('#add-store-submit').addEventListener('click', async () => {
@@ -5083,7 +5191,7 @@ $('#add-store-submit').addEventListener('click', async () => {
   try {
     toast(tx('正在从 Chrome 应用商店获取扩展...'));
     const result = await window.ops.addExtensionStore(url, ids, all);
-    await refreshExtensions(); await refreshStatus(); await refreshSessions();
+    invalidateViewCache(['extensions', 'profiles', 'sync']); await refreshExtensions(); await refreshStatus(); await refreshSessions();
     $('#add-app-dialog').close(); $('#chrome-store-url').value = '';
     log('Extension', '商店添加 ' + result.extension.name + ', 分配 ' + result.assigned + ', 重启 ' + result.restarted);
     toast('已添加 ' + result.extension.name + '，分配 ' + result.assigned + ' 个环境');
@@ -5122,6 +5230,7 @@ $('#proxy-delete-selected')?.addEventListener('click', async () => {
   try {
     await window.ops.proxyDelete(ids);
     ids.forEach((id) => selectedProxies.delete(id));
+    invalidateViewCache(['proxies', 'profiles']);
     await refreshProxies();
     toast('已删除 ' + ids.length + ' 条代理');
     log('Proxy', '删除 ' + ids.length + ' 条');
@@ -5133,6 +5242,7 @@ async function runProxyBatchCheck(ids) {
   if (typeof window.ops.proxyCheckMany === 'function') {
     try {
       const summary = await window.ops.proxyCheckMany({ ids });
+      invalidateViewCache('proxies');
       await refreshProxies();
       toast(tx(`检测完成：成功 ${summary.ok || 0} · 失败 ${summary.fail || 0}`));
       return;
@@ -5184,6 +5294,7 @@ document.addEventListener('click', async (event) => {
     try {
       await window.ops.proxyDelete([id]);
       selectedProxies.delete(id);
+      invalidateViewCache(['proxies', 'profiles']);
       await refreshProxies();
       toast(tx('已删除'));
     } catch (error) { toast(error.message); }
@@ -5195,6 +5306,7 @@ document.addEventListener('click', async (event) => {
     try {
       toast(tx('检测中…'));
       const result = await window.ops.proxyCheck({ id });
+      invalidateViewCache('proxies');
       await refreshProxies();
       toast('连接成功 · ' + result.ip + (result.countryCode ? ' · ' + result.countryCode : ''));
       log('Proxy', '检测 ' + id + ' → ' + result.ip);
@@ -5309,6 +5421,7 @@ $('#proxy-apply-form')?.addEventListener('submit', async (event) => {
     }
   }
   save();
+  invalidateViewCache(['proxies', 'profiles']);
   try {
     engineProfiles = await window.ops.syncProfiles(ui.profiles);
     renderProfiles();
@@ -5416,6 +5529,7 @@ $('#proxy-form')?.addEventListener('submit', async (event) => {
     if (draft.id) await window.ops.proxyUpdate(draft);
     else await window.ops.proxyCreate(draft);
     $('#proxy-dialog').close();
+    invalidateViewCache(['proxies', 'profiles']);
     await refreshProxies();
     toast(draft.id ? '代理已更新' : '代理已创建');
     log('Proxy', (draft.id ? '更新 ' : '新建 ') + (draft.name || draft.host));
@@ -5709,6 +5823,7 @@ $('#editor-proxy-import-and-bind-btn')?.addEventListener('click', async () => {
       ipChannel: $('#editor-ip-channel')?.value || 'ip-api',
     });
 
+    invalidateViewCache(['proxies', 'profiles']);
     await refreshProxies();
     if (created?.id) {
       applyProxyLibrarySelection('editor', created.id);
@@ -5783,6 +5898,7 @@ $('#proxy-batch-import-form')?.addEventListener('submit', async (event) => {
     }
   }
   $('#proxy-batch-import-dialog').close();
+  invalidateViewCache(['proxies', 'profiles']);
   await refreshProxies();
   toast(tx(`批量导入完成：成功 ${successCount} 个` + (failCount ? `，失败 ${failCount} 个` : '')));
   log('Proxy', `批量导入代理完成：${successCount} 成功，${failCount} 失败`);
@@ -5797,6 +5913,7 @@ document.addEventListener('click', async (event) => {
     toast(tx('正在从 Chrome 应用商店安装…'));
     const ids = ui.profiles.map((item) => item.id);
     const result = await window.ops.addExtensionStore(url.includes('://') ? url : `https://chromewebstore.google.com/detail/${url}`, ids, true);
+    invalidateViewCache(['extensions', 'profiles', 'sync']);
     await refreshExtensions();
     await refreshStatus();
     await refreshSessions();
@@ -5809,9 +5926,9 @@ document.addEventListener('click', async (event) => {
 });
 $('#assign-extension').addEventListener('click', (event) => { event.preventDefault(); applyAssignment(true); }); $('#unassign-extension').addEventListener('click', (event) => { event.preventDefault(); applyAssignment(false); });
 $('#refresh-sessions').addEventListener('click', refreshSessions);
-$('#start-sync').addEventListener('click', () => runSyncAction('\u542f\u52a8\u540c\u6b65', () => window.ops.startSync(selectedSessionIds(2))));
-$('#stop-sync').addEventListener('click', () => runSyncAction('\u505c\u6b62\u540c\u6b65', () => window.ops.stopSync()));
-$('#restart-sync').addEventListener('click', () => runSyncAction('\u91cd\u542f\u540c\u6b65', () => window.ops.restartSync()));
+$('#start-sync').addEventListener('click', () => { invalidateViewCache('sync'); return runSyncAction('\u542f\u52a8\u540c\u6b65', () => window.ops.startSync(selectedSessionIds(2))); });
+$('#stop-sync').addEventListener('click', () => { invalidateViewCache('sync'); return runSyncAction('\u505c\u6b62\u540c\u6b65', () => window.ops.stopSync()); });
+$('#restart-sync').addEventListener('click', () => { invalidateViewCache('sync'); return runSyncAction('\u91cd\u542f\u540c\u6b65', () => window.ops.restartSync()); });
 async function sendSameText() { const [delayMin, delayMax] = textDelayRange(); return runSyncAction('\u6587\u672c\u8f93\u5165', () => window.ops.textAction(selectedSessionIds(), 'insert', $('#sync-text').value, delayMin, delayMax)); }
 async function sendRandomNumbers() {
   let ids; try { ids = specifiedTextSessionIds(); } catch (error) { return toast(error.message); }
@@ -6130,7 +6247,7 @@ $('#batch-import-file').addEventListener('change', async (event) => {
     const extension = file.name.toLowerCase().endsWith('.json') ? 'json' : 'csv'; const imported = parseImportedProfiles(await file.text(), extension);
     const start = nextProfileNumber(); const used = new Set(ui.profiles.map((item) => item.id));
     const normalized = imported.map((item, index) => { const number = start + index; const id = createInternalProfileId(number, used); used.add(id); return { id, number, name: String(number), browser: 'Google Chrome', language: String(item.language || 'en-US'), proxy: String(item.proxy || item.ip || 'Direct'), proxyType: String(item.proxyType || item.proxytype || ''), exitIp: String(item.exitIp || item.ip || ''), exitCountryCode: String(item.exitCountryCode || item.countrycode || ''), tag: String(item.tag || item.group || 'Imported'), os: 'Windows', location: String(item.location || 'Local') }; });
-    ui.profiles.push(...normalized); ui.nextProfileNumber = start + normalized.length; save(); engineProfiles = await window.ops.syncProfiles(ui.profiles); renderProfiles(); log('Import', '\u6279\u91cf\u5bfc\u5165 ' + normalized.length + ' \u4e2a\u73af\u5883'); toast('\u5df2\u5bfc\u5165 ' + normalized.length + ' \u4e2a\u73af\u5883');
+    ui.profiles.push(...normalized); ui.nextProfileNumber = start + normalized.length; save(); invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']); engineProfiles = await window.ops.syncProfiles(ui.profiles); renderProfiles(); log('Import', '\u6279\u91cf\u5bfc\u5165 ' + normalized.length + ' \u4e2a\u73af\u5883'); toast('\u5df2\u5bfc\u5165 ' + normalized.length + ' \u4e2a\u73af\u5883');
   } catch (error) { ui.profiles = ui.profiles.slice(0, previousLength); ui.nextProfileNumber = previousNext; save(); toast('\u5bfc\u5165\u5931\u8d25\uff1a' + error.message); }
   event.target.value = '';
 });
@@ -6164,6 +6281,7 @@ async function applySelectedNetworkMode(mode, { proxies = null, restart = true }
     }
   });
   save();
+  invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
   engineProfiles = await window.ops.syncProfiles(ui.profiles);
   if (restart) for (const id of runningBefore) {
     const profile = ui.profiles.find((item) => item.id === id);
@@ -6224,6 +6342,8 @@ window.OpenBrowserApp = {
   get ui() { return ui; },
   get engineProfiles() { return engineProfiles; },
   get editingProfileId() { return editingProfileId; },
+  get loadedViews() { return loadedViews; },
+  invalidateViewCache,
   save,
   toast,
   tx,
@@ -6248,6 +6368,8 @@ window.tx = tx;
 window.t = t;
 window.log = log;
 window.$ = $;
+window.loadedViews = loadedViews;
+window.invalidateViewCache = invalidateViewCache;
 window.$$ = $$;
 window.element = element;
 window.buildSquareMark = buildSquareMark;
@@ -6279,7 +6401,10 @@ switchView = function(view) {
     try { refreshCloudPanel?.().catch(() => {}); } catch (_) {}
   }
   if (view === 'api-mcp') {
-    try { refreshApiMcpPage?.().catch(() => {}); } catch (_) {}
+    if (!loadedViews.has('api-mcp')) {
+      try { refreshApiMcpPage?.().catch(() => {}); } catch (_) {}
+      loadedViews.add('api-mcp');
+    }
     afterUiRender(document.getElementById('view-api-mcp') || document);
   }
   if (view === 'rpa-guide') {
@@ -6385,6 +6510,7 @@ $('#batch-preferences-form')?.addEventListener('submit', async (event) => {
     }
 
     save();
+    invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
     engineProfiles = await window.ops.syncProfiles(ui.profiles);
     $('#batch-preferences-dialog')?.close();
     renderProfiles();

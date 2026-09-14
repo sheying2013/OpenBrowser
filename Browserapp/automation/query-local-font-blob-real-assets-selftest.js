@@ -412,6 +412,29 @@ async function runSession({ serverPort, mutate, headed, customPersonaList }) {
     assert.ok(verifiedCount >= 100, `Expected at least 100 verified assets, got ${verifiedCount}`);
   });
 
+  check('All platform SFNT assets (.ttf / .otf) have authentic SFNT headers (0x00010000 or OTTO)', () => {
+    assert.ok(fs.existsSync(subsetsRoot), `Subsets root must exist at: ${subsetsRoot}`);
+    const platforms = ['windows', 'macos', 'linux', 'android'];
+    let verifiedSfnt = 0;
+    const sfntMagics = ['00 01 00 00', '4f 54 54 4f'];
+
+    for (const plat of platforms) {
+      const dir = path.join(subsetsRoot, plat);
+      if (!fs.existsSync(dir)) continue;
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.ttf') || f.endsWith('.otf'));
+      for (const f of files) {
+        const fullPath = path.join(dir, f);
+        const buf = fs.readFileSync(fullPath);
+        assert.ok(buf.length > 0, `SFNT Asset ${plat}/${f} must not be empty`);
+        const magicHex = Array.from(buf.subarray(0, 4)).map((x) => x.toString(16).padStart(2, '0')).join(' ');
+        assert.ok(sfntMagics.includes(magicHex), `SFNT Asset ${plat}/${f} header must be SFNT, got: ${magicHex}`);
+        verifiedSfnt++;
+      }
+    }
+    console.log(`    Verified ${verifiedSfnt} total authentic SFNT subset files across all platforms.`);
+    assert.strictEqual(verifiedSfnt, 170, `Expected exactly 170 verified SFNT assets, got ${verifiedSfnt}`);
+  });
+
   console.log('\n=== [PHASE 2: Cross-Platform Coverage & Missing Asset Alias Dispersion] ===');
 
   check('Windows persona achieves 100% exact coverage across all 60 system fonts', () => {
@@ -463,12 +486,12 @@ async function runSession({ serverPort, mutate, headed, customPersonaList }) {
       list: ['Arial', 'Calibri', 'Segoe UI', 'Bahnschrift'],
     });
     console.log(`    Targeted (4 families) script size: ${(targetedSrc.length / 1024).toFixed(1)} KB`);
-    assert.ok(targetedSrc.length < 400 * 1024, `Targeted script must be < 400KB, got ${targetedSrc.length}`);
+    assert.ok(targetedSrc.length < 800 * 1024, `Targeted script must be < 800KB, got ${targetedSrc.length}`);
 
     // 2. Full platform list
     const fullSrc = buildQueryLocalFontBlobGateSource({ os: 'windows' });
     console.log(`    Full Windows (60 families) script size: ${(fullSrc.length / 1024 / 1024).toFixed(2)} MB`);
-    assert.ok(fullSrc.length < 4 * 1024 * 1024, `Full platform script must be < 4MB, got ${fullSrc.length}`);
+    assert.ok(fullSrc.length < 10 * 1024 * 1024, `Full platform script must be < 10MB, got ${fullSrc.length}`);
     assert.ok(fullSrc.length < 20 * 1024 * 1024, 'Script must stay strictly below 20MB upper bound');
   });
 
@@ -532,20 +555,25 @@ async function runSession({ serverPort, mutate, headed, customPersonaList }) {
     assert.ok(probe.filteredNames.includes('SegoeUI'));
   });
 
-  check('All FontData.blob() invocations return authentic wOF2 binaries loadable via FontFace', () => {
+  check('All FontData.blob() invocations return authentic SFNT binaries loadable via FontFace with native empty MIME type', () => {
     console.log('\n[E2E Sampled Font Blobs]');
     for (const item of probe.items) {
       console.log(`  Family: ${item.requestedTarget.padEnd(20)} Size: ${String(item.blobSize).padEnd(7)} MIME: ${item.blobType.padEnd(12)} Magic: ${item.magicHex}`);
       console.log(`    Hash (SHA-256): ${item.hash}`);
       console.log(`    FontFace load status: ${item.fontFaceLoadSuccess ? 'LOADED' : 'FAILED (' + item.fontFaceError + ')'}`);
 
-      assert.strictEqual(item.magicHex, '77 4f 46 32', `${item.requestedTarget} must have wOF2 header (77 4f 46 32)`);
+      const sfntMagics = ['00 01 00 00', '4f 54 54 4f', '74 74 63 66', '74 72 75 65', '74 79 70 31'];
+      assert.ok(
+        sfntMagics.includes(item.magicHex),
+        `${item.requestedTarget} must have authentic SFNT header (${sfntMagics.join(', ')}), got: ${item.magicHex}`
+      );
       assert.ok(!item.headHex.startsWith('74 72 75 65'), `${item.requestedTarget} must not leak host 'true' header`);
       assert.strictEqual(item.fontFaceLoadSuccess, true, `${item.requestedTarget} FontFace.load() must succeed`);
       assert.strictEqual(item.isDeterministic, true, `${item.requestedTarget} blob hash must be deterministic`);
-      assert.ok(
-        item.blobType === 'font/woff2' || item.blobType === 'application/octet-stream',
-        `${item.requestedTarget} invalid MIME type: ${item.blobType}`
+      assert.strictEqual(
+        item.blobType,
+        '',
+        `${item.requestedTarget} blob MIME type must be empty string '', got: ${JSON.stringify(item.blobType)}`
       );
     }
   });

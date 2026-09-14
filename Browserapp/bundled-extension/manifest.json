@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "OpenBrowser 环境标记",
+  "name": "环境标记",
   "version": "1.0.1",
-  "description": "标记由 OpenBrowser 打开的浏览器环境（图标与软件一致，编号表示环境）。",
+  "description": "标记浏览器环境（图标编号表示环境）。",
   "action": {
-    "default_title": "OpenBrowser 环境",
+    "default_title": "浏览器环境",
     "default_icon": {
       "16": "icon-16.png",
       "32": "icon-32.png",

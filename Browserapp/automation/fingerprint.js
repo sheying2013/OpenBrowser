@@ -31,6 +31,8 @@ const {
   randomUaForSeed,
   chromeArgsForUa,
   cdpUserAgentOverride,
+  buildAcceptLanguageHeader,
+  formatAcceptLanguage,
   buildUaInjectionScript,
   parseOsFromUa,
   OS_PRESETS,
@@ -51,7 +53,7 @@ function mapPlatformToSubsetKey(platform) {
   const p = platform.trim();
   if (!p) return null;
   if (/^win/i.test(p)) return 'windows';
-  if (/^mac/i.test(p) || /darwin/i.test(p)) return 'macos';
+  if (/^mac/i.test(p) || /darwin/i.test(p) || /iphone|ipad|ipod|ios/i.test(p)) return 'macos';
   if (/android/i.test(p)) return 'android';
   if (/^linux/i.test(p)) {
     if (/arm|aarch/i.test(p)) return 'android';
@@ -158,6 +160,44 @@ function buildFontMetricsScript(platformKey, options = {}) {
       const origFontsGet = origFontsDesc.get;
 
       const createShieldedProxy = (realFonts) => {
+        const wrapIterator = (rawIterator, isEntries) => {
+          return new Proxy(rawIterator, {
+            get(iterTarget, iterProp, iterReceiver) {
+              if (iterProp === 'next') {
+                return function next() {
+                  while (true) {
+                    const res = iterTarget.next();
+                    if (res.done) return res;
+                    const face = isEntries ? res.value[0] : res.value;
+                    if (internalFaces.has(face)) continue;
+                    return res;
+                  }
+                };
+              }
+              if (iterProp === Symbol.iterator) {
+                return function() { return iterReceiver; };
+              }
+              if (iterProp === 'constructor') {
+                return iterTarget.constructor;
+              }
+              const val = Reflect.get(iterTarget, iterProp, iterReceiver);
+              return typeof val === 'function' ? val.bind(iterTarget) : val;
+            }
+          });
+        };
+
+        const getOrCreateMethod = (name, factory, length = 0) => {
+          let fn = boundMethodCache.get(name);
+          if (!fn) {
+            fn = factory();
+            try { Object.defineProperty(fn, 'name', { value: name, configurable: true }); } catch (_) {}
+            try { Object.defineProperty(fn, 'length', { value: length, configurable: true }); } catch (_) {}
+            nativeMap.set(fn, 'function ' + name + '() { [native code] }');
+            boundMethodCache.set(name, fn);
+          }
+          return fn;
+        };
+
         return new Proxy(realFonts, {
           get(target, prop, receiver) {
             if (prop === 'size') {
@@ -168,33 +208,34 @@ function buildFontMetricsScript(platformKey, options = {}) {
               return count;
             }
             if (prop === 'has') {
-              return function has(face) {
+              return getOrCreateMethod('has', () => function has(face) {
                 if (internalFaces.has(face)) return false;
                 return target.has(face);
-              };
+              }, 1);
             }
             if (prop === 'entries') {
-              return function* entries() {
-                for (const face of target) {
-                  if (!internalFaces.has(face)) yield [face, face];
-                }
-              };
+              return getOrCreateMethod('entries', () => function entries() {
+                return wrapIterator(target.entries(), true);
+              }, 0);
             }
-            if (prop === 'keys' || prop === 'values' || prop === Symbol.iterator) {
-              return function* () {
-                for (const face of target) {
-                  if (!internalFaces.has(face)) yield face;
-                }
-              };
+            if (prop === 'keys') {
+              return getOrCreateMethod('keys', () => function keys() {
+                return wrapIterator(target.keys(), false);
+              }, 0);
+            }
+            if (prop === 'values' || prop === Symbol.iterator) {
+              return getOrCreateMethod('values', () => function values() {
+                return wrapIterator(target.values(), false);
+              }, 0);
             }
             if (prop === 'forEach') {
-              return function forEach(callback, thisArg) {
+              return getOrCreateMethod('forEach', () => function forEach(callback, thisArg) {
                 for (const face of target) {
                   if (!internalFaces.has(face)) {
                     callback.call(thisArg, face, face, receiver);
                   }
                 }
-              };
+              }, 1);
             }
             if (prop === 'check') {
               let bound = boundMethodCache.get('check');
@@ -424,73 +465,192 @@ const WEBGL_PRESETS = {
   ],
 };
 
-const MEDIA_DEVICE_TEMPLATES = [
-  { input: 'Microphone Array (2- Realtek High Definition Audio)', output: 'Speaker/Headphone (2- Realtek High Definition Audio)' },
-  { input: 'Microphone Array (Realtek High Definition Audio)', output: 'Speaker/Headphone (Realtek High Definition Audio)' },
-  { input: 'Microphone Array (Realtek(R) Audio)', output: 'Speaker (Realtek(R) Audio)' },
-  { input: 'Microphone Array (Conexant SmartAudio HD)', output: 'Speaker (Conexant SmartAudio HD)' },
-  { input: 'Microphone Array (2- Conexant SmartAudio HD)', output: 'Speaker (2- Conexant SmartAudio HD)' },
-  { input: 'Microphone Array (Synaptics Audio)', output: 'Speaker (Synaptics Audio)' },
+const MEDIA_DEVICE_POOLS_BY_OS = Object.freeze({
+  windows: Object.freeze([
+    { input: 'Microphone Array (2- Realtek High Definition Audio)', output: 'Speaker/Headphone (2- Realtek High Definition Audio)', video: 'Integrated Camera' },
+    { input: 'Microphone Array (Realtek High Definition Audio)', output: 'Speaker/Headphone (Realtek High Definition Audio)', video: 'Integrated Camera' },
+    { input: 'Microphone Array (Realtek(R) Audio)', output: 'Speaker (Realtek(R) Audio)', video: 'Integrated Camera' },
+    { input: 'Microphone Array (Conexant SmartAudio HD)', output: 'Speaker (Conexant SmartAudio HD)', video: 'Integrated Camera' },
+    { input: 'Microphone Array (2- Conexant SmartAudio HD)', output: 'Speaker (2- Conexant SmartAudio HD)', video: 'Integrated Camera' },
+    { input: 'Microphone Array (Synaptics Audio)', output: 'Speaker (Synaptics Audio)', video: 'Integrated Camera' },
+  ]),
+  macos: Object.freeze([
+    { input: 'Built-in Microphone', output: 'MacBook Pro Speakers', video: 'FaceTime HD Camera' },
+    { input: 'Built-in Microphone', output: 'MacBook Air Speakers', video: 'FaceTime HD Camera' },
+    { input: 'Built-in Microphone', output: 'Internal Speakers', video: 'FaceTime HD Camera' },
+    { input: 'MacBook Pro Microphone', output: 'MacBook Pro Speakers', video: 'FaceTime HD Camera (Built-in)' },
+    { input: 'Mac mini Microphone', output: 'Mac mini Speakers', video: 'FaceTime HD Camera' },
+  ]),
+  android: Object.freeze([
+    { input: 'Built-in Audio', output: 'Built-in Speaker', video: 'Back Camera' },
+    { input: 'Built-in Microphone', output: 'Speaker', video: 'Front Camera' },
+    { input: 'Phone Microphone', output: 'Phone Speaker', video: 'Back Camera' },
+    { input: 'Internal Audio Input', output: 'Internal Audio Output', video: 'Rear Camera' },
+  ]),
+  linux: Object.freeze([
+    { input: 'Built-in Audio Analog Stereo', output: 'Built-in Audio Analog Stereo', video: 'Integrated Camera' },
+    { input: 'PulseAudio Internal Microphone', output: 'PulseAudio Internal Speaker', video: 'USB 2.0 Camera' },
+  ]),
+});
+
+const MEDIA_DEVICE_TEMPLATES = MEDIA_DEVICE_POOLS_BY_OS.windows;
+
+const WINDOWS_SPEECH_VOICES = [
+  { name: "Microsoft David - English (United States)", lang: "en-US" },
+  { name: "Microsoft Zira - English (United States)", lang: "en-US" },
+  { name: "Microsoft Mark - English (United States)", lang: "en-US" },
+  { name: "Microsoft George - English (United Kingdom)", lang: "en-GB" },
+  { name: "Microsoft Susan - English (United Kingdom)", lang: "en-GB" },
+  { name: "Microsoft Catherine - English (Australia)", lang: "en-AU" },
+  { name: "Microsoft James - English (Australia)", lang: "en-AU" },
+  { name: "Microsoft Linda - English (Canada)", lang: "en-CA" },
+  { name: "Microsoft Richard - English (Canada)", lang: "en-CA" },
+  { name: "Microsoft Sean - English (Ireland)", lang: "en-IE" },
+  { name: "Microsoft Heera - English (India)", lang: "en-IN" },
+  { name: "Microsoft Ravi - English (India)", lang: "en-IN" },
+  { name: "Microsoft Huihui - Chinese (Simplified, PRC)", lang: "zh-CN" },
+  { name: "Microsoft Yaoyao - Chinese (Simplified, PRC)", lang: "zh-CN" },
+  { name: "Microsoft Kangkang - Chinese (Simplified, PRC)", lang: "zh-CN" },
+  { name: "Microsoft Hanhan - Chinese (Traditional, Taiwan)", lang: "zh-TW" },
+  { name: "Microsoft Tracy - Chinese (Traditional, Hong Kong S.A.R.)", lang: "zh-HK" },
+  { name: "Microsoft Haruka - Japanese", lang: "ja-JP" },
+  { name: "Microsoft Ichiro - Japanese", lang: "ja-JP" },
+  { name: "Microsoft Heami - Korean", lang: "ko-KR" },
+  { name: "Microsoft Hortense - French", lang: "fr-FR" },
+  { name: "Microsoft Paul - French", lang: "fr-FR" },
+  { name: "Microsoft Julie - French (Canada)", lang: "fr-CA" },
+  { name: "Microsoft Hedda - German", lang: "de-DE" },
+  { name: "Microsoft Stefan - German", lang: "de-DE" },
+  { name: "Microsoft Helena - Spanish", lang: "es-ES" },
+  { name: "Microsoft Laura - Spanish", lang: "es-ES" },
+  { name: "Microsoft Sabina - Spanish (Mexico)", lang: "es-MX" },
+  { name: "Microsoft Raul - Spanish (Mexico)", lang: "es-MX" },
+  { name: "Microsoft Cosimo - Italian", lang: "it-IT" },
+  { name: "Microsoft Elsa - Italian", lang: "it-IT" },
+  { name: "Microsoft Maria - Portuguese (Brazil)", lang: "pt-BR" },
+  { name: "Microsoft Daniel - Portuguese (Brazil)", lang: "pt-BR" },
+  { name: "Microsoft Helia - Portuguese (Portugal)", lang: "pt-PT" },
+  { name: "Microsoft Irina - Russian", lang: "ru-RU" },
+  { name: "Microsoft Pavel - Russian", lang: "ru-RU" },
+  { name: "Microsoft Frank - Dutch", lang: "nl-NL" },
+  { name: "Microsoft Paulina - Polish", lang: "pl-PL" },
+  { name: "Microsoft Bengt - Swedish", lang: "sv-SE" },
+  { name: "Microsoft Heidi - Finnish", lang: "fi-FI" },
+  { name: "Microsoft Jon - Norwegian", lang: "nb-NO" },
+  { name: "Microsoft Tolga - Turkish", lang: "tr-TR" },
+  { name: "Microsoft Kalpana - Hindi", lang: "hi-IN" },
+  { name: "Microsoft Pattara - Thai", lang: "th-TH" },
+  { name: "Microsoft Andika - Indonesian", lang: "id-ID" },
+  { name: "Microsoft Hoda - Arabic (Egypt)", lang: "ar-EG" },
+  { name: "Microsoft Naayf - Arabic (Saudi Arabia)", lang: "ar-SA" },
+  { name: "Microsoft Asaf - Hebrew", lang: "he-IL" },
+  { name: "Microsoft Stefanos - Greek", lang: "el-GR" },
+  { name: "Microsoft Filip - Czech", lang: "cs-CZ" },
+  { name: "Microsoft Szabolcs - Hungarian", lang: "hu-HU" },
+  { name: "Microsoft An - Vietnamese", lang: "vi-VN" },
+];
+
+const MACOS_SPEECH_VOICES = [
+  { name: "Alex", lang: "en-US" }, { name: "Samantha", lang: "en-US" }, { name: "Victoria", lang: "en-US" },
+  { name: "Fred", lang: "en-US" }, { name: "Junior", lang: "en-US" }, { name: "Kathy", lang: "en-US" },
+  { name: "Daniel", lang: "en-GB" }, { name: "Kate", lang: "en-GB" }, { name: "Oliver", lang: "en-GB" },
+  { name: "Serena", lang: "en-GB" }, { name: "Moira", lang: "en-IE" }, { name: "Fiona", lang: "en-GB" },
+  { name: "Karen", lang: "en-AU" }, { name: "Lee", lang: "en-AU" }, { name: "Tessa", lang: "en-ZA" },
+  { name: "Ting-Ting", lang: "zh-CN" }, { name: "Sin-ji", lang: "zh-HK" }, { name: "Mei-Jia", lang: "zh-TW" },
+  { name: "Kyoko", lang: "ja-JP" }, { name: "Otoya", lang: "ja-JP" },
+  { name: "Yuna", lang: "ko-KR" },
+  { name: "Thomas", lang: "fr-FR" }, { name: "Amelie", lang: "fr-CA" }, { name: "Audrey", lang: "fr-FR" },
+  { name: "Anna", lang: "de-DE" }, { name: "Helena", lang: "de-DE" }, { name: "Markus", lang: "de-DE" },
+  { name: "Monica", lang: "es-ES" }, { name: "Paulina", lang: "es-MX" }, { name: "Jorge", lang: "es-ES" },
+  { name: "Alice", lang: "it-IT" }, { name: "Luca", lang: "it-IT" },
+  { name: "Luciana", lang: "pt-BR" }, { name: "Joana", lang: "pt-PT" },
+  { name: "Milena", lang: "ru-RU" }, { name: "Yuri", lang: "ru-RU" },
+  { name: "Xander", lang: "nl-NL" }, { name: "Ellen", lang: "nl-BE" },
+  { name: "Alva", lang: "sv-SE" }, { name: "Oskar", lang: "sv-SE" },
+  { name: "Satu", lang: "fi-FI" },
+  { name: "Nora", lang: "nb-NO" },
+  { name: "Zosia", lang: "pl-PL" },
+  { name: "Zuzana", lang: "cs-CZ" },
+  { name: "Lekha", lang: "hi-IN" },
+  { name: "Kanya", lang: "th-TH" },
+  { name: "Damayanti", lang: "id-ID" },
+  { name: "Melina", lang: "el-GR" },
+  { name: "Carmit", lang: "he-IL" },
+  { name: "Maged", lang: "ar-SA" },
+  { name: "Tarik", lang: "ar-SA" },
+];
+
+const ANDROID_SPEECH_VOICES = [
+  { name: "English (United States)", lang: "en-US" },
+  { name: "English (United Kingdom)", lang: "en-GB" },
+  { name: "English (Australia)", lang: "en-AU" },
+  { name: "English (India)", lang: "en-IN" },
+  { name: "English (Nigeria)", lang: "en-NG" },
+  { name: "Chinese (China)", lang: "zh-CN" },
+  { name: "Chinese (Taiwan)", lang: "zh-TW" },
+  { name: "Chinese (Hong Kong)", lang: "zh-HK" },
+  { name: "Japanese (Japan)", lang: "ja-JP" },
+  { name: "Korean (South Korea)", lang: "ko-KR" },
+  { name: "French (France)", lang: "fr-FR" },
+  { name: "French (Canada)", lang: "fr-CA" },
+  { name: "German (Germany)", lang: "de-DE" },
+  { name: "Spanish (Spain)", lang: "es-ES" },
+  { name: "Spanish (United States)", lang: "es-US" },
+  { name: "Italian (Italy)", lang: "it-IT" },
+  { name: "Portuguese (Brazil)", lang: "pt-BR" },
+  { name: "Portuguese (Portugal)", lang: "pt-PT" },
+  { name: "Russian (Russia)", lang: "ru-RU" },
+  { name: "Dutch (Netherlands)", lang: "nl-NL" },
+  { name: "Polish (Poland)", lang: "pl-PL" },
+  { name: "Swedish (Sweden)", lang: "sv-SE" },
+  { name: "Finnish (Finland)", lang: "fi-FI" },
+  { name: "Norwegian Bokmål (Norway)", lang: "nb-NO" },
+  { name: "Danish (Denmark)", lang: "da-DK" },
+  { name: "Czech (Czechia)", lang: "cs-CZ" },
+  { name: "Hungarian (Hungary)", lang: "hu-HU" },
+  { name: "Turkish (Turkey)", lang: "tr-TR" },
+  { name: "Greek (Greece)", lang: "el-GR" },
+  { name: "Hebrew (Israel)", lang: "he-IL" },
+  { name: "Hindi (India)", lang: "hi-IN" },
+  { name: "Indonesian (Indonesia)", lang: "id-ID" },
+  { name: "Thai (Thailand)", lang: "th-TH" },
+  { name: "Vietnamese (Vietnam)", lang: "vi-VN" },
+  { name: "Arabic (Saudi Arabia)", lang: "ar-SA" },
+  { name: "Ukrainian (Ukraine)", lang: "uk-UA" },
+];
+
+const GOOGLE_SPEECH_VOICES = [
+  { name: "Google US English", lang: "en-US" }, { name: "Google UK English Female", lang: "en-GB" },
+  { name: "Google UK English Male", lang: "en-GB" },
+  { name: "Google 普通话（中国大陆）", lang: "zh-CN" }, { name: "Google 粤語（香港）", lang: "zh-HK" },
+  { name: "Google 國語（臺灣）", lang: "zh-TW" },
+  { name: "Google 日本語", lang: "ja-JP" },
+  { name: "Google 한국의", lang: "ko-KR" },
+  { name: "Google français", lang: "fr-FR" },
+  { name: "Google Deutsch", lang: "de-DE" },
+  { name: "Google español", lang: "es-ES" }, { name: "Google español de Estados Unidos", lang: "es-US" },
+  { name: "Google italiano", lang: "it-IT" },
+  { name: "Google português do Brasil", lang: "pt-BR" },
+  { name: "Google русский", lang: "ru-RU" },
+  { name: "Google Nederlands", lang: "nl-NL" },
+  { name: "Google svenska", lang: "sv-SE" },
+  { name: "Google suomi", lang: "fi-FI" },
+  { name: "Google norsk bokmål", lang: "nb-NO" },
+  { name: "Google polski", lang: "pl-PL" },
+  { name: "Google čeština", lang: "cs-CZ" },
+  { name: "Google हिन्दी", lang: "hi-IN" },
+  { name: "Google ไทย", lang: "th-TH" },
+  { name: "Google Bahasa Indonesia", lang: "id-ID" },
+  { name: "Google ελληνικά", lang: "el-GR" },
+  { name: "Google עברית", lang: "he-IL" },
+  { name: "Google العربية", lang: "ar-SA" },
 ];
 
 const SPEECH_VOICE_POOL = [
-  { name: 'Alex', lang: 'en-US' }, { name: 'Samantha', lang: 'en-US' }, { name: 'Victoria', lang: 'en-US' },
-  { name: 'Fred', lang: 'en-US' }, { name: 'Junior', lang: 'en-US' }, { name: 'Kathy', lang: 'en-US' },
-  { name: 'Daniel', lang: 'en-GB' }, { name: 'Kate', lang: 'en-GB' }, { name: 'Oliver', lang: 'en-GB' },
-  { name: 'Serena', lang: 'en-GB' }, { name: 'Moira', lang: 'en-IE' }, { name: 'Fiona', lang: 'en-GB' },
-  { name: 'Karen', lang: 'en-AU' }, { name: 'Lee', lang: 'en-AU' }, { name: 'Tessa', lang: 'en-ZA' },
-  { name: 'Google US English', lang: 'en-US' }, { name: 'Google UK English Female', lang: 'en-GB' },
-  { name: 'Google UK English Male', lang: 'en-GB' },
-  { name: 'Microsoft David - English (United States)', lang: 'en-US' },
-  { name: 'Microsoft Zira - English (United States)', lang: 'en-US' },
-  { name: 'Microsoft Mark - English (United States)', lang: 'en-US' },
-  { name: 'Ting-Ting', lang: 'zh-CN' }, { name: 'Sin-ji', lang: 'zh-HK' }, { name: 'Mei-Jia', lang: 'zh-TW' },
-  { name: 'Google 普通话（中国大陆）', lang: 'zh-CN' }, { name: 'Google 粤語（香港）', lang: 'zh-HK' },
-  { name: 'Google 國語（臺灣）', lang: 'zh-TW' },
-  { name: 'Microsoft Huihui - Chinese (Simplified, PRC)', lang: 'zh-CN' },
-  { name: 'Microsoft Yaoyao - Chinese (Simplified, PRC)', lang: 'zh-CN' },
-  { name: 'Microsoft Kangkang - Chinese (Simplified, PRC)', lang: 'zh-CN' },
-  { name: 'Microsoft Hanhan - Chinese (Traditional, Taiwan)', lang: 'zh-TW' },
-  { name: 'Microsoft Tracy - Chinese (Traditional, Hong Kong S.A.R.)', lang: 'zh-HK' },
-  { name: 'Kyoko', lang: 'ja-JP' }, { name: 'Otoya', lang: 'ja-JP' },
-  { name: 'Google 日本語', lang: 'ja-JP' },
-  { name: 'Microsoft Haruka - Japanese', lang: 'ja-JP' },
-  { name: 'Microsoft Ichiro - Japanese', lang: 'ja-JP' },
-  { name: 'Yuna', lang: 'ko-KR' }, { name: 'Google 한국의', lang: 'ko-KR' },
-  { name: 'Microsoft Heami - Korean', lang: 'ko-KR' },
-  { name: 'Thomas', lang: 'fr-FR' }, { name: 'Amelie', lang: 'fr-CA' }, { name: 'Audrey', lang: 'fr-FR' },
-  { name: 'Google français', lang: 'fr-FR' },
-  { name: 'Microsoft Hortense - French', lang: 'fr-FR' },
-  { name: 'Anna', lang: 'de-DE' }, { name: 'Helena', lang: 'de-DE' }, { name: 'Markus', lang: 'de-DE' },
-  { name: 'Google Deutsch', lang: 'de-DE' },
-  { name: 'Microsoft Hedda - German', lang: 'de-DE' },
-  { name: 'Monica', lang: 'es-ES' }, { name: 'Paulina', lang: 'es-MX' }, { name: 'Jorge', lang: 'es-ES' },
-  { name: 'Google español', lang: 'es-ES' }, { name: 'Google español de Estados Unidos', lang: 'es-US' },
-  { name: 'Microsoft Helena - Spanish', lang: 'es-ES' },
-  { name: 'Alice', lang: 'it-IT' }, { name: 'Luca', lang: 'it-IT' },
-  { name: 'Google italiano', lang: 'it-IT' },
-  { name: 'Microsoft Cosimo - Italian', lang: 'it-IT' },
-  { name: 'Luciana', lang: 'pt-BR' }, { name: 'Joana', lang: 'pt-PT' },
-  { name: 'Google português do Brasil', lang: 'pt-BR' },
-  { name: 'Microsoft Maria - Portuguese (Brazil)', lang: 'pt-BR' },
-  { name: 'Milena', lang: 'ru-RU' }, { name: 'Yuri', lang: 'ru-RU' },
-  { name: 'Google русский', lang: 'ru-RU' },
-  { name: 'Microsoft Irina - Russian', lang: 'ru-RU' },
-  { name: 'Xander', lang: 'nl-NL' }, { name: 'Ellen', lang: 'nl-BE' },
-  { name: 'Google Nederlands', lang: 'nl-NL' },
-  { name: 'Alva', lang: 'sv-SE' }, { name: 'Oskar', lang: 'sv-SE' },
-  { name: 'Google svenska', lang: 'sv-SE' },
-  { name: 'Satu', lang: 'fi-FI' }, { name: 'Google suomi', lang: 'fi-FI' },
-  { name: 'Nora', lang: 'nb-NO' }, { name: 'Google norsk bokmål', lang: 'nb-NO' },
-  { name: 'Zosia', lang: 'pl-PL' }, { name: 'Google polski', lang: 'pl-PL' },
-  { name: 'Zuzana', lang: 'cs-CZ' }, { name: 'Google čeština', lang: 'cs-CZ' },
-  { name: 'Lekha', lang: 'hi-IN' }, { name: 'Google हिन्दी', lang: 'hi-IN' },
-  { name: 'Kanya', lang: 'th-TH' }, { name: 'Google ไทย', lang: 'th-TH' },
-  { name: 'Damayanti', lang: 'id-ID' }, { name: 'Google Bahasa Indonesia', lang: 'id-ID' },
-  { name: 'Melina', lang: 'el-GR' }, { name: 'Google ελληνικά', lang: 'el-GR' },
-  { name: 'Carmit', lang: 'he-IL' }, { name: 'Google עברית', lang: 'he-IL' },
-  { name: 'Maged', lang: 'ar-SA' }, { name: 'Google العربية', lang: 'ar-SA' },
-  { name: 'Tarik', lang: 'ar-SA' },
+  ...WINDOWS_SPEECH_VOICES,
+  ...MACOS_SPEECH_VOICES,
+  ...ANDROID_SPEECH_VOICES,
+  ...GOOGLE_SPEECH_VOICES,
 ];
 
 const DEVICE_NAME_PREFIXES = [
@@ -751,7 +911,15 @@ function createMediaDevicesFromSeed(seedInput, options = {}) {
   const raw = String(seedInput || 'default');
   let acc = 0;
   for (let i = 0; i < raw.length; i += 1) acc += raw.charCodeAt(i);
-  const tpl = MEDIA_DEVICE_TEMPLATES[acc % MEDIA_DEVICE_TEMPLATES.length] || MEDIA_DEVICE_TEMPLATES[0];
+  const osKey = String(options.os || '').toLowerCase();
+  const pool = (osKey.startsWith('macos') || osKey === 'darwin')
+    ? MEDIA_DEVICE_POOLS_BY_OS.macos
+    : (osKey === 'android'
+      ? MEDIA_DEVICE_POOLS_BY_OS.android
+      : (osKey === 'linux'
+        ? MEDIA_DEVICE_POOLS_BY_OS.linux
+        : MEDIA_DEVICE_TEMPLATES));
+  const tpl = pool[acc % pool.length] || pool[0];
   // Chrome hands out 64-character lowercase hex identifiers, salted per origin, and never brands
   // them with a product prefix. Derive each identifier from the whole profile seed so two
   // profiles cannot share one: the previous running-sum derivation only depended on the first two
@@ -766,7 +934,12 @@ function createMediaDevicesFromSeed(seedInput, options = {}) {
   const emptyLabels = options.emptyLabels === true;
   const labelOverride = options.labels && typeof options.labels === 'object' ? options.labels : null;
   const inputLabel = emptyLabels ? '' : String(labelOverride?.audioinput || labelOverride?.input || tpl.input);
-  const videoLabel = emptyLabels ? '' : String(labelOverride?.videoinput || labelOverride?.video || `Integrated Camera (${usbTag})`);
+  const defaultVideo = pool === MEDIA_DEVICE_POOLS_BY_OS.macos
+    ? (tpl.video || 'FaceTime HD Camera')
+    : (pool === MEDIA_DEVICE_POOLS_BY_OS.android
+      ? (tpl.video || 'Back Camera')
+      : (tpl.video ? `${tpl.video} (${usbTag})` : `Integrated Camera (${usbTag})`));
+  const videoLabel = emptyLabels ? '' : String(labelOverride?.videoinput || labelOverride?.video || defaultVideo);
   const outputLabel = emptyLabels ? '' : String(labelOverride?.audiooutput || labelOverride?.output || tpl.output);
   const devices = [
     { kind: 'audioinput', label: inputLabel, deviceId: audioInputId, groupId },
@@ -794,16 +967,29 @@ function createMediaDevicesFromSeed(seedInput, options = {}) {
  * is returned, which keeps previously generated profiles byte-identical.
  */
 function speechVoicePoolForOs(os) {
-  const family = String(os || '').toLowerCase();
-  if (!family) return SPEECH_VOICE_POOL;
-  const isMac = family.startsWith('macos') || family === 'darwin';
-  const isLinux = family === 'linux';
-  return SPEECH_VOICE_POOL.filter((voice) => {
-    const name = String(voice.name || '');
-    if (/^Google\s/i.test(name)) return true;
-    if (/^Microsoft\s/i.test(name)) return !isMac && !isLinux;
-    return isMac;
-  });
+  const family = String(os || "").toLowerCase().trim();
+  const isAndroid = family.includes("android");
+  const isIos = !isAndroid && (family.includes("ios") || family.includes("iphone") || family.includes("ipad"));
+  const isMac = !isAndroid && !isIos && (family.includes("mac") || family.includes("darwin"));
+  const isLinux = !isAndroid && !isIos && !isMac && (family.includes("linux") || family.includes("x11") || family.includes("unix") || family.includes("ubuntu"));
+  const isWindows = !isAndroid && !isIos && !isMac && !isLinux && family.includes("win");
+
+  if (isAndroid) {
+    return ANDROID_SPEECH_VOICES;
+  }
+  if (isIos) {
+    return MACOS_SPEECH_VOICES;
+  }
+  if (isWindows) {
+    return [...WINDOWS_SPEECH_VOICES, ...GOOGLE_SPEECH_VOICES];
+  }
+  if (isLinux) {
+    return GOOGLE_SPEECH_VOICES;
+  }
+  if (isMac) {
+    return [...MACOS_SPEECH_VOICES, ...GOOGLE_SPEECH_VOICES];
+  }
+  return [...WINDOWS_SPEECH_VOICES, ...GOOGLE_SPEECH_VOICES];
 }
 
 function createSpeechVoicesFromSeed(seedInput, languages = ['en-US'], mode = 'noise', options = {}) {
@@ -963,39 +1149,82 @@ function webglPresetsForOs(os, options = {}) {
 const WEBGL_GPU_LIMITS = {
   // vendor: architecture -> limits
   nvidia: {
-    ada: { texture: 32768, vertexUniform: 1024, varying: 32 },
-    ampere: { texture: 32768, vertexUniform: 1024, varying: 32 },
-    turing: { texture: 32768, vertexUniform: 1024, varying: 32 },
+    ada: { texture: 32768, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 192 },
+    ampere: { texture: 32768, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 192 },
+    turing: { texture: 32768, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 192 },
   },
   amd: {
-    'rdna-3': { texture: 16384, vertexUniform: 1024, varying: 32 },
-    'rdna-2': { texture: 16384, vertexUniform: 1024, varying: 32 },
-    'rdna-1': { texture: 16384, vertexUniform: 1024, varying: 32 },
-    'gcn-4': { texture: 16384, vertexUniform: 4096, varying: 32 },
-    'gcn-3': { texture: 16384, vertexUniform: 4096, varying: 32 },
-    vega: { texture: 16384, vertexUniform: 4096, varying: 32 },
+    'rdna-3': { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 128 },
+    'rdna-2': { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 128 },
+    'rdna-1': { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 128 },
+    'gcn-4': { texture: 16384, vertexUniform: 4096, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 128 },
+    'gcn-3': { texture: 16384, vertexUniform: 4096, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 128 },
+    vega: { texture: 16384, vertexUniform: 4096, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 128 },
   },
   intel: {
-    alchemist: { texture: 16384, vertexUniform: 1024, varying: 32 },
-    gen12: { texture: 16384, vertexUniform: 1024, varying: 32 },
-    gen11: { texture: 16384, vertexUniform: 1024, varying: 32 },
-    gen9: { texture: 16384, vertexUniform: 1024, varying: 32 },
-    gen7: { texture: 8192, vertexUniform: 1024, varying: 32 },
+    alchemist: { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 96 },
+    gen12: { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 96 },
+    gen11: { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 96 },
+    gen9: { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 96 },
+    gen7: { texture: 8192, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 96 },
   },
   apple: {
-    'common-3': { texture: 16384, vertexUniform: 1024, varying: 32 },
-    'common-4': { texture: 16384, vertexUniform: 1024, varying: 32 },
+    'common-3': { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 511, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 12, maxFragmentUniformBlocks: 12, maxCombinedTextureImageUnits: 80 },
+    'common-4': { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 511, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 12, maxFragmentUniformBlocks: 12, maxCombinedTextureImageUnits: 80 },
+  },
+  qualcomm: {
+    'adreno-700': { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 64, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 96 },
+  },
+  arm: {
+    valhall: { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 64, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 96 },
+  },
+  samsung: {
+    'rdna-2': { texture: 16384, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 256, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 128 },
+  },
+  imagination: {
+    rogue: { texture: 8192, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 64, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 96 },
+    powervr: { texture: 8192, vertexUniform: 1024, varying: 32, pointSize: 1024, uniformBufferOffsetAlignment: 64, maxUniformBlockSize: 65536, maxVertexUniformBlocks: 14, maxFragmentUniformBlocks: 14, maxCombinedTextureImageUnits: 96 },
   },
 };
+
+const HOST_WEBGL2_DEFAULTS = Object.freeze({
+  macos: Object.freeze({
+    maxUniformBlockSize: 65536,
+    maxVertexUniformBlocks: 12,
+    maxFragmentUniformBlocks: 12,
+    maxCombinedTextureImageUnits: 80,
+    uniformBufferOffsetAlignment: 256,
+  }),
+  linux: Object.freeze({
+    maxUniformBlockSize: 65536,
+    maxVertexUniformBlocks: 14,
+    maxFragmentUniformBlocks: 14,
+    maxCombinedTextureImageUnits: 96,
+    uniformBufferOffsetAlignment: 256,
+  }),
+  windows: Object.freeze({
+    maxUniformBlockSize: 65536,
+    maxVertexUniformBlocks: 14,
+    maxFragmentUniformBlocks: 14,
+    maxCombinedTextureImageUnits: 192,
+    uniformBufferOffsetAlignment: 256,
+  }),
+});
 
 /** WebGL parameter ids that a coerced adapter identity has to answer for. */
 const WEBGL_PARAM_IDS = Object.freeze({
   MAX_TEXTURE_SIZE: 0x0d33,
   MAX_VIEWPORT_DIMS: 0x0d3a,
+  ALIASED_POINT_SIZE_RANGE: 0x846d,
   MAX_CUBE_MAP_TEXTURE_SIZE: 0x851c,
   MAX_RENDERBUFFER_SIZE: 0x84e8,
   MAX_VERTEX_UNIFORM_VECTORS: 0x8dfb,
   MAX_VARYING_VECTORS: 0x8dfc,
+  MAX_UNIFORM_BLOCK_SIZE: 0x8a30,
+  UNIFORM_BUFFER_OFFSET_ALIGNMENT: 0x8a34,
+  MAX_VERTEX_UNIFORM_BLOCKS: 0x8a2b,
+  MAX_FRAGMENT_UNIFORM_BLOCKS: 0x8a2d,
+  MAX_COMBINED_TEXTURE_IMAGE_UNITS: 0x8b4d,
 });
 
 /**
@@ -1033,6 +1262,14 @@ function normalizeGpuArchitecture(vendor, arch) {
     if (raw.includes("ada") || raw.includes("40")) return "ada";
     if (raw.includes("ampere") || raw.includes("30")) return "ampere";
     if (raw.includes("turing") || raw.includes("20") || raw.includes("16")) return "turing";
+  } else if (v === "qualcomm") {
+    if (raw.includes("700") || raw.includes("730") || raw.includes("740") || raw.includes("adreno")) return "adreno-700";
+  } else if (v === "arm") {
+    if (raw.includes("valhall") || raw.includes("g710") || raw.includes("mali")) return "valhall";
+  } else if (v === "samsung") {
+    return "rdna-2";
+  } else if (v === "imagination" || v.includes("powervr")) {
+    return "rogue";
   }
   return raw;
 }
@@ -1047,8 +1284,16 @@ function normalizeGpuArchitecture(vendor, arch) {
  */
 function webglParameterOverrides(gpu, options = {}) {
   if (!gpu || typeof gpu !== "object") return null;
-  const vendor = String(gpu.vendor || "").toLowerCase().trim();
-  const arch = String(gpu.architecture || "").toLowerCase().trim();
+  let vendor = String(gpu.vendor || gpu.family || "").toLowerCase().trim();
+  if (vendor.includes("imagination") || vendor.includes("powervr")) vendor = "imagination";
+  else if (vendor.includes("qualcomm") || vendor.includes("adreno")) vendor = "qualcomm";
+  else if (vendor.includes("arm") || vendor.includes("mali")) vendor = "arm";
+  else if (vendor.includes("apple")) vendor = "apple";
+  else if (vendor.includes("nvidia")) vendor = "nvidia";
+  else if (vendor.includes("amd")) vendor = "amd";
+  else if (vendor.includes("intel")) vendor = "intel";
+  else if (vendor.includes("samsung")) vendor = "samsung";
+  const arch = String(gpu.architecture || gpu.family || "").toLowerCase().trim();
   const family = WEBGL_GPU_LIMITS[vendor];
   if (!family) return null;
   const normArch = normalizeGpuArchitecture(vendor, arch);
@@ -1062,12 +1307,50 @@ function webglParameterOverrides(gpu, options = {}) {
   const overrides = {};
   let textureLimit = entry.texture;
   let renderbufferLimit = entry.texture;
+  let pointSizeLimit = entry.pointSize || (vendor === 'apple' ? 511 : 1024);
+  let uniformBufferOffsetAlignment = entry.uniformBufferOffsetAlignment || 256;
+  let maxUniformBlockSize = entry.maxUniformBlockSize || 65536;
+  let maxVertexUniformBlocks = entry.maxVertexUniformBlocks || (vendor === 'apple' ? 12 : 14);
+  let maxFragmentUniformBlocks = entry.maxFragmentUniformBlocks || (vendor === 'apple' ? 12 : 14);
+  let maxCombinedTextureImageUnits = entry.maxCombinedTextureImageUnits || (vendor === 'nvidia' ? 192 : (vendor === 'amd' ? 128 : (vendor === 'apple' ? 80 : 96)));
+
   const shouldReconcile = options.reconcileHost ?? options.clampToHost;
   if (shouldReconcile) {
     const hostLimits = options.hostLimits || getHostWebglLimits(options.hostPlatform || process.platform);
-    if (hostLimits && Number.isFinite(hostLimits.maxTextureSize) && hostLimits.maxTextureSize > 0) {
-      textureLimit = Math.min(textureLimit, hostLimits.maxTextureSize);
-      renderbufferLimit = Math.min(renderbufferLimit, hostLimits.maxRenderbufferSize || hostLimits.maxTextureSize);
+    if (hostLimits) {
+      if (Number.isFinite(hostLimits.maxTextureSize) && hostLimits.maxTextureSize > 0) {
+        textureLimit = Math.min(textureLimit, hostLimits.maxTextureSize);
+        renderbufferLimit = Math.min(renderbufferLimit, hostLimits.maxRenderbufferSize || hostLimits.maxTextureSize);
+      }
+      if (Array.isArray(hostLimits.aliasedPointSizeRange) && Number.isFinite(hostLimits.aliasedPointSizeRange[1])) {
+        pointSizeLimit = Math.min(pointSizeLimit, hostLimits.aliasedPointSizeRange[1]);
+      }
+      const p = String(options.hostPlatform || process.platform).toLowerCase().trim();
+      const hostWebgl2 = HOST_WEBGL2_DEFAULTS[p === 'darwin' || p === 'macos' ? 'macos' : (p === 'linux' ? 'linux' : 'windows')];
+      if (hostWebgl2) {
+        maxUniformBlockSize = Math.min(maxUniformBlockSize, hostWebgl2.maxUniformBlockSize);
+        maxVertexUniformBlocks = Math.min(maxVertexUniformBlocks, hostWebgl2.maxVertexUniformBlocks);
+        maxFragmentUniformBlocks = Math.min(maxFragmentUniformBlocks, hostWebgl2.maxFragmentUniformBlocks);
+        maxCombinedTextureImageUnits = Math.min(maxCombinedTextureImageUnits, hostWebgl2.maxCombinedTextureImageUnits);
+        uniformBufferOffsetAlignment = Math.max(uniformBufferOffsetAlignment, hostWebgl2.uniformBufferOffsetAlignment);
+      }
+    }
+    if (options.hostLimits && typeof options.hostLimits === 'object') {
+      if (Number.isFinite(options.hostLimits.maxUniformBlockSize)) {
+        maxUniformBlockSize = Math.min(maxUniformBlockSize, options.hostLimits.maxUniformBlockSize);
+      }
+      if (Number.isFinite(options.hostLimits.maxVertexUniformBlocks)) {
+        maxVertexUniformBlocks = Math.min(maxVertexUniformBlocks, options.hostLimits.maxVertexUniformBlocks);
+      }
+      if (Number.isFinite(options.hostLimits.maxFragmentUniformBlocks)) {
+        maxFragmentUniformBlocks = Math.min(maxFragmentUniformBlocks, options.hostLimits.maxFragmentUniformBlocks);
+      }
+      if (Number.isFinite(options.hostLimits.maxCombinedTextureImageUnits)) {
+        maxCombinedTextureImageUnits = Math.min(maxCombinedTextureImageUnits, options.hostLimits.maxCombinedTextureImageUnits);
+      }
+      if (Number.isFinite(options.hostLimits.uniformBufferOffsetAlignment)) {
+        uniformBufferOffsetAlignment = Math.max(uniformBufferOffsetAlignment, options.hostLimits.uniformBufferOffsetAlignment);
+      }
     }
   }
   overrides[WEBGL_PARAM_IDS.MAX_TEXTURE_SIZE] = textureLimit;
@@ -1075,6 +1358,12 @@ function webglParameterOverrides(gpu, options = {}) {
   overrides[WEBGL_PARAM_IDS.MAX_RENDERBUFFER_SIZE] = renderbufferLimit;
   overrides[WEBGL_PARAM_IDS.MAX_VERTEX_UNIFORM_VECTORS] = entry.vertexUniform;
   overrides[WEBGL_PARAM_IDS.MAX_VARYING_VECTORS] = entry.varying;
+  overrides[WEBGL_PARAM_IDS.ALIASED_POINT_SIZE_RANGE] = pointSizeLimit;
+  overrides[WEBGL_PARAM_IDS.UNIFORM_BUFFER_OFFSET_ALIGNMENT] = uniformBufferOffsetAlignment;
+  overrides[WEBGL_PARAM_IDS.MAX_UNIFORM_BLOCK_SIZE] = maxUniformBlockSize;
+  overrides[WEBGL_PARAM_IDS.MAX_VERTEX_UNIFORM_BLOCKS] = maxVertexUniformBlocks;
+  overrides[WEBGL_PARAM_IDS.MAX_FRAGMENT_UNIFORM_BLOCKS] = maxFragmentUniformBlocks;
+  overrides[WEBGL_PARAM_IDS.MAX_COMBINED_TEXTURE_IMAGE_UNITS] = maxCombinedTextureImageUnits;
   return overrides;
 }
 
@@ -1137,7 +1426,8 @@ function buildFingerprint(profile = {}) {
     : memoryPool[u32(seed, 16) % memoryPool.length];
   const width = Number(profile.width) || 1280;
   const height = Number(profile.height) || 820;
-  let colorDepth = [24, 24, 30][u32(seed, 20) % 3];
+  const isHdrRequested = Boolean(fpIn.hdr || privacy.hdr || profile.hdr || (Number(fpIn.colorDepth) === 30));
+  let colorDepth = isHdrRequested ? 30 : 24;
   let devicePixelRatio = [1, 1, 1.25, 1.5, 2][u32(seed, 24) % 5];
 
   // Numeric noise marks (canvas/webgl ±10000; audio/clientRects from seed formulas unless overridden)
@@ -1163,7 +1453,10 @@ function buildFingerprint(profile = {}) {
   // Numeric shadow of webrtc mode only (not an independent control).
   const webrtcPolicy = webrtcMode === 'disabled' ? 0 : (webrtcMode === 'proxy' ? 3 : 1);
   const mediaDevicesMode = mode('mediaDevices', ['real', 'noise', 'empty'], privacy.mediaDevices === 'real' ? 'real' : (privacy.mediaDevices === 'empty' ? 'empty' : (privacy.media === 'noise' ? 'noise' : (privacy.media === 'blocked' ? 'empty' : 'noise'))));
-  const speechMode = mode('speech', ['real', 'noise', 'blocked'], privacy.speech === 'blocked' ? 'blocked' : (privacy.speech === 'noise' ? 'noise' : 'real'));
+  const speechChoice = privacy.speech === undefined || privacy.speech === null || privacy.speech === ""
+    ? "noise"
+    : String(privacy.speech);
+  const speechMode = mode("speech", ["real", "noise", "blocked"], speechChoice === "blocked" ? "blocked" : (speechChoice === "real" ? "real" : "noise"));
   const batteryMode = mode('battery', ['real', 'noise', 'blocked'], privacy.battery === 'blocked' ? 'blocked' : (privacy.battery === 'real' ? 'real' : 'noise'));
   // Profiles the product saved carry an explicit choice (its own default is the WebGL derived
   // identity, see the renderer normalisation), but a profile that never went through that step - an
@@ -1207,10 +1500,14 @@ function buildFingerprint(profile = {}) {
       ua_full_version: clientHintsIn.ua_full_version || fpIn.ua_full_version,
     });
   } else {
+    const desktopRequested = [fpIn.os, clientHintsIn.os, profile.os]
+      .map((value) => String(value || "").toLowerCase().trim())
+      .map((value) => (value === "win" || value === "win32" || value === "win64" ? "windows" : (value === "mac" || value === "darwin" || value === "osx" ? "macos" : value)))
+      .find((value) => value === "windows" || value === "macos" || value === "linux");
     uaProfile = randomUaForSeed(u32(seed, 44), {
       majors: kernelMajor ? [kernelMajor] : undefined,
       // The UA is the source of truth for every OS-facing fingerprint surface.
-      osList: ['windows', 'windows', 'macos', 'linux'],
+      osList: desktopRequested ? [desktopRequested] : ['windows', 'windows', 'macos', 'linux'],
     });
     // Apply explicit clientHints overrides on top of seeded UA
     if (Object.keys(clientHintsIn).length) {
@@ -1224,7 +1521,9 @@ function buildFingerprint(profile = {}) {
     }
   }
 
-  let uaOs = desktopOs(uaProfile.os) || desktopOs(parseOsFromUa(uaProfile.userAgent)) || 'windows';
+  const parsedOsForFp = parseOsFromUa(uaProfile.userAgent);
+  const detectedMobileOs = (uaProfile.os === "android" || parsedOsForFp === "android") ? "android" : ((uaProfile.os === "ios" || parsedOsForFp === "ios") ? "ios" : null);
+  let uaOs = detectedMobileOs || desktopOs(uaProfile.os) || desktopOs(parsedOsForFp) || "windows";
   const personaRequested = String(fpIn.deviceProfile ?? privacy.deviceProfile ?? '').toLowerCase() === 'persona';
   const webglOptions = webglPresetsForOs(uaOs, { legacy: !personaRequested });
   let webglPreset = webglOptions[u32(seed, 8) % webglOptions.length];
@@ -1244,7 +1543,7 @@ function buildFingerprint(profile = {}) {
     }
     if (!hasCoresOverride) cores = devicePersona.cores;
     if (!hasMemoryOverride) memory = Math.min(8, devicePersona.memory);
-    colorDepth = devicePersona.colorDepth;
+    colorDepth = isHdrRequested ? (devicePersona.colorDepth || 30) : 24;
     devicePixelRatio = devicePersona.devicePixelRatio;
     webglPreset = {
       ...webglPreset,
@@ -1268,7 +1567,7 @@ function buildFingerprint(profile = {}) {
     uaOs = mobileDevice.os;
     if (!hasCoresOverride) cores = mobileDevice.cores;
     if (!hasMemoryOverride) memory = mobileDevice.deviceMemory;
-    colorDepth = mobileDevice.colorDepth;
+    colorDepth = isHdrRequested ? (mobileDevice.colorDepth || 30) : 24;
     devicePixelRatio = mobileDevice.dpr;
     webglPreset = {
       ...webglPreset,
@@ -1325,8 +1624,23 @@ function buildFingerprint(profile = {}) {
       countryCode: profile.exitCountryCode,
     }) || languagePrimary;
   } catch (_) {}
-  const languages = String(languagePrimary).split(',').map((s) => s.trim()).filter(Boolean);
+  const candidateLangs = (Array.isArray(privacy.languages) && privacy.languages.length)
+    ? privacy.languages
+    : (Array.isArray(fpIn.languages) && fpIn.languages.length)
+      ? fpIn.languages
+      : (Array.isArray(profile.languages) && profile.languages.length)
+        ? profile.languages
+        : null;
+  let languages = candidateLangs
+    ? candidateLangs.map((s) => String(s || '').trim()).filter(Boolean)
+    : String(languagePrimary).split(',').map((s) => s.trim()).filter(Boolean);
   if (!languages.length) languages.push('en-US');
+  if (languages.length === 1 && languages[0].includes('-')) {
+    const base = languages[0].split('-')[0];
+    if (!languages.includes(base)) languages.push(base);
+  } else if (languages.length === 1 && languages[0].toLowerCase() === 'en') {
+    if (!languages.includes('en-US')) languages.push('en-US');
+  }
 
   // A persona carries its own panel size; without it the reported screen follows the window,
   // which is what makes "screen smaller than the viewport" style inconsistencies show up.
@@ -1358,6 +1672,7 @@ function buildFingerprint(profile = {}) {
       emptyLabels: mediaDevicesMode === 'empty',
       extra: Array.isArray(fpIn.mediaDevices) ? fpIn.mediaDevices : null,
       labels: mediaLabelTemplates,
+      os: uaOs,
     });
   const battery = batteryMode === 'real'
     ? null
@@ -1492,8 +1807,8 @@ function buildFingerprint(profile = {}) {
       availTop,
       screenX,
       screenY,
-      colorDepth: Number(fpIn.colorDepth) || colorDepth,
-      pixelDepth: Number(fpIn.colorDepth) || colorDepth,
+      colorDepth: isHdrRequested ? (Number(fpIn.colorDepth) || colorDepth || 30) : 24,
+      pixelDepth: isHdrRequested ? (Number(fpIn.colorDepth) || colorDepth || 30) : 24,
       devicePixelRatio: Number(fpIn.devicePixelRatio) || devicePixelRatio,
     },
     webgl,
@@ -1540,14 +1855,20 @@ function buildFingerprint(profile = {}) {
     // Font probing is a top-tier OS signal, and on a stock Chromium kernel the host's real
     // font list answers it. A persona carries the set its claimed platform ships, plus the
     // families exclusive to the other platforms so probes for those can be answered honestly
-    // as absent. Null when no persona is selected: no persona means no claim to enforce.
-    fonts: devicePersona
-      ? {
-        os: uaOs,
-        list: fontsForOs(uaOs),
-        foreign: exclusiveFontsForOtherOs(uaOs),
-      }
-      : null,
+    // as absent. When claimed OS differs from host OS (e.g. Windows persona on macOS host),
+    // enable font isolation even without explicit deviceProfile: 'persona'.
+    fonts: (() => {
+      const hostPlatformNorm = process.platform === "darwin" ? "macos" : (process.platform === "win32" ? "windows" : (process.platform === "linux" ? "linux" : process.platform));
+      const foreignFonts = exclusiveFontsForOtherOs(uaOs);
+      const shouldEnableFonts = Boolean(devicePersona || mobileDevice || (uaOs !== hostPlatformNorm));
+      return (shouldEnableFonts && Array.isArray(foreignFonts) && foreignFonts.length > 0)
+        ? {
+          os: uaOs,
+          list: fontsForOs(uaOs) || [],
+          foreign: foreignFonts,
+        }
+        : null;
+    })(),
     maxTouchPoints: mobileDevice
       ? mobileDevice.maxTouchPoints
       : (Number(fpIn.maxTouchPoints) >= 0 ? Number(fpIn.maxTouchPoints) : 0),
@@ -1567,7 +1888,8 @@ function buildFingerprint(profile = {}) {
         gpu: { vendor: mobileDevice.gpu.vendor, renderer: mobileDevice.gpu.renderer, family: mobileDevice.gpu.family },
       }
       : null,
-    vendor: fpIn.vendor || 'Google Inc.',
+    vendor: fpIn.vendor || ((mobileDevice?.os === 'ios' || uaOs === 'ios' || (fpIn.platform && /iphone|ipad|ipod/i.test(fpIn.platform))) ? 'Apple Computer, Inc.' : (mobileDevice?.vendor || uaProfile?.vendor || 'Google Inc.')),
+    acceptLanguage: buildAcceptLanguageHeader(languages),
     doNotTrack: privacy.dnt ? '1' : null,
     // Static noise identity vs dynamic exit-IP layer
     staticConfig: {
@@ -1603,6 +1925,27 @@ function buildFingerprint(profile = {}) {
     // deterministic random for scripts
     _r0: rnd(),
   };
+
+  const lazyFontPayload = fpIn.lazyFontPayload !== false && privacy.lazyFontPayload !== false;
+  const fontBridgePlatform = (() => {
+    const p = String(uaOs || fpIn.os || fpIn.platform || '').trim().toLowerCase();
+    if (p.includes('win')) return 'windows';
+    if (p.includes('mac') || p.includes('darwin')) return 'macos';
+    if (p.includes('android')) return 'android';
+    if (p.includes('linux')) return 'linux';
+    if (p.includes('ios') || p.includes('iphone') || p.includes('ipad')) return 'macos';
+    return 'windows';
+  })();
+  const fontBridgeToken = deriveBridgeToken(fingerprint);
+  const fontBridgeChannel = '_' + String(fontBridgeToken).slice(0, 16);
+
+  fingerprint.fontBlobBridge = lazyFontPayload ? {
+    channelName: fontBridgeChannel,
+    token: String(fontBridgeToken),
+    platform: fontBridgePlatform,
+    wanted: null,
+  } : null;
+
   fingerprint.consistency = fingerprintConsistencyIssues(fingerprint);
   return fingerprint;
 }
@@ -1713,12 +2056,14 @@ function buildInjectionScript(fp) {
   const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     platform: fp.platform,
+    os: fp.uaProfile?.os || (fp.mobile ? 'android' : 'windows'),
     userAgent: fp.userAgent,
     languages: fp.languages,
     timezone: fp.timezone || fp.dynamicConfig?.timezone || null,
     hardwareConcurrency: fp.hardwareConcurrency,
     deviceMemory: Math.min(8, Math.max(1, Number(fp.deviceMemory) || 8)),
     screen: fp.screen,
+    os: fp.uaProfile?.os || (fp.mobile ? 'android' : 'windows'),
     webgl: {
       mode: fp.webgl?.mode,
       metaMode: fp.webgl?.metaMode || 'noise',
@@ -1745,7 +2090,7 @@ function buildInjectionScript(fp) {
     mobileDevice: fp.mobileDevice || null,
     // The injected navigator.patches read this; without it the page reported empty brands / model.
     userAgentMetadata: fp.userAgentMetadata || fp.uaProfile?.metadata || null,
-    vendor: fp.vendor || fp.uaProfile?.vendor || 'Google Inc.',
+    vendor: fp.vendor || ((fp.mobileDevice?.os === 'ios' || fp.uaProfile?.os === 'ios' || (fp.platform && /iphone|ipad|ipod/i.test(fp.platform))) ? 'Apple Computer, Inc.' : (fp.uaProfile?.vendor || 'Google Inc.')),
     doNotTrack: fp.doNotTrack,
     seed: fp.seed,
     stability: {
@@ -1867,6 +2212,8 @@ function buildInjectionScript(fp) {
     } catch (_) {}
     return imageData;
   };
+  const originalToString = Function.prototype.toString;
+  const BRIDGE_TOKEN = ${JSON.stringify(bridgeToken)};
   const nativeSource = new WeakMap();
   const subWindowSyncHooks = [];
   // Assigned by the font-shield block below when a profile declares foreign families. The
@@ -1874,8 +2221,6 @@ function buildInjectionScript(fp) {
   // wrapper: two independent nativeLike wrappers would make replaceMethod treat the second
   // one as an existing bridge and silently skip it.
   let sanitizeElementFontScope = (element, callback) => callback();
-  const originalToString = Function.prototype.toString;
-  const BRIDGE_TOKEN = ${JSON.stringify(bridgeToken)};
   const inspectBridge = (fn) => {
     try {
       if (typeof fn !== 'function') return null;
@@ -1894,6 +2239,21 @@ function buildInjectionScript(fp) {
   // Runtime.evaluate passes return here before they can add a second noise layer; a changed
   // configuration has a different token and continues without writing a public marker.
   if (inspectBridge(Function.prototype.toString)) return;
+  const cleanStack = (err, fnName) => {
+    try {
+      if (err && typeof err.stack === 'string') {
+        const lines = err.stack.split(String.fromCharCode(10));
+        const header = lines[0];
+        const filtered = lines.slice(1).filter((l) => {
+          if (fnName && l.includes(fnName)) return false;
+          if (l.includes('<anonymous>') && (l.includes('getImageData') || l.includes('replaceMethod') || l.includes('nativeLike') || l.includes('safeWrapper'))) return false;
+          return true;
+        });
+        err.stack = [header, ...filtered].join(String.fromCharCode(10));
+      }
+    } catch (_) {}
+    return err;
+  };
   const nativeLike = (wrapper, original, nameOverride, lengthOverride, isConstructor = false) => {
     if (typeof wrapper !== "function") return wrapper;
     const fnName = nameOverride !== undefined ? nameOverride : (original ? original.name : (wrapper.name || ""));
@@ -1906,7 +2266,11 @@ function buildInjectionScript(fp) {
     } else {
       const holder = {
         [fnName](...args) {
-          return wrapper.apply(this, args);
+          try {
+            return wrapper.apply(this, args);
+          } catch (err) {
+            throw cleanStack(err, fnName);
+          }
         }
       };
       clean = holder[fnName];
@@ -1925,28 +2289,74 @@ function buildInjectionScript(fp) {
     try { nativeSource.set(wrapper, nativeStr); } catch (_) {}
     return clean;
   };
+  const stripStackFrame = (err, fn, frameName) => {
+    if (!err) return err;
+    if (typeof Error.captureStackTrace === "function" && typeof fn === "function") {
+      try { Error.captureStackTrace(err, fn); } catch (_) {}
+    }
+    if (typeof err.stack === "string") {
+      const nl = String.fromCharCode(10);
+      const lines = err.stack.split(nl);
+      const baseName = (frameName && frameName.indexOf("get ") === 0) ? frameName.slice(4) : "";
+      if (lines.length > 1 && lines[1] && ((frameName && lines[1].indexOf(frameName) !== -1) || (baseName && lines[1].indexOf(baseName) !== -1))) {
+        lines.splice(1, 1);
+        try { err.stack = lines.join(nl); } catch (_) {}
+      }
+    }
+    return err;
+  };
   const makeNativeGetter = (key, getValue, targetType) => {
+    let getter;
     const holder = {
       get [key]() {
         if (targetType === "navigator") {
-          const isNav = this && (
-            this === (typeof navigator !== "undefined" ? navigator : null) ||
-            (typeof Navigator !== "undefined" && this instanceof Navigator) ||
-            Object.prototype.toString.call(this) === "[object Navigator]"
+          const isProto = (typeof Navigator !== "undefined" && this === Navigator.prototype) ||
+            (this && this.constructor && this.constructor.prototype === this) ||
+            (this && Object.getPrototypeOf(this) === Object.prototype);
+          const isNav = Boolean(
+            this &&
+            !isProto &&
+            (typeof Navigator === "undefined" || this !== Navigator.prototype) &&
+            (
+              this === (typeof navigator !== "undefined" ? navigator : null) ||
+              (typeof Navigator !== "undefined" && (this instanceof Navigator || Navigator.prototype.isPrototypeOf(this))) ||
+              (this.constructor && this.constructor.name === "Navigator" && this !== this.constructor.prototype)
+            )
           );
-          if (!isNav) throw new TypeError("Illegal invocation");
+          if (!isNav) {
+            const err = new TypeError("Illegal invocation");
+            stripStackFrame(err, getter, "get " + key);
+            throw err;
+          }
         } else if (targetType === "screen") {
-          const isScr = this && (
-            this === (typeof screen !== "undefined" ? screen : null) ||
-            (typeof Screen !== "undefined" && this instanceof Screen) ||
-            Object.prototype.toString.call(this) === "[object Screen]"
+          const isProto = (typeof Screen !== "undefined" && this === Screen.prototype) ||
+            (this && this.constructor && this.constructor.prototype === this) ||
+            (this && Object.getPrototypeOf(this) === Object.prototype);
+          const isScr = Boolean(
+            this &&
+            !isProto &&
+            (typeof Screen === "undefined" || this !== Screen.prototype) &&
+            (
+              this === (typeof screen !== "undefined" ? screen : null) ||
+              (typeof Screen !== "undefined" && (this instanceof Screen || Screen.prototype.isPrototypeOf(this))) ||
+              (this.constructor && this.constructor.name === "Screen" && this !== this.constructor.prototype)
+            )
           );
-          if (!isScr) throw new TypeError("Illegal invocation");
+          if (!isScr) {
+            const err = new TypeError("Illegal invocation");
+            stripStackFrame(err, getter, "get " + key);
+            throw err;
+          }
         }
-        return getValue.call(this);
+        try {
+          return getValue.call(this);
+        } catch (err) {
+          stripStackFrame(err, getter, "get " + key);
+          throw err;
+        }
       }
     };
-    const getter = Object.getOwnPropertyDescriptor(holder, key).get;
+    getter = Object.getOwnPropertyDescriptor(holder, key).get;
     try { Object.defineProperty(getter, "name", { configurable: true, value: "get " + key }); } catch (_) {}
     try { Object.defineProperty(getter, "length", { configurable: true, value: 0 }); } catch (_) {}
     nativeSource.set(getter, "function get " + key + "() { [native code] }");
@@ -1959,6 +2369,13 @@ function buildInjectionScript(fp) {
     try { nativeSource.set(fn, "function get " + key + "() { [native code] }"); } catch (_) {}
     return fn;
   };
+  const nativeSetter = (key, fn) => {
+    if (typeof fn !== "function") return fn;
+    try { Object.defineProperty(fn, "name", { configurable: true, value: "set " + key }); } catch (_) {}
+    try { Object.defineProperty(fn, "length", { configurable: true, value: 1 }); } catch (_) {}
+    try { nativeSource.set(fn, "function set " + key + "() { [native code] }"); } catch (_) {}
+    return fn;
+  };
   const nativeAccessor = (key, desc) => {
     if (desc && typeof desc.get === "function") nativeGetter(key, desc.get);
     if (desc && typeof desc.set === "function") {
@@ -1968,6 +2385,7 @@ function buildInjectionScript(fp) {
     return desc;
   };
   try {
+    let patchedToString;
     const holder = {
       toString(...args) {
         const secret = args[0];
@@ -1977,12 +2395,21 @@ function buildInjectionScript(fp) {
             const inherited = originalToString.call(this, secret);
             if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
           } catch (_) {}
+          return null;
         }
         if (nativeSource.has(this)) return nativeSource.get(this);
+        try {
+          if (typeof this.toString === "function" && this.toString !== patchedToString) {
+            const crossRealm = this.toString(BRIDGE_TOKEN);
+            if (crossRealm && typeof crossRealm === "object" && crossRealm.bridge === true && crossRealm.nativeText) {
+              return crossRealm.nativeText;
+            }
+          }
+        } catch (_) {}
         return originalToString.call(this, ...args);
       }
     };
-    const patchedToString = holder.toString;
+    patchedToString = holder.toString;
     nativeSource.set(patchedToString, "function toString() { [native code] }");
     try { Object.defineProperty(patchedToString, "length", { configurable: true, value: 0 }); } catch (_) {}
     try { Object.defineProperty(patchedToString, "name", { configurable: true, value: "toString" }); } catch (_) {}
@@ -2027,7 +2454,17 @@ function buildInjectionScript(fp) {
         try { nativeSource.set(original, existing.nativeText || ('function ' + (original.name || key) + '() { [native code] }')); } catch (_) {}
         return original;
       }
-      const replacement = nativeLike(factory(original), original);
+      const rawFn = factory(original);
+      let replacement;
+      const safeWrapper = function(...args) {
+        try {
+          return rawFn.apply(this, args);
+        } catch (err) {
+          stripStackFrame(err, replacement, key);
+          throw cleanStack(err, key);
+        }
+      };
+      replacement = nativeLike(safeWrapper, original, key, original.length);
       Object.defineProperty(proto, key, {
         configurable: true,
         enumerable: Object.getOwnPropertyDescriptor(proto, key)?.enumerable || false,
@@ -2061,12 +2498,13 @@ function buildInjectionScript(fp) {
   } catch (_) {}
 
   // --- navigator (non-UA fields; UA handled by uaScript) ---
+  const FROZEN_LANGUAGES = Object.freeze(Array.isArray(CFG.languages) ? [...CFG.languages] : ["en-US"]);
   const navPatch = {
     platform: { get: () => CFG.platform },
     maxTouchPoints: { get: () => CFG.maxTouchPoints },
     vendor: { get: () => CFG.vendor },
-    languages: { get: () => Object.freeze([...CFG.languages]) },
-    language: { get: () => CFG.languages[0] || "en-US" },
+    languages: { get: () => FROZEN_LANGUAGES },
+    language: { get: () => FROZEN_LANGUAGES[0] || "en-US" },
     webdriver: { get: () => false },
   };
   if (CFG.hardwareConcurrency != null) navPatch.hardwareConcurrency = { get: () => CFG.hardwareConcurrency };
@@ -2095,6 +2533,288 @@ function buildInjectionScript(fp) {
       }
     }
   } catch (_) {}
+
+  // --- Persona platform guards (iOS, Android, Mobile, Linux) ---
+  const isIosPersona = CFG.os === "ios" || CFG.platform === "iPhone" || CFG.mobileDevice?.os === "ios";
+  const isAndroidPersona = CFG.os === "android" || CFG.mobileDevice?.os === "android";
+  const isMobilePersona = Boolean(CFG.mobile || isIosPersona || isAndroidPersona);
+
+  if (isIosPersona) {
+    try {
+      if (typeof Navigator !== "undefined" && Navigator.prototype) {
+        delete Navigator.prototype.userAgentData;
+        delete Navigator.prototype.connection;
+        delete Navigator.prototype.getBattery;
+        delete Navigator.prototype.usb;
+        delete Navigator.prototype.hid;
+        delete Navigator.prototype.bluetooth;
+        delete Navigator.prototype.serial;
+      }
+      if (typeof navigator !== "undefined") {
+        delete navigator.userAgentData;
+        delete navigator.connection;
+        delete navigator.getBattery;
+        delete navigator.usb;
+        delete navigator.hid;
+        delete navigator.bluetooth;
+        delete navigator.serial;
+      }
+      if (typeof window !== "undefined") {
+        if ("NavigatorUAData" in window) delete window.NavigatorUAData;
+        if ("NetworkInformation" in window) delete window.NetworkInformation;
+        if ("BatteryManager" in window) delete window.BatteryManager;
+        if ("USB" in window) delete window.USB;
+        if ("HID" in window) delete window.HID;
+        if ("Bluetooth" in window) delete window.Bluetooth;
+        if ("Serial" in window) delete window.Serial;
+        delete window.chrome;
+        try { delete Window.prototype.chrome; } catch (_) {}
+        try { delete Object.getPrototypeOf(window).chrome; } catch (_) {}
+      }
+    } catch (_) {}
+    if (typeof window !== "undefined" && typeof window.GestureEvent === "undefined") {
+      try {
+        const BaseEvent = typeof UIEvent !== "undefined" ? UIEvent : Event;
+        const FakeGestureEvent = function GestureEvent(type, eventInitDict) {
+          if (!new.target) throw new TypeError("Failed to construct 'GestureEvent': Please use the 'new' operator.");
+          return Reflect.construct(BaseEvent, [type, eventInitDict], new.target);
+        };
+        FakeGestureEvent.prototype = Object.create(BaseEvent.prototype, {
+          constructor: { value: FakeGestureEvent, writable: true, configurable: true },
+          scale: { value: 0, writable: true, configurable: true, enumerable: true },
+          rotation: { value: 0, writable: true, configurable: true, enumerable: true },
+          [Symbol.toStringTag]: { value: "GestureEvent", configurable: true },
+        });
+        Object.defineProperty(FakeGestureEvent, "prototype", { writable: false, enumerable: false, configurable: false });
+        nativeLike(FakeGestureEvent, null, "GestureEvent", 1, true);
+        nativeSource.set(FakeGestureEvent, "function GestureEvent() { [native code] }");
+        Object.defineProperty(window, "GestureEvent", {
+          configurable: true,
+          writable: true,
+          enumerable: false,
+          value: FakeGestureEvent,
+        });
+      } catch (_) {}
+    }
+    if (typeof MediaSource !== "undefined" && typeof MediaSource.isTypeSupported === "function") {
+      const origIsSupported = MediaSource.isTypeSupported;
+      const patchedIsSupported = function isTypeSupported(type) {
+        const t = String(type || "").toLowerCase();
+        if (t.includes("webm")) return false;
+        return origIsSupported.call(this, type);
+      };
+      nativeLike(patchedIsSupported, origIsSupported, "isTypeSupported", 1);
+      try {
+        Object.defineProperty(MediaSource, "isTypeSupported", {
+          configurable: true, enumerable: true, writable: true, value: patchedIsSupported,
+        });
+      } catch (_) {}
+    }
+    if (typeof HTMLMediaElement !== "undefined" && HTMLMediaElement.prototype && HTMLMediaElement.prototype.canPlayType) {
+      const origCanPlay = HTMLMediaElement.prototype.canPlayType;
+      const patchedCanPlay = function canPlayType(type) {
+        const t = String(type || "").toLowerCase();
+        if (t.includes("webm")) return "";
+        return origCanPlay.call(this, type);
+      };
+      nativeLike(patchedCanPlay, origCanPlay, "canPlayType", 1);
+      try {
+        Object.defineProperty(HTMLMediaElement.prototype, "canPlayType", {
+          configurable: true, enumerable: true, writable: true, value: patchedCanPlay,
+        });
+      } catch (_) {}
+    }
+    if (typeof CSS !== "undefined" && typeof CSS.supports === "function") {
+      const origSupports = CSS.supports;
+      const patchedSupports = function supports(prop, val) {
+        if (arguments.length === 2) {
+          const p = String(prop || "").trim().toLowerCase();
+          if (p === "-webkit-touch-callout") {
+            const v = String(val || "").trim().toLowerCase();
+            return v === "none" || v === "default";
+          }
+        } else if (arguments.length === 1) {
+          const s = String(prop || "").toLowerCase();
+          if (s.includes("-webkit-touch-callout")) return true;
+        }
+        return origSupports.apply(this, arguments);
+      };
+      nativeLike(patchedSupports, origSupports, "supports", 2);
+      try {
+        Object.defineProperty(CSS, "supports", {
+          configurable: true, enumerable: true, writable: true, value: patchedSupports,
+        });
+      } catch (_) {}
+    }
+  }
+
+  if (isMobilePersona) {
+    try {
+      const emptyPlugins = Object.create(typeof PluginArray !== "undefined" ? PluginArray.prototype : Object.prototype);
+      Object.defineProperty(emptyPlugins, "length", { value: 0, configurable: true, enumerable: false, writable: false });
+      const emptyMimeTypes = Object.create(typeof MimeTypeArray !== "undefined" ? MimeTypeArray.prototype : Object.prototype);
+      Object.defineProperty(emptyMimeTypes, "length", { value: 0, configurable: true, enumerable: false, writable: false });
+
+      if (typeof PluginArray !== "undefined" && PluginArray.prototype) {
+        if (PluginArray.prototype.item) {
+          const origItem = PluginArray.prototype.item;
+          replaceMethod(PluginArray.prototype, "item", () => function item(index) {
+            if (!this || this === PluginArray.prototype) throw new TypeError("Illegal invocation");
+            if (this === emptyPlugins) return null;
+            return origItem.apply(this, arguments);
+          });
+        }
+        if (PluginArray.prototype.namedItem) {
+          const origNamedItem = PluginArray.prototype.namedItem;
+          replaceMethod(PluginArray.prototype, "namedItem", () => function namedItem(name) {
+            if (!this || this === PluginArray.prototype) throw new TypeError("Illegal invocation");
+            if (this === emptyPlugins) return null;
+            return origNamedItem.apply(this, arguments);
+          });
+        }
+      }
+
+      if (typeof MimeTypeArray !== "undefined" && MimeTypeArray.prototype) {
+        if (MimeTypeArray.prototype.item) {
+          const origItem = MimeTypeArray.prototype.item;
+          replaceMethod(MimeTypeArray.prototype, "item", () => function item(index) {
+            if (!this || this === MimeTypeArray.prototype) throw new TypeError("Illegal invocation");
+            if (this === emptyMimeTypes) return null;
+            return origItem.apply(this, arguments);
+          });
+        }
+        if (MimeTypeArray.prototype.namedItem) {
+          const origNamedItem = MimeTypeArray.prototype.namedItem;
+          replaceMethod(MimeTypeArray.prototype, "namedItem", () => function namedItem(name) {
+            if (!this || this === MimeTypeArray.prototype) throw new TypeError("Illegal invocation");
+            if (this === emptyMimeTypes) return null;
+            return origNamedItem.apply(this, arguments);
+          });
+        }
+      }
+
+      if (typeof Navigator !== "undefined" && Navigator.prototype) {
+        const emptyPluginsGetter = makeNativeGetter("plugins", () => emptyPlugins, "navigator");
+        Object.defineProperty(Navigator.prototype, "plugins", {
+          configurable: true, enumerable: true, get: emptyPluginsGetter, set: undefined,
+        });
+        const emptyMimeTypesGetter = makeNativeGetter("mimeTypes", () => emptyMimeTypes, "navigator");
+        Object.defineProperty(Navigator.prototype, "mimeTypes", {
+          configurable: true, enumerable: true, get: emptyMimeTypesGetter, set: undefined,
+        });
+        const pdfGetter = makeNativeGetter("pdfViewerEnabled", () => false, "navigator");
+        Object.defineProperty(Navigator.prototype, "pdfViewerEnabled", {
+          configurable: true, enumerable: true, get: pdfGetter, set: undefined,
+        });
+      }
+      if (typeof navigator !== "undefined") {
+        try { delete navigator.plugins; } catch (_) {}
+        try { delete navigator.mimeTypes; } catch (_) {}
+        try { delete navigator.pdfViewerEnabled; } catch (_) {}
+      }
+    } catch (_) {}
+
+    if (typeof ScreenOrientation !== "undefined" && ScreenOrientation.prototype && ScreenOrientation.prototype.lock) {
+      const origLock = ScreenOrientation.prototype.lock;
+      const patchedLock = function lock(orientation) {
+        if (!document.fullscreenElement) {
+          return Promise.reject(new DOMException("screen.orientation.lock() is only available in fullscreen mode.", "SecurityError"));
+        }
+        return origLock.apply(this, arguments);
+      };
+      nativeLike(patchedLock, origLock, "lock", 1);
+      try {
+        Object.defineProperty(ScreenOrientation.prototype, "lock", {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: patchedLock,
+        });
+      } catch (_) {}
+    }
+  }
+
+  const targetClaimedOs = String(CFG.os || "").toLowerCase();
+  if (targetClaimedOs === "linux" && typeof MediaCapabilities !== "undefined" && MediaCapabilities.prototype && MediaCapabilities.prototype.decodingInfo) {
+    const origDecodingInfo = MediaCapabilities.prototype.decodingInfo;
+    const patchedDecodingInfo = function decodingInfo(configuration) {
+      const p = origDecodingInfo.apply(this, arguments);
+      return p.then((res) => {
+        try {
+          const c = String(configuration?.video?.contentType || "").toLowerCase();
+          if (c.includes("hvc1") || c.includes("hev1")) {
+            return {
+              supported: res.supported,
+              smooth: res.smooth,
+              powerEfficient: false,
+            };
+          }
+        } catch (_) {}
+        return res;
+      });
+    };
+    nativeLike(patchedDecodingInfo, origDecodingInfo, "decodingInfo", 1);
+    try {
+      Object.defineProperty(MediaCapabilities.prototype, "decodingInfo", {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: patchedDecodingInfo,
+      });
+    } catch (_) {}
+  }
+
+  // --- Keyboard Layout side-channel shielding (navigator.keyboard.getLayoutMap) ---
+  if (typeof Keyboard !== "undefined" && Keyboard.prototype && typeof Keyboard.prototype.getLayoutMap === "function") {
+    const US_KEYBOARD_LAYOUT = {
+      KeyA: "a", KeyB: "b", KeyC: "c", KeyD: "d", KeyE: "e", KeyF: "f", KeyG: "g", KeyH: "h",
+      KeyI: "i", KeyJ: "j", KeyK: "k", KeyL: "l", KeyM: "m", KeyN: "n", KeyO: "o", KeyP: "p",
+      KeyQ: "q", KeyR: "r", KeyS: "s", KeyT: "t", KeyU: "u", KeyV: "v", KeyW: "w", KeyX: "x",
+      KeyY: "y", KeyZ: "z",
+      Digit0: "0", Digit1: "1", Digit2: "2", Digit3: "3", Digit4: "4",
+      Digit5: "5", Digit6: "6", Digit7: "7", Digit8: "8", Digit9: "9",
+      Backquote: String.fromCharCode(96), Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]",
+      Backslash: String.fromCharCode(92), Semicolon: ";", Quote: String.fromCharCode(39), Comma: ",", Period: ".", Slash: "/",
+      IntlBackslash: "§",
+    };
+    replaceMethod(Keyboard.prototype, "getLayoutMap", (origGetLayoutMap) => async function getLayoutMap() {
+      const realMap = await origGetLayoutMap.call(this);
+      if (!realMap || typeof realMap.get !== "function") return realMap;
+      const targetLayout = US_KEYBOARD_LAYOUT;
+      const origGet = realMap.get.bind(realMap);
+      const origHas = realMap.has.bind(realMap);
+      realMap.get = nativeLike(function get(key) {
+        if (key in targetLayout) return targetLayout[key];
+        return origGet(key);
+      }, realMap.get, "get", 1);
+      realMap.has = nativeLike(function has(key) {
+        if (key in targetLayout) return true;
+        return origHas(key);
+      }, realMap.has, "has", 1);
+      realMap.entries = nativeLike(function* entries() {
+        for (const [k, v] of Object.entries(targetLayout)) {
+          yield [k, v];
+        }
+      }, realMap.entries, "entries", 0);
+      realMap.keys = nativeLike(function* keys() {
+        for (const k of Object.keys(targetLayout)) {
+          yield k;
+        }
+      }, realMap.keys, "keys", 0);
+      realMap.values = nativeLike(function* values() {
+        for (const v of Object.values(targetLayout)) {
+          yield v;
+        }
+      }, realMap.values, "values", 0);
+      realMap.forEach = nativeLike(function forEach(callback, thisArg) {
+        for (const [k, v] of Object.entries(targetLayout)) {
+          callback.call(thisArg, v, k, realMap);
+        }
+      }, realMap.forEach, "forEach", 1);
+      realMap[Symbol.iterator] = realMap.entries;
+      return realMap;
+    });
+  }
 
   // --- permissions consistency (Notification.permission vs permissions.query) ---
   try {
@@ -2131,21 +2851,38 @@ function buildInjectionScript(fp) {
   // --- window.chrome presence ---
   try {
     if (typeof window !== "undefined") {
-      if (!window.chrome) window.chrome = {};
-      if (!window.chrome.app) {
-        const noop = () => {};
-        window.chrome.app = {
-          isInstalled: false,
-          InstallState: { DISABLED: "disabled", INSTALLED: "installed", NOT_INSTALLED: "not_installed" },
-          RunningState: { CANNOT_RUN: "cannot_run", READY_TO_RUN: "ready_to_run", RUNNING: "running" },
-          getDetails: nativeLike(noop, null, "getDetails", 0),
-          getIsInstalled: nativeLike(() => false, null, "getIsInstalled", 0),
-          installState: nativeLike((cb) => { if (typeof cb === 'function') cb('not_installed'); }, null, "installState", 1),
-          runningState: nativeLike(() => "cannot_run", null, "runningState", 0),
-        };
+      if (isIosPersona) {
+        try { delete window.chrome; } catch (_) {}
+        try { delete Window.prototype.chrome; } catch (_) {}
+        try { delete Object.getPrototypeOf(window).chrome; } catch (_) {}
+        if (typeof window.chrome !== "undefined") {
+          try { delete window.chrome.app; } catch (_) {}
+          try { delete window.chrome.loadTimes; } catch (_) {}
+          try { delete window.chrome.csi; } catch (_) {}
+          try { window.chrome = undefined; } catch (_) {}
+        }
+      } else if (isAndroidPersona) {
+        if (!window.chrome) window.chrome = {};
+        try { delete window.chrome.app; } catch (_) {}
+        try { delete window.chrome.loadTimes; } catch (_) {}
+        try { delete window.chrome.csi; } catch (_) {}
+      } else {
+        if (!window.chrome) window.chrome = {};
+        if (!window.chrome.app) {
+          const noop = () => {};
+          window.chrome.app = {
+            isInstalled: false,
+            InstallState: { DISABLED: "disabled", INSTALLED: "installed", NOT_INSTALLED: "not_installed" },
+            RunningState: { CANNOT_RUN: "cannot_run", READY_TO_RUN: "ready_to_run", RUNNING: "running" },
+            getDetails: nativeLike(noop, null, "getDetails", 0),
+            getIsInstalled: nativeLike(() => false, null, "getIsInstalled", 0),
+            installState: nativeLike((cb) => { if (typeof cb === 'function') cb('not_installed'); }, null, "installState", 1),
+            runningState: nativeLike(() => "cannot_run", null, "runningState", 0),
+          };
+        }
+        try { delete window.chrome.loadTimes; } catch (_) {}
+        try { delete window.chrome.csi; } catch (_) {}
       }
-      // Modern Chromium (v117+) has completely removed chrome.loadTimes and chrome.csi.
-      // Retaining those obsolete mocks is an instant signature of legacy puppeteer-extra-plugin-stealth.
     }
   } catch (_) {}
 
@@ -2291,7 +3028,12 @@ function buildInjectionScript(fp) {
         }
         return Reflect.construct(OrigDateTimeFormat, [locales, opts], new.target);
       };
-      PatchedDateTimeFormat.prototype = DateTimeFormatProto;
+      Object.defineProperty(PatchedDateTimeFormat, 'prototype', {
+        value: DateTimeFormatProto,
+        writable: false,
+        enumerable: false,
+        configurable: false,
+      });
       // Without this the prototype's constructor still points at the original, so the one-line
       // check Intl.DateTimeFormat.prototype.constructor === Intl.DateTimeFormat returns false.
       try {
@@ -2315,6 +3057,31 @@ function buildInjectionScript(fp) {
         if (!isFinite(minutes)) return NaN;
         const whole = Math.trunc(minutes);
         return whole === 0 ? 0 : whole;
+      });
+
+      subWindowSyncHooks.push((subWin) => {
+        try {
+          if (!subWin || !subWin.Date || !subWin.Intl) return;
+          subWin.Intl.DateTimeFormat = PatchedDateTimeFormat;
+          subWin.Date = PatchedDate;
+          if (subWin.Date.prototype) {
+            replaceMethod(subWin.Date.prototype, 'getTimezoneOffset', () => function getTimezoneOffset() {
+              const minutes = getOffsetMinutes(asDate(this));
+              if (!isFinite(minutes)) return NaN;
+              const whole = Math.trunc(minutes);
+              return whole === 0 ? 0 : whole;
+            });
+            replaceMethod(subWin.Date.prototype, 'toString', () => function toString() {
+              return formatTzDate(asDate(this)).full;
+            });
+            replaceMethod(subWin.Date.prototype, 'toDateString', () => function toDateString() {
+              return formatTzDate(asDate(this)).dateOnly;
+            });
+            replaceMethod(subWin.Date.prototype, 'toTimeString', () => function toTimeString() {
+              return formatTzDate(asDate(this)).timeOnly;
+            });
+          }
+        } catch (_) {}
       });
 
       const formatTzDate = (date) => {
@@ -2532,18 +3299,23 @@ function buildInjectionScript(fp) {
           );
           return Reflect.construct(OrigDate, [localToUtc(wall)], new.target);
         };
-        PatchedDate.prototype = OrigDate.prototype;
+        Object.defineProperty(PatchedDate, 'prototype', {
+          value: OrigDate.prototype,
+          writable: false,
+          enumerable: false,
+          configurable: false,
+        });
         try {
           Object.defineProperty(OrigDate.prototype, 'constructor', {
             configurable: true, writable: true, enumerable: false, value: PatchedDate,
           });
         } catch (_) {}
-        PatchedDate.UTC = OrigDate.UTC;
         PatchedDate.now = OrigDate.now;
         PatchedDate.parse = nativeLike(
           function parse(value) { return parseLocal(value); },
           OrigDate.parse, 'parse', 1
         );
+        PatchedDate.UTC = OrigDate.UTC;
         nativeLike(PatchedDate, OrigDate, 'Date', 7, true);
         globalThis.Date = PatchedDate;
       } catch (_) {}
@@ -2615,6 +3387,64 @@ function buildInjectionScript(fp) {
             try { if (result && typeof result.then === 'function') return result.then(markRendered); } catch (_) {}
             return result;
           });
+        }
+        const audioClaimedOs = String(CFG.os || '').toLowerCase();
+        const isWinAudio = audioClaimedOs.includes('win');
+        const isLinuxAudio = audioClaimedOs.includes('linux');
+
+        if (isWinAudio || isLinuxAudio) {
+          const mockSampleRate = 48000;
+          const mockBaseLatency = 512 / 48000;
+
+          for (const ctor of [targetWin.AudioContext, targetWin.webkitAudioContext].filter(Boolean)) {
+            if (ctor && ctor.prototype) {
+              const proto = ctor.prototype;
+              const baseProto = targetWin.BaseAudioContext?.prototype;
+              const descRate = Object.getOwnPropertyDescriptor(proto, 'sampleRate') || (baseProto && Object.getOwnPropertyDescriptor(baseProto, 'sampleRate'));
+              const descLat = Object.getOwnPropertyDescriptor(proto, 'baseLatency');
+
+              if (descRate && typeof descRate.get === 'function') {
+                const origGetRate = descRate.get;
+                const rateGetter = function sampleRate() {
+                  if (!this || this === proto || (baseProto && this === baseProto)) {
+                    throw new TypeError('Illegal invocation');
+                  }
+                  if (targetWin.OfflineAudioContext && this instanceof targetWin.OfflineAudioContext) {
+                    return origGetRate.call(this);
+                  }
+                  return mockSampleRate;
+                };
+                const cleanRateGetter = nativeGetter('sampleRate', rateGetter);
+                try {
+                  Object.defineProperty(proto, 'sampleRate', {
+                    configurable: true,
+                    enumerable: descRate.enumerable !== false,
+                    get: cleanRateGetter,
+                    set: undefined,
+                  });
+                } catch (_) {}
+              }
+
+              if (descLat && typeof descLat.get === 'function') {
+                const origGetLat = descLat.get;
+                const latGetter = function baseLatency() {
+                  if (!this || this === proto || (baseProto && this === baseProto)) {
+                    throw new TypeError('Illegal invocation');
+                  }
+                  return mockBaseLatency;
+                };
+                const cleanLatGetter = nativeGetter('baseLatency', latGetter);
+                try {
+                  Object.defineProperty(proto, 'baseLatency', {
+                    configurable: true,
+                    enumerable: descLat.enumerable !== false,
+                    get: cleanLatGetter,
+                    set: undefined,
+                  });
+                } catch (_) {}
+              }
+            }
+          }
         }
         try {
           const completionProto = targetWin.OfflineAudioCompletionEvent ? targetWin.OfflineAudioCompletionEvent.prototype : null;
@@ -2996,26 +3826,45 @@ function buildInjectionScript(fp) {
 
       sanitizeElementFontScope = (element, callback) => {
         const modified = [];
-        let curr = element;
-        try {
-          while (curr && curr.nodeType === 1) {
-            let style = null;
-            let originalInline = '';
-            try { style = curr.style; originalInline = style ? style.fontFamily : ''; } catch (_) {}
-            let originalAttr = null;
-            try { originalAttr = curr.getAttribute ? curr.getAttribute('font-family') : null; } catch (_) {}
-            const raw = originalInline || originalAttr || '';
-            if (raw && familyHasForeign(raw)) {
-              const clean = sanitizeFamilyOnly(raw);
-              if (style) {
-                style.fontFamily = clean;
-                modified.push({ style, originalInline });
-              } else if (curr.setAttribute) {
-                curr.setAttribute('font-family', clean);
-                modified.push({ element: curr, originalAttr });
-              }
+        const checkNode = (node) => {
+          if (!node || node.nodeType !== 1) return;
+          let style = null;
+          let originalInline = '';
+          try { style = node.style; originalInline = style ? style.fontFamily : ''; } catch (_) {}
+          let originalAttr = null;
+          try { originalAttr = node.getAttribute ? node.getAttribute('font-family') : null; } catch (_) {}
+          const raw = originalInline || originalAttr || '';
+          let computedFont = '';
+          try {
+            if (typeof globalThis.getComputedStyle === 'function') {
+              const cs = globalThis.getComputedStyle(node);
+              computedFont = cs ? (cs.fontFamily || '') : '';
             }
-            curr = curr.parentElement;
+          } catch (_) {}
+          const targetFont = (raw && familyHasForeign(raw)) ? raw : (computedFont && familyHasForeign(computedFont) ? computedFont : '');
+          if (targetFont) {
+            const clean = sanitizeFamilyOnly(targetFont) || 'monospace';
+            if (style) {
+              style.setProperty('font-family', clean, 'important');
+              modified.push({ style, originalInline });
+            } else if (node.setAttribute) {
+              node.setAttribute('font-family', clean);
+              modified.push({ element: node, originalAttr });
+            }
+          }
+        };
+
+        try {
+          let curr = element;
+          while (curr && curr.nodeType === 1) {
+            checkNode(curr);
+            curr = curr.parentElement || (curr.parentNode && curr.parentNode.nodeType === 1 ? curr.parentNode : null);
+          }
+          if (element && element.getElementsByTagName) {
+            const tspans = element.getElementsByTagName('tspan');
+            for (let i = 0; i < tspans.length; i++) checkNode(tspans[i]);
+            const textPaths = element.getElementsByTagName('textPath');
+            for (let i = 0; i < textPaths.length; i++) checkNode(textPaths[i]);
           }
           return callback();
         } finally {
@@ -3199,6 +4048,11 @@ function buildInjectionScript(fp) {
             Object.defineProperty(forced, 'media', {
               configurable: true, enumerable: true, get: nativeLike(function media() { return String(query); }, null, 'media', 0),
             });
+            if (forced.matches !== matches) {
+              Object.defineProperty(forced, 'matches', {
+                configurable: true, enumerable: true, get: nativeLike(function matches() { return matches; }, null, 'matches', 0),
+              });
+            }
             return forced;
           } catch (_) {}
           try {
@@ -3213,7 +4067,7 @@ function buildInjectionScript(fp) {
             const q = String(query || "").toLowerCase();
             const sw = dynamicScreen.width();
             const sh = dynamicScreen.height();
-            const mDevW = q.match(/\((min-|max-)?device-width:\s*([\d.]+)px\)/);
+            const mDevW = q.match(/\\((min-|max-)?device-width:\\s*([\\d.]+)px\\)/);
             if (mDevW) {
               const type = mDevW[1] || "";
               const val = parseFloat(mDevW[2]);
@@ -3223,7 +4077,7 @@ function buildInjectionScript(fp) {
               else matches = Math.abs(sw - val) < 1;
               return spoofMql(query, matches);
             }
-            const mDevH = q.match(/\((min-|max-)?device-height:\s*([\d.]+)px\)/);
+            const mDevH = q.match(/\\((min-|max-)?device-height:\\s*([\\d.]+)px\\)/);
             if (mDevH) {
               const type = mDevH[1] || "";
               const val = parseFloat(mDevH[2]);
@@ -3233,7 +4087,7 @@ function buildInjectionScript(fp) {
               else matches = Math.abs(sh - val) < 1;
               return spoofMql(query, matches);
             }
-            const mDpr = q.match(/\(-webkit-(min-|max-)?device-pixel-ratio:\s*([\d.]+)\)/);
+            const mDpr = q.match(/\\(-webkit-(min-|max-)?device-pixel-ratio:\\s*([\\d.]+)\\)/);
             if (mDpr) {
               const type = mDpr[1] || "";
               const val = parseFloat(mDpr[2]);
@@ -3244,7 +4098,7 @@ function buildInjectionScript(fp) {
               else matches = Math.abs(curDpr - val) < 0.01;
               return spoofMql(query, matches);
             }
-            const mRes = q.match(/\((min-|max-)?resolution:\s*([\d.]+)(dppx|dpi)\)/);
+            const mRes = q.match(/\\((min-|max-)?resolution:\\s*([\\d.]+)(dppx|dpi)\\)/);
             if (mRes) {
               const type = mRes[1] || "";
               const val = parseFloat(mRes[2]);
@@ -3299,38 +4153,169 @@ function buildInjectionScript(fp) {
             }
           }
         }
-        if (!subWin.chrome && typeof window !== "undefined" && window.chrome) {
+        if (isIosPersona) {
+          try { delete subWin.chrome; } catch (_) {}
+          try { delete subWin.Window?.prototype?.chrome; } catch (_) {}
+        } else if (subWin.chrome) {
+          try { delete subWin.chrome.loadTimes; } catch (_) {}
+          try { delete subWin.chrome.csi; } catch (_) {}
+          if (isAndroidPersona) {
+            try { delete subWin.chrome.app; } catch (_) {}
+          }
+        } else if (!subWin.chrome && typeof window !== "undefined" && window.chrome) {
           try { subWin.chrome = window.chrome; } catch (_) {}
+        }
+        if (subWin.Function && subWin.Function.prototype) {
+          try {
+            const origSubToString = subWin.Function.prototype.toString;
+            const subHolder = {
+              toString(...args) {
+                if (args[0] === BRIDGE_TOKEN) {
+                  if (nativeSource.has(this)) return { bridge: true, nativeText: nativeSource.get(this) };
+                  try {
+                    const inherited = origSubToString.call(this, ...args);
+                    if (inherited && typeof inherited === "object" && inherited.bridge === true) return inherited;
+                  } catch (_) {}
+                  return null;
+                }
+                if (nativeSource.has(this)) return nativeSource.get(this);
+                try {
+                  const inherited = origSubToString.call(this, ...args);
+                  if (inherited && typeof inherited === "object" && inherited.bridge === true && inherited.nativeText) {
+                    return inherited.nativeText;
+                  }
+                } catch (_) {}
+                return origSubToString.call(this, ...args);
+              }
+            };
+            const patchedSubToString = subHolder.toString;
+            nativeSource.set(patchedSubToString, "function toString() { [native code] }");
+            Object.defineProperty(subWin.Function.prototype, "toString", {
+              configurable: true,
+              writable: true,
+              value: patchedSubToString,
+            });
+          } catch (_) {}
+        }
+        if (isIosPersona) {
+          try {
+            if (subNav) {
+              delete subNav.userAgentData;
+              delete subNav.connection;
+              delete subNav.getBattery;
+              delete subNav.usb;
+              delete subNav.hid;
+              delete subNav.bluetooth;
+              delete subNav.serial;
+            }
+            if (subWin.navigator) {
+              delete subWin.navigator.userAgentData;
+              delete subWin.navigator.connection;
+              delete subWin.navigator.getBattery;
+              delete subWin.navigator.usb;
+              delete subWin.navigator.hid;
+              delete subWin.navigator.bluetooth;
+              delete subWin.navigator.serial;
+            }
+            if ('NavigatorUAData' in subWin) delete subWin.NavigatorUAData;
+            delete subWin.NetworkInformation;
+            delete subWin.BatteryManager;
+            delete subWin.USB;
+            delete subWin.HID;
+            delete subWin.Bluetooth;
+            delete subWin.Serial;
+            delete subWin.chrome;
+            if (typeof subWin.GestureEvent === "undefined" && typeof window.GestureEvent !== "undefined") {
+              subWin.GestureEvent = window.GestureEvent;
+            }
+          } catch (_) {}
+        }
+        if (isMobilePersona && subNav) {
+          try {
+            const emptyPlugins = Object.create(typeof PluginArray !== "undefined" ? PluginArray.prototype : Object.prototype);
+            Object.defineProperty(emptyPlugins, "length", { value: 0, configurable: true, enumerable: false, writable: false });
+            const emptyMimeTypes = Object.create(typeof MimeTypeArray !== "undefined" ? MimeTypeArray.prototype : Object.prototype);
+            Object.defineProperty(emptyMimeTypes, "length", { value: 0, configurable: true, enumerable: false, writable: false });
+            const pGetter = makeNativeGetter("plugins", () => emptyPlugins, "navigator");
+            Object.defineProperty(subNav, "plugins", { configurable: true, enumerable: true, get: pGetter, set: undefined });
+            const mGetter = makeNativeGetter("mimeTypes", () => emptyMimeTypes, "navigator");
+            Object.defineProperty(subNav, "mimeTypes", { configurable: true, enumerable: true, get: mGetter, set: undefined });
+            const pdfG = makeNativeGetter("pdfViewerEnabled", () => false, "navigator");
+            Object.defineProperty(subNav, "pdfViewerEnabled", { configurable: true, enumerable: true, get: pdfG, set: undefined });
+          } catch (_) {}
         }
         if (subWin.HTMLIFrameElement) {
           try {
             const desc = Object.getOwnPropertyDescriptor(subWin.HTMLIFrameElement.prototype, "contentWindow");
             if (desc && typeof desc.get === "function") {
               const origCW = desc.get;
+              let patchedSubCW;
+              const subHolderCW = {
+                get contentWindow() {
+                  try {
+                    const nestedWin = origCW.call(this);
+                    if (nestedWin) patchSubWindow(nestedWin);
+                    return nestedWin;
+                  } catch (err) {
+                    stripStackFrame(err, patchedSubCW, "get contentWindow");
+                    throw err;
+                  }
+                }
+              };
+              patchedSubCW = Object.getOwnPropertyDescriptor(subHolderCW, "contentWindow").get;
+              try { Object.defineProperty(patchedSubCW, "name", { configurable: true, value: "get contentWindow" }); } catch (_) {}
+              try { Object.defineProperty(patchedSubCW, "length", { configurable: true, value: 0 }); } catch (_) {}
+              nativeSource.set(patchedSubCW, "function get contentWindow() { [native code] }");
               Object.defineProperty(subWin.HTMLIFrameElement.prototype, "contentWindow", {
                 configurable: true,
                 enumerable: true,
-                get: nativeGetter("contentWindow", function() {
-                  const nestedWin = origCW.call(this);
-                  if (nestedWin) patchSubWindow(nestedWin);
-                  return nestedWin;
-                }),
+                get: patchedSubCW,
               });
             }
             const docDesc = Object.getOwnPropertyDescriptor(subWin.HTMLIFrameElement.prototype, "contentDocument");
             if (docDesc && typeof docDesc.get === "function") {
               const origCD = docDesc.get;
+              let patchedSubCD;
+              const subHolderCD = {
+                get contentDocument() {
+                  try {
+                    const nestedDoc = origCD.call(this);
+                    if (nestedDoc && nestedDoc.defaultView) patchSubWindow(nestedDoc.defaultView);
+                    return nestedDoc;
+                  } catch (err) {
+                    stripStackFrame(err, patchedSubCD, "get contentDocument");
+                    throw err;
+                  }
+                }
+              };
+              patchedSubCD = Object.getOwnPropertyDescriptor(subHolderCD, "contentDocument").get;
+              try { Object.defineProperty(patchedSubCD, "name", { configurable: true, value: "get contentDocument" }); } catch (_) {}
+              try { Object.defineProperty(patchedSubCD, "length", { configurable: true, value: 0 }); } catch (_) {}
+              nativeSource.set(patchedSubCD, "function get contentDocument() { [native code] }");
               Object.defineProperty(subWin.HTMLIFrameElement.prototype, "contentDocument", {
                 configurable: true,
                 enumerable: true,
-                get: nativeGetter("contentDocument", function() {
-                  const nestedDoc = origCD.call(this);
-                  if (nestedDoc && nestedDoc.defaultView) patchSubWindow(nestedDoc.defaultView);
-                  return nestedDoc;
-                }),
+                get: patchedSubCD,
               });
             }
           } catch (_) {}
+        }
+        if (typeof subWin.open === "function") {
+          const origSubOpen = subWin.open;
+          const origSubDesc = Object.getOwnPropertyDescriptor(subWin, "open");
+          const patchedSubOpen = nativeLike(function open(...args) {
+            const nestedWin = origSubOpen.apply(this, args);
+            if (nestedWin) {
+              try { patchSubWindow(nestedWin); } catch (_) {}
+            }
+            return nestedWin;
+          }, origSubOpen, "open", origSubOpen.length);
+          Object.defineProperty(subWin, "open", {
+            configurable: origSubDesc ? origSubDesc.configurable : true,
+            writable: origSubDesc ? origSubDesc.writable : true,
+            enumerable: origSubDesc ? origSubDesc.enumerable : false,
+            value: patchedSubOpen,
+          });
         }
         for (const hook of subWindowSyncHooks) {
           try { hook(subWin); } catch (_) {}
@@ -3343,11 +4328,23 @@ function buildInjectionScript(fp) {
         const desc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "contentWindow");
         if (desc && typeof desc.get === "function") {
           const origCW = desc.get;
-          const patchedCW = nativeGetter("contentWindow", function() {
-            const subWin = origCW.call(this);
-            if (subWin) patchSubWindow(subWin);
-            return subWin;
-          });
+          let patchedCW;
+          const holderCW = {
+            get contentWindow() {
+              try {
+                const subWin = origCW.call(this);
+                if (subWin) patchSubWindow(subWin);
+                return subWin;
+              } catch (err) {
+                stripStackFrame(err, patchedCW, "get contentWindow");
+                throw err;
+              }
+            }
+          };
+          patchedCW = Object.getOwnPropertyDescriptor(holderCW, "contentWindow").get;
+          try { Object.defineProperty(patchedCW, "name", { configurable: true, value: "get contentWindow" }); } catch (_) {}
+          try { Object.defineProperty(patchedCW, "length", { configurable: true, value: 0 }); } catch (_) {}
+          nativeSource.set(patchedCW, "function get contentWindow() { [native code] }");
           Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
             configurable: true,
             enumerable: true,
@@ -3357,17 +4354,266 @@ function buildInjectionScript(fp) {
         const docDesc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "contentDocument");
         if (docDesc && typeof docDesc.get === "function") {
           const origCD = docDesc.get;
-          const patchedCD = nativeGetter("contentDocument", function() {
-            const subDoc = origCD.call(this);
-            if (subDoc && subDoc.defaultView) patchSubWindow(subDoc.defaultView);
-            return subDoc;
-          });
+          let patchedCD;
+          const holderCD = {
+            get contentDocument() {
+              try {
+                const subDoc = origCD.call(this);
+                if (subDoc && subDoc.defaultView) patchSubWindow(subDoc.defaultView);
+                return subDoc;
+              } catch (err) {
+                stripStackFrame(err, patchedCD, "get contentDocument");
+                throw err;
+              }
+            }
+          };
+          patchedCD = Object.getOwnPropertyDescriptor(holderCD, "contentDocument").get;
+          try { Object.defineProperty(patchedCD, "name", { configurable: true, value: "get contentDocument" }); } catch (_) {}
+          try { Object.defineProperty(patchedCD, "length", { configurable: true, value: 0 }); } catch (_) {}
+          nativeSource.set(patchedCD, "function get contentDocument() { [native code] }");
           Object.defineProperty(HTMLIFrameElement.prototype, "contentDocument", {
             configurable: true,
             enumerable: true,
             get: patchedCD,
           });
         }
+
+        const sboxBootstrap = '<script>(' + String(function(cfg) {
+          try {
+            try {
+              const curScript = document.currentScript;
+              if (curScript && curScript.parentNode) curScript.parentNode.removeChild(curScript);
+            } catch (_) {}
+
+            const sboxNative = new WeakMap();
+            const setSboxNative = (fn, str) => {
+              sboxNative.set(fn, str);
+            };
+
+            const origToString = Function.prototype.toString;
+            const patchedToString = function toString(...args) {
+              if (cfg.bridgeToken && args[0] === cfg.bridgeToken) {
+                if (sboxNative.has(this)) return { bridge: true, nativeText: sboxNative.get(this) };
+                try {
+                  const inherited = origToString.call(this, ...args);
+                  if (inherited && typeof inherited === "object" && inherited.bridge === true) return inherited;
+                } catch (_) {}
+                return null;
+              }
+              if (sboxNative.has(this)) return sboxNative.get(this);
+              return origToString.call(this, ...args);
+            };
+            setSboxNative(patchedToString, "function toString() { [native code] }");
+            try {
+              Object.defineProperty(Function.prototype, "toString", {
+                configurable: true, writable: true, value: patchedToString
+              });
+            } catch (_) {}
+
+            if (typeof Navigator !== "undefined" && Navigator.prototype) {
+              const nav = Navigator.prototype;
+              if (cfg.platform) {
+                const g = () => cfg.platform;
+                setSboxNative(g, "function get platform() { [native code] }");
+                Object.defineProperty(nav, "platform", { configurable: true, enumerable: true, get: g });
+              }
+              if (cfg.hardwareConcurrency != null) {
+                const g = () => cfg.hardwareConcurrency;
+                setSboxNative(g, "function get hardwareConcurrency() { [native code] }");
+                Object.defineProperty(nav, "hardwareConcurrency", { configurable: true, enumerable: true, get: g });
+              }
+              if (cfg.deviceMemory != null) {
+                const g = () => Math.min(8, cfg.deviceMemory);
+                setSboxNative(g, "function get deviceMemory() { [native code] }");
+                Object.defineProperty(nav, "deviceMemory", { configurable: true, enumerable: true, get: g });
+              }
+              if (cfg.userAgent) {
+                const g = () => cfg.userAgent;
+                setSboxNative(g, "function get userAgent() { [native code] }");
+                Object.defineProperty(nav, "userAgent", { configurable: true, enumerable: true, get: g });
+              }
+              if (Array.isArray(cfg.languages)) {
+                const frozen = Object.freeze([...cfg.languages]);
+                const gLangs = () => frozen;
+                const gLang = () => frozen[0] || "en-US";
+                setSboxNative(gLangs, "function get languages() { [native code] }");
+                setSboxNative(gLang, "function get language() { [native code] }");
+                Object.defineProperty(nav, "languages", { configurable: true, enumerable: true, get: gLangs });
+                Object.defineProperty(nav, "language", { configurable: true, enumerable: true, get: gLang });
+              }
+            }
+            if (cfg.screen && typeof Screen !== "undefined" && Screen.prototype) {
+              const scr = Screen.prototype;
+              if (cfg.screen.width) {
+                const g = () => cfg.screen.width;
+                setSboxNative(g, "function get width() { [native code] }");
+                Object.defineProperty(scr, "width", { configurable: true, enumerable: true, get: g });
+              }
+              if (cfg.screen.height) {
+                const g = () => cfg.screen.height;
+                setSboxNative(g, "function get height() { [native code] }");
+                Object.defineProperty(scr, "height", { configurable: true, enumerable: true, get: g });
+              }
+            }
+            if (cfg.timezone && typeof Intl !== "undefined" && Intl.DateTimeFormat) {
+              const targetTz = String(cfg.timezone).trim();
+              const OrigDTF = Intl.DateTimeFormat;
+              const PatchedDTF = function DateTimeFormat(locales, options) {
+                const opts = Object.assign({}, options);
+                if (opts.timeZone === undefined) opts.timeZone = targetTz;
+                return Reflect.construct(OrigDTF, [locales, opts], new.target || PatchedDTF);
+              };
+              PatchedDTF.prototype = OrigDTF.prototype;
+              Object.defineProperty(PatchedDTF, "prototype", { value: OrigDTF.prototype, writable: false, enumerable: false, configurable: false });
+              if (OrigDTF.supportedLocalesOf) PatchedDTF.supportedLocalesOf = OrigDTF.supportedLocalesOf;
+              setSboxNative(PatchedDTF, "function DateTimeFormat() { [native code] }");
+              Intl.DateTimeFormat = PatchedDTF;
+
+              const dtf = new OrigDTF("en-US", { timeZone: targetTz, timeZoneName: "longOffset" });
+              const getOffset = (d) => {
+                try {
+                  const parts = dtf.formatToParts(d);
+                  const p = parts.find(x => x.type === "timeZoneName")?.value || "";
+                  const m = p.match(/^GMT([+-])(\d{2}):(\d{2})$/);
+                  if (!m) return 0;
+                  const sign = m[1] === "+" ? -1 : 1;
+                  return sign * (parseInt(m[2], 10) * 60 + parseInt(m[3], 10));
+                } catch (_) { return 0; }
+              };
+              if (typeof Date !== "undefined" && Date.prototype) {
+                Date.prototype.getTimezoneOffset = function getTimezoneOffset() {
+                  return getOffset(this);
+                };
+                setSboxNative(Date.prototype.getTimezoneOffset, "function getTimezoneOffset() { [native code] }");
+              }
+            }
+            if (cfg.webgl && typeof WebGLRenderingContext !== "undefined" && WebGLRenderingContext.prototype) {
+              const origGetParam = WebGLRenderingContext.prototype.getParameter;
+              WebGLRenderingContext.prototype.getParameter = function getParameter(param) {
+                if (param === 0x9245 && cfg.webgl.vendor) return cfg.webgl.vendor;
+                if (param === 0x9246 && cfg.webgl.renderer) return cfg.webgl.renderer;
+                return origGetParam.call(this, param);
+              };
+              setSboxNative(WebGLRenderingContext.prototype.getParameter, "function getParameter() { [native code] }");
+            }
+          } catch (_) {}
+        }) + ")(" + JSON.stringify({
+          platform: CFG.platform,
+          userAgent: CFG.userAgent,
+          hardwareConcurrency: CFG.hardwareConcurrency,
+          deviceMemory: CFG.deviceMemory,
+          languages: CFG.languages,
+          timezone: CFG.timezone,
+          screen: CFG.screen,
+          webgl: { vendor: CFG.webgl?.vendor, renderer: CFG.webgl?.renderer }, bridgeToken: BRIDGE_TOKEN
+        }) + ");<\/script>";
+
+        const cleanSrcdoc = (val) => {
+          if (typeof val !== "string") return val;
+          const marker = "</script>";
+          const idx = val.indexOf(marker);
+          if (idx !== -1 && val.startsWith("<script>(") && (val.includes(BRIDGE_TOKEN) || val.includes("sboxNative") || val.includes("setSboxNative"))) {
+            return val.slice(idx + marker.length);
+          }
+          return val;
+        };
+
+        const rawSrcdocMap = new WeakMap();
+        const srcdocDesc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "srcdoc");
+        if (srcdocDesc && typeof srcdocDesc.set === "function") {
+          const origSetSrcdoc = srcdocDesc.set;
+          const origGetSrcdoc = srcdocDesc.get;
+          Object.defineProperty(HTMLIFrameElement.prototype, "srcdoc", {
+            configurable: true,
+            enumerable: true,
+            get: nativeGetter("srcdoc", function() {
+              if (rawSrcdocMap.has(this)) return rawSrcdocMap.get(this);
+              return cleanSrcdoc(origGetSrcdoc.call(this));
+            }),
+            set: nativeSetter("srcdoc", function(val) {
+              rawSrcdocMap.set(this, val);
+              let patched = val;
+              try {
+                if (typeof val === "string" && val.length > 0) {
+                  patched = sboxBootstrap + val;
+                }
+              } catch (_) {}
+              return origSetSrcdoc.call(this, patched);
+            }),
+          });
+        }
+        if (typeof Element !== "undefined" && Element.prototype.getAttribute) {
+          const origGetAttribute = Element.prototype.getAttribute;
+          Element.prototype.getAttribute = nativeLike(function getAttribute(name, ...args) {
+            const val = origGetAttribute.call(this, name, ...args);
+            if (String(name).toLowerCase() === "srcdoc") {
+              if (rawSrcdocMap.has(this)) return rawSrcdocMap.get(this);
+              return cleanSrcdoc(val);
+            }
+            return val;
+          }, origGetAttribute, "getAttribute", 1);
+        }
+        if (typeof Element !== "undefined" && Element.prototype.getAttributeNS) {
+          const origGetAttributeNS = Element.prototype.getAttributeNS;
+          Element.prototype.getAttributeNS = nativeLike(function getAttributeNS(ns, name, ...args) {
+            const val = origGetAttributeNS.call(this, ns, name, ...args);
+            if (String(name).toLowerCase() === "srcdoc") {
+              if (rawSrcdocMap.has(this)) return rawSrcdocMap.get(this);
+              return cleanSrcdoc(val);
+            }
+            return val;
+          }, origGetAttributeNS, "getAttributeNS", 2);
+        }
+        if (typeof Element !== "undefined" && Element.prototype.getAttributeNode) {
+          const origGetAttributeNode = Element.prototype.getAttributeNode;
+          Element.prototype.getAttributeNode = nativeLike(function getAttributeNode(name, ...args) {
+            const node = origGetAttributeNode.call(this, name, ...args);
+            if (node && String(name).toLowerCase() === "srcdoc") {
+              const rawVal = rawSrcdocMap.has(this) ? rawSrcdocMap.get(this) : cleanSrcdoc(node.value);
+              try {
+                Object.defineProperty(node, "value", {
+                  configurable: true,
+                  enumerable: true,
+                  get: nativeLike(function value() { return rawVal; }, null, "value", 0),
+                });
+              } catch (_) {}
+            }
+            return node;
+          }, origGetAttributeNode, "getAttributeNode", 1);
+        }
+        if (typeof Element !== "undefined" && Element.prototype.setAttribute) {
+          const origSetAttribute = Element.prototype.setAttribute;
+          Element.prototype.setAttribute = nativeLike(function setAttribute(name, val, ...args) {
+            if (String(name).toLowerCase() === "srcdoc" && typeof HTMLIFrameElement !== "undefined" && this instanceof HTMLIFrameElement) {
+              rawSrcdocMap.set(this, String(val));
+              let patched = val;
+              try {
+                if (typeof val === "string" && val.length > 0) {
+                  patched = sboxBootstrap + val;
+                }
+              } catch (_) {}
+              return origSetAttribute.call(this, name, patched, ...args);
+            }
+            return origSetAttribute.call(this, name, val, ...args);
+          }, origSetAttribute, "setAttribute", 2);
+        }
+      }
+      if (typeof window !== "undefined" && typeof window.open === "function") {
+        const origWindowOpen = window.open;
+        const origDesc = Object.getOwnPropertyDescriptor(window, "open");
+        const patchedWindowOpen = nativeLike(function open(...args) {
+          const subWin = origWindowOpen.apply(this, args);
+          if (subWin) {
+            try { patchSubWindow(subWin); } catch (_) {}
+          }
+          return subWin;
+        }, origWindowOpen, "open", origWindowOpen.length);
+        Object.defineProperty(window, "open", {
+          configurable: origDesc ? origDesc.configurable : true,
+          writable: origDesc ? origDesc.writable : true,
+          enumerable: origDesc ? origDesc.enumerable : false,
+          value: patchedWindowOpen,
+        });
       }
     } catch (_) {}
     // These live on the prototype in a real build. Shadowing them on the instance added own
@@ -3515,7 +4761,7 @@ function buildInjectionScript(fp) {
         return;
       }
       try { patchedCanvasBlockedWindows.add(targetWin); } catch (_) {}
-      const deny = () => { throw new DOMException('Canvas reading is disabled by this profile', 'SecurityError'); };
+      const deny = () => { throw new DOMException('Canvas reading is disabled by permissions policy', 'SecurityError'); };
       try {
         replaceMethod(targetWin.HTMLCanvasElement?.prototype, 'toDataURL', () => deny);
         replaceMethod(targetWin.HTMLCanvasElement?.prototype, 'toBlob', () => function(callback) {
@@ -3524,7 +4770,7 @@ function buildInjectionScript(fp) {
         replaceMethod(targetWin.CanvasRenderingContext2D?.prototype, 'getImageData', () => deny);
         replaceMethod(targetWin.OffscreenCanvasRenderingContext2D?.prototype, 'getImageData', () => deny);
         replaceMethod(targetWin.OffscreenCanvas?.prototype, 'convertToBlob', () => function() {
-          return Promise.reject(new DOMException('Canvas reading is disabled by this profile', 'SecurityError'));
+          return Promise.reject(new DOMException('Canvas reading is disabled by permissions policy', 'SecurityError'));
         });
       } catch (_) {}
     };
@@ -3533,6 +4779,8 @@ function buildInjectionScript(fp) {
   } else if (CFG.canvas && CFG.canvas.mode === 'noise') {
     const mark = Number(CFG.canvas.mark) || 1;
     const rawGetMap = new WeakMap();
+    const noisedImageDataMap = new WeakMap();
+    const ctxLastPutMap = new WeakMap();
 
     const patchedCanvasWindows = new WeakSet();
     const patchCanvasForWindow = (targetWin) => {
@@ -3543,20 +4791,86 @@ function buildInjectionScript(fp) {
       }
       try { patchedCanvasWindows.add(targetWin); } catch (_) {}
       try {
+        const hookGetAndPut = (proto) => {
+          if (!proto) return;
+          if (proto.getImageData) {
+            const originalGet = replaceMethod(proto, 'getImageData', (original) => function getImageData(...args) {
+              const result = original.apply(this, args);
+              try {
+                const lastPut = ctxLastPutMap.get(this);
+                if (lastPut && lastPut.data && result && result.data && result.data.length === lastPut.data.length) {
+                  const sx = args[0] || 0;
+                  const sy = args[1] || 0;
+                  const sw = args[2] || 0;
+                  const sh = args[3] || 0;
+                  if (sx === lastPut.dx && sy === lastPut.dy && sw === lastPut.w && sh === lastPut.h) {
+                    result.data.set(lastPut.data);
+                    noisedImageDataMap.set(result, true);
+                    return result;
+                  }
+                }
+              } catch (_) {}
+              const noised = applyCanvasNoise(result, mark);
+              try { noisedImageDataMap.set(noised, true); } catch (_) {}
+              return noised;
+            });
+            if (originalGet) rawGetMap.set(proto, originalGet);
+          }
+          if (proto.putImageData) {
+            replaceMethod(proto, 'putImageData', (origPut) => function putImageData(imgData, dx, dy, ...rest) {
+              try {
+                if (noisedImageDataMap.has(imgData)) {
+                  ctxLastPutMap.set(this, {
+                    data: imgData.data,
+                    dx: dx | 0,
+                    dy: dy | 0,
+                    w: imgData.width | 0,
+                    h: imgData.height | 0,
+                  });
+                } else {
+                  ctxLastPutMap.delete(this);
+                }
+              } catch (_) {}
+              return origPut.call(this, imgData, dx, dy, ...rest);
+            });
+          }
+          if (proto.measureText) {
+            replaceMethod(proto, 'measureText', (origMeasure) => function measureText(text, ...args) {
+              const tm = origMeasure.call(this, text, ...args);
+              try {
+                const s = String(text || '');
+                let h = 0;
+                for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+                const jitter = ((h % 100) / 10000);
+                return new Proxy(tm, {
+                  get(target, prop, receiver) {
+                    if (prop === 'constructor') return target.constructor;
+                    const val = Reflect.get(target, prop, target);
+                    if (typeof val === 'number') {
+                      if (prop === 'actualBoundingBoxRight') return val + jitter;
+                      if (prop === 'actualBoundingBoxLeft') return val - jitter;
+                      if (prop === 'actualBoundingBoxAscent') return val + (jitter * 0.5);
+                      if (prop === 'actualBoundingBoxDescent') return val - (jitter * 0.5);
+                    }
+                    return typeof val === 'function' ? val.bind(target) : val;
+                  }
+                });
+              } catch (_) {
+                return tm;
+              }
+            });
+          }
+        };
+
         const ctxProto = targetWin.CanvasRenderingContext2D && targetWin.CanvasRenderingContext2D.prototype;
-        if (ctxProto && ctxProto.getImageData) {
-          const originalGet = replaceMethod(ctxProto, 'getImageData', (original) => function getImageData(...args) {
-            const result = original.apply(this, args);
-            return applyCanvasNoise(result, mark);
-          });
-          if (originalGet) rawGetMap.set(ctxProto, originalGet);
-        }
+        hookGetAndPut(ctxProto);
+        const offscreenCtxProto = targetWin.OffscreenCanvasRenderingContext2D?.prototype;
+        hookGetAndPut(offscreenCtxProto);
 
         const noiseCanvas = (source) => {
           const w = source.width | 0;
           const h = source.height | 0;
           if (!w || !h) return null;
-          if (webglCanvases.has(source)) return null;
           const doc = (source && source.ownerDocument) || (targetWin && targetWin.document) || document;
           const copy = doc.createElement('canvas');
           copy.width = w;
@@ -3564,6 +4878,24 @@ function buildInjectionScript(fp) {
           const c2 = copy.getContext('2d');
           if (!c2) return null;
           try {
+            if (webglCanvases.has(source)) {
+              try {
+                const gl = source.getContext('webgl2') || source.getContext('webgl') || source.getContext('experimental-webgl');
+                if (gl && typeof gl.readPixels === 'function') {
+                  const pixels = new Uint8Array(w * h * 4);
+                  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+                  const imgData = c2.createImageData(w, h);
+                  const rowBytes = w * 4;
+                  for (let y = 0; y < h; y++) {
+                    const srcY = (h - 1 - y) * rowBytes;
+                    const dstY = y * rowBytes;
+                    imgData.data.set(pixels.subarray(srcY, srcY + rowBytes), dstY);
+                  }
+                  c2.putImageData(imgData, 0, 0);
+                  return copy;
+                }
+              } catch (_) {}
+            }
             c2.drawImage(source, 0, 0);
             const rawGet = ctxProto ? rawGetMap.get(ctxProto) : null;
             const image = applyCanvasNoise(rawGet ? rawGet.call(c2, 0, 0, w, h) : c2.getImageData(0, 0, w, h), mark);
@@ -3594,17 +4926,34 @@ function buildInjectionScript(fp) {
           });
         }
 
-        const offscreenCtxProto = targetWin.OffscreenCanvasRenderingContext2D?.prototype;
-        if (offscreenCtxProto?.getImageData) {
-          replaceMethod(offscreenCtxProto, 'getImageData', (original) => function getImageData(...args) {
-            const result = original.apply(this, args);
-            return applyCanvasNoise(result, mark);
-          });
-        }
-
         const offscreenProto = targetWin.OffscreenCanvas?.prototype;
         if (offscreenProto?.convertToBlob) {
           replaceMethod(offscreenProto, 'convertToBlob', (original) => async function convertToBlob(options) {
+            try {
+              const w = Number(this.width) || 0;
+              const h = Number(this.height) || 0;
+              if (w > 0 && h > 0 && webglCanvases.has(this)) {
+                const gl = this.getContext('webgl2') || this.getContext('webgl') || this.getContext('experimental-webgl');
+                if (gl && typeof gl.readPixels === 'function') {
+                  const pixels = new Uint8Array(w * h * 4);
+                  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+                  const TargetOffscreen = targetWin.OffscreenCanvas || OffscreenCanvas;
+                  const copy = new TargetOffscreen(w, h);
+                  const context = copy.getContext('2d');
+                  if (context) {
+                    const imgData = context.createImageData(w, h);
+                    const rowBytes = w * 4;
+                    for (let y = 0; y < h; y++) {
+                      const srcY = (h - 1 - y) * rowBytes;
+                      const dstY = y * rowBytes;
+                      imgData.data.set(pixels.subarray(srcY, srcY + rowBytes), dstY);
+                    }
+                    context.putImageData(imgData, 0, 0);
+                    return original.call(copy, options);
+                  }
+                }
+              }
+            } catch (_) {}
             const blob = await original.call(this, options);
             try {
               const w = Number(this.width) || 0;
@@ -3817,6 +5166,67 @@ function buildInjectionScript(fp) {
         });
       };
 
+      const precisionOverridesMap = new WeakMap();
+      const patchPrecisionFormatProto = (proto) => {
+        if (!proto) return;
+        for (const prop of ['rangeMin', 'rangeMax', 'precision']) {
+          const desc = Object.getOwnPropertyDescriptor(proto, prop);
+          if (desc && typeof desc.get === 'function') {
+            const nativeGet = desc.get;
+            Object.defineProperty(proto, prop, {
+              configurable: desc.configurable,
+              enumerable: desc.enumerable,
+              get: nativeLike(function () {
+                const custom = precisionOverridesMap.get(this);
+                if (custom && typeof custom[prop] === 'number') {
+                  return custom[prop];
+                }
+                return nativeGet.call(this);
+              }, nativeGet, 'get ' + prop, 0),
+              set: desc.set,
+            });
+          }
+        }
+      };
+
+      const patchGetShaderPrecisionFormat = (proto) => {
+        if (!proto || !proto.getShaderPrecisionFormat) return;
+        if (metaMode === 'real') return;
+        replaceMethod(proto, 'getShaderPrecisionFormat', (original) => function(shaderType, precisionType) {
+          const fmt = original.apply(this, arguments);
+          if (!fmt) return null;
+
+          const osName = String(CFG.os || '').toLowerCase();
+          const isMobilePersona = Boolean(CFG.mobile) || osName === 'android' || osName === 'ios'
+            || (CFG.platform && /Android|iPhone|iPad/i.test(CFG.platform))
+            || (CFG.webgl?.gpu?.vendor && /qualcomm|arm/i.test(CFG.webgl.gpu.vendor));
+
+          let target = null;
+          if (isMobilePersona) {
+            if (precisionType === 0x8df1 /* MEDIUM_FLOAT */ || precisionType === 0x8df0 /* LOW_FLOAT */) {
+              target = { rangeMin: 14, rangeMax: 14, precision: 10 };
+            } else if (precisionType === 0x8df2 /* HIGH_FLOAT */) {
+              target = { rangeMin: 127, rangeMax: 127, precision: 23 };
+            } else if (precisionType === 0x8df3 /* LOW_INT */ || precisionType === 0x8df4 /* MEDIUM_INT */) {
+              target = { rangeMin: 15, rangeMax: 14, precision: 0 };
+            } else if (precisionType === 0x8df5 /* HIGH_INT */) {
+              target = { rangeMin: 31, rangeMax: 30, precision: 0 };
+            }
+          } else {
+            if (precisionType === 0x8df0 || precisionType === 0x8df1 || precisionType === 0x8df2) {
+              target = { rangeMin: 127, rangeMax: 127, precision: 23 };
+            } else if (precisionType === 0x8df3 || precisionType === 0x8df4 || precisionType === 0x8df5) {
+              target = { rangeMin: 31, rangeMax: 30, precision: 0 };
+            }
+          }
+
+          if (target) {
+            precisionOverridesMap.set(fmt, target);
+          }
+          return fmt;
+        });
+      };
+
       const patchGetParameter = (proto) => {
         if (!proto || !proto.getParameter) return;
         if (metaMode === 'real') return;
@@ -3844,6 +5254,24 @@ function buildInjectionScript(fp) {
                 return out;
               }
               return native;
+            }
+            if (param === 0x846d) {
+              // ALIASED_POINT_SIZE_RANGE: Float32Array [1, maxPoint]
+              const native = original.apply(this, arguments);
+              const maxPoint = Number(limits[0x846d]) || 0;
+              if (maxPoint && native && native.length === 2) {
+                const out = new native.constructor(2);
+                out[0] = native[0] || 1;
+                out[1] = maxPoint;
+                return out;
+              }
+              return native;
+            }
+            const isWebgl2 = typeof WebGL2RenderingContext !== 'undefined' && (this instanceof WebGL2RenderingContext);
+            const WEBGL2_PARAM_KEYS = [0x8a30, 0x8a34, 0x8a2b, 0x8a2d];
+            if (WEBGL2_PARAM_KEYS.includes(param)) {
+              if (isWebgl2) return limits[param];
+              return original.apply(this, arguments);
             }
             if (Object.prototype.hasOwnProperty.call(limits, param)) return limits[param];
           }
@@ -3897,15 +5325,20 @@ function buildInjectionScript(fp) {
         });
       };
 
+      if (typeof WebGLShaderPrecisionFormat !== 'undefined' && WebGLShaderPrecisionFormat.prototype) {
+        patchPrecisionFormatProto(WebGLShaderPrecisionFormat.prototype);
+      }
       const globalWebglAlreadyPatched = adoptNativeBridgeWrappers(globalThis.WebGLRenderingContext?.prototype, globalThis.WebGL2RenderingContext?.prototype);
       if (!globalWebglAlreadyPatched && globalThis.WebGLRenderingContext) {
         patchGetParameter(WebGLRenderingContext.prototype);
+        patchGetShaderPrecisionFormat(WebGLRenderingContext.prototype);
         patchReadPixels(WebGLRenderingContext.prototype);
         patchGetExtension(WebGLRenderingContext.prototype);
         patchGetSupportedExtensions(WebGLRenderingContext.prototype);
       }
       if (!globalWebglAlreadyPatched && globalThis.WebGL2RenderingContext) {
         patchGetParameter(WebGL2RenderingContext.prototype);
+        patchGetShaderPrecisionFormat(WebGL2RenderingContext.prototype);
         patchReadPixels(WebGL2RenderingContext.prototype);
         patchGetExtension(WebGL2RenderingContext.prototype);
         patchGetSupportedExtensions(WebGL2RenderingContext.prototype);
@@ -3918,14 +5351,19 @@ function buildInjectionScript(fp) {
           return;
         }
         try { patchedWebglWindows.add(subWin); } catch (_) {}
+        if (subWin.WebGLShaderPrecisionFormat && subWin.WebGLShaderPrecisionFormat.prototype) {
+          patchPrecisionFormatProto(subWin.WebGLShaderPrecisionFormat.prototype);
+        }
         if (subWin.WebGLRenderingContext) {
           patchGetParameter(subWin.WebGLRenderingContext.prototype);
+          patchGetShaderPrecisionFormat(subWin.WebGLRenderingContext.prototype);
           patchReadPixels(subWin.WebGLRenderingContext.prototype);
           patchGetExtension(subWin.WebGLRenderingContext.prototype);
           patchGetSupportedExtensions(subWin.WebGLRenderingContext.prototype);
         }
         if (subWin.WebGL2RenderingContext) {
           patchGetParameter(subWin.WebGL2RenderingContext.prototype);
+          patchGetShaderPrecisionFormat(subWin.WebGL2RenderingContext.prototype);
           patchReadPixels(subWin.WebGL2RenderingContext.prototype);
           patchGetExtension(subWin.WebGL2RenderingContext.prototype);
           patchGetSupportedExtensions(subWin.WebGL2RenderingContext.prototype);
@@ -4058,7 +5496,8 @@ function buildInjectionScript(fp) {
               if (!rect) return rect;
               try {
                 const x = rect.x + noisePx, y = rect.y + noisePx;
-                const width = rect.width + noiseSize, height = rect.height + noiseSize;
+                const width = rect.width === 0 ? 0 : Math.max(0, rect.width + noiseSize);
+                const height = rect.height === 0 ? 0 : Math.max(0, rect.height + noiseSize);
                 return TargetDOMRect && TargetDOMRect.fromRect ? TargetDOMRect.fromRect({ x, y, width, height }) : rect;
               } catch (_) { return rect; }
             };
@@ -4076,8 +5515,10 @@ function buildInjectionScript(fp) {
                 const rects = [];
                 for (let i = 0; i < list.length; i += 1) {
                   const rect = list[i];
+                  const width = rect.width === 0 ? 0 : Math.max(0, rect.width + noiseSize);
+                  const height = rect.height === 0 ? 0 : Math.max(0, rect.height + noiseSize);
                   rects.push(TargetDOMRect && TargetDOMRect.fromRect
-                    ? TargetDOMRect.fromRect({ x: rect.x + noisePx, y: rect.y + noisePx, width: rect.width + noiseSize, height: rect.height + noiseSize })
+                    ? TargetDOMRect.fromRect({ x: rect.x + noisePx, y: rect.y + noisePx, width, height })
                     : rect);
                 }
                 return makeRectList(rects);
@@ -4117,7 +5558,7 @@ function buildInjectionScript(fp) {
   if (CFG.webrtc === 'disabled') {
     try {
       const blocked = nativeLike(function RTCPeerConnection() {
-        throw new DOMException('WebRTC is disabled by this profile', 'NotAllowedError');
+        throw new DOMException('WebRTC is disabled by permissions policy', 'NotAllowedError');
       }, globalThis.RTCPeerConnection, 'RTCPeerConnection', 0, true);
       if (globalThis.RTCPeerConnection) window.RTCPeerConnection = blocked;
       if (globalThis.webkitRTCPeerConnection) window.webkitRTCPeerConnection = blocked;
@@ -4786,59 +6227,94 @@ function buildInjectionScript(fp) {
   }
 
   // --- speech voices ---
-  if (CFG.speech && CFG.speech.mode === 'blocked') {
+  if (CFG.speech && CFG.speech.mode === "blocked") {
     try {
-      const spProto = typeof SpeechSynthesis !== 'undefined' ? SpeechSynthesis.prototype : null;
-      const isSpeechReceiver = (receiver) => receiver === globalThis.speechSynthesis;
-      const serveEmpty = function getVoices() { return []; };
-      if (spProto && spProto.getVoices) {
-        replaceMethod(spProto, 'getVoices', (original) => guardReceiver(original, isSpeechReceiver, serveEmpty));
-      } else if (globalThis.speechSynthesis) {
-        replaceMethod(speechSynthesis, 'getVoices', (original) => guardReceiver(original, isSpeechReceiver, serveEmpty));
-      }
+      const mainSpProto = typeof SpeechSynthesis !== "undefined" ? SpeechSynthesis.prototype : null;
+      const mainPausedDesc = mainSpProto ? Object.getOwnPropertyDescriptor(mainSpProto, "paused") : null;
+      const patchSpeechBlockedForWindow = (targetWin) => {
+        if (!targetWin) return;
+        try {
+          const spProto = targetWin.SpeechSynthesis ? targetWin.SpeechSynthesis.prototype : mainSpProto;
+          if (!spProto && !targetWin.speechSynthesis) return;
+          const targetPausedDesc = spProto ? Object.getOwnPropertyDescriptor(spProto, "paused") : mainPausedDesc;
+          const isSpeechReceiver = (receiver) => {
+            if (!receiver || typeof receiver !== "object") return false;
+            if (targetPausedDesc && typeof targetPausedDesc.get === "function") {
+              try {
+                targetPausedDesc.get.call(receiver);
+                return true;
+              } catch (_) {
+                return false;
+              }
+            }
+            return receiver === targetWin.speechSynthesis || receiver === globalThis.speechSynthesis;
+          };
+          const serveEmpty = function getVoices() { return []; };
+          if (spProto && spProto.getVoices) {
+            replaceMethod(spProto, "getVoices", (original) => guardReceiver(original, isSpeechReceiver, serveEmpty));
+          } else if (targetWin.speechSynthesis) {
+            replaceMethod(targetWin.speechSynthesis, "getVoices", (original) => guardReceiver(original, isSpeechReceiver, serveEmpty));
+          }
+        } catch (_) {}
+      };
+      patchSpeechBlockedForWindow(globalThis);
+      subWindowSyncHooks.push((subWin) => { patchSpeechBlockedForWindow(subWin); });
     } catch (_) {}
-  } else if (CFG.speech && CFG.speech.mode === 'noise' && Array.isArray(CFG.speech.voices)) {
+  } else if (CFG.speech && CFG.speech.mode === "noise" && Array.isArray(CFG.speech.voices)) {
     try {
       const voiceProto = typeof SpeechSynthesisVoice !== "undefined" ? SpeechSynthesisVoice.prototype : Object.prototype;
       const voiceStates = new WeakMap();
-      const patchedVoiceKeys = new Set();
+      const patchedVoiceProtos = new WeakSet();
       // Native voices keep their fields on the prototype as well. Use the same synthetic-instance
       // WeakMap pattern so the table cannot be distinguished by an own-property scan.
-      const patchVoiceAccessor = (key) => {
-        if (!voiceProto || patchedVoiceKeys.has(key)) return true;
-        const descriptor = Object.getOwnPropertyDescriptor(voiceProto, key);
-        if (!descriptor || typeof descriptor.get !== 'function') return false;
+      const patchVoiceAccessor = (proto, key) => {
+        if (!proto) return true;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, key);
+        if (!descriptor || typeof descriptor.get !== "function") return false;
         const nativeGet = descriptor.get;
-        Object.defineProperty(voiceProto, key, {
+        Object.defineProperty(proto, key, {
           configurable: descriptor.configurable,
           enumerable: descriptor.enumerable,
           get: nativeLike(function voiceValue() {
             const state = voiceStates.get(this);
             if (state) return state[key];
             return nativeGet.call(this);
-          }, nativeGet, 'get ' + key, 0),
+          }, nativeGet, "get " + key, 0),
           set: descriptor.set,
         });
-        patchedVoiceKeys.add(key);
         return true;
       };
-      const voices = CFG.speech.voices.map((v) => {
-        const voice = Object.create(voiceProto);
-        const state = {
-          name: String(v.name || ''),
-          lang: String(v.lang || 'en-US'),
-          default: Boolean(v.default),
-          localService: v.localService !== false,
-          voiceURI: String(v.voiceURI || v.name || ''),
-        };
-        voiceStates.set(voice, state);
-        for (const key of Object.keys(state)) {
-          if (!patchVoiceAccessor(key)) {
-            Object.defineProperty(voice, key, { value: state[key], enumerable: false, writable: false, configurable: true });
-          }
+      const patchVoiceProto = (proto) => {
+        if (!proto || patchedVoiceProtos.has(proto)) return;
+        patchedVoiceProtos.add(proto);
+        for (const key of ["name", "lang", "default", "localService", "voiceURI"]) {
+          patchVoiceAccessor(proto, key);
         }
-        return voice;
-      });
+      };
+      patchVoiceProto(voiceProto);
+
+      const createVoicesForProto = (proto) => {
+        return CFG.speech.voices.map((v) => {
+          const voice = Object.create(proto);
+          const state = {
+            name: String(v.name || ""),
+            lang: String(v.lang || "en-US"),
+            default: Boolean(v.default),
+            localService: v.localService !== false,
+            voiceURI: String(v.voiceURI || v.name || ""),
+          };
+          voiceStates.set(voice, state);
+          for (const key of Object.keys(state)) {
+            if (!patchVoiceAccessor(proto, key)) {
+              Object.defineProperty(voice, key, { value: state[key], enumerable: false, writable: false, configurable: true });
+            }
+          }
+          return voice;
+        });
+      };
+
+      const voices = createVoicesForProto(voiceProto);
+
       // The table is published asynchronously by the engine: the first synchronous call answers with
       // an empty list and the populated one only becomes observable once the engine announces the
       // load. Returning the table straight away left a timing signal, so it is withheld until the
@@ -4850,7 +6326,7 @@ function buildInjectionScript(fp) {
       const markVoicesReady = () => { voicesReady = true; };
       try {
         const sp = globalThis.speechSynthesis;
-        if (sp && typeof sp.addEventListener === 'function') {
+        if (sp && typeof sp.addEventListener === "function") {
           sp.addEventListener('voiceschanged', markVoicesReady, { once: true });
         }
       } catch (_) {}
@@ -4858,14 +6334,63 @@ function buildInjectionScript(fp) {
         setTimeout(markVoicesReady, 1000);
       } catch (_) { markVoicesReady(); }
       const readVoices = () => (voicesReady ? voices.slice() : []);
-      const spProto = typeof SpeechSynthesis !== 'undefined' ? SpeechSynthesis.prototype : null;
-      const isSpeechReceiver = (receiver) => receiver === globalThis.speechSynthesis;
-      const serveVoices = function getVoices() { return readVoices(); };
-      if (spProto && spProto.getVoices) {
-        replaceMethod(spProto, 'getVoices', (original) => guardReceiver(original, isSpeechReceiver, serveVoices));
-      } else if (globalThis.speechSynthesis) {
-        replaceMethod(speechSynthesis, 'getVoices', (original) => guardReceiver(original, isSpeechReceiver, serveVoices));
-      }
+
+      const mainSpProto = typeof SpeechSynthesis !== "undefined" ? SpeechSynthesis.prototype : null;
+      const mainPausedDesc = mainSpProto ? Object.getOwnPropertyDescriptor(mainSpProto, "paused") : null;
+
+      const windowVoicesMap = new WeakMap();
+      windowVoicesMap.set(globalThis, voices);
+
+      const patchSpeechForWindow = (targetWin) => {
+        if (!targetWin) return;
+        try {
+          const spProto = targetWin.SpeechSynthesis ? targetWin.SpeechSynthesis.prototype : mainSpProto;
+          if (!spProto && !targetWin.speechSynthesis) return;
+
+          const targetVoiceProto = targetWin.SpeechSynthesisVoice ? targetWin.SpeechSynthesisVoice.prototype : voiceProto;
+          if (targetVoiceProto) {
+            patchVoiceProto(targetVoiceProto);
+          }
+
+          let winVoices = windowVoicesMap.get(targetWin);
+          if (!winVoices) {
+            winVoices = targetVoiceProto ? createVoicesForProto(targetVoiceProto) : voices;
+            windowVoicesMap.set(targetWin, winVoices);
+          }
+
+          const targetReadVoices = () => (voicesReady ? winVoices.slice() : []);
+          const targetPausedDesc = spProto ? Object.getOwnPropertyDescriptor(spProto, "paused") : mainPausedDesc;
+
+          const isSpeechReceiver = (receiver) => {
+            if (!receiver || typeof receiver !== "object") return false;
+            if (targetPausedDesc && typeof targetPausedDesc.get === "function") {
+              try {
+                targetPausedDesc.get.call(receiver);
+                return true;
+              } catch (_) {
+                return false;
+              }
+            }
+            return receiver === targetWin.speechSynthesis || receiver === globalThis.speechSynthesis;
+          };
+
+          const serveVoices = function getVoices() { return targetReadVoices(); };
+          if (spProto && spProto.getVoices) {
+            replaceMethod(spProto, "getVoices", (original) => guardReceiver(original, isSpeechReceiver, serveVoices));
+          } else if (targetWin.speechSynthesis) {
+            replaceMethod(targetWin.speechSynthesis, "getVoices", (original) => guardReceiver(original, isSpeechReceiver, serveVoices));
+          }
+
+          if (targetWin.speechSynthesis && typeof targetWin.speechSynthesis.addEventListener === "function") {
+            try {
+              targetWin.speechSynthesis.addEventListener('voiceschanged', markVoicesReady, { once: true });
+            } catch (_) {}
+          }
+        } catch (_) {}
+      };
+
+      patchSpeechForWindow(globalThis);
+      subWindowSyncHooks.push((subWin) => { patchSpeechForWindow(subWin); });
     } catch (_) {}
   }
 
@@ -4873,7 +6398,7 @@ function buildInjectionScript(fp) {
   if (CFG.battery && CFG.battery.mode === 'blocked') {
     try {
       const blocked = function getBattery() {
-        return Promise.reject(new DOMException('Battery status is disabled by this profile', 'NotAllowedError'));
+        return Promise.reject(new DOMException('Battery status is not allowed by Permissions Policy', 'NotAllowedError'));
       };
       const navProto = typeof Navigator !== "undefined" ? Navigator.prototype : null;
       const isNavigatorReceiver = (receiver) => receiver === navigator;
@@ -4983,7 +6508,101 @@ function buildInjectionScript(fp) {
       } else if (gpuMode === 'webgl' && gpuInfo && requestTarget) {
         const infoOverrides = new WeakMap();
         const adapterInfos = new WeakMap();
+        const featuresMap = new WeakMap();
+        const limitsMap = new WeakMap();
         const patchedInfoKeys = new Set();
+        let patchedFeaturesProto = false;
+        let patchedLimitsProto = false;
+        let adapterProtoPatched = false;
+
+        const targetVendor = String(gpuInfo.vendor || '').toLowerCase().trim();
+        const targetArch = String(gpuInfo.architecture || '').toLowerCase().trim();
+        const disallowedFeatures = new Set();
+        if (targetVendor === 'intel' || targetVendor === 'nvidia' || targetVendor === 'amd') {
+          disallowedFeatures.add('texture-compression-astc');
+          disallowedFeatures.add('texture-compression-etc2');
+          if (targetVendor === 'intel' && (targetArch.includes('gen9') || targetArch.includes('gen7') || targetArch.includes('gen11') || targetArch.includes('gen-9') || targetArch.includes('gen-7'))) {
+            disallowedFeatures.add('shader-f16');
+            disallowedFeatures.add('subgroups-f16');
+          }
+        } else if (targetVendor === 'qualcomm' || targetVendor === 'arm' || targetVendor === 'samsung') {
+          disallowedFeatures.add('texture-compression-bc');
+        }
+
+        const getFamilyLimits = (vendor, arch) => {
+          const v = String(vendor || '').toLowerCase().trim();
+          if (v === 'nvidia' || v === 'amd') {
+            return {
+              maxTextureDimension1D: 16384,
+              maxTextureDimension2D: 16384,
+              maxTextureDimension3D: 2048,
+              maxTextureArrayLayers: 2048,
+              maxBufferSize: 2147483648,
+              maxStorageBufferBindingSize: 2147483648,
+              minUniformBufferOffsetAlignment: 256,
+              minStorageBufferOffsetAlignment: 256,
+              maxComputeWorkgroupStorageSize: 32768,
+              maxComputeInvocationsPerWorkgroup: 1024,
+              maxComputeWorkgroupSizeX: 1024,
+              maxComputeWorkgroupSizeY: 1024,
+              maxComputeWorkgroupSizeZ: 64,
+            };
+          }
+          if (v === 'intel' || v === 'apple') {
+            return {
+              maxTextureDimension1D: 16384,
+              maxTextureDimension2D: 16384,
+              maxTextureDimension3D: 2048,
+              maxTextureArrayLayers: 2048,
+              maxBufferSize: 2147483648,
+              maxStorageBufferBindingSize: 1073741824,
+              minUniformBufferOffsetAlignment: 256,
+              minStorageBufferOffsetAlignment: 256,
+              maxComputeWorkgroupStorageSize: 32768,
+              maxComputeInvocationsPerWorkgroup: 1024,
+              maxComputeWorkgroupSizeX: 1024,
+              maxComputeWorkgroupSizeY: 1024,
+              maxComputeWorkgroupSizeZ: 64,
+            };
+          }
+          if (v === 'qualcomm' || v === 'arm') {
+            return {
+              maxTextureDimension1D: 8192,
+              maxTextureDimension2D: 8192,
+              maxTextureDimension3D: 2048,
+              maxTextureArrayLayers: 2048,
+              maxBufferSize: 268435456,
+              maxStorageBufferBindingSize: 134217728,
+              minUniformBufferOffsetAlignment: 256,
+              minStorageBufferOffsetAlignment: 256,
+              maxComputeWorkgroupStorageSize: 16384,
+              maxComputeInvocationsPerWorkgroup: 256,
+              maxComputeWorkgroupSizeX: 256,
+              maxComputeWorkgroupSizeY: 256,
+              maxComputeWorkgroupSizeZ: 64,
+            };
+          }
+          return {};
+        };
+
+        const resolveLimits = (hostLimits) => {
+          const familyLimits = getFamilyLimits(gpuInfo.vendor, gpuInfo.architecture);
+          const out = {};
+          for (const [k, famVal] of Object.entries(familyLimits)) {
+            try {
+              const hostVal = hostLimits[k];
+              if (typeof hostVal === 'number') {
+                if (k.startsWith('min')) {
+                  out[k] = Math.max(famVal, hostVal);
+                } else {
+                  out[k] = Math.min(famVal, hostVal);
+                }
+              }
+            } catch (_) {}
+          }
+          return out;
+        };
+
         const patchInfoAccessor = (key) => {
           if (patchedInfoKeys.has(key) || typeof GPUAdapterInfo === 'undefined' || !GPUAdapterInfo.prototype) return false;
           const descriptor = Object.getOwnPropertyDescriptor(GPUAdapterInfo.prototype, key);
@@ -5002,49 +6621,254 @@ function buildInjectionScript(fp) {
           patchedInfoKeys.add(key);
           return true;
         };
-        const prepareInfo = (adapter) => {
-          let info = null;
-          try { info = adapter && adapter.info; } catch (_) {}
-          if (!info || typeof info !== 'object') return;
-          infoOverrides.set(info, gpuInfo);
-          for (const key of Object.keys(gpuInfo)) patchInfoAccessor(key);
-          adapterInfos.set(adapter, info);
-        };
 
-        const adapterProto = typeof GPUAdapter !== 'undefined' ? GPUAdapter.prototype : null;
-        if (adapterProto) {
-          const infoDescriptor = Object.getOwnPropertyDescriptor(adapterProto, 'info');
-          if (infoDescriptor && typeof infoDescriptor.get === 'function') {
-            const nativeInfoGet = infoDescriptor.get;
-            Object.defineProperty(adapterProto, 'info', {
-              configurable: infoDescriptor.configurable,
-              enumerable: infoDescriptor.enumerable,
-              get: nativeLike(function info() {
-                const spoofed = adapterInfos.get(this);
-                return spoofed || nativeInfoGet.call(this);
-              }, nativeInfoGet, 'get info', 0),
-              set: infoDescriptor.set,
+        const patchFeaturesAccessors = (fProto) => {
+          if (!fProto || patchedFeaturesProto) return;
+          patchedFeaturesProto = true;
+          const sizeDesc = Object.getOwnPropertyDescriptor(fProto, 'size');
+          if (sizeDesc && typeof sizeDesc.get === 'function') {
+            const natSizeGet = sizeDesc.get;
+            Object.defineProperty(fProto, 'size', {
+              configurable: sizeDesc.configurable,
+              enumerable: sizeDesc.enumerable,
+              get: nativeLike(function size() {
+                natSizeGet.call(this);
+                const filtered = featuresMap.get(this);
+                return filtered ? filtered.size : natSizeGet.call(this);
+              }, natSizeGet, 'get size', 0),
+              set: sizeDesc.set,
             });
           }
+          if (typeof fProto.has === 'function') {
+            const natHas = fProto.has;
+            const hasMethod = nativeLike(function has(key) {
+              natHas.call(this, key);
+              const filtered = featuresMap.get(this);
+              if (filtered) return filtered.has(String(key));
+              return natHas.call(this, key);
+            }, natHas, 'has', 1);
+            Object.defineProperty(fProto, 'has', {
+              configurable: true,
+              enumerable: true,
+              writable: true,
+              value: hasMethod,
+            });
+          }
+          const wrapIter = (key, makeIter) => {
+            if (typeof fProto[key] === 'function') {
+              const natFn = fProto[key];
+              const method = nativeLike(function (...args) {
+                natFn.apply(this, args);
+                const filtered = featuresMap.get(this);
+                if (filtered) return makeIter(filtered);
+                return natFn.apply(this, args);
+              }, natFn, key, natFn.length);
+              Object.defineProperty(fProto, key, {
+                configurable: true,
+                enumerable: true,
+                writable: true,
+                value: method,
+              });
+            }
+          };
+          wrapIter('entries', (f) => f.entries());
+          wrapIter('keys', (f) => f.keys());
+          wrapIter('values', (f) => f.values());
+          if (typeof Symbol !== 'undefined' && Symbol.iterator && typeof fProto[Symbol.iterator] === 'function') {
+            const natSym = fProto[Symbol.iterator];
+            const symMethod = nativeLike(function () {
+              natSym.call(this);
+              const filtered = featuresMap.get(this);
+              if (filtered) return filtered[Symbol.iterator]();
+              return natSym.call(this);
+              // Do NOT rename or re-arity this wrapper: a Blink setlike prototype exposes
+              // Symbol.iterator as the very same values function object, so the native
+              // name/length are part of the observable surface. Overriding them would make the
+              // prototype signature differ from an un-injected build.
+            }, natSym);
+            Object.defineProperty(fProto, Symbol.iterator, {
+              configurable: true,
+              enumerable: false,
+              writable: true,
+              value: symMethod,
+            });
+          }
+          if (typeof fProto.forEach === 'function') {
+            const natForEach = fProto.forEach;
+            const forEachMethod = nativeLike(function forEach(callback, thisArg) {
+              natForEach.call(this, () => {});
+              const filtered = featuresMap.get(this);
+              if (filtered) {
+                for (const val of filtered) {
+                  callback.call(thisArg, val, val, this);
+                }
+                return;
+              }
+              return natForEach.apply(this, arguments);
+            }, natForEach, 'forEach', 1);
+            Object.defineProperty(fProto, 'forEach', {
+              configurable: true,
+              enumerable: true,
+              writable: true,
+              value: forEachMethod,
+            });
+          }
+        };
+
+        const patchLimitsAccessors = (lProto) => {
+          if (!lProto || patchedLimitsProto) return;
+          patchedLimitsProto = true;
+          const props = Object.getOwnPropertyNames(lProto);
+          for (const key of props) {
+            if (key === 'constructor') continue;
+            const desc = Object.getOwnPropertyDescriptor(lProto, key);
+            if (!desc || typeof desc.get !== 'function') continue;
+            const natGet = desc.get;
+            Object.defineProperty(lProto, key, {
+              configurable: desc.configurable,
+              enumerable: desc.enumerable,
+              get: nativeLike(function () {
+                natGet.call(this);
+                const custom = limitsMap.get(this);
+                if (custom && Object.prototype.hasOwnProperty.call(custom, key)) {
+                  return custom[key];
+                }
+                return natGet.call(this);
+              }, natGet, 'get ' + key, 0),
+              set: desc.set,
+            });
+          }
+        };
+
+        const patchAdapterProto = (aProto) => {
+          if (adapterProtoPatched || !aProto) return;
+          adapterProtoPatched = true;
+
+          const infoDesc = Object.getOwnPropertyDescriptor(aProto, 'info');
+          if (infoDesc && typeof infoDesc.get === 'function') {
+            const natInfoGet = infoDesc.get;
+            Object.defineProperty(aProto, 'info', {
+              configurable: infoDesc.configurable,
+              enumerable: infoDesc.enumerable,
+              get: nativeLike(function info() {
+                const spoofed = adapterInfos.get(this);
+                return spoofed || natInfoGet.call(this);
+              }, natInfoGet, 'get info', 0),
+              set: infoDesc.set,
+            });
+          }
+
+          const featuresDesc = Object.getOwnPropertyDescriptor(aProto, 'features');
+          if (featuresDesc && typeof featuresDesc.get === 'function') {
+            const natFeaturesGet = featuresDesc.get;
+            Object.defineProperty(aProto, 'features', {
+              configurable: featuresDesc.configurable,
+              enumerable: featuresDesc.enumerable,
+              get: nativeLike(function features() {
+                const f = natFeaturesGet.call(this);
+                if (f && !featuresMap.has(f)) {
+                  const allowed = new Set();
+                  try {
+                    for (const item of f) {
+                      if (!disallowedFeatures.has(item)) allowed.add(item);
+                    }
+                  } catch (_) {}
+                  featuresMap.set(f, allowed);
+                }
+                return f;
+              }, natFeaturesGet, 'get features', 0),
+              set: featuresDesc.set,
+            });
+          }
+
+          const limitsDesc = Object.getOwnPropertyDescriptor(aProto, 'limits');
+          if (limitsDesc && typeof limitsDesc.get === 'function') {
+            const natLimitsGet = limitsDesc.get;
+            Object.defineProperty(aProto, 'limits', {
+              configurable: limitsDesc.configurable,
+              enumerable: limitsDesc.enumerable,
+              get: nativeLike(function limits() {
+                const l = natLimitsGet.call(this);
+                if (l && !limitsMap.has(l)) {
+                  limitsMap.set(l, resolveLimits(l));
+                }
+                return l;
+              }, natLimitsGet, 'get limits', 0),
+              set: limitsDesc.set,
+            });
+          }
+
+          if (typeof aProto.requestAdapterInfo === 'function') {
+            replaceMethod(aProto, 'requestAdapterInfo', (origReqInfo) => async function requestAdapterInfo(...args) {
+              const info = await origReqInfo.apply(this, args);
+              if (!info || typeof info !== 'object') return info;
+              infoOverrides.set(info, gpuInfo);
+              for (const key of Object.keys(gpuInfo)) patchInfoAccessor(key);
+              adapterInfos.set(this, info);
+              return info;
+            });
+          }
+        };
+
+        if (typeof GPUAdapterInfo !== 'undefined' && GPUAdapterInfo.prototype) {
+          for (const key of Object.keys(gpuInfo)) patchInfoAccessor(key);
         }
+        if (typeof GPUSupportedFeatures !== 'undefined' && GPUSupportedFeatures.prototype) {
+          patchFeaturesAccessors(GPUSupportedFeatures.prototype);
+        }
+        if (typeof GPUSupportedLimits !== 'undefined' && GPUSupportedLimits.prototype) {
+          patchLimitsAccessors(GPUSupportedLimits.prototype);
+        }
+        if (typeof GPUAdapter !== 'undefined' && GPUAdapter.prototype) {
+          patchAdapterProto(GPUAdapter.prototype);
+        }
+
+        const prepareAdapter = (adapter) => {
+          if (!adapter) return;
+          const aProto = (typeof GPUAdapter !== 'undefined' && GPUAdapter.prototype) || Object.getPrototypeOf(adapter);
+          patchAdapterProto(aProto);
+
+          let info = null;
+          try { info = adapter.info; } catch (_) {}
+          if (info && typeof info === 'object') {
+            infoOverrides.set(info, gpuInfo);
+            for (const key of Object.keys(gpuInfo)) patchInfoAccessor(key);
+            adapterInfos.set(adapter, info);
+          }
+
+          let features = null;
+          try { features = adapter.features; } catch (_) {}
+          if (features && typeof features === 'object') {
+            const fProto = (typeof GPUSupportedFeatures !== 'undefined' && GPUSupportedFeatures.prototype) || Object.getPrototypeOf(features);
+            patchFeaturesAccessors(fProto);
+            if (!featuresMap.has(features)) {
+              const allowed = new Set();
+              try {
+                for (const item of features) {
+                  if (!disallowedFeatures.has(item)) allowed.add(item);
+                }
+              } catch (_) {}
+              featuresMap.set(features, allowed);
+            }
+          }
+
+          let limits = null;
+          try { limits = adapter.limits; } catch (_) {}
+          if (limits && typeof limits === 'object') {
+            const lProto = (typeof GPUSupportedLimits !== 'undefined' && GPUSupportedLimits.prototype) || Object.getPrototypeOf(limits);
+            patchLimitsAccessors(lProto);
+            if (!limitsMap.has(limits)) {
+              limitsMap.set(limits, resolveLimits(limits));
+            }
+          }
+        };
 
         replaceMethod(requestTarget, 'requestAdapter', (originalRequestAdapter) => async function requestAdapter(...args) {
           const adapter = await originalRequestAdapter.apply(this, args);
           if (!adapter) return adapter;
-          prepareInfo(adapter);
+          prepareAdapter(adapter);
           return adapter;
         });
-
-        if (adapterProto && typeof adapterProto.requestAdapterInfo === 'function') {
-          replaceMethod(adapterProto, 'requestAdapterInfo', (originalRequestAdapterInfo) => async function requestAdapterInfo(...args) {
-            const info = await originalRequestAdapterInfo.apply(this, args);
-            if (!info || typeof info !== 'object') return info;
-            infoOverrides.set(info, gpuInfo);
-            for (const key of Object.keys(gpuInfo)) patchInfoAccessor(key);
-            adapterInfos.set(this, info);
-            return info;
-          });
-        }
       }
     } catch (_) {}
   }
@@ -5073,7 +6897,31 @@ function buildInjectionScript(fp) {
     // Local Font Access exposes a binary blob after user activation. Its returned FontData
     // records have already been re-labelled above, so their blob() method must not remain bound
     // to the host record and disclose a different platform's font bytes.
-    try { queryLocalFontBlobGateScript = buildQueryLocalFontBlobGateSource({ ...fp, bridgeToken }); } catch (_) {}
+    const platKey = (() => {
+      const p = String(fp.uaProfile?.os || fp.os || fp.platform || '').trim().toLowerCase();
+      if (p.includes('win')) return 'windows';
+      if (p.includes('mac') || p.includes('darwin')) return 'macos';
+      if (p.includes('android')) return 'android';
+      if (p.includes('linux')) return 'linux';
+      if (p.includes('ios') || p.includes('iphone') || p.includes('ipad')) return 'macos';
+      return 'windows';
+    })();
+    const lazyFontPayload = fp.lazyFontPayload !== false && fp.lazyPayload !== false && (fp.lazyPayload === true || platKey === 'windows');
+    const fontBridgeChannel = String(fp.bridgeChannel || fp.fontBlobBridge?.channelName || ('_' + String(bridgeToken).slice(0, 16)));
+    fp.fontBlobBridge = lazyFontPayload ? {
+      channelName: fontBridgeChannel,
+      token: String(bridgeToken),
+      platform: platKey,
+      wanted: null,
+    } : null;
+    try {
+      queryLocalFontBlobGateScript = buildQueryLocalFontBlobGateSource({
+        ...fp,
+        bridgeToken,
+        lazyPayload: lazyFontPayload,
+        bridgeChannel: fontBridgeChannel,
+      });
+    } catch (_) {}
   }
 
   return [mainScript, fontMetricsScript, cssFontLocalGateScript, queryLocalFontBlobGateScript].filter(Boolean).join('\n');
@@ -5323,6 +7171,17 @@ function buildWorkerInjectionScript(fp) {
         // getOwnPropertyNames() call away from identifying the profile.
         if (!(key in navProto)) continue;
         try { Object.defineProperty(navProto, key, nativeAccessor(key, { configurable: true, enumerable: true, get: () => value })); } catch (_) {}
+      }
+      const isIosPersona = CFG.os === "ios" || CFG.platform === "iPhone" || CFG.mobileDevice?.os === "ios";
+      if (isIosPersona) {
+        try {
+          if (typeof WorkerNavigator !== "undefined" && WorkerNavigator.prototype) {
+            delete WorkerNavigator.prototype.userAgentData;
+          }
+          if (typeof self !== "undefined" && self.navigator) {
+            delete self.navigator.userAgentData;
+          }
+        } catch (_) {}
       }
       const metadata = CFG.userAgentMetadata || {};
       const brands = Object.freeze((metadata.brands || []).map((item) => Object.freeze({ brand: String(item.brand), version: String(item.version) })));
@@ -5586,7 +7445,12 @@ function buildWorkerInjectionScript(fp) {
         }
         return Reflect.construct(OrigDateTimeFormat, [locales, opts], new.target);
       };
-      PatchedDateTimeFormat.prototype = DateTimeFormatProto;
+      Object.defineProperty(PatchedDateTimeFormat, 'prototype', {
+        value: DateTimeFormatProto,
+        writable: false,
+        enumerable: false,
+        configurable: false,
+      });
       // Without this the prototype's constructor still points at the original, so the one-line
       // check Intl.DateTimeFormat.prototype.constructor === Intl.DateTimeFormat returns false.
       try {
@@ -5827,18 +7691,23 @@ function buildWorkerInjectionScript(fp) {
           );
           return Reflect.construct(OrigDate, [localToUtc(wall)], new.target);
         };
-        PatchedDate.prototype = OrigDate.prototype;
+        Object.defineProperty(PatchedDate, 'prototype', {
+          value: OrigDate.prototype,
+          writable: false,
+          enumerable: false,
+          configurable: false,
+        });
         try {
           Object.defineProperty(OrigDate.prototype, 'constructor', {
             configurable: true, writable: true, enumerable: false, value: PatchedDate,
           });
         } catch (_) {}
-        PatchedDate.UTC = OrigDate.UTC;
         PatchedDate.now = OrigDate.now;
         PatchedDate.parse = nativeLike(
           function parse(value) { return parseLocal(value); },
           OrigDate.parse, 'parse', 1
         );
+        PatchedDate.UTC = OrigDate.UTC;
         nativeLike(PatchedDate, OrigDate, 'Date', 7, true);
         globalThis.Date = PatchedDate;
       } catch (_) {}
@@ -5846,10 +7715,10 @@ function buildWorkerInjectionScript(fp) {
   }
   const canvasMark = Number(CFG.canvas?.mark) || 1;
   if (CFG.canvas?.mode === 'blocked') {
-    const deny = () => { throw new DOMException('Canvas reading is disabled by this profile', 'SecurityError'); };
+    const deny = () => { throw new DOMException('Canvas reading is disabled by permissions policy', 'SecurityError'); };
     replace(globalThis.OffscreenCanvasRenderingContext2D?.prototype, 'getImageData', () => deny);
     replace(globalThis.OffscreenCanvas?.prototype, 'convertToBlob', () => function() {
-      return Promise.reject(new DOMException('Canvas reading is disabled by this profile', 'SecurityError'));
+      return Promise.reject(new DOMException('Canvas reading is disabled by permissions policy', 'SecurityError'));
     });
   } else if (CFG.canvas?.mode === 'noise') {
     replace(globalThis.OffscreenCanvasRenderingContext2D?.prototype, 'getImageData', (original) => function(...args) {
@@ -5884,6 +7753,31 @@ function buildWorkerInjectionScript(fp) {
     const metaMode = String(CFG.webgl?.metaMode || 'noise');
     const pixelNoise = CFG.webgl.mode === 'noise';
     const enabledDebugExts = new WeakSet();
+    const precisionOverridesMap = new WeakMap();
+    const patchPrecisionFormatProto = (proto) => {
+      if (!proto) return;
+      for (const prop of ['rangeMin', 'rangeMax', 'precision']) {
+        const desc = Object.getOwnPropertyDescriptor(proto, prop);
+        if (desc && typeof desc.get === 'function') {
+          const nativeGet = desc.get;
+          Object.defineProperty(proto, prop, {
+            configurable: desc.configurable,
+            enumerable: desc.enumerable,
+            get: nativeLike(function () {
+              const custom = precisionOverridesMap.get(this);
+              if (custom && typeof custom[prop] === 'number') {
+                return custom[prop];
+              }
+              return nativeGet.call(this);
+            }, nativeGet, 'get ' + prop, 0),
+            set: desc.set,
+          });
+        }
+      }
+    };
+    if (typeof WebGLShaderPrecisionFormat !== 'undefined' && WebGLShaderPrecisionFormat.prototype) {
+      patchPrecisionFormatProto(WebGLShaderPrecisionFormat.prototype);
+    }
     const targetGpuVendor = (() => {
       const gv = String(CFG.webgl?.gpu?.vendor || '').toLowerCase();
       if (gv) return gv;
@@ -5931,9 +7825,61 @@ function buildWorkerInjectionScript(fp) {
                 }
                 return native;
               }
+              if (param === 0x846d) {
+                const native = original.apply(this, arguments);
+                const maxPoint = Number(limits[0x846d]) || 0;
+                if (maxPoint && native && native.length === 2) {
+                  const out = new native.constructor(2);
+                  out[0] = native[0] || 1;
+                  out[1] = maxPoint;
+                  return out;
+                }
+                return native;
+              }
+              const isWebgl2 = typeof WebGL2RenderingContext !== 'undefined' && (this instanceof WebGL2RenderingContext);
+              const WEBGL2_PARAM_KEYS = [0x8a30, 0x8a34, 0x8a2b, 0x8a2d];
+              if (WEBGL2_PARAM_KEYS.includes(param)) {
+                if (isWebgl2) return limits[param];
+                return original.apply(this, arguments);
+              }
               if (Object.prototype.hasOwnProperty.call(limits, param)) return limits[param];
             }
             return original.apply(this, arguments);
+          });
+        }
+        if (proto.getShaderPrecisionFormat) {
+          replace(proto, 'getShaderPrecisionFormat', (original) => function(shaderType, precisionType) {
+            const fmt = original.apply(this, arguments);
+            if (!fmt) return null;
+
+            const osName = String(CFG.os || '').toLowerCase();
+            const isMobilePersona = Boolean(CFG.mobile) || osName === 'android' || osName === 'ios'
+              || (CFG.platform && /Android|iPhone|iPad/i.test(CFG.platform))
+              || (CFG.webgl?.gpu?.vendor && /qualcomm|arm/i.test(CFG.webgl.gpu.vendor));
+
+            let target = null;
+            if (isMobilePersona) {
+              if (precisionType === 0x8df1 || precisionType === 0x8df0) {
+                target = { rangeMin: 14, rangeMax: 14, precision: 10 };
+              } else if (precisionType === 0x8df2) {
+                target = { rangeMin: 127, rangeMax: 127, precision: 23 };
+              } else if (precisionType === 0x8df3 || precisionType === 0x8df4) {
+                target = { rangeMin: 15, rangeMax: 14, precision: 0 };
+              } else if (precisionType === 0x8df5) {
+                target = { rangeMin: 31, rangeMax: 30, precision: 0 };
+              }
+            } else {
+              if (precisionType === 0x8df0 || precisionType === 0x8df1 || precisionType === 0x8df2) {
+                target = { rangeMin: 127, rangeMax: 127, precision: 23 };
+              } else if (precisionType === 0x8df3 || precisionType === 0x8df4 || precisionType === 0x8df5) {
+                target = { rangeMin: 31, rangeMax: 30, precision: 0 };
+              }
+            }
+
+            if (target) {
+              precisionOverridesMap.set(fmt, target);
+            }
+            return fmt;
           });
         }
       }
@@ -6029,8 +7975,100 @@ function buildWorkerInjectionScript(fp) {
       } else if (gpuMode === "webgl" && gpuInfo && gpuProto) {
         const infoOverrides = new WeakMap();
         const adapterInfos = new WeakMap();
+        const featuresMap = new WeakMap();
+        const limitsMap = new WeakMap();
         const patchedInfoKeys = new Set();
+        let patchedFeaturesProto = false;
+        let patchedLimitsProto = false;
         let adapterProtoPatched = false;
+
+        const targetVendor = String(gpuInfo.vendor || '').toLowerCase().trim();
+        const targetArch = String(gpuInfo.architecture || '').toLowerCase().trim();
+        const disallowedFeatures = new Set();
+        if (targetVendor === 'intel' || targetVendor === 'nvidia' || targetVendor === 'amd') {
+          disallowedFeatures.add('texture-compression-astc');
+          disallowedFeatures.add('texture-compression-etc2');
+          if (targetVendor === 'intel' && (targetArch.includes('gen9') || targetArch.includes('gen7') || targetArch.includes('gen11') || targetArch.includes('gen-9') || targetArch.includes('gen-7'))) {
+            disallowedFeatures.add('shader-f16');
+            disallowedFeatures.add('subgroups-f16');
+          }
+        } else if (targetVendor === 'qualcomm' || targetVendor === 'arm' || targetVendor === 'samsung') {
+          disallowedFeatures.add('texture-compression-bc');
+        }
+
+        const getFamilyLimits = (vendor, arch) => {
+          const v = String(vendor || '').toLowerCase().trim();
+          if (v === 'nvidia' || v === 'amd') {
+            return {
+              maxTextureDimension1D: 16384,
+              maxTextureDimension2D: 16384,
+              maxTextureDimension3D: 2048,
+              maxTextureArrayLayers: 2048,
+              maxBufferSize: 2147483648,
+              maxStorageBufferBindingSize: 2147483648,
+              minUniformBufferOffsetAlignment: 256,
+              minStorageBufferOffsetAlignment: 256,
+              maxComputeWorkgroupStorageSize: 32768,
+              maxComputeInvocationsPerWorkgroup: 1024,
+              maxComputeWorkgroupSizeX: 1024,
+              maxComputeWorkgroupSizeY: 1024,
+              maxComputeWorkgroupSizeZ: 64,
+            };
+          }
+          if (v === 'intel' || v === 'apple') {
+            return {
+              maxTextureDimension1D: 16384,
+              maxTextureDimension2D: 16384,
+              maxTextureDimension3D: 2048,
+              maxTextureArrayLayers: 2048,
+              maxBufferSize: 2147483648,
+              maxStorageBufferBindingSize: 1073741824,
+              minUniformBufferOffsetAlignment: 256,
+              minStorageBufferOffsetAlignment: 256,
+              maxComputeWorkgroupStorageSize: 32768,
+              maxComputeInvocationsPerWorkgroup: 1024,
+              maxComputeWorkgroupSizeX: 1024,
+              maxComputeWorkgroupSizeY: 1024,
+              maxComputeWorkgroupSizeZ: 64,
+            };
+          }
+          if (v === 'qualcomm' || v === 'arm') {
+            return {
+              maxTextureDimension1D: 8192,
+              maxTextureDimension2D: 8192,
+              maxTextureDimension3D: 2048,
+              maxTextureArrayLayers: 2048,
+              maxBufferSize: 268435456,
+              maxStorageBufferBindingSize: 134217728,
+              minUniformBufferOffsetAlignment: 256,
+              minStorageBufferOffsetAlignment: 256,
+              maxComputeWorkgroupStorageSize: 16384,
+              maxComputeInvocationsPerWorkgroup: 256,
+              maxComputeWorkgroupSizeX: 256,
+              maxComputeWorkgroupSizeY: 256,
+              maxComputeWorkgroupSizeZ: 64,
+            };
+          }
+          return {};
+        };
+
+        const resolveLimits = (hostLimits) => {
+          const familyLimits = getFamilyLimits(gpuInfo.vendor, gpuInfo.architecture);
+          const out = {};
+          for (const [k, famVal] of Object.entries(familyLimits)) {
+            try {
+              const hostVal = hostLimits[k];
+              if (typeof hostVal === 'number') {
+                if (k.startsWith('min')) {
+                  out[k] = Math.max(famVal, hostVal);
+                } else {
+                  out[k] = Math.min(famVal, hostVal);
+                }
+              }
+            } catch (_) {}
+          }
+          return out;
+        };
 
         const patchInfoAccessors = (iProto) => {
           if (!iProto) return;
@@ -6053,6 +8091,124 @@ function buildWorkerInjectionScript(fp) {
           }
         };
 
+        const patchFeaturesAccessors = (fProto) => {
+          if (!fProto || patchedFeaturesProto) return;
+          patchedFeaturesProto = true;
+          const sizeDesc = Object.getOwnPropertyDescriptor(fProto, 'size');
+          if (sizeDesc && typeof sizeDesc.get === 'function') {
+            const natSizeGet = sizeDesc.get;
+            Object.defineProperty(fProto, 'size', {
+              configurable: sizeDesc.configurable,
+              enumerable: sizeDesc.enumerable,
+              get: nativeLike(function size() {
+                natSizeGet.call(this);
+                const filtered = featuresMap.get(this);
+                return filtered ? filtered.size : natSizeGet.call(this);
+              }, natSizeGet, 'get size', 0),
+              set: sizeDesc.set,
+            });
+          }
+          if (typeof fProto.has === 'function') {
+            const natHas = fProto.has;
+            const hasMethod = nativeLike(function has(key) {
+              natHas.call(this, key);
+              const filtered = featuresMap.get(this);
+              if (filtered) return filtered.has(String(key));
+              return natHas.call(this, key);
+            }, natHas, 'has', 1);
+            Object.defineProperty(fProto, 'has', {
+              configurable: true,
+              enumerable: true,
+              writable: true,
+              value: hasMethod,
+            });
+          }
+          const wrapIter = (key, makeIter) => {
+            if (typeof fProto[key] === 'function') {
+              const natFn = fProto[key];
+              const method = nativeLike(function (...args) {
+                natFn.apply(this, args);
+                const filtered = featuresMap.get(this);
+                if (filtered) return makeIter(filtered);
+                return natFn.apply(this, args);
+              }, natFn, key, natFn.length);
+              Object.defineProperty(fProto, key, {
+                configurable: true,
+                enumerable: true,
+                writable: true,
+                value: method,
+              });
+            }
+          };
+          wrapIter('entries', (f) => f.entries());
+          wrapIter('keys', (f) => f.keys());
+          wrapIter('values', (f) => f.values());
+          if (typeof Symbol !== 'undefined' && Symbol.iterator && typeof fProto[Symbol.iterator] === 'function') {
+            const natSym = fProto[Symbol.iterator];
+            const symMethod = nativeLike(function () {
+              natSym.call(this);
+              const filtered = featuresMap.get(this);
+              if (filtered) return filtered[Symbol.iterator]();
+              return natSym.call(this);
+              // Do NOT rename or re-arity this wrapper: a Blink setlike prototype exposes
+              // Symbol.iterator as the very same values function object, so the native
+              // name/length are part of the observable surface. Overriding them would make the
+              // prototype signature differ from an un-injected build.
+            }, natSym);
+            Object.defineProperty(fProto, Symbol.iterator, {
+              configurable: true,
+              enumerable: false,
+              writable: true,
+              value: symMethod,
+            });
+          }
+          if (typeof fProto.forEach === 'function') {
+            const natForEach = fProto.forEach;
+            const forEachMethod = nativeLike(function forEach(callback, thisArg) {
+              natForEach.call(this, () => {});
+              const filtered = featuresMap.get(this);
+              if (filtered) {
+                for (const val of filtered) {
+                  callback.call(thisArg, val, val, this);
+                }
+                return;
+              }
+              return natForEach.apply(this, arguments);
+            }, natForEach, 'forEach', 1);
+            Object.defineProperty(fProto, 'forEach', {
+              configurable: true,
+              enumerable: true,
+              writable: true,
+              value: forEachMethod,
+            });
+          }
+        };
+
+        const patchLimitsAccessors = (lProto) => {
+          if (!lProto || patchedLimitsProto) return;
+          patchedLimitsProto = true;
+          const props = Object.getOwnPropertyNames(lProto);
+          for (const key of props) {
+            if (key === 'constructor') continue;
+            const desc = Object.getOwnPropertyDescriptor(lProto, key);
+            if (!desc || typeof desc.get !== 'function') continue;
+            const natGet = desc.get;
+            Object.defineProperty(lProto, key, {
+              configurable: desc.configurable,
+              enumerable: desc.enumerable,
+              get: nativeLike(function () {
+                natGet.call(this);
+                const custom = limitsMap.get(this);
+                if (custom && Object.prototype.hasOwnProperty.call(custom, key)) {
+                  return custom[key];
+                }
+                return natGet.call(this);
+              }, natGet, 'get ' + key, 0),
+              set: desc.set,
+            });
+          }
+        };
+
         const patchAdapterProto = (aProto) => {
           if (adapterProtoPatched || !aProto) return;
           adapterProtoPatched = true;
@@ -6067,6 +8223,46 @@ function buildWorkerInjectionScript(fp) {
                 return spoofed || natInfoGet.call(this);
               }, natInfoGet, 'get info', 0),
               set: infoDesc.set,
+            });
+          }
+
+          const featuresDesc = Object.getOwnPropertyDescriptor(aProto, 'features');
+          if (featuresDesc && typeof featuresDesc.get === 'function') {
+            const natFeaturesGet = featuresDesc.get;
+            Object.defineProperty(aProto, 'features', {
+              configurable: featuresDesc.configurable,
+              enumerable: featuresDesc.enumerable,
+              get: nativeLike(function features() {
+                const f = natFeaturesGet.call(this);
+                if (f && !featuresMap.has(f)) {
+                  const allowed = new Set();
+                  try {
+                    for (const item of f) {
+                      if (!disallowedFeatures.has(item)) allowed.add(item);
+                    }
+                  } catch (_) {}
+                  featuresMap.set(f, allowed);
+                }
+                return f;
+              }, natFeaturesGet, 'get features', 0),
+              set: featuresDesc.set,
+            });
+          }
+
+          const limitsDesc = Object.getOwnPropertyDescriptor(aProto, 'limits');
+          if (limitsDesc && typeof limitsDesc.get === 'function') {
+            const natLimitsGet = limitsDesc.get;
+            Object.defineProperty(aProto, 'limits', {
+              configurable: limitsDesc.configurable,
+              enumerable: limitsDesc.enumerable,
+              get: nativeLike(function limits() {
+                const l = natLimitsGet.call(this);
+                if (l && !limitsMap.has(l)) {
+                  limitsMap.set(l, resolveLimits(l));
+                }
+                return l;
+              }, natLimitsGet, 'get limits', 0),
+              set: limitsDesc.set,
             });
           }
 
@@ -6087,30 +8283,61 @@ function buildWorkerInjectionScript(fp) {
         if (typeof GPUAdapterInfo !== 'undefined' && GPUAdapterInfo.prototype) {
           patchInfoAccessors(GPUAdapterInfo.prototype);
         }
+        if (typeof GPUSupportedFeatures !== 'undefined' && GPUSupportedFeatures.prototype) {
+          patchFeaturesAccessors(GPUSupportedFeatures.prototype);
+        }
+        if (typeof GPUSupportedLimits !== 'undefined' && GPUSupportedLimits.prototype) {
+          patchLimitsAccessors(GPUSupportedLimits.prototype);
+        }
         if (typeof GPUAdapter !== 'undefined' && GPUAdapter.prototype) {
           patchAdapterProto(GPUAdapter.prototype);
         }
 
-        const prepareInfo = (adapter) => {
+        const prepareAdapter = (adapter) => {
           if (!adapter) return;
           const aProto = (typeof GPUAdapter !== 'undefined' && GPUAdapter.prototype) || Object.getPrototypeOf(adapter);
           patchAdapterProto(aProto);
 
           let info = null;
           try { info = adapter.info; } catch (_) {}
-          if (!info || typeof info !== 'object') return;
+          if (info && typeof info === 'object') {
+            const iProto = (typeof GPUAdapterInfo !== 'undefined' && GPUAdapterInfo.prototype) || Object.getPrototypeOf(info);
+            patchInfoAccessors(iProto);
+            infoOverrides.set(info, gpuInfo);
+            adapterInfos.set(adapter, info);
+          }
 
-          const iProto = (typeof GPUAdapterInfo !== 'undefined' && GPUAdapterInfo.prototype) || Object.getPrototypeOf(info);
-          patchInfoAccessors(iProto);
+          let features = null;
+          try { features = adapter.features; } catch (_) {}
+          if (features && typeof features === 'object') {
+            const fProto = (typeof GPUSupportedFeatures !== 'undefined' && GPUSupportedFeatures.prototype) || Object.getPrototypeOf(features);
+            patchFeaturesAccessors(fProto);
+            if (!featuresMap.has(features)) {
+              const allowed = new Set();
+              try {
+                for (const item of features) {
+                  if (!disallowedFeatures.has(item)) allowed.add(item);
+                }
+              } catch (_) {}
+              featuresMap.set(features, allowed);
+            }
+          }
 
-          infoOverrides.set(info, gpuInfo);
-          adapterInfos.set(adapter, info);
+          let limits = null;
+          try { limits = adapter.limits; } catch (_) {}
+          if (limits && typeof limits === 'object') {
+            const lProto = (typeof GPUSupportedLimits !== 'undefined' && GPUSupportedLimits.prototype) || Object.getPrototypeOf(limits);
+            patchLimitsAccessors(lProto);
+            if (!limitsMap.has(limits)) {
+              limitsMap.set(limits, resolveLimits(limits));
+            }
+          }
         };
 
         replace(gpuProto, 'requestAdapter', (origReq) => async function requestAdapter(...args) {
           const adapter = await origReq.apply(this, args);
           if (!adapter) return adapter;
-          prepareInfo(adapter);
+          prepareAdapter(adapter);
           return adapter;
         });
       }
@@ -6195,11 +8422,9 @@ const injectSourceKey = (source) => crypto.createHash('sha1').update(source).dig
 
 async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile = {}, options = {}) {
   const privacy = profile.privacy || {};
-  const timezone = privacy.timezoneMode === 'custom'
-    ? privacy.timezone
-    : privacy.timezoneMode === 'real'
-      ? ''
-      : (profile.exitTimezone || '');
+  const timezone = privacy.timezoneMode === 'real'
+    ? ''
+    : String(privacy.timezone || profile.timezone || profile.exitTimezone || fp.timezone || '').trim();
   // geoMode: custom coords | disabled/prompt (no override) | ip/allow (from exit IP)
   let latitude = null;
   let longitude = null;
@@ -6247,28 +8472,32 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
       await invoke(method, params);
     } catch (error) {
       const msg = String(error && error.message || error || '');
-      if (/already in effect|cannot be overridden|not available/i.test(msg)) return;
+      if (/already in effect|cannot be overridden|not available|Command can only be executed on top-level targets|Cannot find default execution context/i.test(msg)) return;
       throw error;
     }
   };
 
   // Network/Emulation.setUserAgentOverride + UserAgentMetadata (Client Hints)
   if (fp.userAgent || fp.uaProfile) {
+    const isIos = Boolean((fp.mobileDevice && fp.mobileDevice.os === 'ios') || fp.uaProfile?.os === 'ios' || (fp.platform && /iphone|ipad|ipod/i.test(fp.platform)));
     const uaProfile = fp.uaProfile || buildUaProfile({
       userAgent: fp.userAgent,
       platform: fp.platform,
     });
-    const acceptLanguage = (fp.languages || []).join(',');
+    const acceptLanguage = fp.acceptLanguage || buildAcceptLanguageHeader(fp.languages || ['en-US', 'en']);
     const override = cdpUserAgentOverride(uaProfile, acceptLanguage);
+    if (isIos) {
+      override.userAgentMetadata = undefined;
+    }
     // Emulation affects navigator + most page JS
     await softOverride('Emulation.setUserAgentOverride', override);
     // Network affects HTTP headers (User-Agent + sec-ch-ua*)
     await softOverride('Network.enable', {});
     await softOverride('Network.setUserAgentOverride', {
       userAgent: override.userAgent,
-      acceptLanguage: override.acceptLanguage,
+      acceptLanguage: override.acceptLanguage || formatAcceptLanguage(acceptLanguage),
       platform: override.platform,
-      userAgentMetadata: override.userAgentMetadata,
+      userAgentMetadata: isIos ? undefined : override.userAgentMetadata,
     });
   }
   // Desktop windows must retain Chromium's live viewport. A fixed device-metrics
@@ -6297,7 +8526,7 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
       enabled: true,
       maxTouchPoints: Number(fp.maxTouchPoints) || 5,
     });
-  } else if (fp.screen) {
+  } else if (fp.screen && !options.isSubframe && options.targetType !== 'iframe') {
     await softOverride('Emulation.clearDeviceMetricsOverride', {});
   }
   if (timezone) {
@@ -6377,7 +8606,7 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     }
   } catch (error) {
     const msg = String(error && error.message || error || '');
-    if (!/Uncaught|already in effect|cannot be overridden/i.test(msg)) {
+    if (!/Uncaught|already in effect|cannot be overridden|Cannot find default execution context|Command can only be executed on top-level targets/i.test(msg)) {
       // unexpected CDP transport errors still surface
       throw error;
     }
@@ -6416,6 +8645,9 @@ module.exports = {
   isDisallowedVendorExtension,
   WEBGL_PARAM_IDS,
   HOST_WEBGL_LIMITS,
+  HOST_WEBGL2_DEFAULTS,
+  MEDIA_DEVICE_POOLS_BY_OS,
+  MEDIA_DEVICE_TEMPLATES,
   getHostWebglLimits,
   isPersonaWebglCompatible,
   compatiblePersonasForOs,

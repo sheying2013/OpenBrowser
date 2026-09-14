@@ -107,23 +107,156 @@ function batteryFromFp(fp) {
   };
 }
 
-function mediaLabelsFromFp(fp) {
-  const labels = fp.mediaDevices?.labels;
-  if (labels && typeof labels === 'object') {
+function isValidPrivateIpv4(ip) {
+  if (typeof ip !== 'string') return false;
+  const trimmed = ip.trim();
+  if (!trimmed || trimmed === '0.0.0.0') return false;
+  const parts = trimmed.split('.');
+  if (parts.length !== 4) return false;
+  const nums = [];
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) return false;
+    if (p.length > 1 && p.startsWith('0')) return false;
+    const n = Number(p);
+    if (n < 0 || n > 255) return false;
+    nums.push(n);
+  }
+  const [a, b, c, d] = nums;
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+}
+
+function fallbackPrivateIp(seedStr) {
+  const h = crypto.createHash('sha256').update(String(seedStr || 'webrtc-local-ip')).digest();
+  const pick = h[0] % 3;
+  if (pick === 0) return `10.${h[1]}.${h[2]}.${1 + (h[3] % 254)}`;
+  if (pick === 1) return `192.168.${h[1]}.${1 + (h[2] % 254)}`;
+  return `172.${16 + (h[1] % 16)}.${h[2]}.${1 + (h[3] % 254)}`;
+}
+
+function detectOs(fp = {}, profile = {}, init = {}) {
+  const p = String(
+    fp.os
+    || fp.uaProfile?.os
+    || profile.os
+    || init.user_agent_data?.platform
+    || fp.platform
+    || init.platform
+    || profile.userAgent
+    || ''
+  ).toLowerCase();
+  if (p.includes('ios') || p.includes('iphone') || p.includes('ipad')) return 'ios';
+  if (p.includes('mac') || p.includes('darwin')) return 'macos';
+  if (p.includes('android')) return 'android';
+  if (p.includes('linux')) return 'linux';
+  return 'windows';
+}
+
+function detectInitOs(init = {}) {
+  const p = String(
+    init?.user_agent_data?.platform
+    || init?.platform
+    || init?.cmd_line?.['user-agent']
+    || ''
+  ).toLowerCase();
+  if (p.includes('ios') || p.includes('iphone') || p.includes('ipad')) return 'ios';
+  if (p.includes('mac') || p.includes('darwin')) return 'macos';
+  if (p.includes('android')) return 'android';
+  if (p.includes('linux')) return 'linux';
+  return 'windows';
+}
+
+const MEDIA_POOLS_BY_OS = Object.freeze({
+  windows: Object.freeze({
+    audio_input: ['Microphone Array (Realtek High Definition Audio)'],
+    audio_output: ['Speaker/Headphone (Realtek High Definition Audio)'],
+    video_input: ['Integrated Camera'],
+  }),
+  macos: Object.freeze({
+    audio_input: ['Built-in Microphone'],
+    audio_output: ['MacBook Pro Speakers'],
+    video_input: ['FaceTime HD Camera'],
+  }),
+  ios: Object.freeze({
+    audio_input: ['Built-in Microphone'],
+    audio_output: ['Built-in Speaker'],
+    video_input: ['Back Camera', 'Front Camera'],
+  }),
+  android: Object.freeze({
+    audio_input: ['Built-in Microphone'],
+    audio_output: ['Built-in Speaker'],
+    video_input: ['Back Camera'],
+  }),
+  linux: Object.freeze({
+    audio_input: ['Built-in Audio Analog Stereo'],
+    audio_output: ['Built-in Audio Analog Stereo'],
+    video_input: ['USB 2.0 Camera'],
+  }),
+});
+
+function mediaLabelsFromFp(fp = {}, profile = {}, isEnumerateDevices = true) {
+  const os = detectOs(fp, profile);
+  const explicit = fp.mediaDevices?.labels;
+  const commsText = String(explicit?.communications_text || 'Communications - ');
+  const defaultText = String(explicit?.default_text || 'Default - ');
+
+  if (!isEnumerateDevices) {
     return {
-      audio_input_labels: Array.isArray(labels.audio_input_labels) ? labels.audio_input_labels : [''],
-      audio_output_labels: Array.isArray(labels.audio_output_labels) ? labels.audio_output_labels : [''],
-      communications_text: String(labels.communications_text || 'Communications - '),
-      default_text: String(labels.default_text || 'Default - '),
-      video_input_labels: Array.isArray(labels.video_input_labels) ? labels.video_input_labels : [''],
+      audio_input_labels: [],
+      audio_output_labels: [],
+      communications_text: commsText,
+      default_text: defaultText,
+      video_input_labels: [],
     };
   }
+
+  if (explicit && typeof explicit === 'object' &&
+      (Array.isArray(explicit.audio_input_labels) || Array.isArray(explicit.video_input_labels))) {
+    return {
+      audio_input_labels: Array.isArray(explicit.audio_input_labels) ? explicit.audio_input_labels.map(String) : [],
+      audio_output_labels: Array.isArray(explicit.audio_output_labels) ? explicit.audio_output_labels.map(String) : [],
+      communications_text: commsText,
+      default_text: defaultText,
+      video_input_labels: Array.isArray(explicit.video_input_labels) ? explicit.video_input_labels.map(String) : [],
+    };
+  }
+
+  const fallback = MEDIA_POOLS_BY_OS[os] || MEDIA_POOLS_BY_OS.windows;
+
+  const isLabelCompatible = (label) => {
+    if (!label) return false;
+    if (os === 'windows') {
+      if (/facetime|macbook|mac mini/i.test(label)) return false;
+      if (/back camera|front camera|rear camera/i.test(label)) return false;
+    } else if (os === 'macos') {
+      if (/realtek|conexant|synaptics/i.test(label)) return false;
+      if (/back camera|front camera|rear camera/i.test(label)) return false;
+    } else if (os === 'android') {
+      if (/realtek|conexant|synaptics/i.test(label)) return false;
+      if (/facetime|macbook|mac mini/i.test(label)) return false;
+    } else if (os === 'ios') {
+      if (/realtek|conexant|synaptics|integrated camera/i.test(label)) return false;
+      if (/macbook|mac mini|facetime/i.test(label)) return false;
+    } else if (os === 'linux') {
+      if (/realtek|conexant|synaptics|integrated camera/i.test(label)) return false;
+      if (/facetime|macbook|mac mini|\bmac\b/i.test(label)) return false;
+    }
+    return true;
+  };
+
+  const devices = Array.isArray(fp.mediaDevices?.devices) ? fp.mediaDevices.devices : [];
+  const audioIn = devices.filter((d) => d && d.kind === 'audioinput').map((d) => String(d.label || '').trim()).filter(isLabelCompatible);
+  const audioOut = devices.filter((d) => d && d.kind === 'audiooutput').map((d) => String(d.label || '').trim()).filter(isLabelCompatible);
+  const videoIn = devices.filter((d) => d && d.kind === 'videoinput').map((d) => String(d.label || '').trim()).filter(isLabelCompatible);
+
   return {
-    audio_input_labels: [''],
-    audio_output_labels: [''],
-    communications_text: 'Communications - ',
-    default_text: 'Default - ',
-    video_input_labels: [''],
+    audio_input_labels: audioIn.length ? audioIn : [...fallback.audio_input],
+    audio_output_labels: audioOut.length ? audioOut : [...fallback.audio_output],
+    communications_text: commsText,
+    default_text: defaultText,
+    video_input_labels: videoIn.length ? videoIn : [...fallback.video_input],
   };
 }
 
@@ -156,8 +289,8 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
     ? fp.languages
     : String(profile.language || 'en-US').split(',').map((s) => s.trim()).filter(Boolean);
   const accept = langs.join(',') || 'en-US';
-  const webrtcMode = fp.webrtc || 'proxy';
-  const webrtcPolicy = webrtcMode === 'disabled' ? 0 : (webrtcMode === 'proxy' ? 3 : 1);
+  const rawWebrtc = fp.webrtc || privacy.webrtc || 'proxy';
+  const webrtcMode = rawWebrtc === 'disabled' ? 'disabled' : (rawWebrtc === 'real' ? 'real' : 'proxy');
   const canvasMode = fp.canvas?.mode || 'noise';
   const webglMode = fp.webgl?.mode || 'noise';
   const audioMode = fp.audio?.mode || 'noise';
@@ -169,20 +302,68 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
     || privacy.fontFingerprinting === true
     || privacy.isFontFingerprinting === true
     || fp.fontFingerprinting === true;
+  const fontList = fontFingerprinting ? fontListFromFp(fp) : [];
+  const effectiveFontEnable = Boolean(fontFingerprinting && fontList.length > 0);
+  const isEnumerateDevicesEnable = mediaMode !== 'real';
+
+  const exitIp = String(
+    profile.exitIp
+    || profile.exitIP
+    || fp.webrtcAddress
+    || fp.dynamicConfig?.webrtcAddress
+    || privacy.webrtcAddress
+    || ''
+  ).trim();
+  let localIp = String(
+    fp.webrtcLocalIp
+    || fp.staticConfig?.webrtcLocalIp
+    || fp.dynamicConfig?.webrtcLocalIp
+    || privacy.webrtcLocalIp
+    || ''
+  ).trim();
+
+  let isWebrtcEnable = webrtcMode !== 'disabled';
+  let webrtcPolicy = 0;
+  let webrtcFakeIp = undefined;
+  let webrtcLocalIp = undefined;
+
+  if (isWebrtcEnable) {
+    if (webrtcMode === 'proxy') {
+      if (exitIp && exitIp !== '0.0.0.0') {
+        webrtcPolicy = 3;
+        webrtcFakeIp = exitIp;
+      } else {
+        // Exit IP is missing: cannot fake exit IP; downgrade to real mode (policy 1)
+        // Never write empty or placeholder fake IP (e.g. 0.0.0.0)
+        webrtcPolicy = 1;
+      }
+    } else {
+      // Real mode
+      webrtcPolicy = 1;
+    }
+
+    if (!isValidPrivateIpv4(localIp)) {
+      localIp = fallbackPrivateIp(profile.id || fp.profileId || 'webrtc-local');
+    }
+    webrtcLocalIp = localIp;
+  } else {
+    isWebrtcEnable = false;
+    webrtcPolicy = 0;
+  }
 
   const fields = {
     platform: String(fp.platform || meta.platform || 'Win32'),
     accept_languages: accept,
-    is_webrtc_enable: webrtcMode !== 'disabled',
+    is_webrtc_enable: isWebrtcEnable,
     webrtc_policy: webrtcPolicy,
     is_canvas_finger_printing_enable: canvasMode === 'noise',
     is_webgl_finger_printing_enable: webglMode === 'noise',
     is_audio_finger_printing_enable: audioMode === 'noise',
     is_clientrects_finger_printing_enable: clientRectsMode === 'noise',
-    is_enumerate_devices_enable: mediaMode !== 'real',
-    is_font_finger_printing_enable: fontFingerprinting,
+    is_enumerate_devices_enable: isEnumerateDevicesEnable,
+    is_font_finger_printing_enable: effectiveFontEnable,
     GoogleSpeechSynthesis: speechMode !== 'blocked',
-    webrtc_media_labels: mediaLabelsFromFp(fp),
+    webrtc_media_labels: mediaLabelsFromFp(fp, profile, isEnumerateDevicesEnable),
     battery: batteryFromFp(fp),
     user_agent_data: {
       architecture: String(meta.architecture || 'x86'),
@@ -224,34 +405,16 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
     fields.machine = deviceName.slice(0, 120);
   }
 
-  // WebRTC IP surfaces: public (proxy/exit) + private local candidate.
-  const publicIp = String(
-    fp.webrtcAddress
-    || fp.dynamicConfig?.webrtcAddress
-    || privacy.webrtcAddress
-    || profile.exitIp
-    || profile.exitIP
-    || ''
-  ).trim();
-  const localIp = String(
-    fp.webrtcLocalIp
-    || fp.staticConfig?.webrtcLocalIp
-    || fp.dynamicConfig?.webrtcLocalIp
-    || privacy.webrtcLocalIp
-    || ''
-  ).trim();
-  if (webrtcMode === 'disabled') {
-    fields.webrtc_fake_ip = '';
-    fields.webrtc_local_ip = '';
-  } else {
-    if (publicIp) fields.webrtc_fake_ip = publicIp;
-    if (localIp) fields.webrtc_local_ip = localIp;
-  }
-  const stunServers = Array.isArray(privacy.webrtcStunServers)
-    ? privacy.webrtcStunServers
-    : (Array.isArray(fp.webrtcStunServers) ? fp.webrtcStunServers : null);
-  if (stunServers && stunServers.length) {
-    fields.webrtc_stun_servers = stunServers.map((item) => String(item || '').trim()).filter(Boolean);
+  if (webrtcFakeIp !== undefined) fields.webrtc_fake_ip = webrtcFakeIp;
+  if (webrtcLocalIp !== undefined) fields.webrtc_local_ip = webrtcLocalIp;
+
+  if (isWebrtcEnable) {
+    const stunServers = Array.isArray(privacy.webrtcStunServers)
+      ? privacy.webrtcStunServers
+      : (Array.isArray(fp.webrtcStunServers) ? fp.webrtcStunServers : null);
+    if (stunServers && stunServers.length) {
+      fields.webrtc_stun_servers = stunServers.map((item) => String(item || '').trim()).filter(Boolean);
+    }
   }
 
   // Geo as "lat,lon,accuracy" string accepted by Framework geoposition parser.
@@ -279,7 +442,7 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
   fields._canvasConsistencyPatch = consistencyFromFp(fp, 'canvas');
   fields._webglConsistencyPatch = consistencyFromFp(fp, 'webgl');
   const skipHosts = canvasSkipHostsFromFp(fp);
-  if (skipHosts.length) {
+  if (skipHosts.length || Array.isArray(fp?.stability?.skipHosts) || Array.isArray(privacy?.stabilitySkipHosts)) {
     fields._canvasSkipHosts = skipHosts;
     // Canvas 与 WebGL 的豁免列表在内核里是两个独立字段，任何一层漏写都会让同一站点
     // 在两条渲染路径上得到不同答案，因此两者必须同源同值。
@@ -288,8 +451,7 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
   // The switch and its list travel together: a switch with nothing to answer from leaves the
   // native layer undefined, while a list without the switch could activate a build that reads the
   // list on its own.
-  const fontList = fontFingerprinting ? fontListFromFp(fp) : [];
-  if (fontList.length) fields.font_list = fontList;
+  if (effectiveFontEnable) fields.font_list = fontList;
 
   // cmd_line identity (kernel also reads these)
   fields._cmdLinePatch = {
@@ -401,16 +563,22 @@ function mergeConsistency(existing, patch) {
  */
 function fontListFromFp(fp) {
   const personaList = fp && fp.fonts && Array.isArray(fp.fonts.list) ? fp.fonts.list : null;
-  const list = personaList && personaList.length
-    ? personaList
-    : fontsForOs((fp && fp.uaProfile && fp.uaProfile.os) || (fp && fp.platform) || 'windows');
   const seen = new Set();
   const out = [];
-  for (const raw of Array.isArray(list) ? list : []) {
-    const family = String(raw || '').trim();
-    if (!family || seen.has(family.toLowerCase())) continue;
-    seen.add(family.toLowerCase());
-    out.push(family);
+  const collect = (arr) => {
+    for (const raw of Array.isArray(arr) ? arr : []) {
+      const family = String(raw || '').trim();
+      if (!family || seen.has(family.toLowerCase())) continue;
+      seen.add(family.toLowerCase());
+      out.push(family);
+    }
+  };
+  if (personaList && personaList.length) {
+    collect(personaList);
+  }
+  if (!out.length) {
+    const osFonts = fontsForOs((fp && fp.uaProfile && fp.uaProfile.os) || (fp && fp.platform) || 'windows');
+    collect(osFonts);
   }
   return out;
 }
@@ -426,13 +594,15 @@ function canvasSkipHostsFromFp(fp) {
   const seen = new Set();
   const out = [];
   for (const raw of list) {
-    const host = String(raw || '')
+    if (raw == null) continue;
+    if (typeof raw === 'boolean' || (typeof raw === 'object' && raw !== null)) continue;
+    const host = String(raw)
       .trim()
       .toLowerCase()
       .replace(/^https?:\/\//, '')
       .replace(/\/.*$/, '')
       .replace(/^\*\./, '');
-    if (!host || seen.has(host)) continue;
+    if (!host || seen.has(host) || /\s/.test(host)) continue;
     seen.add(host);
     out.push(host);
   }
@@ -468,12 +638,79 @@ function applyFingerprintFields(init, fields) {
       fields._webglConsistencyPatch
     );
   }
-  if (Array.isArray(fields._canvasSkipHosts)) {
-    init.canvas_fingerprint_skip_hosts = fields._canvasSkipHosts;
+  // Canvas 与 WebGL 的豁免列表在内核里是两个独立字段，任何一层漏写都会让同一站点
+  // 在两条渲染路径上得到不同答案，因此两者必须同源同值。
+  const explicitSkipHosts = Array.isArray(fields._canvasSkipHosts)
+    ? fields._canvasSkipHosts
+    : (Array.isArray(fields._webglSkipHosts) ? fields._webglSkipHosts : null);
+  if (explicitSkipHosts !== null) {
+    init.canvas_fingerprint_skip_hosts = [...explicitSkipHosts];
+    init.webgl_fingerprint_skip_hosts = [...explicitSkipHosts];
+  } else if (Array.isArray(init.canvas_fingerprint_skip_hosts) || Array.isArray(init.webgl_fingerprint_skip_hosts)) {
+    const fallbackHosts = Array.isArray(init.canvas_fingerprint_skip_hosts)
+      ? init.canvas_fingerprint_skip_hosts
+      : init.webgl_fingerprint_skip_hosts;
+    init.canvas_fingerprint_skip_hosts = [...fallbackHosts];
+    init.webgl_fingerprint_skip_hosts = [...fallbackHosts];
   }
-  if (Array.isArray(fields._webglSkipHosts)) {
-    init.webgl_fingerprint_skip_hosts = fields._webglSkipHosts;
+
+  // 字体指纹开关与列表配对不变量：开关为 true 必须有非空列表，开关为 false 绝不保留列表
+  if (init.is_font_finger_printing_enable && Array.isArray(fields.font_list) && fields.font_list.length > 0) {
+    init.font_list = [...fields.font_list];
+  } else {
+    init.is_font_finger_printing_enable = false;
+    delete init.font_list;
+    delete init.full_font_list;
   }
+
+  // WebRTC 互洽不变量：
+  // 1. is_webrtc_enable === false 时强制归零策略并清除所有 IP / STUN 残留
+  if (init.is_webrtc_enable === false) {
+    init.webrtc_policy = 0;
+    delete init.webrtc_fake_ip;
+    delete init.webrtc_local_ip;
+    delete init.webrtc_stun_servers;
+  } else if (init.is_webrtc_enable === true) {
+    // 2. 策略为伪造出口 IP 时必须具备合法的出口 IP，否则降级为 real (策略 1) 且不写入占位/空 fake ip
+    if (init.webrtc_policy === 3) {
+      if (fields.webrtc_fake_ip && fields.webrtc_fake_ip !== '0.0.0.0') {
+        init.webrtc_fake_ip = fields.webrtc_fake_ip;
+      } else if (!init.webrtc_fake_ip || init.webrtc_fake_ip === '0.0.0.0') {
+        init.webrtc_policy = 1;
+        delete init.webrtc_fake_ip;
+      }
+    } else if (init.webrtc_policy === 1 || init.webrtc_policy === 0) {
+      delete init.webrtc_fake_ip;
+    }
+
+    // 3. webrtc_local_ip 必须为有效私网 IPv4 地址
+    if (fields.webrtc_local_ip && isValidPrivateIpv4(fields.webrtc_local_ip)) {
+      init.webrtc_local_ip = fields.webrtc_local_ip;
+    } else if (!init.webrtc_local_ip || !isValidPrivateIpv4(init.webrtc_local_ip)) {
+      init.webrtc_local_ip = fallbackPrivateIp(fields._windowName || 'webrtc-local');
+    }
+  }
+
+  // 4. webrtc_media_labels 同源与枚举关闭清空不变量：
+  if (init.is_enumerate_devices_enable === false) {
+    const existing = (init.webrtc_media_labels && typeof init.webrtc_media_labels === 'object') ? init.webrtc_media_labels : {};
+    init.webrtc_media_labels = {
+      audio_input_labels: [],
+      audio_output_labels: [],
+      communications_text: String(existing.communications_text || fields.webrtc_media_labels?.communications_text || 'Communications - '),
+      default_text: String(existing.default_text || fields.webrtc_media_labels?.default_text || 'Default - '),
+      video_input_labels: [],
+    };
+  } else if (fields.webrtc_media_labels) {
+    init.webrtc_media_labels = {
+      audio_input_labels: Array.isArray(fields.webrtc_media_labels.audio_input_labels) ? [...fields.webrtc_media_labels.audio_input_labels] : [],
+      audio_output_labels: Array.isArray(fields.webrtc_media_labels.audio_output_labels) ? [...fields.webrtc_media_labels.audio_output_labels] : [],
+      communications_text: String(fields.webrtc_media_labels.communications_text || 'Communications - '),
+      default_text: String(fields.webrtc_media_labels.default_text || 'Default - '),
+      video_input_labels: Array.isArray(fields.webrtc_media_labels.video_input_labels) ? [...fields.webrtc_media_labels.video_input_labels] : [],
+    };
+  }
+
   const cl = init.cmd_line && typeof init.cmd_line === 'object' ? { ...init.cmd_line } : {};
   if (fields._cmdLinePatch) {
     for (const [k, v] of Object.entries(fields._cmdLinePatch)) {
@@ -530,6 +767,86 @@ async function resolveInitTemplate(browserPath = '', resourceRoots = []) {
  * Write profile/init.json for openbrowser-148 from OpenBrowser fingerprint.
  * @returns {{ windowName: string, path: string, fields: object }}
  */
+function isDeepEqual(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null) return a === b;
+  if (typeof a !== typeof b) return false;
+  if (typeof a !== 'object') return false;
+
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!isDeepEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+
+  if (Array.isArray(b)) return false;
+
+  const aKeys = Object.keys(a).filter((k) => a[k] !== undefined);
+  const bKeys = Object.keys(b).filter((k) => b[k] !== undefined);
+  if (aKeys.length !== bKeys.length) return false;
+
+  for (const k of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+    if (!isDeepEqual(a[k], b[k])) return false;
+  }
+  return true;
+}
+
+/**
+ * 严格回读比对全部泄漏关键字段：
+ * platform, user_agent_data, webgl_vendor, webgl_renderer, webgpu_parameter,
+ * accept_languages, cmd_line(user-agent, lange), is_font_finger_printing_enable,
+ * font_list, canvas_fingerprint_skip_hosts, webgl_fingerprint_skip_hosts,
+ * is_webrtc_enable, webrtc_policy, webrtc_fake_ip, webrtc_local_ip, webrtc_media_labels
+ */
+function verifyKernelInitReadback(written, readback, initPath) {
+  if (!readback || typeof readback !== 'object') {
+    throw new Error('Failed to verify written init.json at ' + initPath + ': readback failed');
+  }
+
+  const mismatches = [];
+  const fields = [
+    'platform',
+    'user_agent_data',
+    'webgl_vendor',
+    'webgl_renderer',
+    'webgpu_parameter',
+    'accept_languages',
+    'is_font_finger_printing_enable',
+    'font_list',
+    'canvas_fingerprint_skip_hosts',
+    'webgl_fingerprint_skip_hosts',
+    'is_webrtc_enable',
+    'webrtc_policy',
+    'webrtc_fake_ip',
+    'webrtc_local_ip',
+    'webrtc_media_labels',
+  ];
+
+  for (const f of fields) {
+    const wVal = written[f];
+    const rVal = readback[f];
+    if (!isDeepEqual(wVal, rVal)) {
+      mismatches.push(`${f} (expected ${JSON.stringify(wVal)}, read back ${JSON.stringify(rVal)})`);
+    }
+  }
+
+  const wCmd = written.cmd_line || {};
+  const rCmd = readback.cmd_line || {};
+  if (wCmd['user-agent'] !== rCmd['user-agent']) {
+    mismatches.push(`cmd_line.user-agent (expected ${JSON.stringify(wCmd['user-agent'])}, read back ${JSON.stringify(rCmd['user-agent'])})`);
+  }
+  if (wCmd.lange !== rCmd.lange) {
+    mismatches.push(`cmd_line.lange (expected ${JSON.stringify(wCmd.lange)}, read back ${JSON.stringify(rCmd.lange)})`);
+  }
+
+  if (mismatches.length > 0) {
+    throw new Error('Failed to verify written init.json at ' + initPath + ': readback verification failed: ' + mismatches.join('; '));
+  }
+}
+
 async function writeOpenBrowserKernelInit(profileRoot, options = {}) {
   const {
     fingerprint,
@@ -557,11 +874,23 @@ async function writeOpenBrowserKernelInit(profileRoot, options = {}) {
   const fields = mapFingerprintToInitFields(fingerprint || {}, profile);
   applySafetyFields(init);
   applyFingerprintFields(init, fields);
-  // Do not force empty proxy here if caller already set init.proxy for bridge — safety only zeros async.
-  // Engine may set proxy after; for now leave {} and rely on Chromium --proxy-server.
+
+  const invariantCheck = validateKernelInitInvariants(init);
+  if (!invariantCheck.valid) {
+    throw new Error('Kernel init invariant violation: ' + invariantCheck.issues.join('; '));
+  }
 
   const encoded = encodeInitObject(init);
   await fsp.writeFile(initPath, encoded, 'utf8');
+
+  // 支持测试插桩以检验人为篡改捕获能力
+  if (typeof options._beforeReadback === 'function') {
+    await options._beforeReadback(initPath);
+  }
+
+  const readback = loadInitObject(await fsp.readFile(initPath));
+  verifyKernelInitReadback(init, readback, initPath);
+
   return {
     path: initPath,
     windowName: init.ipc.browser_window_name,
@@ -587,6 +916,151 @@ function fingerprintForNativeKernelInject(fp) {
   return fp;
 }
 
+/**
+ * Validate openbrowser-148 init.json invariants:
+ * 1. Font invariant: is_font_finger_printing_enable === true <==> font_list is a non-empty array
+ * 2. Skip hosts invariant: canvas_fingerprint_skip_hosts and webgl_fingerprint_skip_hosts must be strictly co-sourced and identical
+ */
+function validateKernelInitInvariants(init) {
+  const issues = [];
+  if (!init || typeof init !== 'object') {
+    return { valid: false, issues: ['init is not an object'] };
+  }
+  if (init.is_font_finger_printing_enable) {
+    if (!Array.isArray(init.font_list) || init.font_list.length === 0) {
+      issues.push('is_font_finger_printing_enable is true but font_list is missing or empty');
+    }
+  } else {
+    if (init.font_list !== undefined) {
+      issues.push('is_font_finger_printing_enable is false but font_list is present');
+    }
+    if (init.full_font_list !== undefined) {
+      issues.push('is_font_finger_printing_enable is false but full_font_list is present');
+    }
+  }
+  const hasCanvasSkip = Array.isArray(init.canvas_fingerprint_skip_hosts);
+  const hasWebglSkip = Array.isArray(init.webgl_fingerprint_skip_hosts);
+  if (hasCanvasSkip !== hasWebglSkip) {
+    issues.push('canvas_fingerprint_skip_hosts and webgl_fingerprint_skip_hosts must both be present or both absent');
+  } else if (hasCanvasSkip && hasWebglSkip) {
+    if (JSON.stringify(init.canvas_fingerprint_skip_hosts) !== JSON.stringify(init.webgl_fingerprint_skip_hosts)) {
+      issues.push('canvas_fingerprint_skip_hosts and webgl_fingerprint_skip_hosts must have identical items');
+    }
+  }
+
+  // 3. WebRTC 互洽不变量校验
+  if (init.is_webrtc_enable !== undefined) {
+    if (init.is_webrtc_enable === false) {
+      if (init.webrtc_policy !== undefined && init.webrtc_policy !== 0) {
+        issues.push('is_webrtc_enable is false but webrtc_policy is not 0 (disabled)');
+      }
+      if (init.webrtc_fake_ip !== undefined) {
+        issues.push('is_webrtc_enable is false but webrtc_fake_ip is present');
+      }
+      if (init.webrtc_local_ip !== undefined) {
+        issues.push('is_webrtc_enable is false but webrtc_local_ip is present');
+      }
+      if (init.webrtc_stun_servers !== undefined) {
+        issues.push('is_webrtc_enable is false but webrtc_stun_servers is present');
+      }
+    } else if (init.is_webrtc_enable === true) {
+      if (init.webrtc_policy === 0) {
+        issues.push('is_webrtc_enable is true but webrtc_policy is 0 (disabled)');
+      }
+      if (init.webrtc_policy === 3) {
+        if (!init.webrtc_fake_ip || typeof init.webrtc_fake_ip !== 'string' || !init.webrtc_fake_ip.trim() || init.webrtc_fake_ip === '0.0.0.0') {
+          issues.push('webrtc_policy is 3 (fake exit IP) but webrtc_fake_ip is missing, empty, or placeholder (0.0.0.0)');
+        }
+      } else if (init.webrtc_policy === 1) {
+        if (init.webrtc_fake_ip !== undefined) {
+          issues.push('webrtc_policy is 1 (real) but webrtc_fake_ip is present');
+        }
+      }
+      if (init.webrtc_local_ip !== undefined) {
+        if (!isValidPrivateIpv4(init.webrtc_local_ip)) {
+          issues.push(`webrtc_local_ip must be a valid private IPv4 address (10.x, 172.16-31.x, 192.168.x), got: ${JSON.stringify(init.webrtc_local_ip)}`);
+        }
+      } else {
+        issues.push('is_webrtc_enable is true but webrtc_local_ip is missing');
+      }
+    }
+  }
+
+  // 4. webrtc_media_labels 同源与前缀校验
+  if (init.webrtc_media_labels !== undefined) {
+    const ml = init.webrtc_media_labels;
+    if (!ml || typeof ml !== 'object') {
+      issues.push('webrtc_media_labels must be an object');
+    } else {
+      if (typeof ml.default_text !== 'string' || !ml.default_text) {
+        issues.push('webrtc_media_labels.default_text must be a non-empty string');
+      }
+      if (typeof ml.communications_text !== 'string' || !ml.communications_text) {
+        issues.push('webrtc_media_labels.communications_text must be a non-empty string');
+      }
+      if (!Array.isArray(ml.audio_input_labels) || !Array.isArray(ml.audio_output_labels) || !Array.isArray(ml.video_input_labels)) {
+        issues.push('webrtc_media_labels audio/video label lists must be arrays');
+      } else if (init.is_enumerate_devices_enable === false) {
+        if (ml.audio_input_labels.length > 0 || ml.audio_output_labels.length > 0 || ml.video_input_labels.length > 0) {
+          issues.push('is_enumerate_devices_enable is false but webrtc_media_labels contains non-empty label lists');
+        }
+      } else {
+        const os = detectInitOs(init);
+        const checkLabels = (list, kind) => {
+          for (const raw of list) {
+            const label = String(raw || '').trim();
+            if (!label) continue;
+            if (os === 'windows') {
+              if (/facetime|macbook|mac mini/i.test(label)) {
+                issues.push(`webrtc_media_labels.${kind} contains macOS device "${label}" on Windows persona`);
+              }
+              if (/back camera|front camera|rear camera/i.test(label)) {
+                issues.push(`webrtc_media_labels.${kind} contains Android device "${label}" on Windows persona`);
+              }
+            } else if (os === 'macos') {
+              if (/realtek|conexant|synaptics/i.test(label)) {
+                issues.push(`webrtc_media_labels.${kind} contains Windows device "${label}" on macOS persona`);
+              }
+              if (/back camera|front camera|rear camera/i.test(label)) {
+                issues.push(`webrtc_media_labels.${kind} contains Android device "${label}" on macOS persona`);
+              }
+            } else if (os === 'android') {
+              if (/realtek|conexant|synaptics/i.test(label)) {
+                issues.push(`webrtc_media_labels.${kind} contains Windows device "${label}" on Android persona`);
+              }
+              if (/facetime|macbook|mac mini/i.test(label)) {
+                issues.push(`webrtc_media_labels.${kind} contains macOS device "${label}" on Android persona`);
+              }
+            } else if (os === 'ios') {
+              if (/realtek|conexant|synaptics|integrated camera/i.test(label)) {
+                issues.push(`webrtc_media_labels.${kind} contains Windows device "${label}" on iOS persona`);
+              }
+              if (/macbook|mac mini|facetime/i.test(label)) {
+                issues.push(`webrtc_media_labels.${kind} contains macOS device "${label}" on iOS persona`);
+              }
+            } else if (os === 'linux') {
+              if (/realtek|conexant|synaptics|integrated camera/i.test(label)) {
+                issues.push(`webrtc_media_labels.${kind} contains Windows device "${label}" on Linux persona`);
+              }
+              if (/facetime|macbook|mac mini|\bmac\b/i.test(label)) {
+                issues.push(`webrtc_media_labels.${kind} contains macOS device "${label}" on Linux persona`);
+              }
+            }
+          }
+        };
+        checkLabels(ml.audio_input_labels, 'audio_input_labels');
+        checkLabels(ml.audio_output_labels, 'audio_output_labels');
+        checkLabels(ml.video_input_labels, 'video_input_labels');
+      }
+    }
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues,
+  };
+}
+
 module.exports = {
   SOURCE_OPENBROWSER,
   isOpenBrowser148,
@@ -601,4 +1075,13 @@ module.exports = {
   loadInitObject,
   encodeInitObject,
   resolveInitTemplate,
+  validateKernelInitInvariants,
+  isValidPrivateIpv4,
+  fallbackPrivateIp,
+  mediaLabelsFromFp,
+  isDeepEqual,
+  verifyKernelInitReadback,
+  detectInitOs,
+  detectOs,
+  MEDIA_POOLS_BY_OS,
 };

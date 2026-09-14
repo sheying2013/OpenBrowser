@@ -481,9 +481,9 @@ async function prepareMarkerExtension({ profileId, envNumber, userDataPath, temp
     manifest_version: 3,
     name: `环境 ${label}`,
     version: '1.0.2',
-    description: `OpenBrowser 环境 ${label}（浏览器图标 logo-native + 编号）`,
+    description: `环境 ${label}（浏览器图标编号）`,
     action: {
-      default_title: `OpenBrowser · 环境 ${label}`,
+      default_title: `环境 ${label}`,
       default_icon: {
         16: 'icon-16.png',
         32: 'icon-32.png',
@@ -507,46 +507,9 @@ async function prepareMarkerExtension({ profileId, envNumber, userDataPath, temp
   };
   await fsp.writeFile(path.join(dest, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
 
-  // In-page badge shows env number (toolbar icon already has logo-native+number)
-  const markerJs = `(() => {
-  const host = location.hostname;
-  if (host && host !== \x27127.0.0.1\x27 && host !== \x27localhost\x27 && !host.endsWith(\x27.local\x27)) return;
-  const id = 'openbrowser-profile-marker';
-  const label = ${JSON.stringify(label)};
-  const existing = document.getElementById(id);
-  if (existing) {
-    existing.textContent = label;
-    existing.setAttribute('data-env', label);
-    return;
-  }
-  const badge = document.createElement('div');
-  badge.id = id;
-  badge.setAttribute('data-env', label);
-  badge.textContent = label;
-  badge.title = 'OpenBrowser 环境 ' + label;
-  Object.assign(badge.style, {
-    position: 'fixed',
-    right: '14px',
-    bottom: '14px',
-    zIndex: '2147483647',
-    minWidth: '28px',
-    height: '28px',
-    padding: '0 10px',
-    borderRadius: '999px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'linear-gradient(145deg,#007AFF,#0056CC)',
-    color: '#fff',
-    font: '700 13px/1 system-ui,-apple-system,Segoe UI,sans-serif',
-    boxShadow: '0 8px 24px rgba(0,122,255,.35)',
-    border: '2px solid rgba(255,255,255,.85)',
-    pointerEvents: 'none',
-    letterSpacing: '0.02em',
-  });
-  (document.documentElement || document.body).appendChild(badge);
-})();
-`;
+  // Environment marker: number is displayed on the browser toolbar icon.
+  // In-page DOM injection omitted to avoid page-visible fingerprinting.
+  const markerJs = `// Environment marker content script\n`;
   await fsp.writeFile(path.join(dest, 'marker.js'), markerJs, 'utf8');
 
   if (templateDir) {

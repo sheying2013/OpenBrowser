@@ -353,20 +353,24 @@ if (!gateSource.includes('answered.length > 0')) {
   });
 }
 
-// Verify that gate embeds real wOF2 magic
-if (gateSource.includes('d09GM') || gateSource.includes('wOF2')) {
+// Verify that gate embeds authentic font binaries (native SFNT TTF/OTF or WOFF2 fallback)
+const hasSfntMagic = gateSource.includes('AAEAAA') || gateSource.includes('T1RU') || gateSource.includes('dHRj');
+const hasWoff2Magic = gateSource.includes('d09GM') || gateSource.includes('wOF2');
+if (hasSfntMagic || hasWoff2Magic) {
   recordAudit({
     category: 'FONT-BLOB-GATE-CONTRACT',
     status: 'PASS',
-    title: 'Gate packages authentic wOF2 binaries',
-    detail: 'Gate embeds base64-encoded WOFF2 binaries with wOF2 magic header.',
+    title: 'Gate packages authentic font binaries (native SFNT or WOFF2 fallback)',
+    detail: hasSfntMagic
+      ? 'Gate embeds base64-encoded native SFNT (TTF/OTF) binaries with authentic magic header (AAEAAA/T1RU).'
+      : 'Gate embeds base64-encoded WOFF2 binaries with wOF2 magic header.',
   });
 } else {
   recordAudit({
     category: 'FONT-BLOB-GATE-CONTRACT',
     status: 'LEAK/GAP',
-    title: 'wOF2 magic missing',
-    detail: 'wOF2 magic not found in gate script.',
+    title: 'Authentic font binary magic missing',
+    detail: 'Neither native SFNT magic (AAEAAA/T1RU/dHRj) nor WOFF2 fallback magic (d09GM/wOF2) found in gate script.',
   });
 }
 

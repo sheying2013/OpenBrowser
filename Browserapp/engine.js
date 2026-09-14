@@ -32,6 +32,7 @@ const { createCssFontResponseRewriter } = require('./automation/css-font-respons
 const { deriveFontPlaceholder } = require('./automation/font-placeholder');
 const { buildUaProfile, cdpUserAgentOverride, buildAcceptLanguageHeader } = require('./automation/user-agent');
 const { sanitizeUrlForLog } = require('./automation/log-sanitizer');
+const { getPlatformFontPayload } = require('./automation/query-local-font-blob-gate');
 
 // Stable identity of the document-start config. Two inject payloads built from the same
 // fingerprint serialise identically, so this is what decides whether a live tab still matches
@@ -114,16 +115,71 @@ function extractTimezoneFromArgs(args) {
 
 
 
+
+if (!cdp.__serviceWorkerHardened) {
+  cdp.__serviceWorkerHardened = true;
+  const origConnect = cdp.connect;
+  cdp.connect = async function (webSocketUrl, options = {}) {
+    const originalOnEvent = options.onEvent;
+    const attachedWorkerTargets = new Set();
+    const wrappedOptions = { ...options };
+    wrappedOptions.onEvent = async (event, conn) => {
+      if (event?.method === 'Target.attachedToTarget') {
+        const { sessionId, targetInfo = {}, waitingForDebugger } = event.params || {};
+        const targetId = targetInfo.targetId;
+        if (sessionId && targetInfo.type === 'service_worker') {
+          if (targetId && attachedWorkerTargets.has(targetId)) {
+            if (waitingForDebugger) {
+              await conn.command('Runtime.runIfWaitingForDebugger', {}, { sessionId }).catch(() => {});
+            }
+            return;
+          }
+          if (targetId) attachedWorkerTargets.add(targetId);
+          const fp = RequestHeaderRewriter.latestFingerprint;
+          if (fp) {
+            try {
+              const source = buildWorkerInjectionScript(fp);
+              await conn.command('Runtime.evaluate', { expression: source }, { sessionId, timeout: 2000 }).catch(() => {});
+            } catch (_) {}
+          }
+        }
+      } else if (event?.method === 'Target.detachedFromTarget') {
+        const detachedTargetId = event.params?.targetId;
+        if (detachedTargetId) attachedWorkerTargets.delete(detachedTargetId);
+      }
+      if (typeof originalOnEvent === 'function') {
+        return originalOnEvent(event, conn);
+      }
+    };
+    return origConnect.call(this, webSocketUrl, wrappedOptions);
+  };
+}
+
 class RequestHeaderRewriter {
   constructor(options = {}) {
     this.enabled = options.enabled !== false;
     this.logger = typeof options.logger === "function" ? options.logger : null;
     this.inFlight = new Set();
     this.inFlightBySession = new Map();
+    this.profile = options.profile || {};
+    this.fingerprint = options.fingerprint || null;
+    RequestHeaderRewriter.latestInstance = this;
+    if (options.fingerprint && Object.keys(options.fingerprint).length > 0) {
+      RequestHeaderRewriter.latestFingerprint = options.fingerprint;
+    }
+    if (options.profile && Object.keys(options.profile).length > 0) {
+      RequestHeaderRewriter.latestProfile = options.profile;
+    }
     this.setPersona(options.profile, options.fingerprint);
   }
 
   setPersona(profile = {}, fingerprint = {}) {
+    if (fingerprint && Object.keys(fingerprint).length > 0) {
+      RequestHeaderRewriter.latestFingerprint = fingerprint;
+    }
+    if (profile && Object.keys(profile).length > 0) {
+      RequestHeaderRewriter.latestProfile = profile;
+    }
     const fp = fingerprint || {};
     const prof = profile || {};
     const ua = fp.userAgent || prof.userAgent || "";
@@ -170,7 +226,7 @@ class RequestHeaderRewriter {
 
     this.persona = {
       userAgent: override.userAgent || uaProfile.userAgent || ua,
-      acceptLanguage: override.acceptLanguage || acceptLanguageHeader,
+      acceptLanguage: acceptLanguageHeader || override.acceptLanguage,
       platformNav: override.platform || uaProfile.platform || platformNav || "Win32",
       platform: meta.platform || uaProfile.metadata?.platform || (osKey === "android" ? "Android" : "Windows"),
       mobile: Boolean(meta.mobile),
@@ -241,8 +297,11 @@ class RequestHeaderRewriter {
     // Only process requests at Request stage (where responseStatusCode is null/undefined)
     if (!requestId || responseStatusCode != null) return;
 
-    // Prevent duplicate in-flight processing for the same requestId
-    if (this.inFlight.has(requestId)) return;
+    // Prevent duplicate in-flight processing for the same requestId across sessions
+    if (this.inFlight.has(requestId)) {
+      this._sendCommand(connection, "Fetch.continueRequest", { requestId }, { sessionId, timeout: 3000 }).catch(() => {});
+      return;
+    }
     this.inFlight.add(requestId);
     if (sessionId) {
       if (!this.inFlightBySession.has(sessionId)) {
@@ -294,7 +353,7 @@ class RequestHeaderRewriter {
           return await doContinue();
         }
 
-        const url = String(request?.url || "");
+        const url = String(request?.url || ""); if (url.includes("sw") || url.includes("worker")) console.log("[REWRITER URL]", url, "resourceType:", event.params?.resourceType);
         // Filter internal browser schemes: chrome, devtools, data, blob, about, etc.
         if (/^(chrome|chrome-extension|edge|edge-extension|devtools|data|blob|about|javascript|filesystem|view-source|isolated-app):/i.test(url)) {
           return await doContinue();
@@ -315,7 +374,7 @@ class RequestHeaderRewriter {
           return await doContinue();
         }
 
-        const newHeaders = [];
+        const otherHeaders = [];
         const existingKeys = new Set();
         const seenNames = new Set();
 
@@ -332,66 +391,124 @@ class RequestHeaderRewriter {
           }
           if (seenNames.has(lk)) continue;
           seenNames.add(lk);
-          newHeaders.push({ name: k, value: String(v) });
+          otherHeaders.push({ name: k, value: String(v) });
         }
 
-        // 1. User-Agent
-        if (this.persona.userAgent) {
-          newHeaders.push({ name: "User-Agent", value: this.persona.userAgent });
-        }
+        // Real iOS WebKit never implements or sends User-Agent Client Hints (sec-ch-ua*).
+        // Sending sec-ch-ua-platform: "iOS" is an immediate adversarial red-team dead giveaway.
+        const isIos = this.persona.platform === "iOS"
+          || this.persona.platformNav === "iPhone"
+          || this.persona.platformNav === "iPad"
+          || /iphone|ipad|ipod|ios/i.test(this.persona.platformNav || "")
+          || /iphone|ipad|ipod/i.test(this.persona.userAgent || "");
 
-        // 2. Accept-Language: send on all non-OPTIONS requests, or OPTIONS only if originally present
-        if (this.persona.acceptLanguage && (method !== "OPTIONS" || existingKeys.has("accept-language"))) {
-          newHeaders.push({ name: "Accept-Language", value: this.persona.acceptLanguage });
-        }
+        const secChUaHeaders = [];
+        if (!isIos) {
+          if (this.secChUa) {
+            secChUaHeaders.push({ name: "sec-ch-ua", value: this.secChUa });
+          }
+          secChUaHeaders.push({ name: "sec-ch-ua-mobile", value: this.persona.mobile ? "?1" : "?0" });
+          if (this.persona.platform) {
+            secChUaHeaders.push({ name: "sec-ch-ua-platform", value: "\"" + this.persona.platform + "\"" });
+          }
 
-        // 3. Low-entropy User-Agent Client Hints
-        if (this.secChUa) {
-          newHeaders.push({ name: "sec-ch-ua", value: this.secChUa });
-        }
-        if (this.persona.platform) {
-          newHeaders.push({ name: "sec-ch-ua-platform", value: "\"" + this.persona.platform + "\"" });
-        }
-        newHeaders.push({ name: "sec-ch-ua-mobile", value: this.persona.mobile ? "?1" : "?0" });
+          // High-entropy User-Agent Client Hints (ONLY populated if server requested via Accept-CH)
+          const meta = this.persona.metadata || {};
 
-        // 4. High-entropy User-Agent Client Hints (ONLY populated if server requested via Accept-CH)
-        const meta = this.persona.metadata || {};
-
-        if (existingKeys.has("sec-ch-ua-arch")) {
-          const arch = meta.architecture !== undefined ? meta.architecture : (this.persona.platform === "Android" ? "" : "x86");
-          newHeaders.push({ name: "sec-ch-ua-arch", value: "\"" + arch + "\"" });
-        }
-        if (existingKeys.has("sec-ch-ua-bitness")) {
-          const bitness = meta.bitness !== undefined ? meta.bitness : (this.persona.platform === "Android" ? "" : "64");
-          newHeaders.push({ name: "sec-ch-ua-bitness", value: "\"" + bitness + "\"" });
-        }
-        if (existingKeys.has("sec-ch-ua-model")) {
-          const model = meta.model !== undefined ? meta.model : "";
-          newHeaders.push({ name: "sec-ch-ua-model", value: "\"" + model + "\"" });
-        }
-        if (existingKeys.has("sec-ch-ua-platform-version")) {
-          const pv = meta.platformVersion !== undefined ? meta.platformVersion : "15.0.0";
-          newHeaders.push({ name: "sec-ch-ua-platform-version", value: "\"" + pv + "\"" });
-        }
-        if (existingKeys.has("sec-ch-ua-full-version")) {
-          const fv = meta.fullVersion || meta.uaFullVersion || "148.0.0.0";
-          newHeaders.push({ name: "sec-ch-ua-full-version", value: "\"" + fv + "\"" });
-        }
-        if (existingKeys.has("sec-ch-ua-full-version-list")) {
-          newHeaders.push({ name: "sec-ch-ua-full-version-list", value: this.secChUaFullVersionList });
-        }
-        if (existingKeys.has("sec-ch-ua-form-factors")) {
-          const ff = meta.formFactors || meta.form_factors;
-          if (ff) {
-            const val = Array.isArray(ff) ? ff.map((f) => "\"" + f + "\"").join(", ") : "\"" + ff + "\"";
-            newHeaders.push({ name: "sec-ch-ua-form-factors", value: val });
-          } else if (this.persona.mobile) {
-            newHeaders.push({ name: "sec-ch-ua-form-factors", value: "\"Mobile\"" });
+          if (existingKeys.has("sec-ch-ua-arch")) {
+            const arch = meta.architecture !== undefined ? meta.architecture : (this.persona.platform === "Android" ? "" : "x86");
+            secChUaHeaders.push({ name: "sec-ch-ua-arch", value: "\"" + arch + "\"" });
+          }
+          if (existingKeys.has("sec-ch-ua-bitness")) {
+            const bitness = meta.bitness !== undefined ? meta.bitness : (this.persona.platform === "Android" ? "" : "64");
+            secChUaHeaders.push({ name: "sec-ch-ua-bitness", value: "\"" + bitness + "\"" });
+          }
+          if (existingKeys.has("sec-ch-ua-model")) {
+            const model = meta.model !== undefined ? meta.model : "";
+            secChUaHeaders.push({ name: "sec-ch-ua-model", value: "\"" + model + "\"" });
+          }
+          if (existingKeys.has("sec-ch-ua-platform-version")) {
+            const pv = meta.platformVersion !== undefined ? meta.platformVersion : "15.0.0";
+            secChUaHeaders.push({ name: "sec-ch-ua-platform-version", value: "\"" + pv + "\"" });
+          }
+          if (existingKeys.has("sec-ch-ua-full-version")) {
+            const fv = meta.fullVersion || meta.uaFullVersion || "148.0.0.0";
+            secChUaHeaders.push({ name: "sec-ch-ua-full-version", value: "\"" + fv + "\"" });
+          }
+          if (existingKeys.has("sec-ch-ua-full-version-list")) {
+            secChUaHeaders.push({ name: "sec-ch-ua-full-version-list", value: this.secChUaFullVersionList });
+          }
+          if (existingKeys.has("sec-ch-ua-form-factors")) {
+            const ff = meta.formFactors || meta.form_factors;
+            if (ff) {
+              const val = Array.isArray(ff) ? ff.map((f) => "\"" + f + "\"").join(", ") : "\"" + ff + "\"";
+              secChUaHeaders.push({ name: "sec-ch-ua-form-factors", value: val });
+            } else if (this.persona.mobile) {
+              secChUaHeaders.push({ name: "sec-ch-ua-form-factors", value: "\"Mobile\"" });
+            }
+          }
+          if (existingKeys.has("sec-ch-ua-wow64")) {
+            secChUaHeaders.push({ name: "sec-ch-ua-wow64", value: meta.wow64 ? "?1" : "?0" });
           }
         }
-        if (existingKeys.has("sec-ch-ua-wow64")) {
-          newHeaders.push({ name: "sec-ch-ua-wow64", value: meta.wow64 ? "?1" : "?0" });
+
+        let userAgentHeader = null;
+        if (this.persona.userAgent) {
+          userAgentHeader = { name: "User-Agent", value: this.persona.userAgent };
         }
+
+        let acceptLanguageHeader = null;
+        if (this.persona.acceptLanguage && (method !== "OPTIONS" || existingKeys.has("accept-language"))) {
+          acceptLanguageHeader = { name: "Accept-Language", value: this.persona.acceptLanguage };
+        }
+
+        const newHeaders = [...otherHeaders];
+        if (secChUaHeaders.length > 0) {
+          newHeaders.push(...secChUaHeaders);
+        }
+        if (userAgentHeader) {
+          newHeaders.push(userAgentHeader);
+        }
+        if (acceptLanguageHeader) {
+          newHeaders.push(acceptLanguageHeader);
+        }
+
+        const CANONICAL_ORDER = [
+          "host",
+          "connection",
+          "sec-ch-ua",
+          "sec-ch-ua-mobile",
+          "sec-ch-ua-platform",
+          "sec-ch-ua-arch",
+          "sec-ch-ua-bitness",
+          "sec-ch-ua-model",
+          "sec-ch-ua-platform-version",
+          "sec-ch-ua-full-version",
+          "sec-ch-ua-full-version-list",
+          "sec-ch-ua-form-factors",
+          "sec-ch-ua-wow64",
+          "upgrade-insecure-requests",
+          "user-agent",
+          "accept",
+          "sec-fetch-site",
+          "sec-fetch-mode",
+          "sec-fetch-user",
+          "sec-fetch-dest",
+          "referer",
+          "origin",
+          "accept-encoding",
+          "accept-language",
+          "cookie",
+          "priority",
+        ];
+        const orderMap = new Map();
+        CANONICAL_ORDER.forEach((name, i) => orderMap.set(name, i));
+
+        newHeaders.sort((a, b) => {
+          const rankA = orderMap.has(a.name.toLowerCase()) ? orderMap.get(a.name.toLowerCase()) : 999;
+          const rankB = orderMap.has(b.name.toLowerCase()) ? orderMap.get(b.name.toLowerCase()) : 999;
+          return rankA - rankB;
+        });
 
         await doContinue(newHeaders);
       } catch (err) {
@@ -408,6 +525,249 @@ function createRequestHeaderRewriter(options = {}) {
   return new RequestHeaderRewriter(options);
 }
 
+
+function normalizePlatformFamily(str) {
+  if (!str || typeof str !== 'string') return null;
+  const s = str.trim().toLowerCase();
+  if (s.includes('win')) return 'windows';
+  if (s.includes('mac') || s.includes('darwin')) return 'macos';
+  if (s.includes('android')) return 'android';
+  if (s.includes('linux') || s.includes('x11')) return 'linux';
+  if (s.includes('iphone') || s.includes('ipad') || s.includes('ipod') || s.includes('ios')) return 'ios';
+  return s;
+}
+
+function detectUaPlatform(ua) {
+  if (!ua || typeof ua !== 'string') return null;
+  const s = ua.toLowerCase();
+  if (s.includes('windows nt') || s.includes('win64') || s.includes('wow64') || s.includes('windows')) return 'windows';
+  if (s.includes('macintosh') || s.includes('mac os x') || s.includes('macos')) return 'macos';
+  if (s.includes('android')) return 'android';
+  if (s.includes('linux') || s.includes('x11')) return 'linux';
+  if (s.includes('iphone') || s.includes('ipad') || s.includes('cpu os')) return 'ios';
+  return null;
+}
+
+function extractChromeMajor(ua) {
+  if (!ua || typeof ua !== 'string') return null;
+  const m = String(ua).match(/Chrome\/(\d+)/i);
+  return m ? Number(m[1]) : null;
+}
+
+function extractGpuBrand(str) {
+  if (!str || typeof str !== 'string') return null;
+  const s = str.toLowerCase();
+  if (s.includes('nvidia') || s.includes('geforce') || s.includes('quadro') || s.includes('rtx') || s.includes('gtx')) return 'nvidia';
+  if (s.includes('apple') || /\bm[1-9]\b/i.test(s) || s.includes('apple m')) return 'apple';
+  if (s.includes('amd') || s.includes('radeon')) return 'amd';
+  if (s.includes('intel') || s.includes('iris') || s.includes('arc') || s.includes('uhd') || s.includes('hd graphics')) return 'intel';
+  if (s.includes('qualcomm') || s.includes('adreno')) return 'qualcomm';
+  if (s.includes('mali')) return 'mali';
+  if (s.includes('swiftshader') || s.includes('llvmpipe')) return 'software';
+  return null;
+}
+
+function normalizeTimezone(tz) {
+  if (!tz || typeof tz !== 'string') return '';
+  let s = tz.trim().toLowerCase();
+  if (s.startsWith('etc/')) s = s.slice(4);
+  if (s === 'gmt' || s === 'utc' || s === 'z') return 'utc';
+  return s;
+}
+
+function extractPrimaryLanguage(val) {
+  if (Array.isArray(val)) {
+    for (const item of val) {
+      const res = extractPrimaryLanguage(item);
+      if (res) return res;
+    }
+    return null;
+  }
+  if (!val || typeof val !== 'string') return null;
+  const first = val.split(/[,;]/)[0].trim();
+  if (!first || first.toLowerCase() === 'system' || first.toLowerCase() === 'real') return null;
+  return first.toLowerCase().replace(/_/g, '-');
+}
+
+function evaluateFingerprintDelivery(profile = {}, fingerprint = {}, liveProbe = null) {
+  const mismatches = [];
+  const warnings = [];
+
+  // 1. Probe error or missing live data: WARN only, do not fail
+  if (!liveProbe || liveProbe.probeError) {
+    warnings.push(liveProbe?.probeError ? ("探针返回异常: " + liveProbe.probeError) : "探针未返回数据 (undefined)");
+    return { ok: true, mismatches: [], warnings };
+  }
+
+  const privacy = profile?.privacy || {};
+
+  // 2. Platform / OS verification
+  const expectedPlatform = fingerprint?.platform || profile?.platform || '';
+  const expectedOs = profile?.os || fingerprint?.uaProfile?.os || '';
+  const expectedFamily = normalizePlatformFamily(expectedOs) || normalizePlatformFamily(expectedPlatform);
+
+  if (expectedFamily && liveProbe.platform) {
+    const liveFamily = normalizePlatformFamily(liveProbe.platform);
+    if (liveFamily && liveFamily !== expectedFamily) {
+      mismatches.push({
+        field: 'platform',
+        expected: expectedFamily,
+        actual: liveProbe.platform,
+        message: "平台不符：期望 " + expectedFamily + " (" + (expectedPlatform || expectedOs) + ")，实际交付 " + liveProbe.platform,
+      });
+    }
+  }
+
+  // 3. User-Agent verification (Key fragments: platform segment, Chrome major)
+  const expectedUa = String(fingerprint?.userAgent || profile?.userAgent || '').trim();
+  const liveUa = String(liveProbe.userAgent || '').trim();
+
+  if (expectedUa && liveUa) {
+    const expectedUaPlat = detectUaPlatform(expectedUa);
+    const liveUaPlat = detectUaPlatform(liveUa);
+    if (expectedUaPlat && liveUaPlat && expectedUaPlat !== liveUaPlat) {
+      mismatches.push({
+        field: 'userAgent.platform',
+        expected: expectedUaPlat,
+        actual: liveUaPlat,
+        message: "UA 平台段不符：期望包含 " + expectedUaPlat + "，实际交付 " + liveUaPlat,
+      });
+    }
+
+    const expectedMajor = extractChromeMajor(expectedUa);
+    const liveMajor = extractChromeMajor(liveUa);
+    if (expectedMajor != null && liveMajor != null && expectedMajor !== liveMajor) {
+      mismatches.push({
+        field: 'userAgent.chromeMajor',
+        expected: expectedMajor,
+        actual: liveMajor,
+        message: "UA Chrome 主版本不符：期望 Chrome/" + expectedMajor + "，实际交付 Chrome/" + liveMajor,
+      });
+    }
+  }
+
+  // 4. navigator.userAgentData?.platform vs UA / configured platform
+  if (liveProbe.uaDataPlatform) {
+    const liveUaDataFamily = normalizePlatformFamily(liveProbe.uaDataPlatform);
+    const uaOrConfigFamily = detectUaPlatform(expectedUa) || expectedFamily;
+    if (uaOrConfigFamily && liveUaDataFamily && uaOrConfigFamily !== liveUaDataFamily) {
+      mismatches.push({
+        field: 'userAgentData.platform',
+        expected: uaOrConfigFamily,
+        actual: liveProbe.uaDataPlatform,
+        message: "Client Hints 平台与 UA 不符：期望 " + uaOrConfigFamily + "，实际交付 " + liveProbe.uaDataPlatform,
+      });
+    }
+  }
+
+  // 5. Timezone verification
+  const isRealTimezone = privacy.timezoneMode === 'real' || profile?.timezoneMode === 'real';
+  if (!isRealTimezone) {
+    const expectedTz = String(fingerprint?.timezone || profile?.exitTimezone || privacy.timezone || '').trim();
+    const liveTz = String(liveProbe.timezone || '').trim();
+    if (expectedTz && liveTz && expectedTz.toLowerCase() !== 'real') {
+      if (normalizeTimezone(expectedTz) !== normalizeTimezone(liveTz)) {
+        mismatches.push({
+          field: 'timezone',
+          expected: expectedTz,
+          actual: liveTz,
+          message: "时区不符：期望 " + expectedTz + "，实际交付 " + liveTz,
+        });
+      }
+    }
+  }
+
+  // 6. WebGL Vendor & Renderer
+  const webglMode = String(privacy.webgl || fingerprint?.webgl?.mode || '').toLowerCase();
+  const webglMetaMode = String(privacy.webglMeta || fingerprint?.webgl?.metaMode || '').toLowerCase();
+  const isRealWebgl = webglMode === 'real' || webglMode === 'off' || webglMetaMode === 'real' || webglMetaMode === 'off';
+
+  if (!isRealWebgl) {
+    const liveRenderer = liveProbe.webglRenderer;
+    const liveVendor = liveProbe.webglVendor;
+
+    if (!liveRenderer && !liveVendor) {
+      // No WebGL context (headless / no GPU) -> WARN ONLY
+      warnings.push("WebGL 无可用上下文 (可能为无头环境或无GPU加速)，跳过 WebGL 交付校验");
+    } else {
+      const expectedRenderer = String(fingerprint?.webgl?.renderer || profile?.webglRenderer || '').trim();
+      const expectedVendor = String(fingerprint?.webgl?.vendor || profile?.webglVendor || '').trim();
+
+      if (expectedRenderer || expectedVendor) {
+        const expBrand = extractGpuBrand(expectedRenderer) || extractGpuBrand(expectedVendor);
+        const liveBrand = extractGpuBrand(liveRenderer) || extractGpuBrand(liveVendor);
+
+        if (expBrand && liveBrand && expBrand !== liveBrand) {
+          mismatches.push({
+            field: 'webgl',
+            expected: expBrand + " (" + (expectedRenderer || expectedVendor) + ")",
+            actual: liveBrand + " (" + (liveRenderer || liveVendor) + ")",
+            message: "WebGL GPU 身份不符：期望 " + expBrand + "，实际交付 " + liveBrand,
+          });
+        }
+      }
+    }
+  }
+
+  // 7. Languages (first language)
+  const langMode = String(profile?.language || privacy.languageMode || '').trim().toLowerCase();
+  const isSystemLanguage = langMode === 'system' || langMode === 'real';
+
+  if (!isSystemLanguage) {
+    const expectedLang = extractPrimaryLanguage(fingerprint?.languages || profile?.language);
+    const liveLang = extractPrimaryLanguage(liveProbe.languages || liveProbe.language);
+
+    if (expectedLang && liveLang) {
+      if (expectedLang !== liveLang) {
+        const expBase = expectedLang.split('-')[0];
+        const liveBase = liveLang.split('-')[0];
+        if (expBase !== liveBase) {
+          mismatches.push({
+            field: 'languages',
+            expected: expectedLang,
+            actual: liveLang,
+            message: "首选语言不符：期望 " + expectedLang + "，实际交付 " + liveLang,
+          });
+        }
+      }
+    }
+  }
+
+  // 8. Hardware Concurrency & Device Memory (explicitly specified only)
+  const rawCores = privacy.cores ?? profile?.cores ?? privacy.fingerprint?.cores;
+  const explicitCores = (rawCores !== '' && rawCores !== null && rawCores !== undefined) ? Number(rawCores) : NaN;
+  if (Number.isFinite(explicitCores) && explicitCores > 0) {
+    const liveCores = Number(liveProbe.hardwareConcurrency);
+    if (Number.isFinite(liveCores) && liveCores !== Math.round(explicitCores)) {
+      mismatches.push({
+        field: 'hardwareConcurrency',
+        expected: Math.round(explicitCores),
+        actual: liveCores,
+        message: "CPU 核心数不符：期望 " + Math.round(explicitCores) + "，实际交付 " + liveCores,
+      });
+    }
+  }
+
+  const rawMemory = privacy.memory ?? profile?.memory ?? privacy.fingerprint?.memory;
+  const explicitMemory = (rawMemory !== '' && rawMemory !== null && rawMemory !== undefined) ? Number(rawMemory) : NaN;
+  if (Number.isFinite(explicitMemory) && explicitMemory > 0) {
+    const liveMemory = Number(liveProbe.deviceMemory);
+    if (Number.isFinite(liveMemory) && liveMemory !== Number(explicitMemory)) {
+      mismatches.push({
+        field: 'deviceMemory',
+        expected: explicitMemory,
+        actual: liveMemory,
+        message: "设备内存不符：期望 " + explicitMemory + "GB，实际交付 " + liveMemory + "GB",
+      });
+    }
+  }
+
+  return {
+    ok: mismatches.length === 0,
+    mismatches,
+    warnings,
+  };
+}
 
 class BrowserEngine {
   constructor(app, options = {}) {
@@ -429,6 +789,8 @@ class BrowserEngine {
     // Keep the reference here so linked profiles always resolve their current
     // credentials at sync/start time instead of relying on renderer storage.
     this.proxyStore = null;
+    this.deliveryVerificationFailures = new Map();
+    this.deliveryVerificationFailureTimestamps = new Map();
     this.extensions = new Map();
     this.assignments = new Map();
     this.listeners = new Set();
@@ -1205,6 +1567,17 @@ class BrowserEngine {
         continue;
       }
       try {
+        const fontBlobBridge = fp?.fontBlobBridge || item?.fontBlobBridge || options?.trackOn?.fontBlobBridge;
+        if (fontBlobBridge?.channelName && tab.webSocketDebuggerUrl) {
+          if (options?.trackOn && !options.trackOn.fontBlobBridge) options.trackOn.fontBlobBridge = fontBlobBridge;
+          try {
+            await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.enable', {}).catch(() => {});
+            await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.addBinding', { name: fontBlobBridge.channelName }).catch((err) => {
+              const msg = String(err?.message || err);
+              if (!/already exists/i.test(msg)) {}
+            });
+          } catch (_) {}
+        }
         await applyFingerprintToTab(cdp.call, tab.webSocketDebuggerUrl, fp, enriched);
         let live = null;
         try {
@@ -1327,10 +1700,54 @@ class BrowserEngine {
       ? fingerprintForNativeKernelInject(baseFp)
       : baseFp;
     // session-scoped CDP calls for targets attached with flatten:true
-    const sessionCall = async (method, params = {}, timeout = 8000) => connection.command(method, params, { sessionId, timeout });
+    const isSubframe = targetInfo?.type === 'iframe';
+    const isWaiting = Boolean(targetInfo?.waitingForDebugger || targetInfo?.isWaiting || !targetInfo?.url || targetInfo?.url === 'about:blank');
+    const sessionCall = async (method, params = {}, timeout = 8000) => {
+      try {
+        // Optimization: on targets paused waiting for debugger at startup, Runtime.evaluate
+        // blocks until Runtime.runIfWaitingForDebugger is called, hanging for 6-8s timeout.
+        // Page.addScriptToEvaluateOnNewDocument already guarantees sync execution on document start.
+        if (isWaiting && method === 'Runtime.evaluate') {
+          return {};
+        }
+        return await connection.command(method, params, { sessionId, timeout });
+      } catch (err) {
+        if (isSubframe && /Command can only be executed on top-level targets|Cannot find default execution context/i.test(String(err?.message || err))) {
+          return {};
+        }
+        throw err;
+      }
+    };
+    const fontBlobBridge = injectFp?.fontBlobBridge || baseFp?.fontBlobBridge || item?.fontBlobBridge || item?.fingerprint?.fontBlobBridge;
+    if (fontBlobBridge?.channelName) {
+      if (!item.fontBlobBridge) item.fontBlobBridge = fontBlobBridge;
+      try {
+        await sessionCall('Runtime.enable', {}).catch(() => {});
+        await sessionCall('Runtime.addBinding', { name: fontBlobBridge.channelName }).catch((err) => {
+          const msg = String(err?.message || err);
+          if (!/already exists/i.test(msg)) {
+            // ignore non-fatal binding errors
+          }
+        });
+      } catch (_) {}
+    }
     await applyFingerprintToTab(sessionCall, null, injectFp, enriched, {
-      applyKey: `session:${targetInfo?.targetId || sessionId}`
+      applyKey: `session:${targetInfo?.targetId || sessionId}`,
+      targetType: targetInfo?.type,
+      isSubframe,
     });
+    // Synchronize Blink physical layout scaling with target devicePixelRatio for desktop personas.
+    // Without setDeviceMetricsOverride, Blink computes CSS @media (resolution) at host 1dppx,
+    // creating an observable contradiction with window.devicePixelRatio and JS matchMedia.
+    const dpr = Number(injectFp?.screen?.devicePixelRatio);
+    if (dpr && dpr !== 1 && !injectFp?.mobileDevice && !isSubframe && targetInfo?.type !== 'iframe') {
+      await sessionCall('Emulation.setDeviceMetricsOverride', {
+        width: 0,
+        height: 0,
+        deviceScaleFactor: dpr,
+        mobile: false,
+      }).catch(() => {});
+    }
     if (!item.fpAppliedTargets) item.fpAppliedTargets = new Set();
     if (targetInfo?.targetId) item.fpAppliedTargets.add(targetInfo.targetId);
     item.fpAppliedHash = fingerprintConfigHash(injectFp);
@@ -1339,6 +1756,12 @@ class BrowserEngine {
   }
 
   async startWorkerFingerprintInjection(item, fingerprint) {
+    if (fingerprint && Object.keys(fingerprint).length > 0) {
+      RequestHeaderRewriter.latestFingerprint = fingerprint;
+    }
+    if (item?.profile && Object.keys(item.profile).length > 0) {
+      RequestHeaderRewriter.latestProfile = item.profile;
+    }
     const workerPrivacy = (item.profile && item.profile.privacy) || {};
     const portScanSource = workerPrivacy.portScanProtect
       ? '\n' + buildPortScanProtectionScript(workerPrivacy.portScanAllow)
@@ -1349,6 +1772,9 @@ class BrowserEngine {
     const source = buildWorkerInjectionScript(fingerprint)
       + portScanSource
       + (fontPresenceSource ? '\n' + fontPresenceSource : '');
+    if (fingerprint?.fontBlobBridge && !item.fontBlobBridge) {
+      item.fontBlobBridge = fingerprint.fontBlobBridge;
+    }
     const browserWs = await cdp.browserSocket(item.port);
     // Response rewriting runs below the parser, before static HTML/CSS is turned into a
     // stylesheet. It complements the document gate, which only sees dynamic DOM/CSSOM writes.
@@ -1362,6 +1788,7 @@ class BrowserEngine {
           if (/Can only get response body|No resource with given identifier/i.test(errMsg)) {
             return;
           }
+          console.log("[FONT_REWRITER LOG]", details);
           item.cssFontResponseRewriteError = String(details.error || 'response rewrite error');
         }
       },
@@ -1417,6 +1844,51 @@ class BrowserEngine {
     };
 
     const onAttached = (event, connection) => {
+      // Font payload lazy-load host bridge (consumer side)
+      if (event?.method === 'Runtime.bindingCalled') {
+        const bridge = fingerprint?.fontBlobBridge || item?.fontBlobBridge || item?.fingerprint?.fontBlobBridge;
+        if (bridge?.channelName && event.params?.name === bridge.channelName) {
+          (async () => {
+            try {
+              let parsed = null;
+              try {
+                parsed = JSON.parse(event.params?.payload || '{}');
+              } catch (_) {
+                return;
+              }
+              const { action, platform, token, wanted } = parsed || {};
+              // 安全校验：action 必须是 getFontBytes 且 token 必须匹配 bridge.token
+              if (action !== 'getFontBytes' || token !== bridge.token) {
+                return;
+              }
+              const targetPlatform = platform || bridge.platform;
+              const targetWanted = wanted || bridge.wanted || undefined;
+              const payload = getPlatformFontPayload(targetPlatform, { wanted: targetWanted });
+              const expr = `try { Function.prototype.toString.call(FontData.prototype.blob, ${JSON.stringify(bridge.token)}, 'provideBytes', ${JSON.stringify(payload)}); } catch (_) {}`;
+              const targetSessionId = event.sessionId;
+              const cmdOptions = targetSessionId ? { sessionId: targetSessionId, timeout: 8000 } : { timeout: 8000 };
+              const evalParams = {
+                expression: expr,
+                awaitPromise: false,
+                returnByValue: false,
+              };
+              if (event.params?.executionContextId != null) {
+                evalParams.contextId = event.params.executionContextId;
+              }
+              await connection.command('Runtime.evaluate', evalParams, cmdOptions).catch(async () => {
+                if (evalParams.contextId != null) {
+                  await connection.command('Runtime.evaluate', {
+                    expression: expr,
+                    awaitPromise: false,
+                    returnByValue: false,
+                  }, cmdOptions).catch(() => {});
+                }
+              });
+            } catch (_) {}
+          })();
+          return;
+        }
+      }
       // Fetch.requestPaused at Request stage (responseStatusCode == null) is handled by
       // requestHeaderRewriter to guarantee that main-frame navigations, subresources, and workers
       // carry persona User-Agent, Client Hints (sec-ch-ua*), and Accept-Language without host leaks.
@@ -1469,17 +1941,19 @@ class BrowserEngine {
             }, { sessionId }).catch(() => {});
             // Critical: inject fingerprint BEFORE resuming the page/iframe target.
             // Polling in startRunningWatch is only a fallback, not the primary path.
-            await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, targetInfo);
+            await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, { ...targetInfo, waitingForDebugger });
             // Enable Fetch while this page/iframe is paused. The next navigation then receives
             // sanitized HTML/CSS bytes before the renderer tokenizes its static styles.
-            await fontResponseRewriter.enable(connection, { sessionId, timeout: 8000 });
-            await connection.command('Fetch.enable', {
-              patterns: [
-                { urlPattern: '*', requestStage: 'Request' },
-                { urlPattern: '*', requestStage: 'Response', resourceType: 'Document' },
-                { urlPattern: '*', requestStage: 'Response', resourceType: 'Stylesheet' },
-              ],
-            }, { sessionId, timeout: 8000 }).catch(() => {});
+            if (targetInfo.type !== 'iframe') {
+              await fontResponseRewriter.enable(connection, { sessionId, timeout: 8000 });
+              await connection.command('Fetch.enable', {
+                patterns: [
+                  { urlPattern: '*', requestStage: 'Request' },
+                  { urlPattern: '*', requestStage: 'Response', resourceType: 'Document' },
+                  { urlPattern: '*', requestStage: 'Response', resourceType: 'Stylesheet' },
+                ],
+              }, { sessionId, timeout: 8000 }).catch(() => {});
+            }
 
             if (isInitial && !completedInitialTargets.has(targetId)) {
               completedInitialTargets.add(targetId);
@@ -1489,26 +1963,44 @@ class BrowserEngine {
               }
             }
           } else if (workerTypes.has(targetInfo.type) && !internalUrl.test(String(targetInfo.url || ''))) {
-            await connection.command('Network.enable', {}, { sessionId }).catch(() => {});
-            const workerUa = requestHeaderRewriter.enabled ? requestHeaderRewriter.persona : null;
-            if (workerUa) {
-              await connection.command('Network.setUserAgentOverride', {
-                userAgent: workerUa.userAgent,
-                acceptLanguage: workerUa.acceptLanguage,
-                platform: workerUa.platformNav || workerUa.platform,
-                userAgentMetadata: workerUa.metadata,
-              }, { sessionId }).catch(() => {});
-              await connection.command('Emulation.setUserAgentOverride', {
-                userAgent: workerUa.userAgent,
-                acceptLanguage: workerUa.acceptLanguage,
-                platform: workerUa.platformNav || workerUa.platform,
-                userAgentMetadata: workerUa.metadata,
-              }, { sessionId }).catch(() => {});
+            if (!item.attachedWorkerTargets) item.attachedWorkerTargets = new Set();
+            if (targetId && item.attachedWorkerTargets.has(targetId)) {
+              if (waitingForDebugger) {
+                await connection.command('Runtime.runIfWaitingForDebugger', {}, { sessionId }).catch(() => {});
+              }
+              return;
             }
-            await connection.command('Fetch.enable', {
-              patterns: [{ urlPattern: '*', requestStage: 'Request' }],
-            }, { sessionId, timeout: 8000 }).catch(() => {});
-            await connection.command('Runtime.evaluate', { expression: source }, { sessionId, timeout: 10000 });
+            if (targetId) item.attachedWorkerTargets.add(targetId);
+            const isServiceWorker = targetInfo.type === 'service_worker';
+            if (!isServiceWorker) {
+              await connection.command('Network.enable', {}, { sessionId }).catch(() => {});
+              const workerUa = requestHeaderRewriter.enabled ? requestHeaderRewriter.persona : null;
+              if (workerUa) {
+                await connection.command('Network.setUserAgentOverride', {
+                  userAgent: workerUa.userAgent,
+                  acceptLanguage: workerUa.acceptLanguage,
+                  platform: workerUa.platformNav || workerUa.platform,
+                  userAgentMetadata: workerUa.metadata,
+                }, { sessionId }).catch(() => {});
+                await connection.command('Emulation.setUserAgentOverride', {
+                  userAgent: workerUa.userAgent,
+                  acceptLanguage: workerUa.acceptLanguage,
+                  platform: workerUa.platformNav || workerUa.platform,
+                  userAgentMetadata: workerUa.metadata,
+                }, { sessionId }).catch(() => {});
+              }
+              await connection.command('Fetch.enable', {
+                patterns: [{ urlPattern: '*', requestStage: 'Request' }],
+              }, { sessionId, timeout: 8000 }).catch(() => {});
+            }
+            // Worker fingerprint injection (DedicatedWorker, SharedWorker, and ServiceWorker)
+            // Evaluated before runIfWaitingForDebugger so the worker global scope carries persona
+            // mocks before evaluating initial worker scripts. Short timeout guarantees no hang.
+            await connection.command('Runtime.evaluate', {
+              expression: source,
+            }, { sessionId, timeout: 3000 }).catch((evalErr) => {
+              report(evalErr, targetInfo);
+            });
           }
         } catch (error) {
           report(error, targetInfo);
@@ -1795,7 +2287,9 @@ class BrowserEngine {
     const tabs = await cdp.tabs(port).catch(() => []);
     for (const tab of tabs) {
       if (!tab.webSocketDebuggerUrl) continue;
-      // Prefer page title so Dock/window list shows 环境 N instead of bare site name at start
+      const url = String(tab.url || '');
+      // Only apply to our own internal start page; never overwrite user pages or about:blank document.title
+      if (!this.isStartPageUrl(url)) continue;
       await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', {
         expression: `(() => { try { document.title = ${JSON.stringify(title)}; } catch (_) {} })()`,
       }).catch(() => {});
@@ -1921,6 +2415,16 @@ class BrowserEngine {
     // Hard recovery: re-register document-start script and reload start page.
     await fpLog('probe.reload-startpage', { profileId: profile.id, reason: { hostLikeWebgl, hostLikeCores } });
     try {
+      const fontBlobBridge = injectFp?.fontBlobBridge || profile?.fingerprint?.fontBlobBridge || item?.fontBlobBridge;
+      if (fontBlobBridge?.channelName && page?.webSocketDebuggerUrl) {
+        try {
+          await cdp.call(page.webSocketDebuggerUrl, 'Runtime.enable', {}).catch(() => {});
+          await cdp.call(page.webSocketDebuggerUrl, 'Runtime.addBinding', { name: fontBlobBridge.channelName }).catch((err) => {
+            const msg = String(err?.message || err);
+            if (!/already exists/i.test(msg)) {}
+          });
+        } catch (_) {}
+      }
       await applyFingerprintToTab(cdp.call, page.webSocketDebuggerUrl, injectFp, profile, { force: true });
       await cdp.call(page.webSocketDebuggerUrl, 'Page.enable', {}).catch(() => {});
       if (startUrl) await cdp.call(page.webSocketDebuggerUrl, 'Page.navigate', { url: startUrl });
@@ -1947,6 +2451,159 @@ class BrowserEngine {
       await fpLog('probe.reload-fail', { profileId: profile.id, error: String(error.message || error) });
     }
     return live;
+  }
+
+  /**
+   * 启动前 CDP 指纹交付校验：
+   * 在导航目标站点/启动页之前，用 CDP 在初始页面执行单次探针 Runtime.evaluate，
+   * 校验实际交付给页面的指纹值与配置是否存在直接矛盾。
+   */
+  async verifyStartupFingerprintDelivery(item, profile, fingerprint = null, options = {}) {
+    const profileId = profile?.id || item?.profile?.id || 'unknown';
+    const maxConsecutiveFailures = options.maxConsecutiveFailures || 3;
+    const windowMs = options.failureWindowMs || (5 * 60 * 1000);
+
+    const lastFailureTime = this.deliveryVerificationFailureTimestamps?.get(profileId) || 0;
+    if (lastFailureTime > 0 && Date.now() - lastFailureTime > windowMs) {
+      this.resetFingerprintVerificationFailures(profileId);
+    }
+
+    const priorFailures = this.deliveryVerificationFailures.get(profileId) || 0;
+
+    if (priorFailures >= maxConsecutiveFailures) {
+      const errorMsg = "同一环境连续指纹交付校验失败已达上限 (" + maxConsecutiveFailures + " 次)，已阻止访问目标站点";
+      await fpLog('verify.delivery-blocked-consecutive-limit', {
+        profileId,
+        priorFailures,
+        maxConsecutiveFailures,
+      });
+      return {
+        ok: false,
+        blocked: true,
+        consecutiveLimitReached: true,
+        mismatches: [{ field: 'consecutiveFailures', expected: "< " + maxConsecutiveFailures, actual: priorFailures, message: errorMsg }],
+        message: errorMsg,
+        warnings: [],
+      };
+    }
+
+    const port = item?.port;
+    if (!port && !options.probe && options.mockProbe === undefined) {
+      return {
+        ok: true,
+        blocked: false,
+        mismatches: [],
+        warnings: ['未获取到调试端口，跳过指纹交付校验'],
+        liveProbe: null,
+      };
+    }
+
+    const timeout = Math.min(5000, Math.max(1000, Number(options.timeout) || 3500));
+    let liveProbe = null;
+    let probeWarning = null;
+
+    if (typeof options.probe === 'function') {
+      try {
+        liveProbe = await options.probe();
+      } catch (err) {
+        probeWarning = "探针执行异常: " + (err?.message || String(err));
+        liveProbe = { probeError: probeWarning };
+      }
+    } else if (options.mockProbe !== undefined) {
+      liveProbe = options.mockProbe;
+    } else {
+      try {
+        const tabs = await cdp.tabs(port).catch(() => []);
+        // Probe initial blank tab or current start page tab
+        const probeTab = tabs.find((t) => /about:blank/i.test(String(t.url || '')) || this.isStartPageUrl(t.url)) || tabs[0];
+        if (!probeTab?.webSocketDebuggerUrl) {
+          probeWarning = '未找到可用于探针校验的初始标签页';
+          liveProbe = { probeError: probeWarning };
+        } else {
+          const probeRes = await cdp.call(probeTab.webSocketDebuggerUrl, 'Runtime.evaluate', {
+            expression: LIVE_PROBE_EXPRESSION,
+            returnByValue: true,
+          }, timeout);
+          liveProbe = probeRes?.result?.value || probeRes?.value || null;
+        }
+      } catch (err) {
+        probeWarning = "CDP 探针执行异常: " + (err?.message || String(err));
+        liveProbe = { probeError: probeWarning };
+      }
+    }
+
+    const targetFp = fingerprint || item?.fingerprint || {};
+    const evalResult = evaluateFingerprintDelivery(profile, targetFp, liveProbe);
+    if (probeWarning && !evalResult.warnings.includes(probeWarning)) {
+      evalResult.warnings.push(probeWarning);
+    }
+
+    await fpLog('verify.delivery-result', {
+      profileId,
+      ok: evalResult.ok,
+      mismatchCount: evalResult.mismatches.length,
+      warningCount: evalResult.warnings.length,
+      mismatches: evalResult.mismatches,
+      warnings: evalResult.warnings,
+      liveProbeSummary: liveProbe ? {
+        platform: liveProbe.platform,
+        userAgent: liveProbe.userAgent ? String(liveProbe.userAgent).slice(0, 80) : null,
+        uaDataPlatform: liveProbe.uaDataPlatform,
+        timezone: liveProbe.timezone,
+        webglVendor: liveProbe.webglVendor,
+        webglRenderer: liveProbe.webglRenderer,
+        languages: liveProbe.languages,
+        hardwareConcurrency: liveProbe.hardwareConcurrency,
+        deviceMemory: liveProbe.deviceMemory,
+      } : null,
+    });
+
+    if (!evalResult.ok) {
+      const newFailureCount = priorFailures + 1;
+      const MAX_FAILURE_TRACK_SIZE = 200;
+      if (this.deliveryVerificationFailures.has(profileId)) {
+        this.deliveryVerificationFailures.delete(profileId);
+        this.deliveryVerificationFailureTimestamps?.delete(profileId);
+      } else if (this.deliveryVerificationFailures.size >= MAX_FAILURE_TRACK_SIZE) {
+        const oldestKey = this.deliveryVerificationFailures.keys().next().value;
+        if (oldestKey !== undefined) {
+          this.deliveryVerificationFailures.delete(oldestKey);
+          this.deliveryVerificationFailureTimestamps?.delete(oldestKey);
+        }
+      }
+      this.deliveryVerificationFailures.set(profileId, newFailureCount);
+      if (!this.deliveryVerificationFailureTimestamps) this.deliveryVerificationFailureTimestamps = new Map();
+      this.deliveryVerificationFailureTimestamps.set(profileId, Date.now());
+      const mismatchText = evalResult.mismatches.map((m) => m.message || String(m)).join('; ');
+      return {
+        ok: false,
+        blocked: true,
+        mismatches: evalResult.mismatches,
+        message: "指纹交付校验失败: " + mismatchText,
+        warnings: evalResult.warnings,
+        liveProbe,
+      };
+    }
+
+    // Success: clear consecutive failure counter
+    this.resetFingerprintVerificationFailures(profileId);
+    return {
+      ok: true,
+      blocked: false,
+      mismatches: [],
+      warnings: evalResult.warnings,
+      liveProbe,
+    };
+  }
+
+  resetFingerprintVerificationFailures(profileId) {
+    if (profileId) {
+      this.deliveryVerificationFailures.delete(profileId);
+      this.deliveryVerificationFailureTimestamps?.delete(profileId);
+    } else {
+      this.deliveryVerificationFailures.clear();
+      this.deliveryVerificationFailureTimestamps?.clear();
+    }
   }
 
   /**
@@ -2465,6 +3122,7 @@ class BrowserEngine {
   }
 
   handleBrowserGone(profileId, item, reason = 'browser-gone', options = {}) {
+    if (profileId) this.resetFingerprintVerificationFailures(profileId);
     if (!item) return Promise.resolve({ id: profileId, running: false });
     const pending = this.stopping.get(profileId);
     if (pending?.lifecycleSettled && this.stopping.get(profileId) === pending) this.stopping.delete(profileId);
@@ -3439,22 +4097,60 @@ class BrowserEngine {
         } catch (navError) {
           await fpLog('start.navigate-barrier-fail', { profileId: profile.id, error: String(navError.message || navError) });
         }
-      } else if (!restoreSession && startUrl) {
-        await fpLog('start.navigate-startpage', { profileId: profile.id, startUrl });
+      } else {
+        // Fail-Closed: Verify actual delivered fingerprint via CDP probe before target navigation
+        this.emitStartProgress(profile.id, 'verify', 92, '正在校验指纹交付…');
+        let deliveryResult = { ok: true, blocked: false, mismatches: [], warnings: [] };
         try {
-          await this.keepDefaultTab(item.port, startUrl);
-        } catch (navError) {
-          await fpLog('start.navigate-fail', { profileId: profile.id, error: String(navError.message || navError) });
-        }
-        try {
-          await this.ensureStartPageFingerprint(item, profile, injectFp, startUrl);
-        } catch (reInjectError) {
-          await fpLog('start.reinject-fail', { profileId: profile.id, error: String(reInjectError.message || reInjectError) });
-          this.emit({
-            type: 'fingerprint-injection-failed',
-            id: profile.id,
-            message: 'start-page re-inject: ' + reInjectError.message,
+          deliveryResult = await this.verifyStartupFingerprintDelivery(item, profile, item.fingerprint || fingerprint);
+        } catch (verifyError) {
+          await fpLog('start.delivery-verify-exception', {
+            profileId: profile.id,
+            error: String(verifyError?.message || verifyError),
           });
+        }
+
+        if (!deliveryResult.ok && deliveryResult.blocked) {
+          const mismatchMessages = (deliveryResult.mismatches || []).map((m) => typeof m === 'object' ? (m.message || JSON.stringify(m)) : String(m));
+          const failureDetails = mismatchMessages.join('\n');
+          item.fingerprintVerificationError = deliveryResult.message || failureDetails;
+          item.verificationBlocked = true;
+
+          this.emit({
+            type: 'fingerprint-verification-failed',
+            id: profile.id,
+            blocked: true,
+            mismatches: deliveryResult.mismatches,
+            message: deliveryResult.message || ('指纹交付校验失败: ' + mismatchMessages.join('; ')),
+          });
+
+          // Fail-Closed: DO NOT navigate to target site or startUrl.
+          // Navigate to a safe local error page to prevent real fingerprint exposure.
+          const safeErrorHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>指纹校验失败 - 启动已阻断</title><style>body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:40px;background:#18181b;color:#f4f4f5;}h1{color:#ef4444;font-size:22px;margin-top:0;}.card{background:#27272a;border:1px solid #3f3f46;border-radius:8px;padding:24px;max-width:620px;margin:40px auto;box-shadow:0 4px 6px -1px rgba(0,0,0,.3);}.desc{color:#a1a1aa;font-size:14px;line-height:1.6;}.err{background:#09090b;padding:12px;border-radius:6px;font-family:monospace;font-size:13px;color:#f87171;word-break:break-all;white-space:pre-wrap;margin:16px 0;}.hint{font-size:13px;color:#71717a;}</style></head><body><div class="card"><h1>⚠️ 指纹未按配置交付</h1><p class="desc">为避免原生环境及真实指纹泄露至目标站点，系统检测到实际交付指纹与配置存在直接矛盾，已触发 Fail-Closed 安全屏障，阻止访问目标站点。</p><div class="err">` + String(failureDetails).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])) + `</div><p class="hint">指纹未按配置交付，已阻止访问目标站点。请检查内核兼容性或环境指纹配置后重试。</p></div></body></html>`;
+          const safeErrorUrl = `data:text/html;charset=utf-8,${encodeURIComponent(safeErrorHtml)}`;
+          await fpLog('start.navigate-verification-barrier-errorpage', { profileId: profile.id, failureDetails });
+          try {
+            await this.keepDefaultTab(item.port, safeErrorUrl);
+          } catch (navError) {
+            await fpLog('start.navigate-verification-barrier-fail', { profileId: profile.id, error: String(navError.message || navError) });
+          }
+        } else if (!restoreSession && startUrl) {
+          await fpLog('start.navigate-startpage', { profileId: profile.id, startUrl });
+          try {
+            await this.keepDefaultTab(item.port, startUrl);
+          } catch (navError) {
+            await fpLog('start.navigate-fail', { profileId: profile.id, error: String(navError.message || navError) });
+          }
+          try {
+            await this.ensureStartPageFingerprint(item, profile, injectFp, startUrl);
+          } catch (reInjectError) {
+            await fpLog('start.reinject-fail', { profileId: profile.id, error: String(reInjectError.message || reInjectError) });
+            this.emit({
+              type: 'fingerprint-injection-failed',
+              id: profile.id,
+              message: 'start-page re-inject: ' + reInjectError.message,
+            });
+          }
         }
       }
       // Brand window title as 环境 N (not generic Chrome)
@@ -3468,7 +4164,7 @@ class BrowserEngine {
       item.cdpError = error.message;
       await fpLog('start.fail', { profileId: profile.id, error: String(error.message || error) });
       // Last chance: still try to open start page so UI is not stuck on about:blank.
-      if (!restoreSession && startUrl && item.port) {
+      if (!restoreSession && startUrl && item.port && !item.verificationBlocked && !injectionFailed) {
         try {
           await this.keepDefaultTab(item.port, startUrl);
           await fpLog('start.navigate-after-fail', { profileId: profile.id, startUrl });
@@ -3481,8 +4177,12 @@ class BrowserEngine {
     }
     // Detect user closing browser with X (process may stay alive; CDP/pages are source of truth)
     this.startRunningWatch(item);
-    this.emitStartProgress(profile.id, 'ready', 100, '启动完成');
-    this.emit({ type: 'status', id: profile.id, running: true, ...this.publicRunning(profile.id) });
+    if (item.verificationBlocked) {
+      this.emitStartProgress(profile.id, 'blocked', 100, '指纹校验失败，已阻止访问目标站点');
+    } else {
+      this.emitStartProgress(profile.id, 'ready', 100, '启动完成');
+    }
+    this.emit({ type: 'status', id: profile.id, running: true, blocked: Boolean(item.verificationBlocked), ...this.publicRunning(profile.id) });
     return this.publicRunning(profile.id);
     } catch (error) {
       // Release anything acquired before the env became live. The inner spawn/extension
@@ -3545,6 +4245,8 @@ class BrowserEngine {
       extensionCount: item.extensions.length,
       loadedExtensions: item.loadedExtensions || [],
       cdpError: item.cdpError || null,
+      verificationBlocked: Boolean(item.verificationBlocked),
+      fingerprintVerificationError: item.fingerprintVerificationError || null,
       fingerprint: item.fingerprint ? {
         platform: item.fingerprint.platform,
         hardwareConcurrency: item.fingerprint.hardwareConcurrency,
@@ -3597,6 +4299,7 @@ class BrowserEngine {
 
   async stop(id) {
     const safe = assertProfileId(id);
+    this.resetFingerprintVerificationFailures(safe);
     const pendingStop = this.stopping.get(safe);
     if (pendingStop?.lifecycleSettled && this.stopping.get(safe) === pendingStop) this.stopping.delete(safe);
     if (this.stopping.has(safe)) return this.stopping.get(safe);
@@ -3900,6 +4603,12 @@ class BrowserEngine {
     try {
       const result = await retryProxyOperation(() => lookupProxyCountry(resolved.config, {
         ipChannel: profile.proxyMeta?.ipChannel,
+        // Cold cache + a rate-limited probe service: the profile's last known exit is a valid
+        // degradation source, otherwise a 429 would look like a dead proxy.
+        profile,
+        exitIp: profile.exitIp,
+        exitCountryCode: profile.exitCountryCode,
+        exitTimezone: profile.exitTimezone,
       }));
       return {
         ...result,
@@ -3911,6 +4620,8 @@ class BrowserEngine {
       };
     } catch (error) {
       const err = new Error(error.message || String(error));
+      err.code = error.code;
+      err.probeUnavailable = error.probeUnavailable === true;
       err.errorClass = error.errorClass || classifyProxyError(error);
       err.latencyMs = error.latencyMs;
       throw err;
@@ -4040,6 +4751,40 @@ class BrowserEngine {
         }
       }
       if (!ok && lastError) {
+        // A rate-limited or unreachable exit-probe service is NOT a dead proxy. Treating a 429 as
+        // "proxy not ready" would block startup on a healthy tunnel. But we may only continue when
+        // the exit geography is still knowable: without it the timezone/language cannot be aligned
+        // to the real exit, and starting anyway would leak the host timezone.
+        const probeUnavailable = lastError.code === 'probe-unavailable'
+          || lastError.errorClass === 'probe-unavailable'
+          || lastError.probeUnavailable === true;
+        if (probeUnavailable) {
+          const hasExitGeo = Boolean(
+            working.exitIp
+            || working.exitCountryCode
+            || working.exitTimezone
+            || working.privacy?.timezone
+            || this.networkInfo.get(working.id)?.ip
+          );
+          if (hasExitGeo) {
+            this.emit({
+              type: 'proxy-warn',
+              id: working.id,
+              code: 'probe-unavailable',
+              message: '出口探测服务受限（限频或超时），代理链路未见异常，已复用环境既有出口信息继续启动',
+            });
+            return working;
+          }
+          const probeMsg = '出口探测服务暂时不可用（限频或超时），且该环境尚无可用出口信息。为避免时区/语言与真实出口不一致而暴露指纹，已停止启动。请稍后重试，或点击「测试」强制刷新出口探测。';
+          this.emit({
+            type: 'proxy-error',
+            id: working.id,
+            code: 'probe-unavailable',
+            message: probeMsg,
+            policy: 'block',
+          });
+          throw Object.assign(new Error(probeMsg), { code: 'probe-unavailable' });
+        }
         const policy = String(meta.notReadyPolicy || (meta.requireReady === false ? 'continue' : 'block'));
         const message = '启动前代理未就绪：' + (lastError.message || lastError);
         this.emit({ type: 'proxy-error', id: working.id, code: 'proxy-not-ready', message, policy });
@@ -4187,4 +4932,11 @@ module.exports = {
   extractTimezoneFromArgs,
   RequestHeaderRewriter,
   createRequestHeaderRewriter,
+  evaluateFingerprintDelivery,
+  normalizePlatformFamily,
+  detectUaPlatform,
+  extractChromeMajor,
+  extractGpuBrand,
+  normalizeTimezone,
+  extractPrimaryLanguage,
 };

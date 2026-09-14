@@ -101,7 +101,7 @@ function buildPortScanProtectionScript(value) {
     if (xhrProto && typeof xhrProto.open === 'function') {
       const originalOpen = xhrProto.open;
       const wrappedOpen = markNative(function open(method, url) {
-        if (isBlocked(url)) throw securityError("Failed to execute 'open' on 'XMLHttpRequest': local port probe blocked");
+        if (isBlocked(url)) throw securityError("Failed to execute 'open' on 'XMLHttpRequest': Access to restricted URI denied.");
         return originalOpen.apply(this, arguments);
       }, 'function open() { [native code] }');
       install(xhrProto, 'open', wrappedOpen);
@@ -113,7 +113,7 @@ function buildPortScanProtectionScript(value) {
     const OriginalWebSocket = globalThis.WebSocket;
     if (typeof OriginalWebSocket === 'function') {
       const WrappedWebSocket = markNative(function WebSocket(url, protocols) {
-        if (isBlocked(url)) throw securityError("Failed to construct 'WebSocket': local port probe blocked");
+        if (isBlocked(url)) throw securityError("Failed to construct 'WebSocket': Access to restricted URI denied.");
         return protocols === undefined ? new OriginalWebSocket(url) : new OriginalWebSocket(url, protocols);
       }, 'function WebSocket() { [native code] }');
       WrappedWebSocket.prototype = OriginalWebSocket.prototype;
@@ -126,7 +126,7 @@ function buildPortScanProtectionScript(value) {
     const OriginalEventSource = globalThis.EventSource;
     if (typeof OriginalEventSource === 'function') {
       const WrappedEventSource = markNative(function EventSource(url, options) {
-        if (isBlocked(url)) throw securityError("Failed to construct 'EventSource': local port probe blocked");
+        if (isBlocked(url)) throw securityError("Failed to construct 'EventSource': Access to restricted URI denied.");
         return options === undefined ? new OriginalEventSource(url) : new OriginalEventSource(url, options);
       }, 'function EventSource() { [native code] }');
       WrappedEventSource.prototype = OriginalEventSource.prototype;

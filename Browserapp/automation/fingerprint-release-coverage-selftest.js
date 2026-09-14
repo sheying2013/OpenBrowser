@@ -82,6 +82,7 @@ const COVERAGE_DOMAINS = [
       { key: "selftest:workerfp", script: "node automation/worker-fingerprint-e2e-selftest.js", file: "automation/worker-fingerprint-e2e-selftest.js" },
       { key: "selftest:workerscope", script: "node automation/worker-scope-family-e2e-selftest.js", file: "automation/worker-scope-family-e2e-selftest.js" },
       { key: "selftest:bluetooth", script: "node automation/bluetooth-adapter-e2e-selftest.js", file: "automation/bluetooth-adapter-e2e-selftest.js" },
+      { key: "selftest:kernelinitcontract", script: "node automation/kernel-init-contract-selftest.js", file: "automation/kernel-init-contract-selftest.js" },
     ]
   },
   {
@@ -115,6 +116,12 @@ const COVERAGE_DOMAINS = [
       { key: "selftest:macosfontsubsets", script: "node automation/macos-missing-font-subsets-e2e-selftest.js", file: "automation/macos-missing-font-subsets-e2e-selftest.js" },
       { key: "selftest:fontcjkprobe", script: "node automation/font-cjk-probe-e2e-selftest.js", file: "automation/font-cjk-probe-e2e-selftest.js" },
       { key: "selftest:fontconsistency", script: "node automation/font-persona-consistency-e2e-selftest.js", file: "automation/font-persona-consistency-e2e-selftest.js" },
+      { key: "selftest:fontmetricsparity", script: "node automation/font-sfnt-woff2-metrics-parity-selftest.js", file: "automation/font-sfnt-woff2-metrics-parity-selftest.js" },
+      { key: "selftest:fingerprintpool", script: "node automation/fingerprint-pool-selftest.js", file: "automation/fingerprint-pool-selftest.js" },
+      { key: "selftest:brandtraceremediation", script: "node automation/page-visible-trace-remediation-selftest.js", file: "automation/page-visible-trace-remediation-selftest.js" },
+      { key: "selftest:mobileosfontfix", script: "node automation/mobile-persona-os-font-fix-selftest.js", file: "automation/mobile-persona-os-font-fix-selftest.js" },
+      { key: "selftest:fontblobnative", script: "node automation/query-local-font-blob-native-shape-selftest.js", file: "automation/query-local-font-blob-native-shape-selftest.js" },
+      { key: "selftest:fontbloblazy", script: "node automation/query-local-font-blob-lazy-payload-selftest.js", file: "automation/query-local-font-blob-lazy-payload-selftest.js" },
     ]
   },
   {
@@ -135,6 +142,7 @@ const COVERAGE_DOMAINS = [
       { key: "selftest:webglarchnorm", script: "node automation/webgl-architecture-normalization-e2e-selftest.js", file: "automation/webgl-architecture-normalization-e2e-selftest.js" },
       { key: "selftest:webglextprofile", script: "node automation/webgl-extensions-profile-e2e-selftest.js", file: "automation/webgl-extensions-profile-e2e-selftest.js" },
       { key: "selftest:webglcompat", script: "node automation/webgl-capability-compatibility-e2e-selftest.js", file: "automation/webgl-capability-compatibility-e2e-selftest.js" },
+      { key: "selftest:graphicsalign", script: "node automation/graphics-media-alignment-selftest.js", file: "automation/graphics-media-alignment-selftest.js" },
     ]
   },
   {
@@ -168,6 +176,7 @@ const COVERAGE_DOMAINS = [
       { key: "selftest:windpi", script: "node automation/windows-dpi-scale-factor-selftest.js", file: "automation/windows-dpi-scale-factor-selftest.js" },
       { key: "selftest:wincascade", script: "node automation/window-sync-cascade-bounds-selftest.js", file: "automation/window-sync-cascade-bounds-selftest.js" },
       { key: "selftest:internalpagesync", script: "node automation/internal-pages-tab-sync-selftest.js", file: "automation/internal-pages-tab-sync-selftest.js" },
+      { key: "selftest:listrendercache", script: "node automation/list-render-cache-tabs-selftest.js", file: "automation/list-render-cache-tabs-selftest.js" },
     ]
   },
   {
@@ -178,6 +187,7 @@ const COVERAGE_DOMAINS = [
       { key: "selftest:socks5complete", script: "node socks5-auth-complete-selftest.js", file: "socks5-auth-complete-selftest.js" },
       { key: "selftest:socks5reset", script: "node socks5-reset-selftest.js", file: "socks5-reset-selftest.js" },
       { key: "selftest:socks5retry", script: "node socks5-retry-selftest.js", file: "socks5-retry-selftest.js" },
+      { key: "selftest:proxyprobe", script: "node automation/proxy-probe-resilience-selftest.js", file: "automation/proxy-probe-resilience-selftest.js" },
     ]
   },
   {
@@ -200,6 +210,11 @@ const COVERAGE_DOMAINS = [
       { key: "selftest:proxydoh", script: "node automation/proxy-forwarder-doh-selftest.js", file: "automation/proxy-forwarder-doh-selftest.js" },
       { key: "selftest:profilelocalstate", script: "node automation/profile-local-state-selftest.js", file: "automation/profile-local-state-selftest.js" },
       { key: "selftest:startupbarrier", script: "node automation/startup-consistency-and-barrier-selftest.js", file: "automation/startup-consistency-and-barrier-selftest.js" },
+      { key: "selftest:startupdelivery", script: "node automation/startup-fingerprint-delivery-selftest.js", file: "automation/startup-fingerprint-delivery-selftest.js" },
+      { key: "selftest:speechcrossplatform", script: "node automation/speech-voice-plugin-crossplatform-selftest.js", file: "automation/speech-voice-plugin-crossplatform-selftest.js" },
+      { key: "selftest:uaditerable", script: "node automation/user-agent-iterable-stack-selftest.js", file: "automation/user-agent-iterable-stack-selftest.js" },
+      { key: "selftest:kernelinitwebrtc", script: "node automation/kernel-init-webrtc-contract-selftest.js", file: "automation/kernel-init-webrtc-contract-selftest.js" },
+      { key: "selftest:kernelinitinvariants", script: "node automation/kernel-template-invariants-selftest.js", file: "automation/kernel-template-invariants-selftest.js" },
     ]
   }
 ];
@@ -213,6 +228,30 @@ const DIAGNOSTIC_AUDITS = [
     script: "node automation/issue-closure-audit-selftest.js",
     file: "automation/issue-closure-audit-selftest.js",
     rationale: "Adversarial GitHub issues #19, #21, #22 closure evaluation with documented boundaries"
+  },
+  {
+    key: "audit:adversarial",
+    script: "node automation/adversarial-detection-audit.js",
+    file: "automation/adversarial-detection-audit.js",
+    rationale: "Round 1 live-kernel A/B adversarial detector: prototype descriptors, cross-context leaks, stack exposure"
+  },
+  {
+    key: "audit:adversarial2",
+    script: "node automation/adversarial-detection-audit-round2.js",
+    file: "automation/adversarial-detection-audit-round2.js",
+    rationale: "Round 2 live-kernel A/B adversarial detector: capability APIs, wire headers, worker contexts, media queries"
+  },
+  {
+    key: "audit:brandtrace",
+    script: "node automation/page-visible-brand-trace-audit.js",
+    file: "automation/page-visible-brand-trace-audit.js",
+    rationale: "Page-visible self-exposure audit: product markers, srcdoc leakage, DOM/CSS artifacts vs native baseline"
+  },
+  {
+    key: "audit:mobilepersona",
+    script: "node automation/mobile-persona-consistency-audit.js",
+    file: "automation/mobile-persona-consistency-audit.js",
+    rationale: "Android/iOS persona end-to-end consistency audit (identity, touch, client hints, GPU, fonts, kernel init)"
   }
 ];
 

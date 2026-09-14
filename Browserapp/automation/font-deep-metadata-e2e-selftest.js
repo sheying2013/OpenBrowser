@@ -592,20 +592,25 @@ function validateDeepMetadata(item) {
       assert.ok(probe.totalCount > 0, `Expected fonts, got ${probe.totalCount}`);
     });
 
-    check('Live browser FontData.blob() returns authentic WOFF2 loadable via FontFace', () => {
+    check('Live browser FontData.blob() returns authentic SFNT loadable via FontFace', () => {
       assert.ok(probe.items.length >= 10, `Expected at least 10 sampled items, got ${probe.items.length}`);
       for (const item of probe.items) {
-        assert.strictEqual(item.blobType, 'font/woff2', `${item.family} blob type must be font/woff2`);
-        assert.strictEqual(item.magicHex, '77 4f 46 32', `${item.family} must have wOF2 header`);
+        assert.strictEqual(item.blobType, '', `${item.family} blob type must be the native empty string`);
+        assert.ok(['00 01 00 00', '4f 54 54 4f', '74 74 63 66'].includes(item.magicHex), `${item.family} must have an SFNT family header, got ${item.magicHex}`);
         assert.strictEqual(item.fontFaceOk, true, `${item.family} FontFace.load() failed: ${item.fontFaceError}`);
       }
     });
 
-    check('Live browser font blob hashes match physical sanitized assets on disk', () => {
+    check('Live browser font blob hashes match the served physical asset on disk (SFNT preferred)', () => {
       for (const item of probe.items) {
         const matchingAsset = allSubsets.find((s) => s.family === item.family);
         assert.ok(matchingAsset, `Missing matching asset for ${item.family}`);
-        const assetPath = path.join(subsetsRoot, matchingAsset.platform, matchingAsset.file);
+        // The blob gate serves the SFNT sibling (.ttf/.otf) when present and only falls
+        // back to the WOFF2 subset for CSS-only assets. Hash the same file the page received.
+        const baseName = matchingAsset.file.replace(/\.woff2$/i, '');
+        const candidates = ['.ttf', '.otf', '.woff2'].map((ext) => path.join(subsetsRoot, matchingAsset.platform, baseName + ext));
+        const assetPath = candidates.find((c) => fs.existsSync(c));
+        assert.ok(assetPath, `Missing served asset for ${item.family}`);
         const diskBuf = fs.readFileSync(assetPath);
         const crypto = require('crypto');
         const diskHash = crypto.createHash('sha256').update(diskBuf).digest('hex');

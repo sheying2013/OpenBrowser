@@ -14,6 +14,7 @@ const {
   isOpenBrowser148,
   canvasSkipHostsFromFp,
   fontListFromFp,
+  validateKernelInitInvariants,
 } = require('./kernel-init-sync');
 const { buildFingerprint } = require('./fingerprint');
 
@@ -247,6 +248,72 @@ async function main() {
       assert.ok(!/env-kit/i.test(serialized), 'template must not carry inherited runtime names');
       assert.ok(!/52\.80\.142\.150/.test(serialized), 'template must not carry fixed bypass hosts');
     }
+  }
+
+  // Linux media label invariant validation: positive & foreign hardware rejection
+  {
+    const baseLinuxInit = {
+      platform: 'Linux x86_64',
+      user_agent_data: { platform: 'Linux' },
+      is_webrtc_enable: true,
+      webrtc_policy: 1,
+      webrtc_local_ip: '192.168.1.55',
+      is_enumerate_devices_enable: true,
+      webrtc_media_labels: {
+        audio_input_labels: ['Built-in Audio Analog Stereo'],
+        audio_output_labels: ['Built-in Audio Analog Stereo'],
+        video_input_labels: ['USB 2.0 Camera'],
+        default_text: 'Default - ',
+        communications_text: 'Communications - ',
+      },
+    };
+
+    // Positive: authentic Linux devices must pass
+    const resPass = validateKernelInitInvariants(baseLinuxInit);
+    assert.strictEqual(resPass.valid, true, `Linux persona with native devices must pass: ${resPass.issues.join('; ')}`);
+
+    // Negative: Realtek audio rejected on Linux
+    const resRealtek = validateKernelInitInvariants({
+      ...baseLinuxInit,
+      webrtc_media_labels: {
+        ...baseLinuxInit.webrtc_media_labels,
+        audio_input_labels: ['Microphone Array (Realtek High Definition Audio)'],
+      },
+    });
+    assert.strictEqual(resRealtek.valid, false, 'Linux persona with Realtek must fail invariant');
+    assert.ok(resRealtek.issues.some((i) => i.includes('contains Windows device')));
+
+    // Negative: Conexant / Synaptics / Integrated Camera rejected on Linux
+    const resIntegratedCam = validateKernelInitInvariants({
+      ...baseLinuxInit,
+      webrtc_media_labels: {
+        ...baseLinuxInit.webrtc_media_labels,
+        video_input_labels: ['Integrated Camera (09db:0fb7)'],
+      },
+    });
+    assert.strictEqual(resIntegratedCam.valid, false, 'Linux persona with Integrated Camera must fail invariant');
+    assert.ok(resIntegratedCam.issues.some((i) => i.includes('contains Windows device')));
+
+    // Negative: FaceTime / MacBook rejected on Linux
+    const resFaceTime = validateKernelInitInvariants({
+      ...baseLinuxInit,
+      webrtc_media_labels: {
+        ...baseLinuxInit.webrtc_media_labels,
+        video_input_labels: ['FaceTime HD Camera'],
+      },
+    });
+    assert.strictEqual(resFaceTime.valid, false, 'Linux persona with FaceTime must fail invariant');
+    assert.ok(resFaceTime.issues.some((i) => i.includes('contains macOS device')));
+
+    const resMacBook = validateKernelInitInvariants({
+      ...baseLinuxInit,
+      webrtc_media_labels: {
+        ...baseLinuxInit.webrtc_media_labels,
+        audio_output_labels: ['MacBook Pro Speakers'],
+      },
+    });
+    assert.strictEqual(resMacBook.valid, false, 'Linux persona with MacBook Speakers must fail invariant');
+    assert.ok(resMacBook.issues.some((i) => i.includes('contains macOS device')));
   }
 
   console.log('kernel-init-sync-selftest: ok');

@@ -596,9 +596,9 @@ async function runCdpSession({ serverPort }) {
       assert.strictEqual(Object.prototype.toString.call(entry), '[object FontData]');
       assert.deepStrictEqual(Object.getOwnPropertyNames(entry), [], `${fam} must have no own properties`);
 
-      // 3. blob() method returns valid font/woff2 Blob
+      // 3. blob() method returns a native-shaped Blob (empty MIME type, like stock Chromium)
       const b = await entry.blob();
-      assert.strictEqual(b.type, 'font/woff2');
+      assert.strictEqual(b.type, '');
       assert.ok(b.size > 0, `Blob for ${fam} must have size > 0`);
 
       // 4. FontData.prototype.blob.call(entry) returns same blob
@@ -662,14 +662,14 @@ async function runCdpSession({ serverPort }) {
       assert.ok(probe.filteredNames.includes('Courier'));
     });
 
-    check('Live FontData.blob() returns authentic WOFF2 binaries loadable via FontFace', () => {
+    check('Live FontData.blob() returns authentic SFNT binaries loadable via FontFace', () => {
       for (const item of probe.items) if (!item.fontFaceOk) console.log('   FAILED FONTFACE:', item.family, item.fontFaceError);
       for (const item of probe.items) {
         assert.strictEqual(item.isFontData, true, `${item.family} must be instanceof FontData`);
         assert.strictEqual(item.protoMatch, true, `${item.family} prototype must match FontData.prototype`);
         assert.deepStrictEqual(item.ownProps, [], `${item.family} must have no own properties`);
         assert.strictEqual(item.toStringTag, '[object FontData]');
-        assert.strictEqual(item.magicHex, '77 4f 46 32', `${item.family} must have wOF2 header`);
+        assert.ok(['00 01 00 00', '4f 54 54 4f', '74 74 63 66'].includes(item.magicHex), `${item.family} must have SFNT family header, got ${item.magicHex}`);
         assert.strictEqual(item.fontFaceOk, true, `${item.family} FontFace.load() must succeed`);
         assert.strictEqual(item.protoSize, item.blobSize, `${item.family} proto blob size must match`);
       }

@@ -860,10 +860,10 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
         }
       });
 
-      check('Windows persona: queryLocalFonts exposes exactly 60 fonts with authentic WOFF2 headers across window frames', () => {
+      check('Windows persona: queryLocalFonts exposes exactly 60 fonts with authentic SFNT headers across window frames', () => {
         for (const s of [winMain, winSame, winSrcdoc, winBlank]) {
           assert.strictEqual(s.localFonts.count, 60, `${s.label} font count must be 60`);
-          assert.strictEqual(s.localFonts.blobHeader, '77 4f 46 32', `${s.label} blob header must be wOF2`);
+          assert.ok(['00 01 00 00', '4f 54 54 4f', '74 74 63 66'].includes(s.localFonts.blobHeader), `${s.label} blob header must be SFNT family, got ${s.localFonts.blobHeader}`);
           assert.ok(s.localFonts.blobSize > 1000, `${s.label} blob size must be non-trivial`);
         }
       });
@@ -1007,10 +1007,10 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
         }
       });
 
-      check('macOS persona: queryLocalFonts exposes exactly 76 fonts with authentic WOFF2 headers across window frames', () => {
+      check('macOS persona: queryLocalFonts exposes exactly 76 fonts with authentic SFNT headers across window frames', () => {
         for (const s of [macMain, macSame, macSrcdoc, macBlank]) {
           assert.strictEqual(s.localFonts.count, 76, `${s.label} font count must be 76`);
-          assert.strictEqual(s.localFonts.blobHeader, '77 4f 46 32', `${s.label} blob header must be wOF2`);
+          assert.ok(['00 01 00 00', '4f 54 54 4f', '74 74 63 66'].includes(s.localFonts.blobHeader), `${s.label} blob header must be SFNT family, got ${s.localFonts.blobHeader}`);
           assert.ok(s.localFonts.blobSize > 1000, `${s.label} blob size must be non-trivial`);
         }
       });

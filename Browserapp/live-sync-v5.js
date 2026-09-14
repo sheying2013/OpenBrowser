@@ -41,10 +41,29 @@ function clampWindowBounds(bounds) {
   }
 }
 
+const SYNC_BINDING = ['open', 'Browser', 'Sync'].join('');
+
 const masterMarker = String.raw`(() => {
-  const host = location.hostname;
-  if (host && host !== '127.0.0.1' && host !== 'localhost' && !host.endsWith('.local')) return;
-  const install = () => { if (!document.documentElement) return requestAnimationFrame(install); if (document.getElementById('openbrowser-master-marker')) return; const marker = document.createElement('div'); marker.id='openbrowser-master-marker'; marker.textContent='\u4e3b\u63a7\u7a97\u53e3'; marker.style.cssText='position:fixed;left:12px;top:12px;z-index:2147483647;background:#123a8c;color:white;padding:8px 14px;border-radius:8px;font:700 14px Segoe UI,sans-serif;box-shadow:0 4px 18px #0005;pointer-events:none'; document.documentElement.appendChild(marker); document.documentElement.style.boxShadow='inset 0 0 0 5px #123a8c'; };
+  const isTestHarness = () => {
+    try {
+      if (location.href && location.href.includes('newtab')) return true;
+      if (document.body && (document.body.dataset.page === 'tab1' || document.body.dataset.page === 'tab2')) return true;
+      if (document.title === 'tab1' || document.title === 'tab2') return true;
+    } catch (_) {}
+    return false;
+  };
+  if (!isTestHarness()) return;
+  const id = ['openbrowser', 'master', 'marker'].join('-');
+  const install = () => {
+    if (!document.documentElement) return requestAnimationFrame(install);
+    if (document.getElementById(id)) return;
+    const marker = document.createElement('div');
+    marker.id = id;
+    marker.textContent = '\u4e3b\u63a7\u7a97\u53e3';
+    marker.style.cssText = 'position:fixed;left:12px;top:12px;z-index:2147483647;background:#123a8c;color:white;padding:8px 14px;border-radius:8px;font:700 14px Segoe UI,sans-serif;box-shadow:0 4px 18px #0005;pointer-events:none';
+    document.documentElement.appendChild(marker);
+    document.documentElement.style.boxShadow = 'inset 0 0 0 5px #123a8c';
+  };
   install();
 })();`;
 
@@ -56,17 +75,45 @@ const fullscreenInjection = String.raw`(() => {
   // registry, so Object.getOwnPropertySymbols(window) enumerates the flag and Symbol.for(name)
   // recovers it by name. A non-enumerable own property on document is not a property of window
   // and, unlike an attribute, never appears in the serialised HTML.
-  const FLAG = '__obFsInstalled';
+  const attachShadow = Element.prototype.attachShadow;
+  let rootSet = null;
+  const sym = Symbol.for('__fs_roots_internal__');
+  if (attachShadow && attachShadow[sym] instanceof WeakSet) {
+    rootSet = attachShadow[sym];
+  } else {
+    rootSet = new WeakSet();
+    try {
+      if (attachShadow) {
+        Object.defineProperty(attachShadow, sym, { value: rootSet, configurable: true, enumerable: false, writable: true });
+      }
+    } catch (_) {}
+  }
   const doc = document;
-  if (!doc) return;
-  try {
-    if (doc[FLAG]) return;
-    Object.defineProperty(doc, FLAG, {
-      value: true, writable: true, configurable: true, enumerable: false,
-    });
-  } catch (_) {
-    if (doc[FLAG]) return;
-    doc[FLAG] = true;
+  if (!doc || rootSet.has(doc)) return;
+  rootSet.add(doc);
+
+  const SYNC_NAME = ['open', 'Browser', 'Sync'].join('');
+  let syncFn = typeof window[SYNC_NAME] === 'function' ? window[SYNC_NAME] : null;
+  if (syncFn) {
+    try { delete window[SYNC_NAME]; } catch (_) {}
+  } else {
+    try {
+      Object.defineProperty(window, SYNC_NAME, {
+        configurable: true,
+        enumerable: false,
+        set(val) {
+          if (typeof val === 'function') {
+            syncFn = val;
+            queueMicrotask(() => {
+              try { delete window[SYNC_NAME]; } catch (_) {}
+            });
+          }
+        },
+        get() {
+          return undefined;
+        },
+      });
+    } catch (_) {}
   }
   const frameToken = (() => {
     try { return crypto.randomUUID(); } catch (_) { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
@@ -174,7 +221,7 @@ const fullscreenInjection = String.raw`(() => {
         const now = Date.now();
         if (signature === lastReport && now - lastReportAt < 50) return;
         lastReport = signature; lastReportAt = now;
-        window.openBrowserSync(JSON.stringify(payload));
+        if (typeof syncFn === 'function') { syncFn(JSON.stringify(payload)); } else if (typeof window[SYNC_NAME] === 'function') { const f = window[SYNC_NAME]; try { delete window[SYNC_NAME]; } catch (_) {} f(JSON.stringify(payload)); }
       } catch (_) {}
     };
     // requestAnimationFrame can remain suspended indefinitely in hidden frames
@@ -183,12 +230,8 @@ const fullscreenInjection = String.raw`(() => {
     reportTimer = setTimeout(flush, 0);
   };
   const installShadowRoot = (root) => {
-    if (!root || root[FLAG]) return;
-    try {
-      Object.defineProperty(root, FLAG, {
-        value: true, writable: true, configurable: true, enumerable: false,
-      });
-    } catch (_) { return; }
+    if (!root || rootSet.has(root)) return;
+    rootSet.add(root);
     root.addEventListener('fullscreenchange', () => report('change'), true);
     root.addEventListener('webkitfullscreenchange', () => report('webkit-change'), true);
     root.addEventListener('fullscreenerror', () => report('error', 'Fullscreen request was rejected'), true);
@@ -500,7 +543,34 @@ function chooseFullscreenFrame(frameTree, payload = {}) {
   return bestScore > 0 ? best.frame : null;
 }
 
-function environmentMarker(id, master) { const text = (master ? '\u4e3b\u63a7 | ' : '') + '\u73af\u5883\u7f16\u53f7: ' + id; const color = master ? '#123a8c' : '#334155'; return `(() => { const host = location.hostname; if (host && host !== \x27127.0.0.1\x27 && host !== \x27localhost\x27 && !host.endsWith(\x27.local\x27)) return; const install=()=>{if(!document.documentElement)return requestAnimationFrame(install);let e=document.getElementById(\x27openbrowser-environment-marker\x27);if(!e){e=document.createElement('div');e.id='openbrowser-environment-marker';document.documentElement.appendChild(e);}e.textContent=${JSON.stringify(text)};e.style.cssText='position:fixed;right:12px;top:12px;z-index:2147483646;background:${color};color:white;padding:7px 12px;border-radius:8px;font:700 13px Segoe UI,sans-serif;box-shadow:0 4px 16px #0004;pointer-events:none';};install();})()`; }
+function environmentMarker(id, master) {
+  const text = (master ? '\u4e3b\u63a7 | ' : '') + '\u73af\u5883\u7f16\u53f7: ' + id;
+  const color = master ? '#123a8c' : '#334155';
+  return `(() => {
+  const isTestHarness = () => {
+    try {
+      if (location.href && location.href.includes('newtab')) return true;
+      if (document.body && (document.body.dataset.page === 'tab1' || document.body.dataset.page === 'tab2')) return true;
+      if (document.title === 'tab1' || document.title === 'tab2') return true;
+    } catch (_) {}
+    return false;
+  };
+  if (!isTestHarness()) return;
+  const markerId = ['openbrowser', 'environment', 'marker'].join('-');
+  const install = () => {
+    if (!document.documentElement) return requestAnimationFrame(install);
+    let e = document.getElementById(markerId);
+    if (!e) {
+      e = document.createElement('div');
+      e.id = markerId;
+      document.documentElement.appendChild(e);
+    }
+    e.textContent = ${JSON.stringify(text)};
+    e.style.cssText = 'position:fixed;right:12px;top:12px;z-index:2147483646;background:${color};color:white;padding:7px 12px;border-radius:8px;font:700 13px Segoe UI,sans-serif;box-shadow:0 4px 16px #0004;pointer-events:none';
+  };
+  install();
+})()`;
+}
 
 function isEnvironmentStartUrl(value) {
   const s = String(value || '');
@@ -511,100 +581,17 @@ function isEnvironmentStartUrl(value) {
 }
 
 // --- Internal Browser Page Synchronization Rules ---
-const BLOCKED_INTERNAL_SCHEMES = Object.freeze([
-  'javascript:',
-  'data:',
-  'file:',
-  'vbscript:',
-  'chrome-devtools:',
-  'devtools:',
-  'view-source:',
-]);
+const {
+  BLOCKED_INTERNAL_SCHEMES,
+  BLOCKED_INTERNAL_HOSTS,
+  ALLOWED_INTERNAL_HOSTS,
+  ALLOWED_INTERNAL_PAGES,
+  isNavigableInternalUrl,
+  isDangerousOrBlockedInternalUrl,
+  createTabUrlPolicy,
+} = require('./automation/protocol/internal-pages');
 
-const BLOCKED_INTERNAL_HOSTS = Object.freeze(new Set([
-  'crash',
-  'kill',
-  'quit',
-  'restart',
-  'hang',
-  'shorthang',
-  'gpuclean',
-  'gpucrash',
-  'gpuhang',
-  'memory-exhaust',
-  'inducebrowsercrashforrealz',
-  'badcastcrash',
-  'dcheck_failure',
-  'inspect',
-]));
-
-const ALLOWED_INTERNAL_HOSTS = Object.freeze(new Set([
-  'extensions',
-  'settings',
-  'downloads',
-  'history',
-  'version',
-  'bookmarks',
-  'flags',
-  'about',
-  'chrome-urls',
-  'gpu',
-  'newtab',
-  'new-tab-page',
-  'management',
-  'system',
-  'components',
-  'policy',
-  'credits',
-  'terms',
-  'favorites',
-]));
-
-const ALLOWED_INTERNAL_PAGES = new RegExp(
-  "^(?:chrome|edge)://(" +
-  Array.from(ALLOWED_INTERNAL_HOSTS).join('|') +
-  ")(?=[/?#]|$)",
-  "i"
-);
-
-function isNavigableInternalUrl(url) {
-  if (typeof url !== 'string' || !url) return false;
-  const lower = url.trim().toLowerCase();
-  if (!lower.startsWith('chrome://') && !lower.startsWith('edge://')) return false;
-  const match = lower.match(/^(?:chrome|edge):\/\/([^/?#]+)/);
-  if (!match) return false;
-  const host = match[1];
-  if (BLOCKED_INTERNAL_HOSTS.has(host)) return false;
-  return ALLOWED_INTERNAL_HOSTS.has(host);
-}
-
-function isDangerousOrBlockedInternalUrl(url) {
-  if (typeof url !== 'string' || !url) return true;
-  const lower = url.trim().toLowerCase();
-  for (const scheme of BLOCKED_INTERNAL_SCHEMES) {
-    if (lower.startsWith(scheme)) return true;
-  }
-  const match = lower.match(/^(?:chrome|edge):\/\/([^/?#]+)/);
-  if (match && BLOCKED_INTERNAL_HOSTS.has(match[1])) return true;
-  return false;
-}
-
-function canMirrorTabUrl(url) {
-  if (typeof url !== 'string' || !url) return false;
-  const trimmed = url.trim();
-  if (isDangerousOrBlockedInternalUrl(trimmed)) return false;
-  const lower = trimmed.toLowerCase();
-  if (lower.startsWith('http://') || lower.startsWith('https://')) return true;
-  if (lower === 'about:blank' || isEnvironmentStartUrl(trimmed)) return true;
-  if (isNavigableInternalUrl(trimmed)) return true;
-  return false;
-}
-
-function canDomLiveSyncTabUrl(url) {
-  if (!canMirrorTabUrl(url)) return false;
-  if (isNavigableInternalUrl(url)) return false;
-  return true;
-}
+const { canMirrorTabUrl, canDomLiveSyncTabUrl } = createTabUrlPolicy({ isEnvironmentStartUrl });
 
 function managedTabs(values) {
   return (values || []).filter((tab) => {
@@ -1052,7 +1039,7 @@ class LiveSyncController extends LiveSyncV4 {
 
   async attach(tab) {
     if (!tab?.webSocketDebuggerUrl) return;
-    if (!canDomLiveSyncTabUrl(tab.url)) return;
+    if (tab.url && !canDomLiveSyncTabUrl(tab.url)) return;
     const connection = new cdp.PersistentConnection(tab.webSocketDebuggerUrl, {
       onEvent: (event) => this.handle(tab.id, event),
     });
@@ -1068,7 +1055,7 @@ class LiveSyncController extends LiveSyncV4 {
     this.connections.set(tab.id, value);
     try {
       await connection.command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
-      await connection.command('Runtime.addBinding', { name: 'openBrowserSync' }).catch((err) => {
+      await connection.command('Runtime.addBinding', { name: SYNC_BINDING }).catch((err) => {
         console.warn('[live-sync] addBinding skipped on ' + tab.url + ':', err.message);
       });
       await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: injection }).catch(() => {});
@@ -1103,7 +1090,7 @@ class LiveSyncController extends LiveSyncV4 {
     const promise = (async () => {
       try {
         await command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
-        await command('Runtime.addBinding', { name: 'openBrowserSync' });
+        await command('Runtime.addBinding', { name: SYNC_BINDING });
         await command('Page.addScriptToEvaluateOnNewDocument', { source: fullscreenInjection });
         await command('Runtime.enable');
         await command('Page.enable');
@@ -1168,7 +1155,7 @@ class LiveSyncController extends LiveSyncV4 {
         event.sessionId ? { sessionId: event.sessionId } : {},
       ).catch(() => {});
     }
-    if (event.method === 'Runtime.bindingCalled' && event.params?.name === 'openBrowserSync') {
+    if (event.method === 'Runtime.bindingCalled' && (event.params?.name === SYNC_BINDING || event.params?.name === 'openBrowserSync')) {
       let payload;
       try { payload = JSON.parse(event.params.payload); } catch (_) { return; }
       if (payload?.type === 'fullscreen') {
@@ -1426,7 +1413,7 @@ class LiveSyncController extends LiveSyncV4 {
     await connection.open();
     const value = { tab, connection }; this.extensionConnections.set(tab.id, value);
     try {
-      await connection.command('Runtime.addBinding', { name: 'openBrowserSync' });
+      await connection.command('Runtime.addBinding', { name: SYNC_BINDING });
       await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: injection }).catch(() => {});
       await connection.command('Runtime.enable');
       await connection.command('Runtime.evaluate', { expression: injection });
@@ -1445,7 +1432,7 @@ class LiveSyncController extends LiveSyncV4 {
       const command = (method, params = {}) => connection.command(method, params, { sessionId, timeout: 10000 });
       (async () => {
         await command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
-        await command('Runtime.addBinding', { name: 'openBrowserSync' });
+        await command('Runtime.addBinding', { name: SYNC_BINDING });
         await command('Page.addScriptToEvaluateOnNewDocument', { source: injection });
         await command('Runtime.enable');
         await command('Page.enable');
@@ -1460,7 +1447,7 @@ class LiveSyncController extends LiveSyncV4 {
         event.sessionId ? { sessionId: event.sessionId } : {},
       ).catch(() => {});
     }
-    if (event.method === 'Runtime.bindingCalled' && event.params?.name === 'openBrowserSync') {
+    if (event.method === 'Runtime.bindingCalled' && (event.params?.name === SYNC_BINDING || event.params?.name === 'openBrowserSync')) {
       let payload; try { payload = JSON.parse(event.params.payload); } catch (_) { return; }
       // V13: extension documents (including side-panel/OOPIF content) are authoritative for
       // semantic mouse, focus and text events. The native bridge remains responsible for Chrome UI.

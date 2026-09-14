@@ -19,13 +19,13 @@
  * and validates:
  *  1. Distinguishes authentic user activation from unactivated SecurityError rejection.
  *  2. Raw vs Injected comparison: injected gate replaces host font blobs with authentic,
- *     parseable, and loadable platform font subset WOFF2 binaries.
+ *     parseable, and loadable platform font subset SFNT binaries.
  *  3. queryLocalFonts returned font list arrives with expected persona count.
  *  4. postscriptNames filter option correctly narrows the returned list.
  *  5. FontData shape integrity: prototype chain, instanceof FontData, Object.prototype.toString,
  *     and zero own properties on FontData instances.
  *  6. Function disguises: f.blob and FontData.prototype.blob keep native code toString and [native code].
- *  7. blob() metadata: valid font MIME type, positive size, first 4 bytes match wOF2 magic
+ *  7. blob() metadata: valid font MIME type, positive size, first 4 bytes match authentic SFNT magic
  *     (0x774f4632), deterministic hash per family, and distinct binaries across distinct families.
  *  8. In-browser FontFace parsing: new FontFace('...', await blob.arrayBuffer()).load() succeeds,
  *     verifying the returned font is fully valid and loadable rather than an empty synthetic shell.
@@ -344,7 +344,7 @@ async function runSession({ serverPort, mutate, headed }) {
       console.log(`  Alias mappings: ${gateStats.aliasCount}`);
       console.log(`  Coverage percentage: ${gateStats.coveragePercentage}%`);
       console.log(`  Unique asset files bundled: ${gateStats.uniqueAssetCount}`);
-      console.log(`  Total WOFF2 binary payload: ${gateStats.totalWoff2Bytes} bytes (~${(gateStats.totalWoff2Bytes / 1024 / 1024).toFixed(2)} MB)`);
+      console.log(`  Total font binary payload: ${gateStats.totalFontBytes || gateStats.totalWoff2Bytes} bytes (~${((gateStats.totalFontBytes || gateStats.totalWoff2Bytes) / 1024 / 1024).toFixed(2)} MB)`);
 
       await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
         source: gateSource,
@@ -539,21 +539,26 @@ async function runSession({ serverPort, mutate, headed }) {
       assert.strictEqual(probe.illegalThrew, true, 'FontData.prototype.blob.call({}) must throw TypeError');
     });
 
-    check('blob output is deterministic with valid font MIME type', () => {
+    check('blob output is deterministic with native empty MIME type', () => {
       for (const item of probe.items) {
-        assert.ok(
-          item.blobType === 'font/woff2' || item.blobType === 'application/octet-stream',
-          `${item.family} blob MIME type must be font/woff2 or application/octet-stream, got ${item.blobType}`
+        assert.strictEqual(
+          item.blobType,
+          '',
+          `${item.family} blob MIME type must be empty string '', got ${JSON.stringify(item.blobType)}`
         );
         assert.ok(item.blobSize > 0, `${item.family} blob size must be positive`);
         assert.strictEqual(item.isDeterministic, true, `${item.family} blob hash must be deterministic across repeated calls`);
       }
     });
 
-    check('Windows persona font blobs are authentic parseable WOFF2 binaries and do not leak macOS host artifacts', () => {
+    check('Windows persona font blobs are authentic parseable SFNT binaries and do not leak macOS host artifacts', () => {
+      const sfntMagics = ['00 01 00 00', '4f 54 54 4f', '74 74 63 66', '74 72 75 65', '74 79 70 31'];
       for (const item of probe.items) {
-        // Assert wOF2 header magic (0x774f4632)
-        assert.strictEqual(item.magicHex, '77 4f 46 32', `${item.family} header must start with wOF2 magic (77 4f 46 32), got ${item.magicHex}`);
+        // Assert authentic SFNT header magic (TrueType 0x00010000 or OpenType CFF 'OTTO')
+        assert.ok(
+          sfntMagics.includes(item.magicHex),
+          `${item.family} header must start with authentic SFNT magic (${sfntMagics.join(', ')}), got ${item.magicHex}`
+        );
         // Assert absence of host macOS Apple TrueType header (0x74727565 'true')
         assert.ok(!item.headHex.startsWith('74 72 75 65'), `${item.family} header must not contain Apple 'true' tag`);
         // Assert successful in-browser FontFace parsing and loading
