@@ -1850,9 +1850,11 @@ function buildFingerprint(profile = {}) {
       if (webglGpu) { webglGpu.vendor = picked.gpu.vendor; webglGpu.architecture = picked.gpu.architecture; }
     }
   } else if (!hasManualWebglOverride && (uaOs === 'ios' || detectedMobileOs === 'ios')) {
-    webglVendor = 'Apple Inc.';
-    webglRenderer = 'Apple GPU';
-    if (webglGpu) { webglGpu.vendor = 'apple'; webglGpu.architecture = 'common-3'; }
+    if (webglRenderer && /direct3d|d3d11|nvidia|geforce|radeon|intel|adreno|mali|powervr/i.test(webglRenderer)) {
+      webglVendor = 'Apple Inc.';
+      webglRenderer = 'Apple GPU';
+      if (webglGpu) { webglGpu.vendor = 'apple'; webglGpu.architecture = 'common-3'; }
+    }
   }
 
   if (webglGpu && webglMetaMode !== 'real') {
