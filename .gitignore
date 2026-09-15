@@ -15,3 +15,7 @@ dist/
 
 # OS generated files
 .DS_Store
+
+# Internal maintenance documentation (confidential - never commit)
+CODE_OVERVIEW.md
+**/CODE_OVERVIEW.md

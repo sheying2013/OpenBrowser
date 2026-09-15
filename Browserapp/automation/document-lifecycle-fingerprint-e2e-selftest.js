@@ -108,7 +108,7 @@ async function run(inject, profile, fp) {
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const child = spawn(launcher, [dir, '--headless=new'], { cwd: kernelRoot, detached: true, stdio: 'ignore' });
+  const child = spawn(launcher, [dir, '--headless=new', '--disable-popup-blocking'], { cwd: kernelRoot, detached: true, stdio: 'ignore' });
   child.unref();
   let port = null;
   for (let i = 0; i < 80; i += 1) {
@@ -150,8 +150,9 @@ async function run(inject, profile, fp) {
             await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, session);
             if (inject) {
               // The engine's chain: patch the child session before letting it run.
-              const sessionCall = (method, params = {}) => cdp.send(method, params, session);
-              await applyFingerprintToTab(sessionCall, null, fp, profile, { applyKey: 'session:' + String(info.targetId) });
+              const isWaiting = Boolean(event.params.waitingForDebugger || !info.url || info.url === 'about:blank');
+              const sessionCall = (method, params = {}) => (isWaiting && method === 'Runtime.evaluate' ? Promise.resolve({}) : cdp.send(method, params, session));
+              await applyFingerprintToTab(sessionCall, null, fp, profile, { applyKey: 'session:' + String(info.targetId), isWaiting: Boolean(event.params.waitingForDebugger) });
             }
             childSessions.set(String(info.targetId), session);
           }

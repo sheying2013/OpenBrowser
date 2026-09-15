@@ -256,7 +256,7 @@ check('a GPU class without driver limits is surfaced instead of assumed', () => 
     screen: { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040, availLeft: 0, availTop: 0, screenX: 0, screenY: 0, devicePixelRatio: 1 },
     hardwareConcurrency: 8,
     deviceMemory: 8,
-    webgl: { mode: 'noise', vendor: 'Google Inc. (Imagination)', renderer: 'IMG', gpu: { vendor: 'imagination', architecture: '' } },
+    webgl: { mode: 'noise', vendor: 'Google Inc. (Vivante)', renderer: 'Vivante GC7000', gpu: { vendor: 'vivante', architecture: 'gc7000' } },
     userAgentMetadata: { platform: 'Windows' },
   });
   const codes = issues.issues.map((issue) => issue.code);

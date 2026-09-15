@@ -130,7 +130,8 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
   };
   // appendChild is wrapped only by this dynamic CSS gate, so this retains idempotence without
   // creating a page-readable state property on window, document, a DOM prototype, or Symbol.
-  if (inspectBridge(Node?.prototype?.appendChild)) return;
+  if (typeof Node === 'undefined' || !Node.prototype) return;
+  if (inspectBridge(Node.prototype.appendChild)) return;
 
   const allowedFamilies = new Set(${allowedSetJson});
   const fontSubsets = ${fontSubsetsJson};

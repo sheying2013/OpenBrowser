@@ -1828,7 +1828,9 @@ function buildFingerprint(profile = {}) {
     : (webglMetaMode === 'blocked' ? '' : resolvedVendor);
 
   // Enforce cross-platform GPU consistency: prevent contradictory combinations
-  if (uaOs === 'windows') {
+  // Only apply auto-correction when the caller did NOT supply an explicit webglRenderer override.
+  const hasManualWebglOverride = Boolean(fpIn.webglRenderer);
+  if (!hasManualWebglOverride && uaOs === 'windows') {
     if (webglRenderer && /metal|apple/i.test(webglRenderer)) {
       const winPresets = WEBGL_PRESETS.windows;
       const picked = winPresets[u32(seed, 8) % winPresets.length];
@@ -1839,7 +1841,7 @@ function buildFingerprint(profile = {}) {
     if (webglVendor && /apple/i.test(webglVendor)) {
       webglVendor = 'Google Inc. (Intel)';
     }
-  } else if (uaOs === 'android' || detectedMobileOs === 'android') {
+  } else if (!hasManualWebglOverride && (uaOs === 'android' || detectedMobileOs === 'android')) {
     if (webglRenderer && /direct3d|d3d11|metal/i.test(webglRenderer)) {
       const andrPresets = WEBGL_PRESETS.android;
       const picked = andrPresets[u32(seed, 8) % andrPresets.length];
@@ -1847,7 +1849,7 @@ function buildFingerprint(profile = {}) {
       webglVendor = picked.vendor;
       if (webglGpu) { webglGpu.vendor = picked.gpu.vendor; webglGpu.architecture = picked.gpu.architecture; }
     }
-  } else if (uaOs === 'ios' || detectedMobileOs === 'ios') {
+  } else if (!hasManualWebglOverride && (uaOs === 'ios' || detectedMobileOs === 'ios')) {
     webglVendor = 'Apple Inc.';
     webglRenderer = 'Apple GPU';
     if (webglGpu) { webglGpu.vendor = 'apple'; webglGpu.architecture = 'common-3'; }
@@ -3037,7 +3039,7 @@ function buildInjectionScript(fp) {
               const timing = (typeof performance !== 'undefined' && performance.timing) || {};
               const startE = timing.navigationStart || Date.now();
               const onloadT = timing.loadEventEnd || timing.domContentLoadedEventEnd || startE;
-              const pageT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : (Date.now() - startE);
+              const pageT = (typeof performance !== 'undefined' && performance['now']) ? performance['now']() : (Date.now() - startE);
               return { startE, onloadT, pageT, tran: 15 };
             }, null, 'csi', 0);
           } catch (_) {}
@@ -3243,30 +3245,7 @@ function buildInjectionScript(fp) {
         return whole === 0 ? 0 : whole;
       });
 
-      subWindowSyncHooks.push((subWin) => {
-        try {
-          if (!subWin || !subWin.Date || !subWin.Intl) return;
-          subWin.Intl.DateTimeFormat = PatchedDateTimeFormat;
-          subWin.Date = PatchedDate;
-          if (subWin.Date.prototype) {
-            replaceMethod(subWin.Date.prototype, 'getTimezoneOffset', () => function getTimezoneOffset() {
-              const minutes = getOffsetMinutes(asDate(this));
-              if (!isFinite(minutes)) return NaN;
-              const whole = Math.trunc(minutes);
-              return whole === 0 ? 0 : whole;
-            });
-            replaceMethod(subWin.Date.prototype, 'toString', () => function toString() {
-              return formatTzDate(asDate(this)).full;
-            });
-            replaceMethod(subWin.Date.prototype, 'toDateString', () => function toDateString() {
-              return formatTzDate(asDate(this)).dateOnly;
-            });
-            replaceMethod(subWin.Date.prototype, 'toTimeString', () => function toTimeString() {
-              return formatTzDate(asDate(this)).timeOnly;
-            });
-          }
-        } catch (_) {}
-      });
+
 
       const formatTzDate = (date) => {
         try {
@@ -4379,7 +4358,7 @@ function buildInjectionScript(fp) {
                 const timing = (typeof performance !== 'undefined' && performance.timing) || {};
                 const startE = timing.navigationStart || Date.now();
                 const onloadT = timing.loadEventEnd || timing.domContentLoadedEventEnd || startE;
-                const pageT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : (Date.now() - startE);
+                const pageT = (typeof performance !== 'undefined' && performance['now']) ? performance['now']() : (Date.now() - startE);
                 return { startE, onloadT, pageT, tran: 15 };
               }, null, 'csi', 0);
             } catch (_) {}
@@ -4863,7 +4842,12 @@ function buildInjectionScript(fp) {
         const patchedWindowOpen = nativeLike(function open(...args) {
           const subWin = origWindowOpen.apply(this, args);
           if (subWin) {
-            try { patchSubWindow(subWin); } catch (_) {}
+            try {
+              const targetUrl = typeof args[0] === "string" ? args[0].trim() : "";
+              if (!targetUrl || targetUrl === "about:blank") {
+                patchSubWindow(subWin);
+              }
+            } catch (_) {}
           }
           return subWin;
         }, origWindowOpen, "open", origWindowOpen.length);
@@ -9044,8 +9028,9 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
   // Already-open documents: best-effort patch. Never abort startup if evaluate throws
   // (Chromium often reports "Uncaught" for redefine races; document-start still applies on next nav).
   let evaluatedOk = false;
-  try {
-    const evaluated = await invoke('Runtime.evaluate', {
+  if (!options.skipEvaluate && !options.isWaiting) {
+    try {
+      const evaluated = await invoke('Runtime.evaluate', {
       expression: source,
       returnByValue: false,
       awaitPromise: false,
@@ -9070,6 +9055,7 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
       // unexpected CDP transport errors still surface
       throw error;
     }
+  }
   }
   if (injectTargetKey) {
     TARGET_INJECT_STATE.set(injectTargetKey, { fpKey, identifier: scriptIdentifier, documentStartOk, evaluated: evaluatedOk });

@@ -168,7 +168,7 @@ async function measure(profileId, { autoAttach }) {
         const created = await conn.send('Target.createTarget', { url: 'about:blank' });
         const targetId = created && created.result && created.result.targetId;
         let sessionId = null;
-        if (autoAttach) { await sleep(900); sessionId = attachedSession; }
+        if (autoAttach) { for (let s = 0; s < 10 && !attachedSession; s++) await sleep(200); sessionId = attachedSession; if (!sessionId && targetId) { const attached = await conn.send('Target.attachToTarget', { targetId, flatten: true }); sessionId = attached && attached.result && attached.result.sessionId; } }
         else if (targetId) {
           const attached = await conn.send('Target.attachToTarget', { targetId, flatten: true });
           sessionId = attached && attached.result && attached.result.sessionId;
