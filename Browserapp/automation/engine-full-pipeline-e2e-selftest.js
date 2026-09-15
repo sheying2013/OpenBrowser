@@ -33,8 +33,47 @@ const launcher = path.join(kernelRoot, 'launch_openbrowser.sh');
 
 const { buildFingerprint } = require('./fingerprint');
 const { writeOpenBrowserKernelInit } = require('./kernel-init-sync');
-const { BrowserEngine, RequestHeaderRewriter, CHROMIUM_CANONICAL_HEADER_ORDER, CHROMIUM_CANONICAL_HEADER_INDEX } = require('../engine');
+const { BrowserEngine, RequestHeaderRewriter, CHROMIUM_CANONICAL_HEADER_ORDER } = require('../engine');
 const cdp = require('../cdp');
+
+// Independent, hand-maintained reference of the real Chrome navigation wire order.
+// Deliberately NOT derived from engine's CHROMIUM_CANONICAL_HEADER_ORDER so the
+// monotonic wire-order check below validates against an external spec instead of
+// self-validating against the very constant under test. Verified against real Chrome
+// req.rawHeaders on the loopback HTTP server: accept-language sits immediately after
+// accept and before sec-fetch-*, with accept-encoding late (before cookie).
+const EXPECTED_CHROMIUM_WIRE_ORDER = Object.freeze([
+  'host',
+  'connection',
+  'cache-control',
+  'pragma',
+  'sec-ch-ua',
+  'sec-ch-ua-mobile',
+  'sec-ch-ua-platform',
+  'sec-ch-ua-arch',
+  'sec-ch-ua-bitness',
+  'sec-ch-ua-model',
+  'sec-ch-ua-platform-version',
+  'sec-ch-ua-full-version',
+  'sec-ch-ua-full-version-list',
+  'sec-ch-ua-form-factors',
+  'sec-ch-ua-wow64',
+  'upgrade-insecure-requests',
+  'user-agent',
+  'accept',
+  'accept-language',
+  'sec-fetch-site',
+  'sec-fetch-mode',
+  'sec-fetch-user',
+  'sec-fetch-dest',
+  'sec-fetch-storage-access',
+  'referer',
+  'origin',
+  'accept-encoding',
+  'cookie',
+  'priority',
+]);
+const EXPECTED_WIRE_INDEX = new Map(EXPECTED_CHROMIUM_WIRE_ORDER.map((name, i) => [name, i]));
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -430,13 +469,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const acceptIdx = lowerHeaders.indexOf('accept');
     const langIdx = lowerHeaders.indexOf('accept-language');
 
-    // Canonical monotonic sequence check on live wire request
+    // Canonical monotonic sequence check on live wire request, validated against the
+    // INDEPENDENT EXPECTED_WIRE_INDEX (not the engine constant) to avoid self-validation.
     let canonicalMonotonic = true;
     let lastRank = -1;
     let rankViolations = [];
     for (const h of lowerHeaders) {
-      if (CHROMIUM_CANONICAL_HEADER_INDEX && CHROMIUM_CANONICAL_HEADER_INDEX.has(h)) {
-        const currentRank = CHROMIUM_CANONICAL_HEADER_INDEX.get(h);
+      if (EXPECTED_WIRE_INDEX.has(h)) {
+        const currentRank = EXPECTED_WIRE_INDEX.get(h);
         if (currentRank < lastRank) {
           canonicalMonotonic = false;
           rankViolations.push(`${h} (rank ${currentRank}) appeared after rank ${lastRank}`);
@@ -451,6 +491,23 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       '9. Wire header order: full canonical sequence (sec-ch-ua < user-agent < accept < accept-language)',
       c9,
       `sec-ch-ua=${secChIdx}, user-agent=${uaIdx}, accept=${acceptIdx}, accept-language=${langIdx}, monotonic=${canonicalMonotonic}${rankViolations.length ? `, violations: ${rankViolations.join(', ')}` : ''}`
+    );
+
+    // 9-drift. Guard: engine's CHROMIUM_CANONICAL_HEADER_ORDER must not diverge from the
+    // independent wire spec above. Catches array reordering that the monotonic check alone
+    // cannot (the monotonic check would still pass against a drifted-but-self-consistent array).
+    const engineOrder = (CHROMIUM_CANONICAL_HEADER_ORDER || []).map((h) => String(h).toLowerCase());
+    const expectedOrder = EXPECTED_CHROMIUM_WIRE_ORDER.slice();
+    const orderDrift = engineOrder.length !== expectedOrder.length
+      ? [`length ${engineOrder.length} != ${expectedOrder.length}`]
+      : engineOrder.reduce((acc, h, i) => {
+          if (h !== expectedOrder[i]) acc.push(`[${i}] engine="${h}" expected="${expectedOrder[i]}"`);
+          return acc;
+        }, []);
+    check(
+      '9-drift. engine CHROMIUM_CANONICAL_HEADER_ORDER matches independent wire spec',
+      orderDrift.length === 0,
+      orderDrift.length ? orderDrift.slice(0, 4).join('; ') : 'in sync'
     );
 
     // Helper for wire header variations testing RequestHeaderRewriter
