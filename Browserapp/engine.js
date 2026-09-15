@@ -273,16 +273,16 @@ if (!cdp.__serviceWorkerHardened) {
  * 5. upgrade-insecure-requests: 页面导航层下发的升级请求标记，位于 User-Agent 之前。
  * 6. user-agent: 浏览器核心 UA 字符串，位于 Accept 之前。
  * 7. accept: 客户端内容协商偏好 (text/html, application/xhtml+xml, ...)。
- * 8. sec-fetch-* 系列 (W3C Fetch Metadata): 紧随 Accept 之后按规范排布：
+ * 8. accept-language: 语言与区域偏好（含 RFC 9110 q-factor 权重），紧随 Accept，排在 sec-fetch-* 之前。
+ * 9. sec-fetch-* 系列 (W3C Fetch Metadata): 紧随 Accept-Language 之后按规范排布：
  *    - sec-fetch-site: 请求源关系 (same-origin, cross-site, none 等)。
  *    - sec-fetch-mode: 请求模式 (navigate, cors, no-cors 等)。
  *    - sec-fetch-user: 用户手势标记 (?1)。
  *    - sec-fetch-dest: 请求目标资源类型 (document, script, empty 等)。
  *    - sec-fetch-storage-access: 存储访问权限标记。
- * 9. referer: 来源页 URL。
- * 10. origin: CORS 跨域请求的源标识。
- * 11. accept-encoding: 浏览器支持的内容编码 (gzip, deflate, br, zstd)。
- * 12. accept-language: 语言与区域偏好（含 RFC 9110 q-factor 权重），排在 Cookie 之前。
+ * 10. referer: 来源页 URL。
+ * 11. origin: CORS 跨域请求的源标识。
+ * 12. accept-encoding: 浏览器支持的内容编码 (gzip, deflate, br, zstd)，排在 Cookie 之前。
  * 13. cookie: 携带的持久化/会话 Cookie。
  * 14. priority: HTTP/2 与 HTTP/3 流优先级控制头。
  */
