@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.21'
+        description: 'Release tag to create, for example v1.0.22'
         required: true
-        default: 'v1.0.21'
+        default: 'v1.0.22'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -38,43 +38,25 @@ env:
   OPENBROWSER_PACKAGE_VARIANT: with-kernel
   OPENBROWSER_BUNDLE_KERNEL: 'true'
   RELEASE_NOTES: |
-    ## OpenBrowser ${{ inputs.release_tag }} (**v1.0.21**)
+    ## OpenBrowser ${{ inputs.release_tag }}
 
     ### 中文
 
-    - **版本标识与同步**：本发布版本统一为 **v1.0.21**，严格同步前端界面显示版本、npm 包版本、Windows 可执行文件与产品版本元数据、项目文档徽章及 CI/CD 工作流定义。
-    - **字体指纹出口全面闭环（P0）**：Canvas 与 OffscreenCanvas 的 `measureText`、DOM 元素尺寸（`offsetWidth`/`getBoundingClientRect`/`getClientRects`）、Range 布局测量、SVG `getComputedTextLength`/`getBBox`、`document.fonts.check` 与 `document.fonts.load` 全部纳入外平台字体脱敏；修复 `FontFace` 构造函数按 `local()` 真实目标名解析的致命反转（此前误用外层别名判定，导致正规字体被拒、宿主专属字体反而放行）；消除读取 `FontFace.loaded` 时突变 `status` 的规范违规副作用。
-    - **CSSOM 回显保真**：`style.textContent`/`innerHTML`/`innerText`、`CSSRule.cssText`、`CSSStyleDeclaration.cssText` 与 `getPropertyValue('src')` 一律回显调用方原始输入，杜绝被改写的内部占位符反向暴露注入痕迹；DedicatedWorker 字体层与主线程语义完全同构。
-    - **媒体轨道标签防泄漏（P0）**：`MediaStreamTrack.label`、`getSettings().deviceId`、`track.clone()`/`stream.clone()` 与 `enumerateDevices()` 严格同源，彻底封堵 `getUserMedia` 返回真实物理硬件名称的穿透路径，同时保持 WebIDL 品牌检查与 `Illegal invocation` 错误类型不变。
-    - **Worker WebGPU 去 Proxy 化（P1）**：DedicatedWorker 的 WebGPU 伪装改为原型访问器 + WeakMap 实现并保留品牌校验；Proxy 包装会破坏 WebIDL 内部私有槽，使 `GPUAdapter.prototype.info.call(adapter)` 抛出 `Illegal invocation`，这本身就是一个可被直接识别的破绽。
-    - **时区一致性（P0）**：`engine.js` 接入 `resolveProfileTimezone`，当出口探测只返回国家码而缺少 IANA 时区时也能推导并注入 `--time-zone-for-testing`，杜绝内核 ICU/V8 裸奔在宿主真实时区而启动页显示代理国时区的时间双面人。
-    - **代理 Fail-Closed（P0）**：代理未就绪时默认阻断启动，不再静默回落直连导致真实公网 IP 暴露；如需回落必须显式开启 `allowDirectFallback`，界面选项同时标注"真实 IP 暴露风险"。
-    - **启动注入屏障 Fail-Closed**：指纹注入失败改为有限重试，重试仍失败时不再导航用户目标站点，改为本地安全错误页并显式上报，避免未伪装的原生指纹裸奔。
-    - **Profile Local State 双写（P1）**：启动前原子写入 `<root>/Local State` 的 `intl.app_locale` 并执行读回校验，补齐 Chromium 最早期 App Locale 读取路径，与 `Default/Preferences` 保持一致。
-    - **多窗口同步特权页降级**：`chrome://` 等特权内部页在多窗口同步中仅做 URL 镜像，不再注入 DOM 脚本或注册 `Runtime.addBinding`；内部页白名单补齐至与主进程一致的 19 项。
-    - **代理域名解析走 DoH（P1）**：代理服务商域名优先经 DoH 解析，避免本地 ISP DNS 泄漏；DoH 端点不可达时输出响亮告警并降级系统解析，既不静默泄漏、也不会让受限网络下的代理直接不可用。
-    - **应用中心下架冲突扩展**：移除 Canvas Defender、WebRTC Control、Spoof Timezone、AudioContext Defender 四个推荐项，避免第三方扩展在 DOM 层重复改写 Canvas/时区/WebRTC 与内核指纹注入互相打架（Canvas Defender 在官方商店已下架）。
-    - **操作栏与平台 UI 修复**：操作栏 4 个按钮改用内联同步 SVG 兜底，浏览器内核图标固定 256×256 矢量且不裁切；macOS 下隐藏对其无效的"关闭行为"设置卡片。
-    - **发布门禁扩容**：核心阻断回归套件由 56 项扩充至 64 项，新增"Fingerprint Hardening & Security Barriers"功能域，把字体出口、媒体轨道标签、Worker WebGPU、DoH、Local State 与 Fail-Closed 启动纳入强制门禁。
-    - **架构边界披露（内核层范围 / 平台边界）**：TLS Client Hello 与 JA4 指纹、系统级 DNS 解析管线位于 Chromium C++ 网络栈内部，本版本不做脆弱的 JS 层模拟；缺失 CJK 字形仍由系统字体栈原生回退，不做合成 Canvas 度量；`chrome://` 特权页面受安全沙箱约束保持仅镜像。以上均以 WARN（架构边界）如实标注，绝不伪装为 PASS。
+    - **版本同步与规范**：统一更新版本为 **v1.0.22**，严格同步应用界面显示、npm 配置、Windows 可执行文件元数据与项目文档。
+    - **网络与代理防护**：修复代理加载配置，杜绝特定场景下静默回退直连泄漏真实 IP；规范 Client Hints 报头装配顺序以对齐 Chromium 原生网络栈。
+    - **内核与自动化防护**：清理命令行自动化调试开关（`enable-automation`），保持 `navigator.webdriver` 原生状态；对齐启动配置模板 User-Agent 与真实内核版本（148.0.7778.165）。
+    - **作用域与跨域隔离**：完善 Web Worker 嵌套 auto-attach 注入时序，确保 Worker 内部 OffscreenCanvas 与主页面指纹严格一致；优化跨 Realm 原型方法与错误对象一致性。
+    - **显卡与设备画像细化**：细化 macOS WebGL 预设池，按 Intel 与 Apple Silicon 架构分别对齐显卡型号与 Client Hints；规范多平台设备参数。
+    - **界面与图标优化**：优化操作栏按钮与浏览器引擎图标矢量渲染，防止界面图标裁切与样式缺失。
 
     ### English
 
-    - **Version Alignment & Synchronization**: Formally released as **v1.0.21**, synchronized end-to-end across UI display labels, npm package definitions, Windows PE file and product version metadata, documentation badges, and CI/CD workflow manifests.
-    - **Font Fingerprint Exit Closure (P0)**: Canvas/OffscreenCanvas `measureText`, DOM element metrics (`offsetWidth`/`getBoundingClientRect`/`getClientRects`), Range layout measurement, SVG `getComputedTextLength`/`getBBox`, and `document.fonts.check`/`load` are now all shielded against foreign-platform families. Fixed a critical inversion where the `FontFace` constructor matched the outer alias instead of the real `local()` target (foreign fonts were admitted while legitimate persona fonts were rejected); removed the spec-violating side effect where merely reading `FontFace.loaded` mutated `status`.
-    - **CSSOM Echo Fidelity**: `style.textContent`/`innerHTML`/`innerText`, `CSSRule.cssText`, `CSSStyleDeclaration.cssText`, and `getPropertyValue('src')` now echo the caller's original input, so rewritten internal placeholders can no longer expose the injection layer; DedicatedWorker font behaviour is strictly isomorphic to the main thread.
-    - **Media Track Label Containment (P0)**: `MediaStreamTrack.label`, `getSettings().deviceId`, `track.clone()`/`stream.clone()` are sourced from the same persona table as `enumerateDevices()`, closing the path where `getUserMedia` returned real physical hardware names, while preserving WebIDL brand checks and native `Illegal invocation` error types.
-    - **Worker WebGPU De-Proxying (P1)**: DedicatedWorker WebGPU disguise now uses prototype accessors backed by a WeakMap with brand checks intact; a Proxy wrapper breaks WebIDL internal private slots, making `GPUAdapter.prototype.info.call(adapter)` throw `Illegal invocation` — a directly detectable tell.
-    - **Timezone Consistency (P0)**: `engine.js` now uses `resolveProfileTimezone`, so `--time-zone-for-testing` is derived and injected even when the exit probe only returns a country code. This removes the split where the kernel ICU/V8 silently ran on the host timezone while the start page displayed the proxy country's zone.
-    - **Proxy Fail-Closed (P0)**: A not-ready proxy now blocks startup by default instead of silently falling back to a direct connection that exposes the real public IP; falling back requires the explicit `allowDirectFallback` opt-in, and the UI option is labelled "real IP exposure risk".
-    - **Startup Injection Barrier Fail-Closed**: Injection failure now retries a bounded number of times and, if it still fails, refuses to navigate to the user's target site, showing a local safety page and raising an explicit event instead of exposing an unspoofed native fingerprint.
-    - **Profile Local State Dual-Write (P1)**: `intl.app_locale` is atomically written to `<root>/Local State` with read-back verification before spawn, covering Chromium's earliest App Locale read path and staying consistent with `Default/Preferences`.
-    - **Privileged Internal Pages Downgraded in Sync**: `chrome://` internal pages are mirror-only in multi-window sync — no DOM script injection and no `Runtime.addBinding`; the internal-page allowlist is aligned to the 19 entries used by the main process.
-    - **DoH for Proxy Hostname Resolution (P1)**: Proxy vendor hostnames resolve over DoH first to avoid local ISP DNS leakage; when the DoH endpoint is unreachable we emit a loud warning and degrade to the system resolver, so nothing leaks silently and restricted networks do not lose proxy connectivity.
-    - **Conflicting Extensions Removed from App Center**: Canvas Defender, WebRTC Control, Spoof Timezone, and AudioContext Defender are no longer recommended — stacking third-party DOM-level Canvas/timezone/WebRTC rewrites on top of engine fingerprint injection breaks per-profile consistency (Canvas Defender is also delisted from the store).
-    - **Action Bar & Platform UI Fixes**: The four action-bar buttons fall back to synchronous inline SVG, the browser engine icon is a fixed unclipped 256x256 vector, and the close-behaviour card is hidden on macOS where it has no effect.
-    - **Release Gate Expansion**: Core blocking regression suites grew from 56 to 64 with a new "Fingerprint Hardening & Security Barriers" domain, gating font exits, media track labels, Worker WebGPU, DoH, Local State, and fail-closed startup.
-    - **Architectural Boundary Disclosure (Kernel-Layer Scope)**: TLS Client Hello and JA4 fingerprints, plus system-level DNS resolution pipelines, live inside Chromium's C++ network stack; this release does not attempt fragile JavaScript-level emulation for transport traits. Missing CJK glyphs still fall back natively through the system font stack without synthetic Canvas metric manipulation, and privileged `chrome://` URLs remain mirror-only under security sandbox policies. These are reported as WARN (architectural boundary) and are never mislabelled as PASS.
+    - **Version Alignment**: Formally updated to **v1.0.22**, synchronized across UI display, npm packages, Windows PE metadata, and documentation.
+    - **Network & Proxy Hardening**: Fixed proxy launcher configuration to prevent fallback direct connections; restored canonical Chromium wire order for Client Hints headers.
+    - **Kernel & Automation Hardening**: Removed automation flags to maintain native `navigator.webdriver` behavior; aligned kernel template User-Agent with the active kernel version (148.0.7778.165).
+    - **Worker & Cross-Realm Isolation**: Fixed nested auto-attach timing for Web Workers, ensuring OffscreenCanvas WebGL strictly matches main frame persona GPU; improved cross-realm prototype consistency.
+    - **GPU Persona Refinement**: Separated macOS WebGL presets by CPU architecture (Intel vs Apple Silicon) to prevent cross-architecture GPU contradictions.
+    - **UI & Icon Rendering**: Refined action bar and engine icon SVG rendering to eliminate clipping and display glitches.
 
     ### 下载 / Downloads
 
@@ -87,6 +69,7 @@ env:
     | **Ubuntu x86_64 · 内置内核** | `OpenBrowser-Linux-x86_64-with-kernel.tar.gz` |
 
     > 标签说明：`with-kernel` = 安装包内置独立浏览器内核，运行时无需再下载内核。
+
 jobs:
   ensure-release:
     name: Ensure GitHub Release
