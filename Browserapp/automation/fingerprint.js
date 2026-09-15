@@ -468,20 +468,42 @@ const WEBGL_PRESETS = {
     { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon 780M Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'rdna-3' } },
     { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon 680M Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'rdna-2' } },
   ],
-  macos: [
-    // Chrome switched macOS to the ANGLE Metal backend in 111, so a current build always reports
-    // "ANGLE (..., ANGLE Metal Renderer: <gpu>, Unspecified Version)" - verified against a real
-    // Chrome 152 on macOS here. The former "OpenGL 4.1" strings are what pre-111 builds emitted
-    // and cannot come from a browser this UA claims to be. Each preset keeps the GPU it named.
+  // Chrome switched macOS to the ANGLE Metal backend in 111, so a current build always reports
+  // "ANGLE (..., ANGLE Metal Renderer: <gpu>, Unspecified Version)" - verified against a real
+  // Chrome 152 on macOS here. The former "OpenGL 4.1" strings are what pre-111 builds emitted
+  // and cannot come from a browser this UA claims to be. Each preset keeps the GPU it named.
+  //
+  // The pool is split by CPU architecture: an x86 Chrome build (Intel Mac) can never report an
+  // Apple M-series GPU and an arm64 build never reports Intel/AMD - that cross-check is exactly
+  // what detectors run (W2: INTEL_MAC_WITH_APPLE_SILICON_GPU).
+  macos_intel: [
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics 640, Unspecified Version)', gpu: { vendor: 'intel', architecture: 'gen9' } },
+    // MacBook Pro 16" (2019) dGPU - RDNA1.
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro 5500M, Unspecified Version)', gpu: { vendor: 'amd', architecture: 'rdna-1' } },
+    // iMac Pro (2017) - Vega.
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro Vega 56, Unspecified Version)', gpu: { vendor: 'amd', architecture: 'vega' } },
+  ],
+  macos_apple: [
     { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)', gpu: { vendor: 'apple', architecture: 'common-3' } },
     { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)', gpu: { vendor: 'apple', architecture: 'common-3' } },
     { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)', gpu: { vendor: 'apple', architecture: 'common-3' } },
-    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics 640, Unspecified Version)', gpu: { vendor: 'intel', architecture: 'gen9' } },
   ],
+  // Legacy merged view kept for external consumers; webglPresetsForOs resolves by architecture.
+  get macos() { return [...this.macos_intel, ...this.macos_apple]; },
   linux: [
     { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)', gpu: { vendor: 'intel', architecture: 'gen9' } },
     { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Series (RADV POLARIS10), OpenGL 4.6)', gpu: { vendor: 'amd', architecture: 'gcn-4' } },
     { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER/PCIe/SSE2, OpenGL 4.6)', gpu: { vendor: 'nvidia', architecture: 'turing' } },
+  ],
+  android: [
+    { vendor: 'Google Inc. (Qualcomm)', renderer: 'ANGLE (Qualcomm, Adreno (TM) 740, OpenGL ES 3.2)', gpu: { vendor: 'qualcomm', architecture: 'adreno-700' } },
+    { vendor: 'Google Inc. (Qualcomm)', renderer: 'ANGLE (Qualcomm, Adreno (TM) 730, OpenGL ES 3.2)', gpu: { vendor: 'qualcomm', architecture: 'adreno-700' } },
+    { vendor: 'Google Inc. (ARM)', renderer: 'ANGLE (ARM, Mali-G715-Immortalis MC11, OpenGL ES 3.2)', gpu: { vendor: 'arm', architecture: 'valhall' } },
+    { vendor: 'Google Inc. (ARM)', renderer: 'ANGLE (ARM, Mali-G710, OpenGL ES 3.2)', gpu: { vendor: 'arm', architecture: 'valhall' } },
+    { vendor: 'Google Inc. (Samsung Electronics)', renderer: 'ANGLE (Samsung Electronics, Samsung Xclipse 920, OpenGL ES 3.2)', gpu: { vendor: 'samsung', architecture: 'rdna-2' } },
+  ],
+  ios: [
+    { vendor: 'Apple Inc.', renderer: 'Apple GPU', gpu: { vendor: 'apple', architecture: 'common-3' } },
   ],
 };
 
@@ -1154,8 +1176,13 @@ function desktopOs(os) {
 
 function webglPresetsForOs(os, options = {}) {
   let list = WEBGL_PRESETS.windows;
-  if (os === 'macos' || os === 'macos_arm') list = WEBGL_PRESETS.macos;
+  // "macos" is the x86 Chrome build (Intel Mac); "macos_arm" is the Apple Silicon build.
+  // Mixing the two pools is a contradiction detectors score directly.
+  if (os === 'macos') list = WEBGL_PRESETS.macos_intel;
+  else if (os === 'macos_arm') list = WEBGL_PRESETS.macos_apple;
   else if (os === 'linux') list = WEBGL_PRESETS.linux;
+  else if (os === 'android') list = WEBGL_PRESETS.android;
+  else if (os === 'ios') list = WEBGL_PRESETS.ios;
   if (options.legacy && (!os || os === 'windows')) return list.slice(0, 16);
   return list;
 }
@@ -1500,14 +1527,27 @@ function buildFingerprint(profile = {}) {
   const uaOverride = String(fpIn.userAgent || profile.userAgent || '').trim();
   const clientHintsIn = (fpIn.clientHints && typeof fpIn.clientHints === 'object')
     ? fpIn.clientHints
-    : (privacy.clientHints && typeof privacy.clientHints === 'object' ? privacy.clientHints : {});
+    : (privacy.clientHints && typeof privacy.clientHints === 'object' ? privacy.clientHints
+      : (profile.clientHints && typeof profile.clientHints === 'object' ? profile.clientHints : {}));
   const kernelMajor = Number(String(profile.kernelVersion || '').match(/^\d+/)?.[0]) || 0;
   let uaProfile;
   if (uaOverride) {
     const osFromUa = parseOsFromUa(uaOverride);
+    // buildUaProfile keys OS_PRESETS with exact lowercase ids; profile records may carry
+    // aliases ("iOS", "Mac", "Win11") that would otherwise fall through to the host OS.
+    const normalizeOsKey = (value) => {
+      const v = String(value || '').toLowerCase().trim();
+      if (v === 'win' || v === 'win32' || v === 'win64' || v.startsWith('windows')) return 'windows';
+      if (v === 'mac' || v === 'darwin' || v === 'osx') return 'macos';
+      if (v === 'macos_arm' || v === 'mac_arm') return 'macos_arm';
+      if (v === 'iphone' || v === 'ipad' || v === 'ipod') return 'ios';
+      return v;
+    };
     uaProfile = buildUaProfile({
       userAgent: uaOverride,
-      os: fpIn.os || clientHintsIn.os || osFromUa,
+      // profile.os participates so a saved "macos_arm" profile keeps its Apple Silicon
+      // identity (preset pins architecture=arm) even when it also pins a custom UA string.
+      os: normalizeOsKey(fpIn.os || clientHintsIn.os || profile.os) || osFromUa,
       chromeMajor: Number(fpIn.chromeMajor || clientHintsIn.chromeMajor) || undefined,
       chromeFull: fpIn.ua_full_version || clientHintsIn.ua_full_version || fpIn.fullVersion,
       platform: fpIn.platform,
@@ -1522,11 +1562,18 @@ function buildFingerprint(profile = {}) {
   } else {
     const desktopRequested = [fpIn.os, clientHintsIn.os, profile.os]
       .map((value) => String(value || "").toLowerCase().trim())
-      .map((value) => (value === "win" || value === "win32" || value === "win64" ? "windows" : (value === "mac" || value === "darwin" || value === "osx" ? "macos" : value)))
-      .find((value) => value === "windows" || value === "macos" || value === "linux");
+      .map((value) => {
+        if (value === "win" || value === "win32" || value === "win64") return "windows";
+        if (value === "mac" || value === "darwin" || value === "osx") return "macos";
+        if (value === "macos_arm" || value === "mac_arm") return "macos_arm";
+        return value;
+      })
+      .find((value) => value === "windows" || value === "macos" || value === "macos_arm" || value === "linux");
     uaProfile = randomUaForSeed(u32(seed, 44), {
       majors: kernelMajor ? [kernelMajor] : undefined,
       // The UA is the source of truth for every OS-facing fingerprint surface.
+      // macos_arm goes through as-is: OS_PRESETS.macos_arm emits the same MacIntel UA token
+      // but pins Client Hints architecture=arm, which downstream persona/WebGL pools key on.
       osList: desktopRequested ? [desktopRequested] : ['windows', 'windows', 'macos', 'linux'],
     });
     // Apply explicit clientHints overrides on top of seeded UA
@@ -1544,6 +1591,12 @@ function buildFingerprint(profile = {}) {
   const parsedOsForFp = parseOsFromUa(uaProfile.userAgent);
   const detectedMobileOs = (uaProfile.os === "android" || parsedOsForFp === "android") ? "android" : ((uaProfile.os === "ios" || parsedOsForFp === "ios") ? "ios" : null);
   let uaOs = detectedMobileOs || desktopOs(uaProfile.os) || desktopOs(parsedOsForFp) || "windows";
+  // macOS persona pools are split by CPU architecture (W2). The UA metadata decides which
+  // side of the split this profile lives on: an arm Client Hint can never ship an Intel/AMD
+  // GPU and an x86 hint can never ship an Apple M-series GPU.
+  const uaArchitecture = String(uaProfile?.metadata?.architecture || '').toLowerCase();
+  if (uaOs === 'macos' && uaArchitecture === 'arm') uaOs = 'macos_arm';
+  else if (uaOs === 'macos_arm' && uaArchitecture && uaArchitecture !== 'arm') uaOs = 'macos';
   const personaRequested = String(fpIn.deviceProfile ?? privacy.deviceProfile ?? '').toLowerCase() === 'persona';
   const webglOptions = webglPresetsForOs(uaOs, { legacy: !personaRequested });
   let webglPreset = webglOptions[u32(seed, 8) % webglOptions.length];
@@ -1755,7 +1808,7 @@ function buildFingerprint(profile = {}) {
     }
   }
 
-  const webglRenderer = (webglMetaMode === 'real')
+  let webglRenderer = (webglMetaMode === 'real')
     ? null
     : (webglMetaMode === 'blocked' ? '' : (fpIn.webglRenderer || webglPreset.renderer));
   const rLow = String(webglRenderer || '').toLowerCase();
@@ -1768,23 +1821,51 @@ function buildFingerprint(profile = {}) {
     if (rLow.includes('nvidia') || rLow.includes('geforce')) resolvedVendor = 'Google Inc. (NVIDIA)';
     else if (rLow.includes('intel') || rLow.includes('arc') || rLow.includes('iris') || rLow.includes('uhd')) resolvedVendor = 'Google Inc. (Intel)';
     else if (rLow.includes('amd') || rLow.includes('radeon')) resolvedVendor = 'Google Inc. (AMD)';
-    else if (rLow.includes('apple')) resolvedVendor = 'Google Inc. (Apple)';
+    else if (rLow.includes('apple')) resolvedVendor = (uaOs === 'ios' || detectedMobileOs === 'ios') ? 'Apple Inc.' : 'Google Inc. (Apple)';
   }
-  const webglVendor = (webglMetaMode === 'real')
+  let webglVendor = (webglMetaMode === 'real')
     ? null
     : (webglMetaMode === 'blocked' ? '' : resolvedVendor);
+
+  // Enforce cross-platform GPU consistency: prevent contradictory combinations
+  if (uaOs === 'windows') {
+    if (webglRenderer && /metal|apple/i.test(webglRenderer)) {
+      const winPresets = WEBGL_PRESETS.windows;
+      const picked = winPresets[u32(seed, 8) % winPresets.length];
+      webglRenderer = picked.renderer;
+      webglVendor = picked.vendor;
+      if (webglGpu) { webglGpu.vendor = picked.gpu.vendor; webglGpu.architecture = picked.gpu.architecture; }
+    }
+    if (webglVendor && /apple/i.test(webglVendor)) {
+      webglVendor = 'Google Inc. (Intel)';
+    }
+  } else if (uaOs === 'android' || detectedMobileOs === 'android') {
+    if (webglRenderer && /direct3d|d3d11|metal/i.test(webglRenderer)) {
+      const andrPresets = WEBGL_PRESETS.android;
+      const picked = andrPresets[u32(seed, 8) % andrPresets.length];
+      webglRenderer = picked.renderer;
+      webglVendor = picked.vendor;
+      if (webglGpu) { webglGpu.vendor = picked.gpu.vendor; webglGpu.architecture = picked.gpu.architecture; }
+    }
+  } else if (uaOs === 'ios' || detectedMobileOs === 'ios') {
+    webglVendor = 'Apple Inc.';
+    webglRenderer = 'Apple GPU';
+    if (webglGpu) { webglGpu.vendor = 'apple'; webglGpu.architecture = 'common-3'; }
+  }
+
   if (webglGpu && webglMetaMode !== 'real') {
     const vLow = String(webglVendor || '').toLowerCase();
-    if (rLow.includes('nvidia') || vLow.includes('nvidia')) {
+    const curRLow = String(webglRenderer || '').toLowerCase();
+    if (curRLow.includes('nvidia') || vLow.includes('nvidia')) {
       webglGpu.vendor = 'nvidia';
       if (!webglGpu.architecture) webglGpu.architecture = 'ampere';
-    } else if (rLow.includes('intel') || vLow.includes('intel')) {
+    } else if (curRLow.includes('intel') || vLow.includes('intel')) {
       webglGpu.vendor = 'intel';
       if (!webglGpu.architecture) webglGpu.architecture = 'gen12';
-    } else if (rLow.includes('amd') || rLow.includes('radeon') || vLow.includes('amd') || vLow.includes('radeon')) {
+    } else if (curRLow.includes('amd') || curRLow.includes('radeon') || vLow.includes('amd') || vLow.includes('radeon')) {
       webglGpu.vendor = 'amd';
       if (!webglGpu.architecture) webglGpu.architecture = 'rdna-2';
-    } else if (rLow.includes('apple') || vLow.includes('apple')) {
+    } else if (curRLow.includes('apple') || vLow.includes('apple')) {
       webglGpu.vendor = 'apple';
       if (!webglGpu.architecture) webglGpu.architecture = 'common-3';
     }
@@ -1999,7 +2080,7 @@ function fingerprintConsistencyIssues(fp) {
   if (uaOs === 'windows' && /Apple M[0-9]|OpenGL 4\.1|Mesa|RADV/i.test(renderer)) {
     add('webgl-ua-mismatch', 'WebGL renderer does not look like a Windows renderer.');
   }
-  if ((uaOs === 'macos' || uaOs === 'macos_arm') && (/Direct3D|D3D11|Mesa|RADV/i.test(renderer) || !/Apple|Intel/i.test(vendor + renderer))) {
+  if ((uaOs === 'macos' || uaOs === 'macos_arm') && (/Direct3D|D3D11|Mesa|RADV/i.test(renderer) || !/Apple|Intel|AMD/i.test(vendor + renderer))) {
     add('webgl-ua-mismatch', 'WebGL renderer does not look like a macOS renderer.');
   }
   if (uaOs === 'linux' && (/Direct3D|D3D11|Apple M[0-9]/i.test(renderer) || !/Mesa|RADV|OpenGL/i.test(renderer))) {
@@ -2599,6 +2680,7 @@ function buildInjectionScript(fp) {
         delete Navigator.prototype.bluetooth;
         delete Navigator.prototype.serial;
         delete Navigator.prototype.deviceMemory;
+        delete Navigator.prototype.gpu;
       }
       if (typeof navigator !== "undefined") {
         delete navigator.userAgentData;
@@ -2609,6 +2691,7 @@ function buildInjectionScript(fp) {
         delete navigator.bluetooth;
         delete navigator.serial;
         delete navigator.deviceMemory;
+        delete navigator.gpu;
       }
       if (typeof window !== "undefined") {
         if ("NavigatorUAData" in window) delete window.NavigatorUAData;
@@ -2618,23 +2701,18 @@ function buildInjectionScript(fp) {
         if ("HID" in window) delete window.HID;
         if ("Bluetooth" in window) delete window.Bluetooth;
         if ("Serial" in window) delete window.Serial;
-        try {
-          Object.defineProperty(globalThis, "chrome", {
-            configurable: true,
-            get() { return undefined; },
-          });
-          delete globalThis.chrome;
-        } catch (_) {}
+        if ("GPU" in window) delete window.GPU;
+        if ("GPUAdapter" in window) delete window.GPUAdapter;
+        if ("GPUDevice" in window) delete window.GPUDevice;
         try {
           Object.defineProperty(Window.prototype, "chrome", {
             get() { return undefined; },
             configurable: true,
           });
         } catch (_) {}
-        delete window.chrome;
-        try { delete Window.prototype.chrome; } catch (_) {}
-        try { delete Object.getPrototypeOf(window).chrome; } catch (_) {}
-        if (typeof window.chrome !== "undefined") {
+        try { delete window.chrome; } catch (_) {}
+        try { delete globalThis.chrome; } catch (_) {}
+        if (typeof window.chrome !== "undefined" || window.chrome) {
           try { delete window.chrome.app; } catch (_) {}
           try { delete window.chrome.loadTimes; } catch (_) {}
           try { delete window.chrome.csi; } catch (_) {}
@@ -2923,10 +3001,15 @@ function buildInjectionScript(fp) {
   try {
     if (typeof window !== "undefined") {
       if (isIosPersona) {
+        try {
+          Object.defineProperty(Window.prototype, "chrome", {
+            get() { return undefined; },
+            configurable: true,
+          });
+        } catch (_) {}
         try { delete window.chrome; } catch (_) {}
-        try { delete Window.prototype.chrome; } catch (_) {}
-        try { delete Object.getPrototypeOf(window).chrome; } catch (_) {}
-        if (typeof window.chrome !== "undefined") {
+        try { delete globalThis.chrome; } catch (_) {}
+        if (typeof window.chrome !== "undefined" || window.chrome) {
           try { delete window.chrome.app; } catch (_) {}
           try { delete window.chrome.loadTimes; } catch (_) {}
           try { delete window.chrome.csi; } catch (_) {}
@@ -4278,8 +4361,14 @@ function buildInjectionScript(fp) {
               configurable: true,
             });
           } catch (_) {}
-          try { delete subWin.chrome; } catch (_) {}
-          try { delete subWin.Window?.prototype?.chrome; } catch (_) {}
+          try { delete subWin.chrome;
+            try { subWin.chrome = undefined; } catch (_) {} } catch (_) {}
+          if (typeof subWin.chrome !== "undefined" || subWin.chrome) {
+            try { delete subWin.chrome.app; } catch (_) {}
+            try { delete subWin.chrome.loadTimes; } catch (_) {}
+            try { delete subWin.chrome.csi; } catch (_) {}
+            try { subWin.chrome = undefined; } catch (_) {}
+          }
         } else if (subWin.chrome) {
           if (isAndroidPersona) {
             try { delete subWin.chrome.app; } catch (_) {}
@@ -4385,6 +4474,15 @@ function buildInjectionScript(fp) {
             delete subWin.HID;
             delete subWin.Bluetooth;
             delete subWin.Serial;
+            delete subWin.GPU;
+            delete subWin.GPUAdapter;
+            delete subWin.GPUDevice;
+            if (subWin.Navigator?.prototype) {
+              delete subWin.Navigator.prototype.gpu;
+            }
+            if (subNav) {
+              delete subNav.gpu;
+            }
             delete subWin.chrome;
             if (typeof subWin.GestureEvent === "undefined" && typeof window.GestureEvent !== "undefined") {
               subWin.GestureEvent = window.GestureEvent;
@@ -4397,11 +4495,11 @@ function buildInjectionScript(fp) {
             Object.defineProperty(emptyPlugins, "length", { value: 0, configurable: true, enumerable: false, writable: false });
             const emptyMimeTypes = Object.create(typeof MimeTypeArray !== "undefined" ? MimeTypeArray.prototype : Object.prototype);
             Object.defineProperty(emptyMimeTypes, "length", { value: 0, configurable: true, enumerable: false, writable: false });
-            const pGetter = makeNativeGetter("plugins", () => emptyPlugins, "navigator");
+            const pGetter = makeNativeGetter("plugins", () => emptyPlugins, "navigator", subWin);
             Object.defineProperty(subNav, "plugins", { configurable: true, enumerable: true, get: pGetter, set: undefined });
-            const mGetter = makeNativeGetter("mimeTypes", () => emptyMimeTypes, "navigator");
+            const mGetter = makeNativeGetter("mimeTypes", () => emptyMimeTypes, "navigator", subWin);
             Object.defineProperty(subNav, "mimeTypes", { configurable: true, enumerable: true, get: mGetter, set: undefined });
-            const pdfG = makeNativeGetter("pdfViewerEnabled", () => false, "navigator");
+            const pdfG = makeNativeGetter("pdfViewerEnabled", () => false, "navigator", subWin);
             Object.defineProperty(subNav, "pdfViewerEnabled", { configurable: true, enumerable: true, get: pdfG, set: undefined });
           } catch (_) {}
         }
@@ -6681,7 +6779,7 @@ function buildInjectionScript(fp) {
   //   real    : do not touch the kernel's adapter or its info
   //   blocked : keep navigator.gpu present but make requestAdapter resolve to no adapter
   //   webgl   : expose an adapter whose info matches the configured WebGL/GPU identity
-  if (CFG.webgpu && typeof navigator !== "undefined" && navigator.gpu) {
+  if (!isIosPersona && CFG.webgpu && typeof navigator !== "undefined" && navigator.gpu) {
     try {
       const gpuMode = String(CFG.webgpu.mode || 'real');
       const gpuProto = typeof GPU !== 'undefined' ? GPU.prototype : null;
@@ -7370,6 +7468,72 @@ function buildWorkerInjectionScript(fp) {
     }
     return desc;
   };
+  const stripStackFrame = (err, fn, frameName) => {
+    if (!err) return err;
+    if (typeof Error.captureStackTrace === 'function' && typeof fn === 'function') {
+      try { Error.captureStackTrace(err, fn); } catch (_) {}
+    }
+    if (typeof err.stack === 'string') {
+      const nl = String.fromCharCode(10);
+      const lines = err.stack.split(nl);
+      const baseName = (frameName && frameName.indexOf('get ') === 0) ? frameName.slice(4) : '';
+      if (lines.length > 1 && lines[1] && ((frameName && lines[1].indexOf(frameName) !== -1) || (baseName && lines[1].indexOf(baseName) !== -1))) {
+        lines.splice(1, 1);
+        try { err.stack = lines.join(nl); } catch (_) {}
+      }
+    }
+    return err;
+  };
+  const getWorkerRealmTypeError = (receiver) => {
+    try {
+      if (receiver && receiver.constructor) {
+        const ctor = receiver.constructor;
+        if (typeof ctor.constructor === 'function') {
+          const glob = ctor.constructor('return this')();
+          if (glob && glob.TypeError) return glob.TypeError;
+        }
+      }
+    } catch (_) {}
+    try {
+      if (typeof self !== 'undefined' && self.TypeError) return self.TypeError;
+    } catch (_) {}
+    try {
+      if (typeof globalThis !== 'undefined' && globalThis.TypeError) return globalThis.TypeError;
+    } catch (_) {}
+    return (typeof TypeError !== 'undefined' ? TypeError : Error);
+  };
+  const makeNativeWorkerGetter = (key, getValue) => {
+    let getter;
+    const holder = {
+      get [key]() {
+        const isProto = (typeof WorkerNavigator !== 'undefined' && this === WorkerNavigator.prototype) ||
+          (this && this.constructor && this.constructor.prototype === this) ||
+          (this && Object.getPrototypeOf(this) === Object.prototype);
+        const isWorkerNav = Boolean(
+          this &&
+          !isProto &&
+          (typeof WorkerNavigator === 'undefined' || this !== WorkerNavigator.prototype) &&
+          (
+            this === (typeof navigator !== 'undefined' ? navigator : null) ||
+            (typeof WorkerNavigator !== 'undefined' && (this instanceof WorkerNavigator || WorkerNavigator.prototype.isPrototypeOf(this))) ||
+            (this.constructor && this.constructor.name === 'WorkerNavigator' && this !== this.constructor.prototype)
+          )
+        );
+        if (!isWorkerNav) {
+          const RealmTypeError = getWorkerRealmTypeError(this);
+          const err = new RealmTypeError('Illegal invocation');
+          stripStackFrame(err, getter, 'get ' + key);
+          throw err;
+        }
+        return getValue.call(this);
+      }
+    };
+    getter = Object.getOwnPropertyDescriptor(holder, key).get;
+    try { Object.defineProperty(getter, 'name', { configurable: true, value: 'get ' + key }); } catch (_) {}
+    try { Object.defineProperty(getter, 'length', { configurable: true, value: 0 }); } catch (_) {}
+    try { sources.set(getter, 'function get ' + key + '() { [native code] }'); } catch (_) {}
+    return getter;
+  };
   try {
     const rawToString = function toString(...args) {
       const secret = args[0];
@@ -7422,16 +7586,30 @@ function buildWorkerInjectionScript(fp) {
         // here leaves the worker with an own prototype member no stock build has, which is a single
         // getOwnPropertyNames() call away from identifying the profile.
         if (!(key in navProto)) continue;
-        try { Object.defineProperty(navProto, key, nativeAccessor(key, { configurable: true, enumerable: true, get: () => value })); } catch (_) {}
+        const getter = makeNativeWorkerGetter(key, () => value);
+        try {
+          Object.defineProperty(navProto, key, {
+            configurable: true,
+            enumerable: true,
+            get: getter,
+          });
+        } catch (_) {}
       }
       const isIosPersona = CFG.os === "ios" || CFG.platform === "iPhone" || CFG.mobileDevice?.os === "ios";
       if (isIosPersona) {
         try {
           if (typeof WorkerNavigator !== "undefined" && WorkerNavigator.prototype) {
             delete WorkerNavigator.prototype.userAgentData;
+            delete WorkerNavigator.prototype.gpu;
           }
           if (typeof self !== "undefined" && self.navigator) {
             delete self.navigator.userAgentData;
+            delete self.navigator.gpu;
+          }
+          if (typeof self !== "undefined") {
+            delete self.GPU;
+            delete self.GPUAdapter;
+            delete self.GPUDevice;
           }
         } catch (_) {}
       }

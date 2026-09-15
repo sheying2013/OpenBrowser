@@ -264,6 +264,8 @@ class TestServer {
       // ------------------------------------------------------------
       out.v2 = {
         chromeInWindow: 'chrome' in window,
+        chromeType: typeof window.chrome,
+        chromeValue: window.chrome,
         connectionInNav: 'connection' in navigator,
         getBatteryInNav: 'getBattery' in navigator,
         usbInNav: 'usb' in navigator,
@@ -338,6 +340,8 @@ class TestServer {
       out.v7 = {
         hasLoadTimes: typeof window.chrome?.loadTimes !== 'undefined',
         hasCsi: typeof window.chrome?.csi !== 'undefined',
+        loadTimesType: typeof window.chrome?.loadTimes,
+        csiType: typeof window.chrome?.csi,
       };
 
       // ------------------------------------------------------------
@@ -962,7 +966,8 @@ async function runSession(profileConfig, isInject, server) {
   check('V2', 'iOS persona eliminates chrome, connection, getBattery, usb & empty plugins/pdfViewerEnabled', () => {
     const v2 = iosClient.v2 || {};
     const issues = [];
-    if (v2.chromeInWindow !== false) issues.push("'chrome' in window is true");
+    if (v2.chromeInWindow !== false && v2.chromeType !== 'undefined') issues.push("'chrome' in window is true and defined");
+    if (v2.chromeValue !== undefined && v2.chromeType !== 'undefined') issues.push(`window.chrome is ${v2.chromeType}`);
     if (v2.connectionInNav !== false) issues.push("'connection' in navigator is true");
     if (v2.getBatteryInNav !== false) issues.push("'getBattery' in navigator is true");
     if (v2.usbInNav !== false) issues.push("'usb' in navigator is true");
@@ -970,7 +975,7 @@ async function runSession(profileConfig, isInject, server) {
     if (v2.pdfViewerEnabled !== false) issues.push(`pdfViewerEnabled=${v2.pdfViewerEnabled} !== false`);
     if (issues.length === 0) return true;
     return { ok: false, reason: issues.join('; ') };
-  }, { isKnownGap: true });
+  });
 
   check('V3', 'Android persona chrome.app undefined & empty plugins/pdfViewerEnabled', () => {
     const v3 = andrClient.v3 || {};
@@ -1009,14 +1014,25 @@ async function runSession(profileConfig, isInject, server) {
     return true;
   }, { isKnownGap: true });
 
-  check('V7', 'window.chrome.loadTimes and chrome.csi are absent', () => {
-    const v7 = winClient.v7 || {};
+  check('V7', 'window.chrome.loadTimes and chrome.csi exist on desktop as functions and are absent on iOS', () => {
+    const v7Win = winClient.v7 || {};
+    const v7Ios = iosClient.v7 || {};
     const issues = [];
-    if (v7.hasLoadTimes) issues.push('chrome.loadTimes exists');
-    if (v7.hasCsi) issues.push('chrome.csi exists');
+    if (!v7Win.hasLoadTimes || v7Win.loadTimesType !== 'function') {
+      issues.push(`desktop chrome.loadTimes is ${v7Win.loadTimesType}`);
+    }
+    if (!v7Win.hasCsi || v7Win.csiType !== 'function') {
+      issues.push(`desktop chrome.csi is ${v7Win.csiType}`);
+    }
+    if (v7Ios.hasLoadTimes) {
+      issues.push('iOS chrome.loadTimes exists');
+    }
+    if (v7Ios.hasCsi) {
+      issues.push('iOS chrome.csi exists');
+    }
     if (issues.length === 0) return true;
     return { ok: false, reason: issues.join('; ') };
-  }, { isKnownGap: true });
+  });
 
   // ==================================================================
   // DOMAIN 2: Rendering & Media Defense (Hubble: H1, H2, H4, H5, H6, H7, H8, H9)

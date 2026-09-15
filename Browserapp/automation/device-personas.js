@@ -76,8 +76,8 @@ const WINDOWS_PERSONAS = [
   },
 ];
 
-/** Apple hardware: Retina (2x) and 30-bit colour are the norm, not the exception. */
-const MACOS_PERSONAS = [
+/** Apple Silicon hardware: Retina (2x) and 30-bit colour are the norm, not the exception. */
+const MACOS_APPLE_PERSONAS = [
   {
     os: "macos", cores: 8, memory: 8, colorDepth: 30, devicePixelRatio: 2,
     screen: { width: 1440, height: 900 },
@@ -105,6 +105,14 @@ const MACOS_PERSONAS = [
       gpu: { vendor: "apple", architecture: "apple-m3" },
     },
   },
+];
+
+/**
+ * Intel Mac hardware: x86 Chrome builds only. An x86 UA whose Client Hints say architecture=x86
+ * can never legitimately report an Apple M-series GPU - that cross-check is exactly what
+ * detectors run, so Intel and Apple Silicon personas live in separate pools.
+ */
+const MACOS_INTEL_PERSONAS = [
   {
     os: "macos", cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 2,
     screen: { width: 1680, height: 1050 },
@@ -114,7 +122,30 @@ const MACOS_PERSONAS = [
       gpu: { vendor: "intel", architecture: "gen-9" },
     },
   },
+  {
+    // MacBook Pro 16" (2019): 8-core Intel + Radeon Pro 5500M (RDNA1).
+    os: "macos", cores: 8, memory: 8, colorDepth: 30, devicePixelRatio: 2,
+    screen: { width: 1728, height: 1117 },
+    webgl: {
+      vendor: "Google Inc. (AMD)",
+      renderer: "ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro 5500M, Unspecified Version)",
+      gpu: { vendor: "amd", architecture: "rdna-1" },
+    },
+  },
+  {
+    // iMac Pro (2017): 10-core Xeon + Radeon Pro Vega 56.
+    os: "macos", cores: 10, memory: 8, colorDepth: 30, devicePixelRatio: 2,
+    screen: { width: 2560, height: 1440 },
+    webgl: {
+      vendor: "Google Inc. (AMD)",
+      renderer: "ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro Vega 56, Unspecified Version)",
+      gpu: { vendor: "amd", architecture: "vega" },
+    },
+  },
 ];
+
+/** Legacy merged pool kept for external consumers; new code should pick by architecture. */
+const MACOS_PERSONAS = [...MACOS_APPLE_PERSONAS, ...MACOS_INTEL_PERSONAS];
 
 const LINUX_PERSONAS = [
   {
@@ -321,8 +352,10 @@ function exclusiveFontsForOtherOs(os) {
 
 const PERSONAS_BY_OS = Object.freeze({
   windows: Object.freeze(WINDOWS_PERSONAS),
-  macos: Object.freeze(MACOS_PERSONAS),
-  macos_arm: Object.freeze(MACOS_PERSONAS),
+  // "macos" is the x86 Chrome build (Intel Mac): only Intel/AMD GPUs are plausible there.
+  macos: Object.freeze(MACOS_INTEL_PERSONAS),
+  // "macos_arm" is the Apple Silicon Chrome build: only Apple M-series GPUs.
+  macos_arm: Object.freeze(MACOS_APPLE_PERSONAS),
   linux: Object.freeze(LINUX_PERSONAS),
   android: Object.freeze(ANDROID_PERSONAS),
 });
@@ -330,7 +363,8 @@ const PERSONAS_BY_OS = Object.freeze({
 function personasForOs(os) {
   const k = String(os || "").toLowerCase();
   if (k.includes("ios") || k.includes("iphone") || k.includes("ipad")) {
-    return PERSONAS_BY_OS.macos;
+    // iPhone/iPad share the Apple GPU family with Apple Silicon Macs, never with Intel Macs.
+    return PERSONAS_BY_OS.macos_arm;
   }
   return PERSONAS_BY_OS[k] || WINDOWS_PERSONAS;
 }
@@ -460,6 +494,10 @@ function isCoherent(persona) {
 }
 
 module.exports = {
+  WINDOWS_PERSONAS,
+  MACOS_PERSONAS,
+  MACOS_APPLE_PERSONAS,
+  MACOS_INTEL_PERSONAS,
   PERSONAS_BY_OS,
   DEVICE_PERSONAS: PERSONAS_BY_OS,
   OS_FONTS,
