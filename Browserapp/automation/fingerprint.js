@@ -2119,7 +2119,7 @@ function fingerprintConsistencyIssues(fp) {
     add('cores-invalid', 'hardwareConcurrency must be between 1 and 64 when overridden.', 'error');
   }
   if (fp?.deviceMemory != null && !(Number(fp.deviceMemory) >= 1 && Number(fp.deviceMemory) <= 8)) {
-    add('memory-invalid', 'deviceMemory must be between 1 and 128 when overridden.', 'error');
+    add('memory-invalid', 'deviceMemory must be between 1 and 8 when overridden.', 'error');
   }
   // WebGL and WebGPU read the same physical adapter, so a page that finds a disguised WebGL
   // renderer next to an untouched WebGPU adapter has two GPUs on one machine - a contradiction no
@@ -4662,7 +4662,12 @@ function buildInjectionScript(fp) {
                 setSboxNative(g, "function get hardwareConcurrency() { [native code] }");
                 Object.defineProperty(nav, "hardwareConcurrency", { configurable: true, enumerable: true, get: g });
               }
-              if (cfg.deviceMemory != null) {
+              if (cfg.platform === "iPhone") {
+                // Real iOS Safari (WebKit) has no navigator.deviceMemory; mirror the main-frame
+                // and sub-window iOS scrub so srcdoc frames do not resurrect a Chromium-only member.
+                try { delete nav.deviceMemory; } catch (_) {}
+                try { if (typeof navigator !== "undefined") delete navigator.deviceMemory; } catch (_) {}
+              } else if (cfg.deviceMemory != null) {
                 const g = () => Math.min(8, cfg.deviceMemory);
                 setSboxNative(g, "function get deviceMemory() { [native code] }");
                 Object.defineProperty(nav, "deviceMemory", { configurable: true, enumerable: true, get: g });
@@ -7587,10 +7592,12 @@ function buildWorkerInjectionScript(fp) {
           if (typeof WorkerNavigator !== "undefined" && WorkerNavigator.prototype) {
             delete WorkerNavigator.prototype.userAgentData;
             delete WorkerNavigator.prototype.gpu;
+            delete WorkerNavigator.prototype.deviceMemory;
           }
           if (typeof self !== "undefined" && self.navigator) {
             delete self.navigator.userAgentData;
             delete self.navigator.gpu;
+            delete self.navigator.deviceMemory;
           }
           if (typeof self !== "undefined") {
             delete self.GPU;

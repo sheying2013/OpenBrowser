@@ -438,6 +438,9 @@ async function runBrowserSession(fp, profile) {
       assert.strictEqual(liveI.worker.platform, "iPhone", "worker platform");
       assert.strictEqual(liveI.worker.cores, deviceIos.cores, "worker hardwareConcurrency");
       assert.ok(liveI.worker.ua.includes("iPhone"), "worker UA contains iPhone");
+      // Real iOS Safari (WebKit) has no navigator.deviceMemory in any context; the worker
+      // scrub must delete it rather than resurrect the Chromium-only member with a spoofed 8.
+      assert.strictEqual(liveI.worker.deviceMemory, undefined, "worker must not expose deviceMemory on iOS");
     });
 
     check("iOS canvas renders distinct noise surface", () => {

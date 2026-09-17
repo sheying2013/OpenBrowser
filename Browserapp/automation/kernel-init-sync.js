@@ -382,7 +382,7 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
     fields.hardwareConcurrency = Math.min(64, Math.max(1, Math.round(Number(fp.hardwareConcurrency))));
   }
   if (fp.deviceMemory != null && Number(fp.deviceMemory) > 0) {
-    fields.deviceMemory = Math.min(128, Math.max(1, Math.round(Number(fp.deviceMemory))));
+    fields.deviceMemory = Math.min(8, Math.max(1, Math.round(Number(fp.deviceMemory))));
   }
 
   if (webglMode === 'blocked') {
