@@ -276,6 +276,15 @@ async function check(name, fn) {
     assert.strictEqual(res.ok, true, "Must skip language check when language=system");
   });
 
+  await check("3.4b: languageMode=real 跳过语言校验，即使 profile.language 是已解析值", async () => {
+    // profile.language 是引擎解析后的具体值(ja-JP)，模式经 privacy.languageMode=real 表达；
+    // real/system 模式下语言为宿主透传，不得因与 live 不一致而误报。
+    const profile = { id: "p_lang_real", language: "ja-JP", privacy: { languageMode: "real" } };
+    const live = { languages: ["en-US", "en"] };
+    const res = evaluateFingerprintDelivery(profile, {}, live);
+    assert.strictEqual(res.ok, true, "Must skip language check when languageMode=real");
+  });
+
   await check("3.5: cores/memory 未显式指定或设为 0 (real) 时跳过校验", async () => {
     const profile = {
       id: "p_hw_real",

@@ -855,8 +855,13 @@ function evaluateFingerprintDelivery(profile = {}, fingerprint = {}, liveProbe =
   }
 
   // 7. Languages (first language)
-  const langMode = String(profile?.language || privacy.languageMode || '').trim().toLowerCase();
-  const isSystemLanguage = langMode === 'system' || langMode === 'real';
+  // The language mode may arrive either as privacy.languageMode or as a profile.language
+  // sentinel ('system'/'real'); a resolved profile.language value (e.g. 'ja-JP') must NOT be
+  // treated as a mode. Recognise the mode from either source without letting a real value in.
+  const profileLangField = String(profile?.language || '').trim().toLowerCase();
+  const explicitLangMode = String(privacy.languageMode || '').trim().toLowerCase();
+  const isSystemLanguage = explicitLangMode === 'system' || explicitLangMode === 'real'
+    || profileLangField === 'system' || profileLangField === 'real';
 
   if (!isSystemLanguage) {
     const expectedLang = extractPrimaryLanguage(fingerprint?.languages || profile?.language);
