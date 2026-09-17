@@ -1842,7 +1842,7 @@ function buildFingerprint(profile = {}) {
       webglVendor = 'Google Inc. (Intel)';
     }
   } else if (!hasManualWebglOverride && (uaOs === 'android' || detectedMobileOs === 'android')) {
-    if (webglRenderer && /direct3d|d3d11|metal/i.test(webglRenderer)) {
+    if (webglRenderer && /direct3d|d3d11|metal|nvidia|geforce|radeon|intel|iris|uhd|apple/i.test(webglRenderer)) {
       const andrPresets = WEBGL_PRESETS.android;
       const picked = andrPresets[u32(seed, 8) % andrPresets.length];
       webglRenderer = picked.renderer;
