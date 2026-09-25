@@ -38,6 +38,27 @@ const {
   OS_PRESETS,
 } = require('./user-agent');
 
+/**
+ * Canonical bridge secret for one profile.
+ *
+ * The bridge token is the shared secret between the page-side lazy font payload channel and the
+ * host that answers it. It has to be a pure function of the *declared* configuration, because
+ * three independent callers derive it — buildFingerprint (which stamps fontBlobBridge), the
+ * document injection script and the worker injection script — plus the host re-reads it later to
+ * validate whatever the page sends. Two derived fields are therefore excluded:
+ *   * fontBlobBridge carries the token itself, so hashing it would make the value depend on how
+ *     many times (and in what order) the helpers ran, and would break the injection script cache.
+ *   * consistency is a diagnostic list computed at the end of buildFingerprint.
+ * Without this, a document could receive a script whose token the host then rejects, and workers
+ * would disagree with the main world — a cross-realm fingerprint inconsistency that silently
+ * drops every lazy payload request.
+ */
+function canonicalBridgeToken(fp) {
+  if (!fp || typeof fp !== 'object') return deriveBridgeToken(fp);
+  const { fontBlobBridge, consistency, ...declared } = fp;
+  return deriveBridgeToken(declared);
+}
+
 const FONT_SUBSET_ROOT = path.join(__dirname, '..', 'assets', 'font-subsets');
 
 let fontSubsetIndexCache = null;
@@ -124,10 +145,14 @@ function buildFontMetricsScript(platformKey, options = {}) {
     return '';
   }
 
-  const payload = loadFontSubsetPayload(resolvedPlatform);
+  // The same platform font payload is consumed twice per document (document.fonts seeding here
+  // and the dynamic @font-face local() gate). buildInjectionScript hoists it into one shared
+  // binding instead of serialising ~3 MB of base64 twice.
+  const payload = Array.isArray(options.payload) ? options.payload : loadFontSubsetPayload(resolvedPlatform);
   if (!payload || !payload.length) {
     return '';
   }
+  const payloadExpression = options.payloadVar ? String(options.payloadVar) : JSON.stringify(payload);
 
   return `(() => {
   try {
@@ -146,7 +171,7 @@ function buildFontMetricsScript(platformKey, options = {}) {
     if (inspectBridge(origFontsDesc.get)) return;
     if (typeof FontFace !== 'function' || !document || !document.fonts) return;
 
-    const fontData = ${JSON.stringify(payload)};
+    const fontData = ${payloadExpression};
     if (!fontData || !fontData.length) return;
 
     const internalFaces = new WeakSet();
@@ -261,17 +286,31 @@ function buildFontMetricsScript(platformKey, options = {}) {
               let bound = boundMethodCache.get('check');
               if (!bound) {
                 const targetCheck = target.check;
+                // FontFace.family reports the CSS-serialised value, so a multi-word author family
+                // arrives quoted: '"Probe Cross Tahoma"'. Comparing that raw against the unquoted family
+                // parsed out of the check() spec never matched, and the page-visible result was
+                // check() === false for a face the page had just added and loaded - a difference no
+                // stock browser shows. Normalise both sides instead.
+                const normalizeFontFamily = (value) => {
+                  let name = String(value == null ? '' : value).trim().toLowerCase();
+                  const first = name[0];
+                  const last = name[name.length - 1];
+                  if (name.length > 1 && ((first === '"' && last === '"') || (first === "'" && last === "'"))) {
+                    name = name.slice(1, -1).trim();
+                  }
+                  return name;
+                };
                 bound = function check(font, text) {
                   try {
                     const css = String(font || '');
-                    const match = css.match(/(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9][A-Za-z0-9 _-]*))\s*$/);
-                    const family = match ? String(match[1] || match[2] || match[3] || '').trim().toLowerCase() : '';
+                    const match = css.match(/(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9][A-Za-z0-9 _-]*))\\s*$/);
+                    const family = match ? normalizeFontFamily(match[1] || match[2] || match[3] || '') : '';
                     const generic = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace']);
                     if (family && !generic.has(family) && !personaFamilySet.has(family)) {
                       let authorFace = false;
                       for (const face of target) {
                         if (internalFaces.has(face)) continue;
-                        if (String(face.family || '').trim().toLowerCase() === family) { authorFace = true; break; }
+                        if (normalizeFontFamily(face.family) === family) { authorFace = true; break; }
                       }
                       if (!authorFace) return false;
                     }
@@ -2042,7 +2081,7 @@ function buildFingerprint(profile = {}) {
     if (p.includes('ios') || p.includes('iphone') || p.includes('ipad')) return 'macos';
     return 'windows';
   })();
-  const fontBridgeToken = deriveBridgeToken(fingerprint);
+  const fontBridgeToken = canonicalBridgeToken(fingerprint);
   const fontBridgeChannel = '_' + String(fontBridgeToken).slice(0, 16);
 
   fingerprint.fontBlobBridge = lazyFontPayload ? {
@@ -2158,7 +2197,19 @@ function fingerprintConsistencyIssues(fp) {
  * Document-start injection implementing noise/block modes.
  */
 function buildInjectionScript(fp) {
-  const bridgeToken = deriveBridgeToken(fp);
+  // A pure function of the declared configuration, so every call for one profile — cold or warm,
+  // main world or worker — agrees with the token the host later validates and with the value this
+  // function stores back on fp.fontBlobBridge. See canonicalBridgeToken.
+  const bridgeToken = canonicalBridgeToken(fp);
+  const injectionCacheKey = bridgeToken + '|' + String((fp && fp.bridgeChannel) || '');
+  if (injectionCacheKey) {
+    const cached = injectionScriptCache.get(injectionCacheKey);
+    if (typeof cached === 'string') {
+      injectionScriptCache.delete(injectionCacheKey);
+      injectionScriptCache.set(injectionCacheKey, cached);
+      return cached;
+    }
+  }
   const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     platform: fp.platform,
@@ -4424,6 +4475,13 @@ function buildInjectionScript(fp) {
               writable: true,
               value: patchedSubToString,
             });
+            // Re-arm the font-blob token channel that this wrapper just buried. The gate exposes
+            // its installer on the realm global; without it the lazy payload handshake dead-ends
+            // and Local Font Access blob() returns empty inside child frames.
+            try {
+              const rearm = subWin.__obFontGateReinstallToString;
+              if (typeof rearm === "function") rearm.call(subWin);
+            } catch (_) {}
           } catch (_) {}
         }
         if (isIosPersona) {
@@ -4719,7 +4777,7 @@ function buildInjectionScript(fp) {
                 try {
                   const parts = dtf.formatToParts(d);
                   const p = parts.find(x => x.type === "timeZoneName")?.value || "";
-                  const m = p.match(/^GMT([+-])(\d{2}):(\d{2})$/);
+                  const m = p.match(/^GMT([+-])(\\d{2}):(\\d{2})$/);
                   if (!m) return 0;
                   const sign = m[1] === "+" ? -1 : 1;
                   return sign * (parseInt(m[2], 10) * 60 + parseInt(m[3], 10));
@@ -7220,19 +7278,32 @@ function buildInjectionScript(fp) {
   let fontMetricsScript = '';
   let cssFontLocalGateScript = '';
   let queryLocalFontBlobGateScript = '';
+  let sharedFontPayloadForOutput = null;
   if (fp && fp.fonts && Array.isArray(fp.fonts.list) && fp.fonts.list.length) {
     const platformKey = mapPlatformToSubsetKey(fp.platform);
+    // Load the platform payload once: both the document.fonts seeding layer and the dynamic
+    // local() gate consume the same bytes, and serialising it twice used to bloat every
+    // document-start script to ~6 MB.
+    const sharedFontPayload = platformKey ? loadFontSubsetPayload(platformKey) : [];
+    const sharedPayloadVar = sharedFontPayload.length ? SHARED_FONT_PAYLOAD_VAR : null;
+    if (sharedPayloadVar) sharedFontPayloadForOutput = sharedFontPayload;
     if (platformKey) {
-      fontMetricsScript = buildFontMetricsScript(platformKey, { ...(fp.fontMetricsOptions || {}), bridgeToken });
+      fontMetricsScript = buildFontMetricsScript(platformKey, {
+        ...(fp.fontMetricsOptions || {}),
+        bridgeToken,
+        payload: sharedFontPayload,
+        payloadVar: sharedPayloadVar,
+      });
     }
     // Dynamic stylesheet APIs reach the native local-font resolver without constructing a
     // FontFace object. The companion source filters those dynamic paths from the same persona
     // list while leaving web-font url/data candidates untouched.
     try {
-      const fontSubsets = platformKey ? loadFontSubsetPayload(platformKey) : [];
+      const fontSubsets = sharedFontPayload;
       cssFontLocalGateScript = buildCssFontLocalGateSource(fp.fonts.list, fontSubsets, {
         blockedFont: deriveFontPlaceholder(fp),
         bridgeToken,
+        payloadVar: sharedPayloadVar,
       });
     } catch (_) {}
     // Local Font Access exposes a binary blob after user activation. Its returned FontData
@@ -7265,12 +7336,16 @@ function buildInjectionScript(fp) {
     } catch (_) {}
   }
 
-  return [mainScript, fontMetricsScript, cssFontLocalGateScript, queryLocalFontBlobGateScript].filter(Boolean).join('\n');
+  const composed = [mainScript, fontMetricsScript, cssFontLocalGateScript, queryLocalFontBlobGateScript].filter(Boolean).join('\n');
+  const output = sharedFontPayloadForOutput
+    ? '(() => {\nconst ' + SHARED_FONT_PAYLOAD_VAR + ' = ' + JSON.stringify(sharedFontPayloadForOutput) + ';\n' + composed + '\n})();'
+    : composed;
+  return rememberInjectionScript(injectionCacheKey, output);
 }
 
 /** Worker-safe subset injected before attached workers are resumed. */
 function buildWorkerInjectionScript(fp) {
-  const bridgeToken = deriveBridgeToken(fp);
+  const bridgeToken = canonicalBridgeToken(fp);
   const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     platform: fp.platform,
@@ -8871,6 +8946,26 @@ function chromeArgsForFingerprint(fp, profile = {}) {
 // the later passes true no-ops without leaving anything the page itself could detect.
 const TARGET_INJECT_STATE = new Map();
 const MAX_TRACKED_TARGETS = 256;
+// Name of the single hoisted platform-payload binding inside the composed document-start script.
+// It lives inside an outer IIFE, so nothing about it is reachable from the page.
+const SHARED_FONT_PAYLOAD_VAR = '__obPlatformFontPayload';
+
+// Composing a document-start script serialises the font payload, so repeating it for every
+// iframe/worker of one profile costs tens of milliseconds of main-process CPU and a fresh
+// multi-megabyte string. Profiles are few and short-lived relative to the injected targets, so a
+// tiny bounded cache removes that cost without retaining unbounded heap.
+const INJECTION_SCRIPT_CACHE_LIMIT = 4;
+const injectionScriptCache = new Map();
+const rememberInjectionScript = (key, value) => {
+  if (!key) return value;
+  if (injectionScriptCache.has(key)) injectionScriptCache.delete(key);
+  injectionScriptCache.set(key, value);
+  while (injectionScriptCache.size > INJECTION_SCRIPT_CACHE_LIMIT) {
+    injectionScriptCache.delete(injectionScriptCache.keys().next().value);
+  }
+  return value;
+};
+
 const injectSourceKey = (source) => crypto.createHash('sha1').update(source).digest('hex').slice(0, 16);
 
 async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile = {}, options = {}) {

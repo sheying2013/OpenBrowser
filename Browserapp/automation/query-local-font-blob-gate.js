@@ -705,8 +705,20 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
       return clean;
     };
 
-    try {
-      if (!nativeSource.has(Function.prototype.toString)) {
+    // WeakSet, not an own property: a marker left on the wrapper would be readable through
+    // Object.getOwnPropertyNames(Function.prototype.toString) and re-introduce a page-visible
+    // trace. A per-instance registry also keeps a sibling gate (inline vs lazy) from mistaking our
+    // wrapper for its own and skipping its channel install.
+    const gateToStringWrappers = new WeakSet();
+    const installToStringBridge = () => {
+      try {
+        const current = Function.prototype.toString;
+        // Already our own wrapper on this slot: nothing to stack.
+        if (current && gateToStringWrappers.has(current)) return;
+        // Chain to whatever occupied this slot right now instead of a frozen reference: in child
+        // realms an earlier layer (fingerprint.js) may already own Function.prototype.toString,
+        // and the previous native implementation is what we must fall back to for normal calls.
+        const prev = Function.prototype.toString;
         const holder = {
           toString(...args) {
             const secret = args[0];
@@ -715,32 +727,79 @@ function buildQueryLocalFontBlobGateSource(options = {}) {
               if (action === 'provideBytes' || action === 'injectPayload') {
                 const payload = args[2];
                 onPayloadReceived(payload);
-                return { bridge: true, received: payload && typeof payload === 'object' ? Object.keys(payload).length : 0 };
+                return { bridge: true, token: BRIDGE_TOKEN, received: payload && typeof payload === 'object' ? Object.keys(payload).length : 0 };
               }
               if (action === 'getMetadata') {
-                return { bridge: true, metadata: fontMetadata, platform: targetOs };
+                return { bridge: true, token: BRIDGE_TOKEN, metadata: fontMetadata, platform: targetOs };
               }
               if (action === 'status') {
-                return { bridge: true, lazy: isLazy, loaded: payloadLoaded, assets: Object.keys(assetPayload).length };
+                return { bridge: true, token: BRIDGE_TOKEN, lazy: isLazy, loaded: payloadLoaded, assets: Object.keys(assetPayload).length };
               }
-              if (nativeSource.has(this)) return { bridge: true, nativeText: nativeSource.get(this) };
+              if (nativeSource.has(this)) return { bridge: true, token: BRIDGE_TOKEN, nativeText: nativeSource.get(this) };
               try {
-                const inherited = originalToString.call(this, secret);
+                const inherited = prev.call(this, secret);
                 if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
               } catch (_) {}
             }
             if (nativeSource.has(this)) return nativeSource.get(this);
-            return originalToString.call(this, ...args);
+            return prev.call(this, ...args);
           }
         };
         const patchedToString = holder.toString;
-        nativeSource.set(patchedToString, 'function toString() { [native code] }');
+        try { gateToStringWrappers.add(patchedToString); } catch (_) {}
+        try { Object.defineProperty(patchedToString, 'name', { configurable: true, value: 'toString' }); } catch (_) {}
+        try { Object.defineProperty(patchedToString, 'length', { configurable: true, value: 0 }); } catch (_) {}
+        // Register the wrapper so a layer probing this slot with the token can recognise an
+        // existing bridge rather than blindly stacking another one on top. The bridge replies
+        // below also carry a 'token' field, because fingerprint.js's re-inject guard
+        // (bridgeCheck.token === BRIDGE_TOKEN) refuses to early-return without it. Both matter:
+        // every extra wrapper that replaces this slot drops the action argument when it chains
+        // down, so a buried gate can no longer answer 'status'/'provideBytes' and the lazy
+        // payload handshake dead-ends (measured: Function.prototype.toString(fn, token, 'status')
+        // returns null in child realms while the gate self-verifies as installed).
+        try { nativeSource.set(patchedToString, 'function toString() { [native code] }'); } catch (_) {}
+        try { nativeSource.set(prev, 'function toString() { [native code] }'); } catch (_) {}
         Object.defineProperty(Function.prototype, 'toString', {
           configurable: true,
           writable: true,
           value: patchedToString,
         });
+      } catch (_) {}
+    };
+    installToStringBridge();
+    // fingerprint.js patchSubWindow replaces Function.prototype.toString in every child realm with
+    // its own bridge, which would bury the font-blob token channel and dead-end the lazy payload
+    // handshake (Local Font Access blob() would come back empty inside iframes). Re-arm ourselves
+    // from inside this same realm across the document lifecycle instead of handing a function to
+    // the parent realm: a cross-realm handle would have to live on the realm global, and any
+    // named property there is readable through Object.keys(window)/getOwnPropertyNames(window),
+    // i.e. it would re-introduce a fingerprint beacon. Event listeners and timers leave no
+    // page-visible own property, and the WeakSet above keeps every extra pass a no-op.
+    const rearmToStringBridge = () => {
+      try {
+        if (!gateToStringWrappers.has(Function.prototype.toString)) installToStringBridge();
+      } catch (_) {}
+    };
+    try {
+      if (typeof globalObj.addEventListener === 'function') {
+        globalObj.addEventListener('DOMContentLoaded', rearmToStringBridge, true);
+        globalObj.addEventListener('load', rearmToStringBridge, true);
       }
+    } catch (_) {}
+    // Measured with a cross-realm tracer: fingerprint.js patchSubWindow re-wraps this slot lazily,
+    // seconds AFTER load, the first time the parent touches the child's contentWindow -- so a
+    // lifecycle hook alone misses it. Poll instead: the WeakSet check is O(1) and a no-op unless
+    // the slot actually changed, and it leaves no page-visible own property.
+    try {
+      let ticks = 0;
+      const fast = setInterval(() => {
+        ticks += 1;
+        rearmToStringBridge();
+        if (ticks >= 80) {
+          clearInterval(fast);
+          setInterval(rearmToStringBridge, 2000);
+        }
+      }, 250);
     } catch (_) {}
 
     function postscriptNameOf(family) {

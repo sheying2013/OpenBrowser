@@ -271,6 +271,24 @@ function parseProxy(value) {
   return parseProxyInput(value);
 }
 
+/**
+ * The single endpoint handed to Chromium as `--proxy-server`.
+ *
+ * Chromium accepts `scheme://host:port` only, so the raw stored string cannot be used verbatim:
+ * `socks5h://x:1`, a `#remark` suffix, a trailing slash or the bare `host:port` shorthand all
+ * need normalising first. Deriving the endpoint from the parser (instead of pattern-matching the
+ * raw text) matters because a rejected string used to yield no `--proxy-server` at all — Chromium
+ * then falls through to the host's own system proxy and the profile leaks the machine's real
+ * route while the UI still reports the configured proxy.
+ *
+ * Returns null only for the explicit direct sentinels (direct/offline/none/empty). Malformed
+ * input throws, so callers fail closed instead of silently starting unproxied.
+ */
+function chromeProxyEndpoint(value) {
+  const config = parseProxy(value);
+  return config ? config.chromeUrl : null;
+}
+
 function displayProxy(value) {
   try {
     const config = parseProxy(value);
@@ -2060,6 +2078,7 @@ async function probeProxyHttps(config, hostname = 'www.google.com', pathname = '
 module.exports = {
   parseProxy,
   parseProxyInput,
+  chromeProxyEndpoint,
   displayProxy,
   normalizeIpLookupChannel,
   startAuthenticatedProxy,

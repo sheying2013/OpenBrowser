@@ -510,6 +510,8 @@
                   <th>出口 IP</th>
                   <th>延迟</th>
                   <th>类型</th>
+                  <th>使用情况</th>
+                  <th>并发上限</th>
                   <th>备注</th>
                   <th>操作</th>
                 </tr>
@@ -1109,6 +1111,8 @@
         <label>账号<input id="proxy-user" autocomplete="off" placeholder="可选"></label>
         <label>密码<input id="proxy-password" type="password" autocomplete="new-password" placeholder="可选"></label>
       </div>
+      <label>并发窗口上限<input id="proxy-max-concurrency" type="number" min="0" max="1000" step="1" placeholder="留空或 0 表示不限制"></label>
+      <small class="field-hint" style="margin-top:-4px;margin-bottom:8px;display:block;">同一代理最多允许几个窗口同时运行；达到上限后再启动会被拦截并提示占用窗口，避免上游代理并发通道耗尽后整批环境一起失效。</small>
       <label>备注<textarea id="proxy-remark" rows="2" placeholder="用途说明"></textarea></label>
       <div class="proxy-test-result" id="proxy-dialog-result">保存前可先检测</div>
       <div class="dialog-actions">

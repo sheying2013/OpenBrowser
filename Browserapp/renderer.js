@@ -3185,6 +3185,23 @@ function renderProxies() {
   const q = ($('#proxy-search')?.value || '').trim().toLowerCase();
   const list = proxyLibrary.filter((item) => !q || [item.name, item.host, item.protocol, item.remark, item.lastIp, String(item.port)].join(' ').toLowerCase().includes(q));
   table.replaceChildren();
+
+  /**
+   * Window usage for one proxy-library record. The proxy cap is enforced in the main process off
+   * the same association (profile.proxyId, or the raw endpoint for a manually pasted proxy), so
+   * the badge and the blocking rule always describe the same set of windows.
+   */
+  const proxyUsage = (item) => {
+    const raw = String(item.raw || '').trim();
+    const bound = (ui.profiles || []).filter((profile) => {
+      const linked = profileProxyId(profile);
+      if (linked) return linked === item.id;
+      return profile.networkMode === 'proxy' && raw && String(profile.proxy || '').trim() === raw;
+    });
+    const running = bound.filter((profile) => profileEngine(profile.id).running);
+    return { bound, running, limit: Number(item.maxConcurrency) || 0 };
+  };
+
   const fragment = new DocumentFragment();
   for (const item of list) {
     const row = document.createElement('tr');
@@ -3227,6 +3244,36 @@ function renderProxies() {
     nameText.append(element('small', '', host));
     nameWrap.append(nameText);
     nameCell.append(nameWrap);
+    const usage = proxyUsage(item);
+    const usageCell = document.createElement('td');
+    const usageBadge = element('span', 'net-badge', '');
+    const numbers = usage.bound.map((profile) => displayProfileNumber(profile)).join('、');
+    // Translated label + raw counters: interpolating inside tx() would leave the Chinese label
+    // untranslated, because the catalogs match the literal text rather than a template pattern.
+    if (usage.bound.length === 0) {
+      usageBadge.className = 'net-badge net-badge-idle';
+      usageBadge.textContent = tx('未使用');
+    } else if (usage.running.length === 0) {
+      usageBadge.className = 'net-badge net-badge-idle';
+      usageBadge.textContent = `${tx('闲置')} · ${usage.bound.length}`;
+      usageBadge.title = `${tx('已绑定环境')}：${numbers}`;
+    } else {
+      const full = usage.limit > 0 && usage.running.length >= usage.limit;
+      usageBadge.className = full ? 'net-badge net-badge-full' : 'net-badge net-badge-direct';
+      usageBadge.textContent = full
+        ? `${tx('满载')} · ${usage.running.length}/${usage.limit}`
+        : `${tx('运行中')} · ${usage.running.length}`;
+      usageBadge.title = `${tx('运行中环境')}：${usage.running.map((profile) => displayProfileNumber(profile)).join('、')}`;
+    }
+    usageCell.append(usageBadge);
+
+    const limitCell = document.createElement('td');
+    const limitText = document.createElement('span');
+    limitText.className = usage.limit > 0 ? 'net-badge net-badge-proxy' : 'net-badge net-badge-idle';
+    limitText.textContent = usage.limit > 0 ? String(usage.limit) : '—';
+    if (usage.limit > 0) limitText.title = tx('该代理最多允许同时运行这么多窗口');
+    limitCell.append(limitText);
+
     row.append(
       checkCell,
       nameCell,
@@ -3236,6 +3283,8 @@ function renderProxies() {
       element('td', '', exit),
       element('td', '', latency),
       element('td', '', netType),
+      usageCell,
+      limitCell,
       element('td', '', item.remark || '—'),
       actionCell
     );
@@ -3285,6 +3334,7 @@ function openProxyDialog(item = null) {
   $('#proxy-password').value = parsed?.password || item?.password || '';
   $('#proxy-raw').value = parsed?.raw || item?.raw || '';
   $('#proxy-remark').value = parsed?.remark || item?.remark || '';
+  $('#proxy-max-concurrency').value = item?.maxConcurrency ? String(item.maxConcurrency) : '';
   const result = $('#proxy-dialog-result');
   result.className = 'proxy-test-result';
   result.textContent = item?.lastIp ? tx(`上次出口：${item.lastIp}`) : tx('保存前可先检测');
@@ -3331,6 +3381,7 @@ function readProxyForm() {
     password,
     raw: builtRaw,
     ipChannel: $('#proxy-ip-channel')?.value || 'direct',
+    maxConcurrency: Math.max(0, Math.min(1000, Number.parseInt($('#proxy-max-concurrency')?.value || '0', 10) || 0)),
     remark,
   };
   // Empty credentials are normally redacted by round-tripped UI data. Only
@@ -3673,6 +3724,9 @@ function scheduleStatusRefresh() {
     __statusRefreshTimer = 0;
     try { engineProfiles = await window.ops.profileStatus(); mergeEngineExitState(engineProfiles); } catch (_) {}
     scheduleRenderProfiles();
+    // The proxy library shows which windows are using each proxy, so a start/stop has to refresh
+    // that view too while it is on screen.
+    if (document.querySelector('#view-proxies.view.active')) scheduleProxySearchRender();
   }, 120);
 }
 let __sessionRefreshTimer = 0;

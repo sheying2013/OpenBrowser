@@ -23,7 +23,11 @@ function main() {
   const engineSrc = fs.readFileSync(path.join(__dirname, 'engine.js'), 'utf8');
   const startIdx = engineSrc.indexOf('item.startupExtensionGuard');
   assert.ok(startIdx > 0, 'startup block present');
-  const block = engineSrc.slice(startIdx, startIdx + 4500);
+  // Bound the start tail by the next top-level member definition rather than a magic char count:
+  // unrelated growth inside the routine used to push keepDefaultTab past the window and fail this
+  // assertion even though applyRuntimeSettings still ran first.
+  const nextMember = engineSrc.slice(startIdx).search(/\n  (?:async\s+)?[A-Za-z_$][\w$]*\s*\(/);
+  const block = engineSrc.slice(startIdx, nextMember > 0 ? startIdx + nextMember : startIdx + 20000);
   // Match call sites only (not comments mentioning keepDefaultTab before inject).
   const injectPos = block.indexOf('await this.applyRuntimeSettings');
   const keepPos = block.indexOf('await this.keepDefaultTab');
