@@ -115,6 +115,16 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
   }
 
   const fontSubsetsJson = JSON.stringify(subsetMap);
+  // When the caller already hoisted the platform payload into a shared binding, rebuild the
+  // lookup map from it at runtime instead of embedding a second copy of the font bytes.
+  const sharedPayloadVar = options.payloadVar ? String(options.payloadVar) : null;
+  const fontSubsetsDeclaration = sharedPayloadVar
+    ? '(() => { const map = Object.create(null); for (const item of ' + sharedPayloadVar + ') {'
+      + ' if (!item || !item.family || !item.base64) continue;'
+      + ' const lower = String(item.family).trim().toLowerCase();'
+      + ' if (allowedFamilies.has(lower)) map[lower] = { format: item.format || \'font/woff2\', base64: item.base64 };'
+      + ' } return map; })()'
+    : fontSubsetsJson;
   const blockedFont = String(options.blockedFont || deriveFontPlaceholder(options.seed || allowedList.join('|')));
   const bridgeToken = String(options.bridgeToken || deriveBridgeToken({ allowedList, blockedFont }));
 
@@ -134,7 +144,7 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
   if (inspectBridge(Node.prototype.appendChild)) return;
 
   const allowedFamilies = new Set(${allowedSetJson});
-  const fontSubsets = ${fontSubsetsJson};
+  const fontSubsets = ${fontSubsetsDeclaration};
   const BLOCKED_FONT = ${JSON.stringify(blockedFont)};
 
   function sanitizeCss(css) {

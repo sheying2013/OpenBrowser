@@ -60,6 +60,7 @@
     "selftest:doh": "node automation/doh-resolver-selftest.js",
     "selftest:graphicsalign": "node automation/graphics-media-alignment-selftest.js",
     "selftest:proxyprobe": "node automation/proxy-probe-resilience-selftest.js",
+    "selftest:proxyconcurrency": "node automation/proxy-concurrency-selftest.js",
     "selftest:kernelinitcontract": "node automation/kernel-init-contract-selftest.js",
     "selftest:startupdelivery": "node automation/startup-fingerprint-delivery-selftest.js",
     "selftest:speechcrossplatform": "node automation/speech-voice-plugin-crossplatform-selftest.js",

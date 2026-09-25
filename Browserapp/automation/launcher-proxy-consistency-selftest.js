@@ -119,6 +119,61 @@ async function main() {
     return 'browser-kernel.js verified clean';
   });
 
+  // --- 1b. --proxy-server endpoint derivation (issue #23) ---
+  // Chromium only accepts `scheme://host:port`, so the endpoint has to be normalised before it
+  // reaches the command line. The launch path used to pattern-match the raw stored string and
+  // returned nothing for every form the regex did not list (socks5h://, a "#remark" suffix, a
+  // trailing slash, the bare host:port shorthand). No `--proxy-server` means Chromium silently
+  // resolves through the host's own system proxy, so a profile that displayed "SOCKS5 … · Auth"
+  // still left through the machine's real route.
+  {
+    const engineSrc = fs.readFileSync(path.join(appRoot, 'engine.js'), 'utf8');
+    check('launch path derives --proxy-server from the parser, not a raw-string regex', () => {
+      assert.ok(
+        /chromeProxyEndpoint\(profile\.proxy\)/.test(engineSrc),
+        'engine.js must build the proxy endpoint through chromeProxyEndpoint(profile.proxy)'
+      );
+      assert.ok(
+        !/proxyArg\(/.test(engineSrc),
+        'engine.js must not carry the raw-string proxyArg() matcher any more'
+      );
+      return 'endpoint comes from proxy-forwarder.chromeProxyEndpoint';
+    });
+
+    const { chromeProxyEndpoint } = require('../proxy-forwarder');
+    check('every proxy spelling the UI accepts yields a non-empty --proxy-server endpoint', () => {
+      const cases = [
+        ['socks5://1.2.3.4:1080', 'socks5://1.2.3.4:1080'],
+        ['socks5h://1.2.3.4:1080', 'socks5://1.2.3.4:1080'],
+        ['socks5://1.2.3.4:1080#马德里-01', 'socks5://1.2.3.4:1080'],
+        ['http://1.2.3.4:8080/', 'http://1.2.3.4:8080'],
+        ['1.2.3.4:1080', 'http://1.2.3.4:1080'],
+        ['socks4://1.2.3.4:1080', 'socks4://1.2.3.4:1080'],
+      ];
+      for (const [input, expected] of cases) {
+        const actual = chromeProxyEndpoint(input);
+        assert.strictEqual(actual, expected, `${input} -> ${actual} (expected ${expected})`);
+      }
+      return `${cases.length}/${cases.length} spellings normalised`;
+    });
+
+    check('authenticated proxies keep the credentials out of the Chromium endpoint', () => {
+      // Chrome cannot do SOCKS5 auth; the bridge terminates it locally, so the endpoint must be
+      // host:port only and the secret must never appear on a command line other processes can read.
+      const endpoint = chromeProxyEndpoint('socks5://user-1:sup3r\u0026secret@1.2.3.4:1080#remark');
+      assert.ok(endpoint && !endpoint.includes('sup3r') && !endpoint.includes('user-1'), `leaked credentials in ${endpoint}`);
+      return 'credentials stripped from the endpoint';
+    });
+
+    check('explicit direct sentinels stay unproxied and malformed input fails closed', () => {
+      for (const sentinel of ['', '   ', 'direct', 'Direct', 'offline', 'none']) {
+        assert.strictEqual(chromeProxyEndpoint(sentinel), null, `${JSON.stringify(sentinel)} must be unproxied`);
+      }
+      assert.throws(() => chromeProxyEndpoint('garbage'), /invalid/i);
+      return 'sentinels unproxied, malformed input throws';
+    });
+  }
+
   // --- 2. Live Headless Kernel End-to-End Proxy Verification ---
   if (process.platform === 'darwin' && fs.existsSync(helperLauncher)) {
     await asyncCheck('kernel strictly enforces configured proxy (negative control fails via dead proxy)', async () => {

@@ -24,6 +24,7 @@ const ok = (n, c) => { assert.ok(c, n); console.log('  PASS  ' + n); passed += 1
 
 const WIN_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const LINUX_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 // --- the platform tables themselves ---
 {
@@ -64,8 +65,17 @@ const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.
   ok('persona profile carries a font set', persona.fonts && persona.fonts.list.length > 0);
   ok('persona font set matches the claimed OS', persona.fonts.os === 'windows' && persona.fonts.list.includes('Segoe UI'));
 
-  const legacy = buildFingerprint({ id: 'font-a', userAgent: WIN_UA, privacy: {}, advanced: {} });
-  ok('profiles without the opt-in carry no font claim', legacy.fonts === null);
+  // The font layer arms on one of two declared inputs: an explicit persona opt-in, or a claimed
+  // OS that differs from the host. The second case is deliberate, not a leak: a Windows claim on
+  // a macOS host must not be answered by the host's real fonts. So "no opt-in means no claim"
+  // holds only while the claimed OS still matches the host, and is asserted that way here.
+  const HOST_OS = process.platform === 'darwin' ? 'macos' : (process.platform === 'win32' ? 'windows' : 'linux');
+  const HOST_UA = HOST_OS === 'macos' ? MAC_UA : (HOST_OS === 'windows' ? WIN_UA : LINUX_UA);
+  const sameOs = buildFingerprint({ id: 'font-a', userAgent: HOST_UA, privacy: {}, advanced: {} });
+  ok(`profiles without the opt-in carry no font claim while the claim matches the host (${HOST_OS})`, sameOs.fonts === null);
+
+  const crossOs = buildFingerprint({ id: 'font-a', userAgent: HOST_OS === 'macos' ? WIN_UA : MAC_UA, privacy: {}, advanced: {} });
+  ok('a cross-OS claim arms font isolation without an explicit persona', crossOs.fonts !== null && crossOs.fonts.os !== HOST_OS);
 }
 
 /**

@@ -175,6 +175,9 @@ class CssFontResponseRewriter {
     this.enabled = options.enabled !== false;
     this.logger = typeof options.logger === 'function' ? options.logger : null;
     this.inFlightRequests = new Set();
+    // requestId -> owning CDP session, so a detached iframe/worker can only release its own
+    // bookkeeping instead of clearing ids that still belong to live tabs.
+    this.inFlightBySession = new Map();
   }
 
   /**
@@ -253,15 +256,65 @@ class CssFontResponseRewriter {
     if (!requestId) return;
 
     this.inFlightRequests.add(requestId);
+    if (sessionId) {
+      let sessionRequests = this.inFlightBySession.get(sessionId);
+      if (!sessionRequests) {
+        sessionRequests = new Set();
+        this.inFlightBySession.set(sessionId, sessionRequests);
+      }
+      sessionRequests.add(requestId);
+    }
 
     (async () => {
       let settled = false;
+      let safetyTimer = null;
+      const clearSafety = () => {
+        if (safetyTimer) {
+          clearTimeout(safetyTimer);
+          safetyTimer = null;
+        }
+      };
+      const forget = () => {
+        this.inFlightRequests.delete(requestId);
+        const tracked = sessionId ? this.inFlightBySession.get(sessionId) : null;
+        if (tracked) {
+          tracked.delete(requestId);
+          if (!tracked.size) this.inFlightBySession.delete(sessionId);
+        }
+      };
+      const release = () => {
+        settled = true;
+        clearSafety();
+        forget();
+      };
+      // Fail-open backstop. Every awaited CDP call already carries its own timeout, so the only
+      // way this handler can strand a paused response is a send() that never settles at all.
+      // The backstop is therefore armed per send and sized to that send's own budget: one absolute
+      // deadline shorter than the longest legitimate path (8s body fetch + 8s fulfil) would
+      // release requests that were merely slow, which the page sees as a half-rewritten document
+      // and a tab that stops responding — exactly the symptom this guard exists to prevent.
+      const guardedSend = async (method, params = {}, options = {}) => {
+        const budget = Number(options.timeout) || 6000;
+        clearSafety();
+        safetyTimer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          forget();
+          this._log('stuck-failopen', { method, url: request?.url, budget });
+          this._sendCommand(connection, 'Fetch.continueRequest', { requestId }, { sessionId, timeout: 4000 }).catch(() => {});
+        }, budget + 2000);
+        if (typeof safetyTimer.unref === 'function') safetyTimer.unref();
+        try {
+          return await this._sendCommand(connection, method, params, options);
+        } finally {
+          clearSafety();
+        }
+      };
       const doContinue = async () => {
         if (settled) return;
-        settled = true;
-        this.inFlightRequests.delete(requestId);
+        release();
         try {
-          await this._sendCommand(connection, 'Fetch.continueRequest', { requestId }, { sessionId, timeout: 6000 });
+          await guardedSend('Fetch.continueRequest', { requestId }, { sessionId, timeout: 6000 });
         } catch (_) {}
       };
 
@@ -301,8 +354,7 @@ class CssFontResponseRewriter {
         }
 
         // 6. Request response body from CDP
-        const bodyMessage = await this._sendCommand(
-          connection,
+        const bodyMessage = await guardedSend(
           'Fetch.getResponseBody',
           { requestId },
           { sessionId, timeout: 8000 }
@@ -356,21 +408,34 @@ class CssFontResponseRewriter {
           fulfilledHeaders = updateCspHeaders(fulfilledHeaders, styleReplacements);
         }
 
-        settled = true;
-        this.inFlightRequests.delete(requestId);
-
-        await this._sendCommand(
-          connection,
-          'Fetch.fulfillRequest',
-          {
-            requestId,
-            responseCode: responseStatusCode || 200,
-            responsePhrase: responseStatusText || undefined,
-            responseHeaders: fulfilledHeaders,
-            body: newBodyBuffer.toString('base64'),
-          },
-          { sessionId, timeout: 8000 }
-        );
+        // Settle only after the CDP call actually succeeds. Marking the request settled first
+        // made the catch-path fallback a no-op, so a rejected fulfill left the resource paused
+        // forever and the tab stopped responding.
+        let fulfilled = false;
+        try {
+          await guardedSend(
+            'Fetch.fulfillRequest',
+            {
+              requestId,
+              responseCode: responseStatusCode || 200,
+              responsePhrase: responseStatusText || undefined,
+              responseHeaders: fulfilledHeaders,
+              body: newBodyBuffer.toString('base64'),
+            },
+            { sessionId, timeout: 8000 }
+          );
+          fulfilled = true;
+        } catch (fulfillError) {
+          this._log('fulfill-error', { error: fulfillError.message, url: request?.url });
+        }
+        release();
+        if (!fulfilled) {
+          // Hand the untouched response back instead of stranding it.
+          try {
+            await guardedSend('Fetch.continueRequest', { requestId }, { sessionId, timeout: 6000 });
+          } catch (_) {}
+          return;
+        }
 
         this._log('rewritten', {
           url: request?.url,
@@ -384,6 +449,25 @@ class CssFontResponseRewriter {
         await doContinue();
       }
     })();
+  }
+
+  /**
+   * Drop bookkeeping for a detached session. Without this, a closed iframe/worker leaves its
+   * request ids behind for the lifetime of the process.
+   */
+  cleanupSession(sessionId) {
+    if (!sessionId) return;
+    const tracked = this.inFlightBySession.get(sessionId);
+    if (!tracked) return;
+    // Only this session's ids are dropped. A detached iframe/worker must never clear bookkeeping
+    // that still belongs to a live tab, which would hide that tab's requests from the counters.
+    for (const requestId of tracked) this.inFlightRequests.delete(requestId);
+    this.inFlightBySession.delete(sessionId);
+  }
+
+  destroy() {
+    this.inFlightRequests.clear();
+    this.inFlightBySession.clear();
   }
 
   _hasHeader(headers, targetName) {

@@ -457,6 +457,10 @@ html[data-color-mode="light"] .env-identity:hover .env-window-svg {
 .network-mode-cell-compact .net-badge{padding:1px 6px;font-size:10px;font-weight:600}
 .net-badge-direct{background:rgba(32,183,122,.12);color:#12825c;border:1px solid rgba(32,183,122,.28)}
 .net-badge-proxy{background:rgba(36,92,255,.10);color:#245cff;border:1px solid rgba(36,92,255,.22)}
+/* Proxy-library usage column (issue #25). Same shape as the environment network pill so the
+   table keeps one visual language; only the tone differs (muted = unused, danger = at cap). */
+.net-badge-idle{background:var(--theme-surface-alt,rgba(127,127,127,.10));color:var(--theme-muted,#8b8b8b);border:1px solid rgba(127,127,127,.22)}
+.net-badge-full{background:color-mix(in srgb,var(--danger,#ef4444) 14%,transparent);color:var(--danger,#ef4444);border:1px solid color-mix(in srgb,var(--danger,#ef4444) 34%,transparent)}
 .net-proxy-detail{color:var(--theme-muted,#7b879b);font-size:11px;line-height:1.35;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .network-info-compact{display:inline-flex;align-items:center;gap:4px;min-width:0}
 .exit-compact{font-size:10px;font-weight:600;color:var(--theme-text,#334057);max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

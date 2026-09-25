@@ -11,6 +11,9 @@ const {
 } = require('../proxy-forwarder');
 
 const MAX_PROXY_URL_LENGTH = 64 * 1024;
+// Upper bound for the per-proxy window cap. 0 means "no limit" and is the default, so a
+// stored record from an older build keeps working without migration.
+const MAX_PROXY_CONCURRENCY = 1000;
 const MAX_PROXY_CREDENTIAL_LENGTH = 32 * 1024;
 const PROXY_STORE_CORRUPTION_CODE = 'ERR_PROXY_STORE_CORRUPT';
 
@@ -74,6 +77,14 @@ function normalizeProxyRecord(input = {}, existing = null) {
   const requestedName = String(input.name || existing?.name || '').trim().slice(0, 120);
   const refreshUrl = String(input.refreshUrl ?? input.refresh_url ?? existing?.refreshUrl ?? '').slice(0, 1000);
   const ipChannel = normalizeIpLookupChannel(input.ipChannel ?? input.ip_channel ?? existing?.ipChannel);
+
+  const concurrencyInput = ownValue(input, ['maxConcurrency', 'max_concurrency', 'concurrencyLimit', 'concurrency']);
+  const requestedConcurrency = concurrencyInput.present
+    ? Number.parseInt(concurrencyInput.value, 10)
+    : Number.parseInt(existing && existing.maxConcurrency, 10);
+  const maxConcurrency = Number.isInteger(requestedConcurrency) && requestedConcurrency > 0
+    ? Math.min(requestedConcurrency, MAX_PROXY_CONCURRENCY)
+    : 0;
 
   const existingRaw = firstNonEmpty(existing, ['raw', 'proxy', 'proxy_url', 'proxyUrl']);
   const explicitRaw = firstNonEmpty(input, ['raw', 'proxy', 'proxy_url', 'proxyUrl']);
@@ -181,6 +192,7 @@ function normalizeProxyRecord(input = {}, existing = null) {
     authenticated: parsed.authenticated,
     refreshUrl,
     ipChannel,
+    maxConcurrency,
     remark,
     lastCheck: existing?.lastCheck || null,
     lastIp: existing?.lastIp || '',

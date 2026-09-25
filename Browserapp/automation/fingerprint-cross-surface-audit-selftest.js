@@ -40,6 +40,7 @@ const {
 } = require('./fingerprint');
 const { buildWorkerFontPresenceSource } = require('./worker-font-presence-fallback');
 const { writeOpenBrowserKernelInit } = require('./kernel-init-sync');
+const { getPlatformFontPayload } = require('./query-local-font-blob-gate');
 
 const appRoot = path.join(__dirname, '..');
 const kernelRoot = path.join(appRoot, 'kernels', 'macos-x64');
@@ -405,6 +406,37 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
     await cdp.send('Page.enable', {}, pageSession);
     await cdp.send('Runtime.enable', {}, pageSession);
 
+    // Lazy font payload host. The Windows persona answers Local Font Access from this CDP binding
+    // rather than an inline payload, so without a host side here blob() would come back empty and
+    // the SFNT-header parity check would fail for a reason the product does not have. Mirror
+    // engine.js: validate the token, then hand the requested subset back through the same
+    // Function.prototype.toString channel the injected gate listens on.
+    const bridgeChannel = mutate ? null : (fp?.fontBlobBridge?.channelName || null);
+    const answerFontBridge = async (ev) => {
+      let request = null;
+      try { request = JSON.parse(ev.params?.payload || '{}'); } catch (_) { return; }
+      const payload = getPlatformFontPayload(
+        String(request?.platform || fp?.fontBlobBridge?.platform || 'windows'),
+        { wanted: request?.wanted || undefined },
+      );
+      const token = String(request?.token || '');
+      const expression = `try {
+        const targetFn = (typeof FontData !== 'undefined' && FontData && FontData.prototype && FontData.prototype.blob)
+          ? FontData.prototype.blob
+          : Function.prototype.toString;
+        Function.prototype.toString.call(targetFn, ${JSON.stringify(token)}, 'provideBytes', ${JSON.stringify(payload)});
+      } catch (_) {}`;
+      // Target the context that called the binding: an iframe has its own global, so answering on
+      // the default page context would leave the frame's blob() empty.
+      const contextId = ev.params?.executionContextId;
+      const evaluateParams = { expression, returnByValue: false };
+      if (contextId) evaluateParams.contextId = contextId;
+      await cdp.send('Runtime.evaluate', evaluateParams, ev.sessionId || pageSession);
+    };
+    if (bridgeChannel) {
+      await cdp.send('Runtime.addBinding', { name: bridgeChannel }, pageSession);
+    }
+
     // Grant localFonts permissions to allow Local Font Access API probe
     await cdp.send('Browser.grantPermissions', {
       permissions: ['localFonts'],
@@ -436,6 +468,10 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
     const eventInterval = setInterval(() => {
       while (cdp.events.length) {
         const ev = cdp.events.shift();
+        if (ev.method === 'Runtime.bindingCalled' && bridgeChannel && ev.params?.name === bridgeChannel) {
+          answerFontBridge(ev).catch(() => {});
+          continue;
+        }
         if (ev.method === 'Runtime.exceptionThrown') {
           const details = ev.params?.exceptionDetails || {};
           runtimeExceptions.push(String(details.exception?.description || details.text || 'Runtime exception'));

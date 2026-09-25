@@ -8,7 +8,7 @@ const cdp = require('./cdp');
 const { mergeFlags, appendFlagValue, LIST_VALUE_FLAGS } = require('./automation/command-line-flags');
 const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
-const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
+const { parseProxy, chromeProxyEndpoint, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
 const { resolveProfileLanguage, resolveProfileTimezone, localeFromCountryCode } = require('./automation/locale-from-country');
 const { applyLanguagePreferences, verifyLanguagePreferences, syncProfileLocalState } = require('./automation/profile-file-consistency');
 const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
@@ -520,7 +520,7 @@ class RequestHeaderRewriter {
           return await doContinue();
         }
 
-        const url = String(request?.url || ""); if (url.includes("sw") || url.includes("worker")) console.log("[REWRITER URL]", url, "resourceType:", event.params?.resourceType);
+        const url = String(request?.url || "");
         // Filter internal browser schemes: chrome, devtools, data, blob, about, etc.
         if (/^(chrome|chrome-extension|edge|edge-extension|devtools|data|blob|about|javascript|filesystem|view-source|isolated-app):/i.test(url)) {
           return await doContinue();
@@ -1412,15 +1412,58 @@ class BrowserEngine {
     throw new Error(selection.message);
   }
 
-  proxyArg(value) {
-    const proxy = String(value || '').trim();
-    if (!proxy || /^(direct|offline|none)/i.test(proxy)) return null;
-    if (/^(https?|socks4|socks5):\/\/[a-zA-Z0-9._-]+:\d{1,5}$/i.test(proxy)) return proxy;
-    if (/^[a-zA-Z0-9._-]+:\d{1,5}$/.test(proxy)) return `http://${proxy}`;
-    return null;
+  proxyConfig(value) { return parseProxy(value); }
+
+  /**
+   * Live window usage for the proxy-library record a profile is bound to (issue #25).
+   *
+   * A commercial SOCKS5 endpoint usually admits a fixed number of concurrent tunnels, so the same
+   * node can serve the first handful of windows and then reject every later one. Counting the
+   * running windows per proxy is also what the proxy library panel shows, so both the display and
+   * the cap read the same source.
+   */
+  proxyConcurrencyUsage(profile) {
+    const association = profileProxyAssociation(profile);
+    const proxyId = normalizedProxyAssociationId(association.value);
+    if (!proxyId || !this.proxyStore) return null;
+    let item = null;
+    try { item = this.proxyStore.get?.(proxyId) || null; } catch (_) { return null; }
+    if (!item) return null;
+    const raw = String(item.raw || '').trim();
+    const running = [];
+    for (const [runningId, runningItem] of this.running) {
+      if (runningItem?.cleanedUp || runningItem?.stopping) continue;
+      const candidate = runningItem?.profile;
+      if (!candidate || String(candidate.id) === String(profile.id)) continue;
+      const candidateAssociation = profileProxyAssociation(candidate);
+      const sameProxy = normalizedProxyAssociationId(candidateAssociation.value) === proxyId
+        || (raw && String(candidate.proxy || '').trim() === raw);
+      if (sameProxy) {
+        running.push({ id: candidate.id, label: candidate.name || candidate.title || runningId });
+      }
+    }
+    return {
+      item,
+      limit: Number.isInteger(item.maxConcurrency) ? item.maxConcurrency : 0,
+      running,
+    };
   }
 
-  proxyConfig(value) { return parseProxy(value); }
+  /**
+   * Per-proxy window cap (issue #25). Enforced before any data directory, profile lock, proxy
+   * bridge or child process exists, so a blocked start leaves nothing behind to clean up.
+   */
+  assertProxyConcurrencyAvailable(profile) {
+    const usage = this.proxyConcurrencyUsage(profile);
+    if (!usage || !usage.limit) return;
+    if (usage.running.length < usage.limit) return;
+    const name = usage.item.name || `${usage.item.host}:${usage.item.port}`;
+    const holders = usage.running.slice(0, 3).map((entry) => entry.label).join('、');
+    const error = new Error(`代理「${name}」已达并发窗口上限（${usage.running.length}/${usage.limit}）。占用窗口：${holders}${usage.running.length > 3 ? ' 等' : ''}。请先关闭其中一个窗口，或调高该代理的并发上限。`);
+    error.code = 'ERR_PROXY_MAX_CONCURRENCY';
+    this.emit({ type: 'proxy-error', id: profile.id, code: 'proxy-max-concurrency', message: error.message, policy: 'block' });
+    throw error;
+  }
 
   async resetZoom(root) {
     const file = path.join(root, 'Default', 'Preferences');
@@ -1933,7 +1976,7 @@ class BrowserEngine {
       fingerprint,
       blockedFont: deriveFontPlaceholder(fingerprint),
       logger: (details) => {
-        if (details?.type === 'handle-error' || details?.type === 'enable-error') {
+        if (details?.type === 'handle-error' || details?.type === 'enable-error' || details?.type === 'fulfill-error') {
           const errMsg = String(details?.error || '');
           if (/Can only get response body|No resource with given identifier/i.test(errMsg)) {
             return;
@@ -3657,6 +3700,7 @@ class BrowserEngine {
       if (!profile.advanced.multiOpen) return this.publicRunning(profile.id);
       return this.publicRunning(profile.id);
     }
+    this.assertProxyConcurrencyAvailable(profile);
     // Surface cross-platform risks (Windows MAX_PATH on a deep data root, missing env,
     // Linux sandbox, …) once — turns silent per-platform breakage into an actionable event.
     if (!this._platformPreflightDone) {
@@ -3836,12 +3880,21 @@ class BrowserEngine {
     if (profile.advanced.jsHeapMax) args.push('--js-flags=--max-old-space-size=8192');
     if (restoreSession) args.push('--restore-last-session');
     const disabledFeatures = [];
-    // Authenticated proxies must be exposed to Chrome through the local bridge.
-    let proxy = proxyForwarder ? proxyForwarder.url : this.proxyArg(profile.proxy);
+    // Authenticated proxies are exposed to Chrome through the local bridge. Everything else takes
+    // the canonical endpoint from the parser, never from a pattern match on the raw string:
+    // `socks5h://`, a `#remark` suffix or a trailing slash used to miss every branch and emit no
+    // `--proxy-server` at all, which let Chromium resolve through the host's system proxy — a
+    // real-IP leak behind a UI that still reported the configured proxy.
+    let proxy = proxyForwarder ? proxyForwarder.url : chromeProxyEndpoint(profile.proxy);
     // systemProxy: off = 强制本机直连(不走系统代理)；use/global + Direct = 不传 --proxy-server（跟随系统路由）
     const sysMode = profile.proxyMeta?.systemProxy || 'global';
     if (!proxy && sysMode === 'off') {
       proxy = 'direct://';
+    }
+    if (proxyConfig && !proxy && sysMode !== 'off') {
+      // Fail closed rather than fall back to the host route. A profile that is configured with a
+      // proxy must never quietly leave through the machine's own network.
+      throw new Error('代理已配置但无法生成可用的浏览器代理端点，已按安全策略阻断启动以避免真实 IP 泄漏。');
     }
     if (proxy) {
       args.push(`--proxy-server=${proxy}`);
