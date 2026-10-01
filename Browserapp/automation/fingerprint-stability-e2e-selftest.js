@@ -121,13 +121,16 @@ async function measure(dir, profileId, withInject, reuseInit) {
     return;
   }
 
-  // Pick an id whose derived clientRects step used to collapse to zero (mark % 7 === 3).
+  // Pick an id whose derived clientRects offset lands exactly on the neutral bucket, i.e. adds no
+  // displacement at all -- the case that used to be spelled `mark % 7 === 3` before the offset was
+  // re-bucketed to 97 values (a 7-way residue collided across profiles, see the clientRects layer).
   let zeroId = null;
-  for (let i = 0; i < 40; i += 1) {
+  for (let i = 0; i < 400; i += 1) {
     const id = `stability-zero-${i}`;
     const fp = buildFingerprint(profileFor(id));
     const mark = Number(fp.clientRects && fp.clientRects.mark) || 1;
-    if (((mark % 7) + 7) % 7 === 3) { zeroId = id; break; }
+    const absMark = Math.abs(Math.trunc(mark)) || 1;
+    if (absMark % 97 === 48) { zeroId = id; break; }
   }
 
   const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'ob-stability-a-'));

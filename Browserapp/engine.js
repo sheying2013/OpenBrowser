@@ -1421,6 +1421,13 @@ class BrowserEngine {
    * node can serve the first handful of windows and then reject every later one. Counting the
    * running windows per proxy is also what the proxy library panel shows, so both the display and
    * the cap read the same source.
+   *
+   * Windows that are still coming up count too. A start inserts itself into `this.starting` long
+   * before the child process exists, so a check that only looked at `this.running` would let a
+   * batch start every window of a capped proxy: each call would observe the cap as unused because
+   * none of the siblings had finished booting yet. Counting in-flight starts is what makes the
+   * cap hold for the "select N environments -> start" flow, which is exactly when the upstream
+   * tunnel budget is spent fastest.
    */
   proxyConcurrencyUsage(profile) {
     const association = profileProxyAssociation(profile);
@@ -1431,16 +1438,24 @@ class BrowserEngine {
     if (!item) return null;
     const raw = String(item.raw || '').trim();
     const running = [];
-    for (const [runningId, runningItem] of this.running) {
-      if (runningItem?.cleanedUp || runningItem?.stopping) continue;
-      const candidate = runningItem?.profile;
-      if (!candidate || String(candidate.id) === String(profile.id)) continue;
+    const seen = new Set([String(profile.id)]);
+    const consider = (candidate, fallbackId) => {
+      if (!candidate) return;
+      const candidateId = String(candidate.id || fallbackId || '');
+      if (!candidateId || seen.has(candidateId)) return;
       const candidateAssociation = profileProxyAssociation(candidate);
       const sameProxy = normalizedProxyAssociationId(candidateAssociation.value) === proxyId
         || (raw && String(candidate.proxy || '').trim() === raw);
-      if (sameProxy) {
-        running.push({ id: candidate.id, label: candidate.name || candidate.title || runningId });
-      }
+      if (!sameProxy) return;
+      seen.add(candidateId);
+      running.push({ id: candidate.id || fallbackId, label: candidate.name || candidate.title || fallbackId });
+    };
+    for (const [runningId, runningItem] of this.running) {
+      if (runningItem?.cleanedUp || runningItem?.stopping) continue;
+      consider(runningItem?.profile, runningId);
+    }
+    for (const startingId of this.starting.keys()) {
+      consider(this.profiles.get(startingId), startingId);
     }
     return {
       item,

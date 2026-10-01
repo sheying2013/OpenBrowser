@@ -175,7 +175,6 @@ function buildFontMetricsScript(platformKey, options = {}) {
     if (!fontData || !fontData.length) return;
 
     const internalFaces = new WeakSet();
-    const personaFamilySet = new Set(fontData.map((item) => String(item.family || '').trim().toLowerCase()).filter(Boolean));
     const shieldedFontsMap = new WeakMap();
     const boundMethodCache = new Map();
     const nativeMap = new WeakMap();
@@ -286,35 +285,13 @@ function buildFontMetricsScript(platformKey, options = {}) {
               let bound = boundMethodCache.get('check');
               if (!bound) {
                 const targetCheck = target.check;
-                // FontFace.family reports the CSS-serialised value, so a multi-word author family
-                // arrives quoted: '"Probe Cross Tahoma"'. Comparing that raw against the unquoted family
-                // parsed out of the check() spec never matched, and the page-visible result was
-                // check() === false for a face the page had just added and loaded - a difference no
-                // stock browser shows. Normalise both sides instead.
-                const normalizeFontFamily = (value) => {
-                  let name = String(value == null ? '' : value).trim().toLowerCase();
-                  const first = name[0];
-                  const last = name[name.length - 1];
-                  if (name.length > 1 && ((first === '"' && last === '"') || (first === "'" && last === "'"))) {
-                    name = name.slice(1, -1).trim();
-                  }
-                  return name;
-                };
+                // check() must answer exactly like a stock build. Chromium's native implementation
+                // answers true for any family it can fall back on -- it is not a font-enumeration
+                // oracle -- so filtering by the persona list here cannot hide anything, it only
+                // creates a page-visible difference (stock: true, injected: false) that flags the
+                // browser as instrumented. The real FontFaceSet already holds the injected faces,
+                // so delegating with the real receiver is both correct and sufficient.
                 bound = function check(font, text) {
-                  try {
-                    const css = String(font || '');
-                    const match = css.match(/(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9][A-Za-z0-9 _-]*))\\s*$/);
-                    const family = match ? normalizeFontFamily(match[1] || match[2] || match[3] || '') : '';
-                    const generic = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace']);
-                    if (family && !generic.has(family) && !personaFamilySet.has(family)) {
-                      let authorFace = false;
-                      for (const face of target) {
-                        if (internalFaces.has(face)) continue;
-                        if (normalizeFontFamily(face.family) === family) { authorFace = true; break; }
-                      }
-                      if (!authorFace) return false;
-                    }
-                  } catch (_) {}
                   return targetCheck.apply(target, arguments);
                 };
                 try { Object.defineProperty(bound, 'name', { value: 'check', configurable: true }); } catch (_) {}
@@ -5703,10 +5680,15 @@ function buildInjectionScript(fp) {
   if (CFG.clientRects && CFG.clientRects.mode === 'noise') {
     try {
       const mark = Number(CFG.clientRects.mark) || 1;
-      const rawStep = (mark % 7) - 3;
-      const noisePx = (rawStep === 0 ? 1 : rawStep) * 0.0001;
-      const sizeStep = (mark % 5) - 2;
-      const noiseSize = (sizeStep === 0 ? 1 : sizeStep) * 0.0001;
+      // Bucket width is what makes two profiles distinguishable. The original 7-way residue
+      // collides for roughly one in seven seed pairs, and when it collides two *different* profiles
+      // measure byte-identical ClientRects -- the exact cross-profile differentiation this layer
+      // exists to provide. Use much finer residues (97 / 89 buckets) so the offsets almost never
+      // coincide, while keeping every offset far below one CSS pixel so the value stays plausible
+      // for a real device.
+      const absMark = Math.abs(Math.trunc(mark)) || 1;
+      const noisePx = ((absMark % 97) - 48) * 0.00001;
+      const noiseSize = ((absMark % 89) - 44) * 0.00001;
 
       const rectListStates = new WeakMap();
 
@@ -5751,7 +5733,26 @@ function buildInjectionScript(fp) {
       const patchedClientRectWindows = new WeakSet();
       const patchClientRectsForWindow = (targetWin) => {
         if (!targetWin || patchedClientRectWindows.has(targetWin)) return;
-        if (adoptNativeBridgeWrappers(targetWin.Element?.prototype, targetWin.Range?.prototype, targetWin.DOMRectList?.prototype)) {
+        // Only the two geometry methods this layer owns may veto the patch. Scanning every own
+        // member of Element.prototype was wrong: the font shield installs Element.prototype
+        // .getAttribute through nativeLike(), which carries the same bridge marker, so
+        // adoptNativeBridgeWrappers() reported "already patched" on every document and the whole
+        // clientRects layer bailed out. Every profile then measured identical rects -- visible to
+        // any page that compares two environments, and the reason the cross-profile audit failed.
+        const rectMethodAlreadyBridged = (proto, key) => {
+          if (!proto) return false;
+          const descriptor = Object.getOwnPropertyDescriptor(proto, key);
+          const fn = descriptor && descriptor.value;
+          const state = inspectBridge(fn);
+          if (!state) return false;
+          try { nativeSource.set(fn, state.nativeText || ('function ' + (fn.name || key) + '() { [native code] }')); } catch (_) {}
+          return true;
+        };
+        const alreadyPatchedByUs = ['getBoundingClientRect', 'getClientRects'].some((key) => (
+          rectMethodAlreadyBridged(targetWin.Element && targetWin.Element.prototype, key)
+          || rectMethodAlreadyBridged(targetWin.Range && targetWin.Range.prototype, key)
+        ));
+        if (alreadyPatchedByUs) {
           try { patchedClientRectWindows.add(targetWin); } catch (_) {}
           return;
         }

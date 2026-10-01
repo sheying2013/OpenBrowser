@@ -530,8 +530,30 @@ async function resolveDnsLeakProbes(testId, count = 12) {
   return { resolved: hosts.length, hosts };
 }
 
-function summarizeDnsLeak(rows = [], exitNetwork = null) {
+/**
+ * Proxy protocols whose target hostnames Chromium resolves **on the proxy side**.
+ *
+ * `--proxy-server=socks5://…` never asks the host resolver for the origin hostname, so a probe run
+ * through the application process's own resolver cannot describe the browser's DNS path. Marking
+ * that divergence as a leak is a structural false positive (issue #27), which also buries genuine
+ * leaks because a permanently red item carries no signal.
+ *
+ * Deliberately absent: `socks4` / bare `socks` (Chromium maps `socks://` to SOCKS4) — SOCKSv4 is
+ * documented as always resolving client side, so those profiles must keep the original verdict.
+ */
+const REMOTE_RESOLVING_PROXY_PROTOCOLS = new Set(['socks5', 'socks5h', 'socks5s', 'http', 'https']);
+
+function proxyResolvesRemotely(protocol) {
+  const raw = String(protocol || '').trim().toLowerCase();
+  if (!raw || raw === 'direct' || raw === 'offline' || raw === 'none') return false;
+  const name = raw.replace(/\/\/.*$/, '').replace(/\/.*$/, '').replace(/:$/, '');
+  return REMOTE_RESOLVING_PROXY_PROTOCOLS.has(name);
+}
+
+function summarizeDnsLeak(rows = [], exitNetwork = null, options = {}) {
   const list = Array.isArray(rows) ? rows : [];
+  const proxyProtocol = String(options.proxyProtocol || '').trim().toLowerCase();
+  const remoteResolvingProxy = proxyResolvesRemotely(proxyProtocol);
   const exitIp = String(exitNetwork?.ip || '').trim();
   const exitCountry = normalizeCountryCode(exitNetwork?.countryCode || exitNetwork?.countryUsage || '');
   const servers = [];
@@ -590,13 +612,23 @@ function summarizeDnsLeak(rows = [], exitNetwork = null) {
     label = '未观测到 DNS 服务器';
     detail = '已触发唯一探测域名，但结果服务未返回可识别的 DNS 解析器。可稍后重试。';
   } else if (countryMismatch) {
-    state = 'bad';
-    label = '可能存在 DNS 泄露';
-    detail = [
+    const regions = [
       exitCountry ? `出口地区 ${exitCountry}` : '',
       dnsCountries.length ? `DNS 地区 ${dnsCountries.join('/')}` : '',
       unique.slice(0, 4).map((item) => item.ip).join(', '),
     ].filter(Boolean).join(' · ');
+    if (remoteResolvingProxy) {
+      // The probe resolved through the app process's host resolver; Chromium resolved through the
+      // proxy. Keep the observation (it is useful evidence that the host resolver was queried) but
+      // stop presenting it as a leak, and keep the resolver list so nothing is hidden.
+      state = 'info';
+      label = '经代理远端解析';
+      detail = `${regions}。本项由应用进程的本机解析路径探测，而 Chromium 对 ${proxyProtocol} 代理在代理端解析域名，两条路径结构性不同，此结果不构成 DNS 泄露。`;
+    } else {
+      state = 'bad';
+      label = '可能存在 DNS 泄露';
+      detail = regions;
+    }
   } else if (multiCountryDns) {
     state = 'warn';
     label = 'DNS 地区不一致';
@@ -643,8 +675,13 @@ function summarizeDnsLeak(rows = [], exitNetwork = null) {
  * 3) read which DNS servers the service observed
  * 4) compare DNS countries with current exit IP country
  *
- * For proxy profiles, the probe still uses the host resolver path — this is
- * intentional: it surfaces true DNS leaks when the browser/OS bypasses the proxy.
+ * For proxy profiles the probe still uses the host resolver path — that part is
+ * intentional, because it is what surfaces a *real* leak when the browser bypasses
+ * the proxy (no proxy, or a client-side-resolving SOCKSv4). What changed for
+ * issue #27 is the verdict: with a remote-resolving proxy (SOCKS5 / HTTP(S))
+ * Chromium never asks the host resolver at all, so the divergence is reported as
+ * an informational item instead of a leak. Pass the profile's proxy protocol in
+ * `options.proxyProtocol` so the summariser can tell the two cases apart.
  */
 async function lookupDnsLeak(options = {}) {
   const exitNetwork = options.exitNetwork || null;
@@ -660,7 +697,7 @@ async function lookupDnsLeak(options = {}) {
     const rows = await fetchJsonUrl(`https://bash.ws/dnsleak/test/${encodeURIComponent(testId)}?json`, {
       timeout: 15000,
     });
-    const summary = summarizeDnsLeak(rows, exitNetwork);
+    const summary = summarizeDnsLeak(rows, exitNetwork, { proxyProtocol: options.proxyProtocol });
     return {
       ...summary,
       testId,
@@ -1290,6 +1327,10 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
             countryCode: session?.countryCode || '',
             country: '',
           },
+          // Lets the verdict distinguish "client-side resolution" (a real leak signal) from
+          // "remote-resolving proxy" (issue #27 false positive).
+          proxyProtocol: session?.proxyProtocol
+            || (session?.networkMode === 'direct' ? 'direct' : ''),
         });
         return this.#json(res, 200, {
           ok: true,

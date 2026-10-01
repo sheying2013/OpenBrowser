@@ -16,7 +16,13 @@ const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 
-const { ProxyStore } = require('./proxy-store');
+const {
+  ProxyStore,
+  summarizeProxyUsage,
+  canAssignProxy,
+  assertProxyAssignmentAvailable,
+  profileMatchesProxy,
+} = require('./proxy-store');
 const { BrowserEngine } = require('../engine');
 
 const results = [];
@@ -134,6 +140,32 @@ async function main() {
     engine.running.get('p1').stopping = false;
   });
 
+  check('an in-flight start holds a slot before the child process exists', () => {
+    // Batch-starting N environments bound to one capped proxy: none of the siblings is in
+    // `this.running` yet, so a check that only counted running windows would observe the proxy as
+    // unused for every one of them and let the whole batch through.
+    engine.profiles.set('p10', proxyProfile('p10', { proxyId: shared.id, raw: shared.raw }));
+    engine.starting.set('p10', Promise.resolve());
+    const usage = engine.proxyConcurrencyUsage(proxyProfile('p3', { proxyId: shared.id, raw: shared.raw }));
+    assert.ok(usage.running.some((entry) => entry.id === 'p10'), 'an in-flight start must be counted');
+    let error = null;
+    try {
+      engine.assertProxyConcurrencyAvailable(proxyProfile('p11', { proxyId: shared.id, raw: shared.raw }));
+    } catch (err) { error = err; }
+    assert.ok(error && error.code === 'ERR_PROXY_MAX_CONCURRENCY', 'a concurrent batch must not slip past the cap');
+    engine.starting.delete('p10');
+    engine.profiles.delete('p10');
+  });
+
+  check('the starting profile is never counted against itself', () => {
+    engine.profiles.set('p12', proxyProfile('p12', { proxyId: shared.id, raw: shared.raw }));
+    engine.starting.set('p12', Promise.resolve());
+    const usage = engine.proxyConcurrencyUsage(proxyProfile('p12', { proxyId: shared.id, raw: shared.raw }));
+    assert.strictEqual(usage.running.filter((entry) => entry.id === 'p12').length, 0, 'the caller is excluded');
+    engine.starting.delete('p12');
+    engine.profiles.delete('p12');
+  });
+
   // --- enforcement ---
   check('a start under the cap is allowed', () => {
     engine.assertProxyConcurrencyAvailable(proxyProfile('p3', { proxyId: shared.id, raw: shared.raw }));
@@ -173,6 +205,156 @@ async function main() {
     assert.ok(guarded > resolved, 'the cap must be checked after the stored proxy is resolved');
     assert.ok(lock < 0 || guarded < lock, 'the cap must be checked before the profile lock is taken');
     return 'cap is asserted before the lock, data directory and proxy bridge';
+  });
+
+  // --- profile assignment accounting & capacity enforcement (Issue #25) ---
+  const idleProxy = await store.create({ name: '空闲代理', protocol: 'socks5', host: '10.0.0.5', port: 1080, raw: 'socks5://10.0.0.5:1080', maxConcurrency: 3 });
+  const cappedProxy = await store.create({ name: '并发上限2', protocol: 'socks5', host: '10.0.0.6', port: 1080, raw: 'socks5://10.0.0.6:1080', maxConcurrency: 2 });
+  const unlimitedProxy = await store.create({ name: '不限环境', protocol: 'socks5', host: '10.0.0.7', port: 1080, raw: 'socks5://10.0.0.7:1080', maxConcurrency: 0 });
+  const legacyProxy = { id: 'legacy-node', name: '旧节点无字段', protocol: 'socks5', host: '10.0.0.8', port: 1080, raw: 'socks5://10.0.0.8:1080' };
+
+  const testProfiles = [
+    { id: 'env-1', name: '环境 Alpha', proxyId: cappedProxy.id },
+    { id: 'env-2', name: '环境 Beta', proxyMeta: { proxy_id: cappedProxy.id } },
+    { id: 'env-3', name: '环境 Gamma', proxy: 'socks5://10.0.0.8:1080' },
+    { id: 'env-direct', name: '直连环境', networkMode: 'direct', proxyId: cappedProxy.id },
+  ];
+
+  check('summarizeProxyUsage correctly attributes bound profiles and identifies idle proxies', () => {
+    const summary = summarizeProxyUsage([cappedProxy, idleProxy, unlimitedProxy, legacyProxy], testProfiles);
+    assert.strictEqual(summary.length, 4);
+
+    const cappedSum = summary.byId.get(cappedProxy.id);
+    assert.strictEqual(cappedSum.count, 2);
+    assert.strictEqual(cappedSum.limit, 2);
+    assert.strictEqual(cappedSum.isFull, true);
+    assert.strictEqual(cappedSum.isOverLimit, false);
+    assert.strictEqual(cappedSum.isIdle, false);
+    assert.strictEqual(cappedSum.available, 0);
+    assert.deepStrictEqual(cappedSum.profiles.map((p) => p.id), ['env-1', 'env-2']);
+    assert.strictEqual(cappedSum.profiles[0].name, '环境 Alpha');
+
+    const idleSum = summary.byId.get(idleProxy.id);
+    assert.strictEqual(idleSum.count, 0);
+    assert.strictEqual(idleSum.limit, 3);
+    assert.strictEqual(idleSum.isIdle, true);
+    assert.strictEqual(idleSum.available, 3);
+    assert.strictEqual(idleSum.profiles.length, 0);
+
+    const legacySum = summary.byId.get(legacyProxy.id);
+    assert.strictEqual(legacySum.count, 1);
+    assert.strictEqual(legacySum.limit, 0);
+    assert.strictEqual(legacySum.isOverLimit, false);
+    assert.strictEqual(legacySum.available, null);
+
+    assert.strictEqual(summary.idle.length, 2, 'idle getter filters accurately');
+    assert.strictEqual(summary.inUse.length, 2, 'inUse getter filters accurately');
+  });
+
+  check('summarizeProxyUsage detects over-limit status when profiles exceed cap', () => {
+    const overflowProfiles = [
+      ...testProfiles,
+      { id: 'env-overflow', name: '溢出环境', proxyId: cappedProxy.id },
+    ];
+    const summary = summarizeProxyUsage([cappedProxy], overflowProfiles);
+    const item = summary[0];
+    assert.strictEqual(item.count, 3);
+    assert.strictEqual(item.limit, 2);
+    assert.strictEqual(item.isOverLimit, true);
+    assert.strictEqual(item.overLimit, true);
+    assert.strictEqual(item.isFull, true);
+    assert.strictEqual(summary.overLimit.length, 1);
+  });
+
+  check('summarizeProxyUsage handles missing maxConcurrency as 0 (no limit)', () => {
+    const summary = summarizeProxyUsage([legacyProxy], testProfiles);
+    assert.strictEqual(summary[0].limit, 0);
+    assert.strictEqual(summary[0].maxConcurrency, 0);
+    assert.strictEqual(summary[0].isOverLimit, false);
+    assert.strictEqual(summary[0].isFull, false);
+  });
+
+  check('store.summarizeUsage prototype method works with active store data', () => {
+    const storeSummary = store.summarizeUsage(testProfiles);
+    assert.ok(Array.isArray(storeSummary));
+    assert.ok(storeSummary.byId instanceof Map);
+  });
+
+  check('canAssignProxy allows assignment when proxy is uncapped (0) or legacy', () => {
+    const checkUnlimited = canAssignProxy(unlimitedProxy, testProfiles, 'new-env');
+    assert.strictEqual(checkUnlimited.ok, true);
+    assert.strictEqual(checkUnlimited.reason, null);
+
+    const checkLegacy = canAssignProxy(legacyProxy, testProfiles, 'new-env');
+    assert.strictEqual(checkLegacy.ok, true);
+    assert.strictEqual(checkLegacy.reason, null);
+  });
+
+  check('canAssignProxy allows assignment when below cap', () => {
+    const checkIdle = canAssignProxy(idleProxy, testProfiles, 'new-env');
+    assert.strictEqual(checkIdle.ok, true);
+    assert.strictEqual(checkIdle.count, 0);
+    assert.strictEqual(checkIdle.limit, 3);
+  });
+
+  check('canAssignProxy rejects new profile assignment when cap is reached', () => {
+    const checkCapped = canAssignProxy(cappedProxy, testProfiles, 'new-env');
+    assert.strictEqual(checkCapped.ok, false);
+    assert.strictEqual(checkCapped.code, 'ERR_PROXY_MAX_CONCURRENCY');
+    assert.strictEqual(checkCapped.count, 2);
+    assert.strictEqual(checkCapped.limit, 2);
+    assert.ok(checkCapped.reason.includes('并发上限2'), 'reason must contain proxy name');
+    assert.ok(checkCapped.reason.includes('2/2'), 'reason must contain count/limit');
+    assert.ok(checkCapped.reason.includes('环境 Alpha') || checkCapped.reason.includes('环境 Beta'), 'reason must name occupying profiles');
+  });
+
+  check('assertProxyAssignmentAvailable throws actionable error with details when capped', () => {
+    let thrown = null;
+    try {
+      assertProxyAssignmentAvailable(cappedProxy, testProfiles, 'new-env');
+    } catch (err) {
+      thrown = err;
+    }
+    assert.ok(thrown, 'must throw when capped');
+    assert.strictEqual(thrown.code, 'ERR_PROXY_MAX_CONCURRENCY');
+    assert.strictEqual(thrown.limit, 2);
+    assert.strictEqual(thrown.count, 2);
+    assert.ok(thrown.message.includes('已达并发上限（2/2）'));
+  });
+
+  check('saving an existing profile assigned to a capped proxy does not block itself', () => {
+    // env-1 already holds a slot on cappedProxy. Saving env-1 should not be rejected
+    const updateResult = canAssignProxy(cappedProxy, testProfiles, 'env-1');
+    assert.strictEqual(updateResult.ok, true, 'updating own profile must be permitted');
+    assert.strictEqual(updateResult.count, 1, 'own slot should be excluded during check');
+    assert.doesNotThrow(() => assertProxyAssignmentAvailable(cappedProxy, testProfiles, 'env-1'));
+  });
+
+  check('switching another profile to a full proxy is rejected', () => {
+    // env-3 is currently on legacyProxy. Switching to cappedProxy must be rejected
+    const switchResult = canAssignProxy(cappedProxy, testProfiles, 'env-3');
+    assert.strictEqual(switchResult.ok, false, 'switching to full proxy must be rejected');
+    assert.strictEqual(switchResult.code, 'ERR_PROXY_MAX_CONCURRENCY');
+    assert.throws(() => assertProxyAssignmentAvailable(cappedProxy, testProfiles, 'env-3'), (err) => {
+      return err.code === 'ERR_PROXY_MAX_CONCURRENCY';
+    });
+  });
+
+  check('store.canAssign and store.assertAssignmentAvailable resolve by proxy ID', () => {
+    assert.strictEqual(store.canAssign(cappedProxy.id, testProfiles, 'env-1').ok, true);
+    assert.strictEqual(store.canAssign(cappedProxy.id, testProfiles, 'new-env').ok, false);
+    assert.throws(() => store.assertAssignmentAvailable(cappedProxy.id, testProfiles, 'new-env'), (err) => {
+      return err.code === 'ERR_PROXY_MAX_CONCURRENCY';
+    });
+  });
+
+  check('profileMatchesProxy correctly discriminates direct, ID-linked, and raw endpoints', () => {
+    const dummyProxy = { id: 'd-1', raw: 'socks5://192.168.1.1:1080' };
+    assert.strictEqual(profileMatchesProxy({ id: '1', proxyId: 'd-1' }, dummyProxy), true);
+    assert.strictEqual(profileMatchesProxy({ id: '2', proxyMeta: { proxy_library_id: 'd-1' } }, dummyProxy), true);
+    assert.strictEqual(profileMatchesProxy({ id: '3', proxy: 'socks5://192.168.1.1:1080' }, dummyProxy), true);
+    assert.strictEqual(profileMatchesProxy({ id: '4', networkMode: 'direct', proxyId: 'd-1' }, dummyProxy), false);
+    assert.strictEqual(profileMatchesProxy({ id: '5', proxyId: 'other', proxy: 'socks5://192.168.1.1:1080' }, dummyProxy), false);
   });
 
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
