@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.22'
+        description: 'Release tag to create, for example v1.0.23'
         required: true
-        default: 'v1.0.22'
+        default: 'v1.0.23'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,21 +42,17 @@ env:
 
     ### 中文
 
-    - **版本同步与规范**：统一更新版本为 **v1.0.22**，严格同步应用界面显示、npm 配置、Windows 可执行文件元数据与项目文档。
-    - **网络与代理防护**：修复代理加载配置，杜绝特定场景下静默回退直连泄漏真实 IP；规范 Client Hints 报头装配顺序以对齐 Chromium 原生网络栈。
-    - **内核与自动化防护**：清理命令行自动化调试开关（`enable-automation`），保持 `navigator.webdriver` 原生状态；对齐启动配置模板 User-Agent 与真实内核版本（148.0.7778.165）。
-    - **作用域与跨域隔离**：完善 Web Worker 嵌套 auto-attach 注入时序，确保 Worker 内部 OffscreenCanvas 与主页面指纹严格一致；优化跨 Realm 原型方法与错误对象一致性。
-    - **显卡与设备画像细化**：细化 macOS WebGL 预设池，按 Intel 与 Apple Silicon 架构分别对齐显卡型号与 Client Hints；规范多平台设备参数。
-    - **界面与图标优化**：优化操作栏按钮与浏览器引擎图标矢量渲染，防止界面图标裁切与样式缺失。
+    - **版本：** **v1.0.23** —— 应用内显示、npm 版本、Windows 可执行文件元数据与文档全部对齐。
+    - **指纹防护：** 修复 `document.fonts.check()` 与 ClientRects 两处可被页面识别的差异（前者对非画像字体族一律返回 false，后者的噪声层实际完全未生效）。
+    - **代理与网络：** 修复代理串未被识别时静默回落系统路由造成真实 IP 泄漏；SOCKS5 下启动页 DNS 泄露检测不再必然误报；新增单代理并发窗口上限与使用情况。
+    - **稳定性：** 修复字体响应改写失败导致请求永久挂起、网页加载后无响应的问题。
 
     ### English
 
-    - **Version Alignment**: Formally updated to **v1.0.22**, synchronized across UI display, npm packages, Windows PE metadata, and documentation.
-    - **Network & Proxy Hardening**: Fixed proxy launcher configuration to prevent fallback direct connections; restored canonical Chromium wire order for Client Hints headers.
-    - **Kernel & Automation Hardening**: Removed automation flags to maintain native `navigator.webdriver` behavior; aligned kernel template User-Agent with the active kernel version (148.0.7778.165).
-    - **Worker & Cross-Realm Isolation**: Fixed nested auto-attach timing for Web Workers, ensuring OffscreenCanvas WebGL strictly matches main frame persona GPU; improved cross-realm prototype consistency.
-    - **GPU Persona Refinement**: Separated macOS WebGL presets by CPU architecture (Intel vs Apple Silicon) to prevent cross-architecture GPU contradictions.
-    - **UI & Icon Rendering**: Refined action bar and engine icon SVG rendering to eliminate clipping and display glitches.
+    - **Version:** **v1.0.23** - in-app display, npm metadata, Windows executable metadata and docs are aligned.
+    - **Fingerprint hardening:** fixed two page-detectable differences: `document.fonts.check()` and the ClientRects noise layer (which was silently inert).
+    - **Proxy & network:** fixed a silent fallback to the system route that leaked the real IP; the SOCKS5 DNS-leak check no longer always false-positives; added a per-proxy concurrency cap and usage display.
+    - **Stability:** fixed a stalled font-response rewrite that left pages unresponsive after load.
 
     ### 下载 / Downloads
 
