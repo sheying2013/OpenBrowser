@@ -15,8 +15,9 @@ async function main() {
 
   assert.throws(() => cloud.webDavTarget({ url: 'http://example.com/dav', dir: 'OpenBrowser' }));
   assert.throws(() => cloud.webDavTarget({ url: 'https://example.com/dav', dir: '../outside' }));
-  assert.ok(cloud.webDavTarget({ url: 'http://127.0.0.1:9000/dav', dir: 'OpenBrowser' }).target.startsWith('http://127.0.0.1:9000/'));
-  console.log('  PASS  WebDAV requires HTTPS except loopback');
+  assert.throws(() => cloud.webDavTarget({ url: 'http://127.0.0.1:9000/dav', dir: 'OpenBrowser' }));
+  assert.ok(cloud.webDavTarget({ url: 'http://127.0.0.1:9000/dav', dir: 'OpenBrowser', allowInsecureLocalhost: true }).target.startsWith('http://127.0.0.1:9000/'));
+  console.log('  PASS  WebDAV requires HTTPS except opt-in loopback');
 
   assert.throws(() => cloud.validatedGitHubConfig({ owner: '../x', repo: 'repo', token: 't' }, cloud.REMOTE_NAME));
   assert.throws(() => cloud.validatedGitHubConfig({ owner: 'owner', repo: 'repo', token: 't', branch: '../main' }, cloud.REMOTE_NAME));

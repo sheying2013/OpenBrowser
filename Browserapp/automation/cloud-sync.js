@@ -524,8 +524,9 @@ function webDavTarget(config, remoteName = REMOTE_NAME) {
   let parsed;
   try { parsed = new URL(String(config.url || '')); } catch (_) { throw new Error('请填写有效的 WebDAV 地址'); }
   const loopback = ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname.toLowerCase());
-  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
-    throw new Error('WebDAV 必须使用 HTTPS；仅本机回环地址允许 HTTP');
+  const allowLoopbackHttp = loopback && config.allowInsecureLocalhost === true;
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && allowLoopbackHttp)) {
+    throw new Error('WebDAV 必须使用 HTTPS；本机回环地址需显式设置 allowInsecureLocalhost 才允许 HTTP');
   }
   if (parsed.username || parsed.password) throw new Error('WebDAV 凭据必须使用独立账号字段');
   if (parsed.search) throw new Error('WebDAV 地址不能包含查询参数');
