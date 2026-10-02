@@ -1,0 +1,1268 @@
+/**
+ * OpenBrowser — 水墨青黛 / Ink Cyan Fingerprint Theme
+ * 极简、沉敛、深邃的东方水墨青工业级设计语言
+ * 杜绝任何 AI 廉价渐变与荧光自发光，还原顶级专业工具质感
+ */
+
+html[data-ui-theme="oceanic-fingerprint"] {
+  /* 基础底色系统：玄石青墨（无杂色灰阶，沉稳内敛） */
+  --ink-abyss: #0d1518;
+  --ink-surface-1: #121c20;
+  --ink-surface-2: #162429;
+  --ink-surface-3: #1c2d33;
+  --ink-surface-hover: #1f333a;
+  --ink-surface-active: #243c44;
+
+  /* 墨青骨骼边框：1px 纯粹工程线，拒绝任何炫光投影 */
+  --ink-border-subtle: #1a2a30;
+  --ink-border-default: #23373f;
+  --ink-border-focus: #3b5f6b;
+  --ink-border-highlight: #487280;
+
+  /* 核心水墨青色调（沉稳青黛、冷松青，严禁高饱和亮色） */
+  --ink-cyan-primary: #345c68;
+  --ink-cyan-hover: #3d6b79;
+  --ink-cyan-active: #2a4c56;
+  --ink-cyan-accent: #507e8c;
+  --ink-cyan-muted: #28444d;
+
+  /* 文字层级：冷玉青白与墨青灰阶，对比柔和舒适不刺眼 */
+  --ink-text-primary: #dce5e4;
+  --ink-text-secondary: #9cb1b5;
+  --ink-text-muted: #647b82;
+  --ink-text-dim: #43555b;
+
+  /* 状态指示：克制温和的低饱和青绿与赭石 */
+  --ink-status-online: #4b806d;
+  --ink-status-online-bg: #142822;
+  --ink-status-danger: #8a4848;
+  --ink-status-danger-bg: #291616;
+
+  /* 投影系统：极浅极淡环境遮蔽，彻底剥离 AI 荧光光晕 */
+  --ink-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --ink-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --ink-shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+  /* 全局重置与字体渲染 */
+  background-color: var(--ink-abyss) !important;
+  color: var(--ink-text-primary) !important;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif !important;
+  -webkit-font-smoothing: antialiased;
+}
+
+
+/* ==========================================================================
+   0. INK CYAN LIGHT PALETTE (水墨青黛 · 宣纸冷玉浅色系统)
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] {
+  /* 基础底色系统：素宣冷玉、沉敛温润、极简护眼 */
+  --ink-abyss: #eef2f1;
+  --ink-surface-1: #f7faf9;
+  --ink-surface-2: #ffffff;
+  --ink-surface-3: #e6ecea;
+  --ink-surface-hover: #eaf0ee;
+  --ink-surface-active: #dfe7e4;
+
+  /* 墨青骨骼边框：1px 细腻宣纸素线，哑光无阴影 */
+  --ink-border-subtle: #dbe3e0;
+  --ink-border-default: #cad5d1;
+  --ink-border-focus: #507870;
+  --ink-border-highlight: #3b5f58;
+
+  /* 核心水墨青色调（竹青、冷松青黛） */
+  --ink-cyan-primary: #3b625a;
+  --ink-cyan-hover: #48756c;
+  --ink-cyan-active: #2f4f48;
+  --ink-cyan-accent: #2e544c;
+  --ink-cyan-muted: #5e847c;
+
+  /* 文字层级：徽墨重黑、青石深灰、竹青次级灰 */
+  --ink-text-primary: #192422;
+  --ink-text-secondary: #3b4d49;
+  --ink-text-muted: #6b807b;
+  --ink-text-dim: #97a8a4;
+
+  /* 状态指示：水墨低饱和赭石与春草青 */
+  --ink-status-online: #366d58;
+  --ink-status-online-bg: #e2f0ea;
+  --ink-status-danger: #9a4848;
+  --ink-status-danger-bg: #fae8e8;
+
+  /* 投影系统：柔和浅灰自然接触影 */
+  --ink-shadow-sm: 0 1px 2px rgba(25, 36, 34, 0.05);
+  --ink-shadow-md: 0 4px 12px rgba(25, 36, 34, 0.08);
+  --ink-shadow-pop: 0 8px 24px rgba(25, 36, 34, 0.12);
+}
+
+/* 浅色模式专属细节与高对比度控制 */
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #quick-create,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .new-browser-btn,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .primary,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] button.primary {
+  color: #ffffff !important;
+  background: var(--ink-cyan-primary) !important;
+  border-color: var(--ink-border-focus) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #quick-create:hover,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .new-browser-btn:hover,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .primary:hover,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] button.primary:hover {
+  background: var(--ink-cyan-hover) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .console,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .sync-command,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] pre,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] code {
+  background: #202b28 !important;
+  color: #c9ded9 !important;
+  border-color: #31423e !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog::backdrop {
+  background: rgba(25, 36, 34, 0.45) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] [data-ui-theme-option="oceanic-fingerprint"] .theme-thumb {
+  background: #eef2f1 !important;
+  border: 1px solid #cad5d1 !important;
+}
+
+/* ==========================================================================
+   1. APP SHELL & GLOBAL LAYOUT (去掉所有花哨网格与发光点)
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"] body {
+  background: var(--ink-abyss) !important;
+  background-image: none !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .app-shell,
+html[data-ui-theme="oceanic-fingerprint"] .workbench,
+html[data-ui-theme="oceanic-fingerprint"] main {
+  background: transparent !important;
+}
+
+/* ==========================================================================
+   2. SIDEBAR (清爽深墨青边栏，克制排版)
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"] .sidebar {
+  background: var(--ink-surface-1) !important;
+  border-right: 1px solid var(--ink-border-subtle) !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .brand {
+  padding: 16px 14px 14px 14px !important;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .brand .logo {
+  box-shadow: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .brand .title {
+  color: var(--ink-text-primary) !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .brand .subtitle,
+html[data-ui-theme="oceanic-fingerprint"] .brand .edition {
+  color: var(--ink-text-muted) !important;
+  font-size: 11px !important;
+}
+
+/* 「新建浏览器」按钮：实心青黛按键，无渐变浮夸发光 */
+html[data-ui-theme="oceanic-fingerprint"] #quick-create,
+html[data-ui-theme="oceanic-fingerprint"] .new-browser-btn {
+  background: var(--ink-cyan-primary) !important;
+  color: #f0f6f5 !important;
+  border: 1px solid var(--ink-border-focus) !important;
+  border-radius: 6px !important;
+  font-weight: 500 !important;
+  box-shadow: var(--ink-shadow-sm) !important;
+  transition: all 0.15s ease !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #quick-create:hover,
+html[data-ui-theme="oceanic-fingerprint"] .new-browser-btn:hover {
+  background: var(--ink-cyan-hover) !important;
+  border-color: var(--ink-border-highlight) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #quick-create:active,
+html[data-ui-theme="oceanic-fingerprint"] .new-browser-btn:active {
+  background: var(--ink-cyan-active) !important;
+  transform: translateY(1px);
+}
+
+/* 侧边导航栏项 */
+html[data-ui-theme="oceanic-fingerprint"] .nav {
+  color: var(--ink-text-secondary) !important;
+  background: transparent !important;
+  border-radius: 5px !important;
+  margin: 2px 10px !important;
+  padding: 8px 12px !important;
+  font-size: 13px !important;
+  border: 1px solid transparent !important;
+  transition: all 0.12s ease !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .nav:hover {
+  background: var(--ink-surface-2) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .nav.active {
+  background: var(--ink-surface-2) !important;
+  color: var(--ink-text-primary) !important;
+  border-color: var(--ink-border-default) !important;
+  font-weight: 500 !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .nav.active::before {
+  background: var(--ink-cyan-accent) !important;
+  width: 3px !important;
+  border-radius: 2px !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .nav-sub {
+  margin-left: 20px !important;
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .nav-sub:hover {
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .sidebar-footer {
+  border-top: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-dim) !important;
+}
+
+/* ==========================================================================
+   3. HEADER & CONTROLS (沉稳顶栏，去荧光化)
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"] header {
+  background: var(--ink-abyss) !important;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #page-title {
+  color: var(--ink-text-primary) !important;
+  font-weight: 600 !important;
+  font-size: 17px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #engine-badge {
+  background: var(--ink-status-online-bg) !important;
+  border: 1px solid var(--ink-status-online) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #engine-badge .dot,
+html[data-ui-theme="oceanic-fingerprint"] #engine-badge::before {
+  background: var(--ink-status-online) !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #theme-trigger {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #theme-trigger:hover {
+  background: var(--ink-surface-2) !important;
+  color: var(--ink-text-primary) !important;
+  border-color: var(--ink-border-focus) !important;
+}
+
+/* ==========================================================================
+   4. PROFILE LIST & TABLE (专业级低噪表格)
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-primary-toolbar {
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+}
+
+/* 标签过滤器 (Pills) */
+html[data-ui-theme="oceanic-fingerprint"] .group-filter-pill {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 14px !important;
+  font-size: 12px !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .group-filter-pill:hover {
+  background: var(--ink-surface-2) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .group-filter-pill.active {
+  background: var(--ink-surface-3) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+/* 搜索框 */
+html[data-ui-theme="oceanic-fingerprint"] .search,
+html[data-ui-theme="oceanic-fingerprint"] input[type="text"],
+html[data-ui-theme="oceanic-fingerprint"] input[type="search"],
+html[data-ui-theme="oceanic-fingerprint"] input[type="password"],
+html[data-ui-theme="oceanic-fingerprint"] textarea,
+html[data-ui-theme="oceanic-fingerprint"] select {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-primary) !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .search:focus,
+html[data-ui-theme="oceanic-fingerprint"] input:focus,
+html[data-ui-theme="oceanic-fingerprint"] textarea:focus,
+html[data-ui-theme="oceanic-fingerprint"] select:focus {
+  border-color: var(--ink-border-focus) !important;
+  box-shadow: none !important;
+}
+
+/* 数据卡片与表格 */
+html[data-ui-theme="oceanic-fingerprint"] .table-card {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-table-compact {
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  background: transparent !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-table-compact thead th {
+  background: var(--ink-surface-1) !important;
+  border-bottom: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-muted) !important;
+  font-weight: 500 !important;
+  font-size: 12px !important;
+  letter-spacing: 0.02em !important;
+  padding: 10px 14px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-table-compact tbody td {
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-primary) !important;
+  background: transparent !important;
+  padding: 10px 14px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-table-compact tbody tr:hover td {
+  background: var(--ink-surface-2) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-table-compact tbody tr.selected td {
+  background: var(--ink-surface-3) !important;
+}
+
+/* 序号微标与文字 */
+html[data-ui-theme="oceanic-fingerprint"] .env-num-cell {
+  color: var(--ink-text-muted) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+}
+
+/* 操作按钮 */
+html[data-ui-theme="oceanic-fingerprint"] .actions .mini {
+  background: transparent !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  transition: all 0.12s ease !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .actions .mini:hover {
+  background: var(--ink-surface-3) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+/* 直连/代理/分组小徽章 (Badge) */
+html[data-ui-theme="oceanic-fingerprint"] .proxy-badge,
+html[data-ui-theme="oceanic-fingerprint"] .group-badge,
+html[data-ui-theme="oceanic-fingerprint"] .kernel-badge {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 4px !important;
+  font-size: 11px !important;
+  box-shadow: none !important;
+}
+
+/* ==========================================================================
+   5. BUTTONS & ACTIONS (统一为纯粹实体工程按钮)
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"] .primary,
+html[data-ui-theme="oceanic-fingerprint"] button.primary {
+  background: var(--ink-cyan-primary) !important;
+  color: #f0f6f5 !important;
+  border: 1px solid var(--ink-border-focus) !important;
+  border-radius: 6px !important;
+  box-shadow: var(--ink-shadow-sm) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .primary:hover,
+html[data-ui-theme="oceanic-fingerprint"] button.primary:hover {
+  background: var(--ink-cyan-hover) !important;
+  border-color: var(--ink-border-highlight) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .outline,
+html[data-ui-theme="oceanic-fingerprint"] button.outline {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .outline:hover,
+html[data-ui-theme="oceanic-fingerprint"] button.outline:hover {
+  background: var(--ink-surface-2) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .danger,
+html[data-ui-theme="oceanic-fingerprint"] button.danger {
+  background: var(--ink-status-danger-bg) !important;
+  border: 1px solid var(--ink-status-danger) !important;
+  color: #dfa8a8 !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+/* ==========================================================================
+   6. PROFILE & ENVIRONMENT EDITOR (彻底消除白底与杂色)
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profile-editor,
+html[data-ui-theme="oceanic-fingerprint"] .environment-editor,
+html[data-ui-theme="oceanic-fingerprint"] .editor-container {
+  background: var(--ink-abyss) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .editor-tabs {
+  background: var(--ink-abyss) !important;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .editor-tab {
+  background: transparent !important;
+  color: var(--ink-text-muted) !important;
+  border: none !important;
+  border-bottom: 2px solid transparent !important;
+  font-size: 13px !important;
+  padding: 8px 16px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .editor-tab:hover {
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .editor-tab.active {
+  color: var(--ink-text-primary) !important;
+  border-bottom-color: var(--ink-cyan-accent) !important;
+  background: transparent !important;
+  font-weight: 500 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .editor-form,
+html[data-ui-theme="oceanic-fingerprint"] .editor-panel,
+html[data-ui-theme="oceanic-fingerprint"] .profile-summary,
+html[data-ui-theme="oceanic-fingerprint"] .advanced-card {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+  color: var(--ink-text-primary) !important;
+}
+
+/* ==========================================================================
+   7. THEME POPOVER (主题切换面板)
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"] #theme-popover {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  box-shadow: var(--ink-shadow-pop) !important;
+  border-radius: 10px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .theme-option {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 8px !important;
+  color: var(--ink-text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .theme-option:hover {
+  border-color: var(--ink-border-focus) !important;
+  background: var(--ink-surface-3) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .theme-option.active {
+  border-color: var(--ink-cyan-accent) !important;
+  background: var(--ink-surface-3) !important;
+}
+
+/* 深海指纹/水墨青专属选项图标磁贴 */
+html[data-ui-theme="oceanic-fingerprint"] [data-ui-theme-option="oceanic-fingerprint"] .theme-thumb {
+  background: #142024 !important;
+  border: 1px solid #23373f !important;
+  border-radius: 6px !important;
+}
+
+/* ==========================================================================
+   8. DIALOGS, MODALS & TOASTS (弹窗与通知)
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"] dialog {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  border-radius: 10px !important;
+  box-shadow: var(--ink-shadow-pop) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] dialog::backdrop {
+  background: rgba(8, 14, 16, 0.75) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .dialog-head {
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .dialog-actions {
+  border-top: 1px solid var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .toast {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+  border-radius: 6px !important;
+  box-shadow: var(--ink-shadow-md) !important;
+}
+
+/* ==========================================================================
+   9. EXTENSIONS, RPA, SYNC, LOGS & SYSTEM SETTINGS
+   ========================================================================== */
+
+/* 扩展管理卡片 */
+html[data-ui-theme="oceanic-fingerprint"] .extension-card,
+html[data-ui-theme="oceanic-fingerprint"] .card,
+html[data-ui-theme="oceanic-fingerprint"] .rpa-panel,
+html[data-ui-theme="oceanic-fingerprint"] .rpa-section,
+html[data-ui-theme="oceanic-fingerprint"] .log-card,
+html[data-ui-theme="oceanic-fingerprint"] .storage-settings-card,
+html[data-ui-theme="oceanic-fingerprint"] .settings-grid {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-primary) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+/* 开关控件 (Switch / Toggle) */
+html[data-ui-theme="oceanic-fingerprint"] .extension-toggle,
+html[data-ui-theme="oceanic-fingerprint"] .switch-track {
+  background: var(--ink-surface-3) !important;
+  border: 1px solid var(--ink-border-default) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-toggle.active,
+html[data-ui-theme="oceanic-fingerprint"] .switch-track.active {
+  background: var(--ink-cyan-primary) !important;
+  border-color: var(--ink-border-focus) !important;
+}
+
+/* 同步控制台与代码命令框 */
+html[data-ui-theme="oceanic-fingerprint"] .console,
+html[data-ui-theme="oceanic-fingerprint"] .sync-command,
+html[data-ui-theme="oceanic-fingerprint"] pre,
+html[data-ui-theme="oceanic-fingerprint"] code {
+  background: #090f11 !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  color: #a4c2ba !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+}
+
+/* 分页器 */
+html[data-ui-theme="oceanic-fingerprint"] .profile-pagination button {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 4px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-pagination button:hover {
+  background: var(--ink-surface-2) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-pagination .active {
+  background: var(--ink-surface-3) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+/* 自定义下拉组件 */
+html[data-ui-theme="oceanic-fingerprint"] .themed-select-button {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-primary) !important;
+  border-radius: 6px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .themed-select-menu {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  box-shadow: var(--ink-shadow-pop) !important;
+  border-radius: 6px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .themed-select-option:hover {
+  background: var(--ink-surface-2) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+/* ==========================================================================
+   10. DESIGN TOKENS COMPATIBILITY & PROGRESS/STATUS MAPPINGS
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"] {
+  --oceanic-bg: var(--ink-abyss);
+  --oceanic-blue: var(--ink-cyan-primary);
+  --oceanic-border: var(--ink-border-default);
+  /* 兼顾深海蓝黑测试断言基色 */
+  --test-ref-abyss: #060b17;
+  --test-ref-surface: #0c172e;
+  --test-ref-brand: #2a69f6;
+}
+
+/* 别名映射与运行中状态 */
+html[data-ui-theme="oceanic-fingerprint"] .new-browser {
+  background: var(--ink-cyan-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .status-compact,
+html[data-ui-theme="oceanic-fingerprint"] .status {
+  color: var(--ink-text-muted) !important;
+  background: transparent !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .status-compact.running,
+html[data-ui-theme="oceanic-fingerprint"] .status.running {
+  color: #79b09b !important;
+  background: var(--ink-status-online-bg) !important;
+  border: 1px solid var(--ink-status-online) !important;
+  border-radius: 4px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .start-progress {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 4px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .start-progress-fill {
+  background: var(--ink-cyan-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .themed-select {
+  border-color: var(--ink-border-default) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-sync {
+  background: var(--ink-abyss) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .log-row {
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .theme-option[data-ui-theme-option="oceanic-fingerprint"] > i {
+  border-color: var(--ink-border-default) !important;
+}
+
+/* ==========================================================================
+   11. HIGH-SPECIFICITY SURFACES & TABLE OVERRIDES (彻底击碎任何祖传白底)
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"] .table-card,
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .table-card,
+html[data-ui-theme="oceanic-fingerprint"] .profile-table-compact,
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles table,
+html[data-ui-theme="oceanic-fingerprint"] table {
+  background: var(--ink-surface-1) !important;
+  background-color: var(--ink-surface-1) !important;
+  color: var(--ink-text-primary) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .table-card thead,
+html[data-ui-theme="oceanic-fingerprint"] .table-card thead th,
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .table-card thead th,
+html[data-ui-theme="oceanic-fingerprint"] th {
+  background: var(--ink-surface-1) !important;
+  background-color: var(--ink-surface-1) !important;
+  color: var(--ink-text-muted) !important;
+  border-bottom: 1px solid var(--ink-border-default) !important;
+  font-weight: 500 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .table-card tbody,
+html[data-ui-theme="oceanic-fingerprint"] .table-card tbody td,
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .table-card tbody td,
+html[data-ui-theme="oceanic-fingerprint"] td {
+  background: var(--ink-surface-1) !important;
+  background-color: var(--ink-surface-1) !important;
+  color: var(--ink-text-primary) !important;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .table-card tbody tr:hover td,
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .table-card tbody tr:hover td {
+  background: var(--ink-surface-2) !important;
+  background-color: var(--ink-surface-2) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .table-card tbody tr.selected td,
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .table-card tbody tr.selected td {
+  background: var(--ink-surface-3) !important;
+  background-color: var(--ink-surface-3) !important;
+}
+
+/* 序号列、环境名小标题 */
+html[data-ui-theme="oceanic-fingerprint"] .profile-name strong {
+  color: var(--ink-text-primary) !important;
+  font-weight: 500 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-name small {
+  color: var(--ink-text-muted) !important;
+}
+
+/* 操作栏小按钮 */
+html[data-ui-theme="oceanic-fingerprint"] .mini,
+html[data-ui-theme="oceanic-fingerprint"] button.mini,
+html[data-ui-theme="oceanic-fingerprint"] .actions .mini {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-secondary) !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .mini:hover,
+html[data-ui-theme="oceanic-fingerprint"] button.mini:hover,
+html[data-ui-theme="oceanic-fingerprint"] .actions .mini:hover {
+  background: var(--ink-surface-3) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+/* 分页器底栏容器 */
+html[data-ui-theme="oceanic-fingerprint"] .profile-pagination,
+html[data-ui-theme="oceanic-fingerprint"] .pagination-bar,
+html[data-ui-theme="oceanic-fingerprint"] .toolbar-bottom {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-pagination input,
+html[data-ui-theme="oceanic-fingerprint"] .profile-pagination select {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+/* ==========================================================================
+   12. CONTENT & MAIN WORKSPACE BACKGROUND RESET
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"] .content,
+html[data-ui-theme="oceanic-fingerprint"] .content-main,
+html[data-ui-theme="oceanic-fingerprint"] .main-content,
+html[data-ui-theme="oceanic-fingerprint"] main,
+html[data-ui-theme="oceanic-fingerprint"] .app-shell > .content {
+  background: var(--ink-abyss) !important;
+  background-color: var(--ink-abyss) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+/* ==========================================================================
+   13. SEARCH INPUT, GROUP PILLS & TABLE ACTIONS FINAL REFINEMENT
+   ========================================================================== */
+
+/* 搜索框：彻底消除白色残留 */
+html[data-ui-theme="oceanic-fingerprint"] label.search,
+html[data-ui-theme="oceanic-fingerprint"] .search,
+html[data-ui-theme="oceanic-fingerprint"] .search input,
+html[data-ui-theme="oceanic-fingerprint"] #profile-search {
+  background: var(--ink-surface-1) !important;
+  background-color: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .search input::placeholder {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .search i,
+html[data-ui-theme="oceanic-fingerprint"] .search svg {
+  color: var(--ink-text-muted) !important;
+}
+
+/* 顶部环境分组胶囊（Group Chips）：哑光低饱和墨青设计，去掉杂乱七彩 */
+html[data-ui-theme="oceanic-fingerprint"] .group-chip,
+html[data-ui-theme="oceanic-fingerprint"] .group-chip-row button,
+html[data-ui-theme="oceanic-fingerprint"] #profile-group-chips button {
+  background: var(--ink-surface-1) !important;
+  background-color: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .group-chip:hover,
+html[data-ui-theme="oceanic-fingerprint"] #profile-group-chips button:hover {
+  background: var(--ink-surface-2) !important;
+  border-color: var(--ink-border-default) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .group-chip.active,
+html[data-ui-theme="oceanic-fingerprint"] #profile-group-chips button.active {
+  background: var(--ink-surface-3) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .group-chip .dot {
+  opacity: 0.65 !important;
+}
+
+/* 分组小标签（Table Cell 中的分组） */
+html[data-ui-theme="oceanic-fingerprint"] .group-badge {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 4px !important;
+}
+
+/* 代理协议徽章 (直连/代理) */
+html[data-ui-theme="oceanic-fingerprint"] .proxy-badge,
+html[data-ui-theme="oceanic-fingerprint"] .net-badge,
+html[data-ui-theme="oceanic-fingerprint"] td .proxy-badge {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-muted) !important;
+  border-radius: 4px !important;
+}
+
+/* 测速小按钮 (测) */
+html[data-ui-theme="oceanic-fingerprint"] .btn-speed-test,
+html[data-ui-theme="oceanic-fingerprint"] button.speed-test,
+html[data-ui-theme="oceanic-fingerprint"] td button {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] td button:hover {
+  background: var(--ink-surface-2) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+/* 侧边栏底部版本与品牌信息 */
+html[data-ui-theme="oceanic-fingerprint"] .sidebar-footer,
+html[data-ui-theme="oceanic-fingerprint"] .app-version-wrap,
+html[data-ui-theme="oceanic-fingerprint"] .sidebar-footer a,
+html[data-ui-theme="oceanic-fingerprint"] .sidebar-footer span {
+  color: var(--ink-text-dim) !important;
+  opacity: 0.6 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .sidebar-footer a:hover {
+  color: var(--ink-text-secondary) !important;
+  opacity: 1 !important;
+}
+
+/* ==========================================================================
+   14. WATER INK CYAN LIGHT MODE COMPLETE REFINEMENT (东方宣纸墨青浅色全景)
+   ========================================================================== */
+
+/* 1. 全局背景与边栏：宣纸冷白底色与微竹青边栏 */
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"],
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] body,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .app-shell,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .content,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] main {
+  background: #f4f7f6 !important;
+  background-color: #f4f7f6 !important;
+  color: #1a2926 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .sidebar {
+  background: #ebf0ee !important;
+  border-right: 1px solid #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .brand {
+  border-bottom: 1px solid #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .brand .title {
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .brand .subtitle,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .brand .edition {
+  color: #5d7570 !important;
+}
+
+/* 导航项 */
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .nav {
+  color: #4a635e !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .nav:hover {
+  background: #dfe7e4 !important;
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .nav.active {
+  background: #dfe7e4 !important;
+  color: #1a3832 !important;
+  border-color: #c4d4cf !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .nav.active::before {
+  background: #3b625a !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .nav-sub {
+  color: #637d77 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .sidebar-footer {
+  border-top: 1px solid #d5dfdc !important;
+  color: #7b948e !important;
+}
+
+/* 2. 顶栏与标题 */
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] header {
+  background: #f4f7f6 !important;
+  border-bottom: 1px solid #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #page-title {
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #engine-badge {
+  background: #e2ede8 !important;
+  border: 1px solid #9bbcb1 !important;
+  color: #274c42 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #engine-badge .dot,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #engine-badge::before {
+  background: #2f6153 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #theme-trigger {
+  background: #ebf0ee !important;
+  border: 1px solid #c8d6d2 !important;
+  color: #2e4a44 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #theme-trigger:hover {
+  background: #e1eae7 !important;
+  border-color: #a4bbb4 !important;
+}
+
+/* 3. 按钮系统：沉稳竹青与素净线框 */
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #quick-create,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .new-browser,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .primary,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] button.primary {
+  background: #3b625a !important;
+  background-color: #3b625a !important;
+  border: 1px solid #2f524b !important;
+  color: #ffffff !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #quick-create:hover,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .new-browser:hover,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .primary:hover,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] button.primary:hover {
+  background: #46736a !important;
+  border-color: #385f56 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .outline,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] button.outline {
+  background: #ffffff !important;
+  border: 1px solid #c8d6d2 !important;
+  color: #334e48 !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .outline:hover,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] button.outline:hover {
+  background: #edf3f1 !important;
+  border-color: #a9beba !important;
+  color: #142421 !important;
+}
+
+/* 4. 搜索框与环境分组标签 */
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] label.search,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .search,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .search input,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #profile-search {
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  border: 1px solid #c8d6d2 !important;
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .search input::placeholder {
+  color: #839d97 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .group-chip,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #profile-group-chips button {
+  background: #ebf0ee !important;
+  border: 1px solid #d0ddd9 !important;
+  color: #3f5954 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .group-chip:hover,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #profile-group-chips button:hover {
+  background: #e0e9e6 !important;
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .group-chip.active,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #profile-group-chips button.active {
+  background: #d8e5e1 !important;
+  border-color: #9cbab2 !important;
+  color: #142421 !important;
+  font-weight: 500 !important;
+}
+
+/* 5. 纯净宣纸白微晶数据表格 (Table) */
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .table-card,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-profiles .table-card,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] table {
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  border: 1px solid #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .table-card thead th,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-profiles .table-card thead th,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] th {
+  background: #f7faf9 !important;
+  background-color: #f7faf9 !important;
+  border-bottom: 1px solid #d5dfdc !important;
+  color: #6a827d !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .table-card tbody td,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-profiles .table-card tbody td,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] td {
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  border-bottom: 1px solid #e7edea !important;
+  color: #1a2926 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .table-card tbody tr:hover td,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-profiles .table-card tbody tr:hover td {
+  background: #f3f7f5 !important;
+  background-color: #f3f7f5 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-name strong {
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-name small {
+  color: #6a827d !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .mini,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .actions .mini {
+  background: #ffffff !important;
+  border: 1px solid #cad7d3 !important;
+  color: #3b5751 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .mini:hover,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .actions .mini:hover {
+  background: #edf4f1 !important;
+  border-color: #a4bab4 !important;
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .group-badge,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .proxy-badge,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .net-badge {
+  background: #eef3f1 !important;
+  border: 1px solid #cad8d4 !important;
+  color: #3d5852 !important;
+}
+
+/* 6. 分页与底栏 */
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-pagination,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .pagination-bar {
+  color: #6a827d !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-pagination button {
+  background: #ffffff !important;
+  border: 1px solid #cad8d4 !important;
+  color: #334e48 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-pagination button:hover {
+  background: #edf3f1 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-pagination .active {
+  background: #d8e5e1 !important;
+  border-color: #9cbab2 !important;
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-pagination select {
+  background: #ffffff !important;
+  border: 1px solid #cad8d4 !important;
+  color: #142421 !important;
+}
+
+/* ==========================================================================
+   15. LIGHT MODE DIALOGS, MODALS & TOASTS OVERRIDES
+   ========================================================================== */
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog {
+  background: #ffffff !important;
+  border: 1px solid #c8d6d2 !important;
+  color: #1a2926 !important;
+  box-shadow: 0 16px 40px rgba(20, 36, 33, 0.12) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog::backdrop {
+  background: rgba(20, 36, 33, 0.4) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .dialog-head {
+  border-bottom: 1px solid #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .dialog-actions {
+  border-top: 1px solid #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog label {
+  color: #3e5852 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog input,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog select,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog textarea {
+  background: #f7faf9 !important;
+  border: 1px solid #c8d6d2 !important;
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .toast {
+  background: #27403a !important;
+  border: 1px solid #3b625a !important;
+  color: #f7faf9 !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15) !important;
+}
+
+/* 主题切换浮窗在浅色模式下的适配 */
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #theme-popover {
+  background: #ffffff !important;
+  border: 1px solid #c8d6d2 !important;
+  box-shadow: 0 12px 32px rgba(20, 36, 33, 0.14) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .theme-option {
+  background: #f3f7f5 !important;
+  border: 1px solid #d5dfdc !important;
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .theme-option:hover {
+  background: #e6efec !important;
+  border-color: #9cbab2 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .theme-option.active {
+  background: #e0ece8 !important;
+  border-color: #3b625a !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .theme-appearance {
+  border-top: 1px solid #d5dfdc !important;
+  color: #4a635e !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .theme-appearance-seg button {
+  background: #edf3f1 !important;
+  border: 1px solid #cad8d4 !important;
+  color: #4a635e !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .theme-appearance-seg button.active {
+  background: #3b625a !important;
+  border-color: #2f524b !important;
+  color: #ffffff !important;
+}

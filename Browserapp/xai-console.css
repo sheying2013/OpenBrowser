@@ -1518,8 +1518,10 @@ html[data-ui-theme="merge-gateway"] .sidebar {
 }
 
 html[data-ui-theme="merge-gateway"] .brand .logo {
-  overflow: hidden;
-  box-shadow: inset 0 0 0 1px var(--xai-border);
+  overflow: visible !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 html[data-ui-theme="merge-gateway"] .nav:hover { color: var(--xai-ink-console); background: rgb(255 255 255 / 68%); }
 html[data-ui-theme="merge-gateway"] .nav.active {

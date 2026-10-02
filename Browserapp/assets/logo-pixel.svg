@@ -1,22 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 64 64" shape-rendering="crispEdges">
-  <rect width="64" height="64" fill="#111820"/>
-  <rect x="4" y="4" width="56" height="56" fill="#05090d"/>
-  <rect x="8" y="8" width="48" height="44" fill="#e8f1e8"/>
-  <rect x="12" y="12" width="40" height="32" fill="#0c1c24"/>
-  <rect x="12" y="12" width="40" height="6" fill="#19c9d4"/>
-  <rect x="16" y="14" width="2" height="2" fill="#f04f4f"/>
-  <rect x="20" y="14" width="2" height="2" fill="#f6c453"/>
-  <rect x="24" y="14" width="2" height="2" fill="#50e878"/>
-  <rect x="16" y="22" width="20" height="3" fill="#e8f1e8"/>
-  <rect x="16" y="28" width="12" height="3" fill="#50e878"/>
-  <rect x="16" y="34" width="8" height="3" fill="#f6c453"/>
-  <rect x="40" y="24" width="4" height="4" fill="#19c9d4"/>
-  <rect x="44" y="30" width="4" height="4" fill="#50e878"/>
-  <rect x="36" y="34" width="4" height="4" fill="#f6c453"/>
-  <rect x="38" y="27" width="2" height="9" fill="#70818a"/>
-  <rect x="40" y="32" width="6" height="2" fill="#70818a"/>
-  <rect x="26" y="52" width="12" height="4" fill="#e8f1e8"/>
-  <rect x="20" y="56" width="24" height="4" fill="#19c9d4"/>
-  <rect x="8" y="52" width="8" height="8" fill="#f04f4f"/>
-  <rect x="48" y="52" width="8" height="8" fill="#50e878"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="OpenBrowser">
+  <title>OpenBrowser</title>
+  <desc>Flat macOS-style brand mark: squircle plate, diagonal blue gradient, browser window.</desc>
+  <defs>
+    <linearGradient id="obPlate" gradientUnits="userSpaceOnUse" x1="100" y1="100" x2="924" y2="924">
+      <stop offset="0" stop-color="#6FAEFF"/>
+      <stop offset="1" stop-color="#1B44C4"/>
+    </linearGradient>
+    <linearGradient id="obGloss" gradientUnits="userSpaceOnUse" x1="0" y1="100" x2="0" y2="610.9">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.161" stop-color="#FFFFFF" stop-opacity="0.123"/>
+      <stop offset="0.322" stop-color="#FFFFFF" stop-opacity="0.089"/>
+      <stop offset="0.484" stop-color="#FFFFFF" stop-opacity="0.059"/>
+      <stop offset="0.645" stop-color="#FFFFFF" stop-opacity="0.034"/>
+      <stop offset="0.806" stop-color="#FFFFFF" stop-opacity="0.014"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Apple icon grid: 824px content box centred in a 1024px canvas, superellipse n=4.2 -->
+    <clipPath id="obSquircle">
+      <path d="M 512 100 C 897.22 100 924 126.78 924 512 C 924 897.22 897.22 924 512 924 C 126.78 924 100 897.22 100 512 C 100 126.78 126.78 100 512 100 Z"/>
+    </clipPath>
+    <filter id="obWindowShadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="9" stdDeviation="13" flood-color="#091E5C" flood-opacity="0.227"/>
+    </filter>
+  </defs>
+
+  <g clip-path="url(#obSquircle)">
+    <rect width="1024" height="1024" fill="url(#obPlate)"/>
+    <rect width="1024" height="1024" fill="url(#obGloss)"/>
+  </g>
+
+  <rect x="240.08" y="273.86" width="543.84" height="453.2" rx="47.86" fill="#FFFFFF" fill-opacity="0.992" filter="url(#obWindowShadow)"/>
+  <path d="M 240.08 371.3 L 240.08 321.72 A 47.86 47.86 0 0 1 287.94 273.86 L 736.06 273.86 A 47.86 47.86 0 0 1 783.92 321.72 L 783.92 371.3 Z" fill="#EBF0F9"/>
+  <circle cx="300.19" cy="322.58" r="20.95" fill="#FF5F57"/>
+  <circle cx="364.08" cy="322.58" r="20.95" fill="#FEBC2E"/>
+  <circle cx="427.98" cy="322.58" r="20.95" fill="#28C840"/>
+  <rect x="293.38" y="438.9" width="228.41" height="33.8" rx="16.9" fill="#2563EB"/>
+  <rect x="293.38" y="536.73" width="380.69" height="33.8" rx="16.9" fill="#CDD5E3"/>
+  <rect x="293.38" y="632.79" width="299.11" height="33.8" rx="16.9" fill="#CDD5E3"/>
 </svg>

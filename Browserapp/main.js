@@ -1506,6 +1506,8 @@ async function fetchChromeStoreIcon(storeId) {
 
 /** Theme chrome colors for fused title bar (shipping-app look). */
 const THEME_CHROME = {
+  'oceanic-fingerprint': { bg: '#080e1e', overlay: '#0d172e', symbol: '#e2ebf8' },
+  'oceanic-fingerprint-light': { bg: '#eaf0ee', overlay: '#f3f7f6', symbol: '#233833' },
   'merge-gateway': { bg: '#ffffff', overlay: '#ffffff', symbol: '#080808' },
   'pixel-workstation': { bg: '#0c0f13', overlay: '#161c20', symbol: '#d1e5d4' },
   'nes-light': { bg: '#c2b59c', overlay: '#d0c4aa', symbol: '#27231b' },
@@ -1517,6 +1519,7 @@ const THEME_CHROME = {
 
 function chromeForTheme(themeId, colorMode) {
   if (themeId === 'element-admin' && colorMode === 'dark') return THEME_CHROME['element-admin-dark'];
+  if (themeId === 'oceanic-fingerprint' && colorMode === 'light') return THEME_CHROME['oceanic-fingerprint-light'];
   return THEME_CHROME[themeId] || THEME_CHROME.default;
 }
 

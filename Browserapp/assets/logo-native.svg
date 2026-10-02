@@ -1,13 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
-  <rect width="128" height="128" rx="28" fill="#007AFF"/>
-  <rect x="22" y="28" width="84" height="72" rx="12" fill="white" fill-opacity="0.96"/>
-  <rect x="22" y="28" width="84" height="18" rx="12" fill="#E8E8ED"/>
-  <rect x="22" y="38" width="84" height="8" fill="#E8E8ED"/>
-  <circle cx="34" cy="37" r="3.2" fill="#FF5F57"/>
-  <circle cx="45" cy="37" r="3.2" fill="#FEBC2E"/>
-  <circle cx="56" cy="37" r="3.2" fill="#28C840"/>
-  <rect x="34" y="56" width="40" height="6" rx="3" fill="#007AFF" fill-opacity="0.9"/>
-  <rect x="34" y="68" width="56" height="5" rx="2.5" fill="#C7C7CC"/>
-  <rect x="34" y="78" width="48" height="5" rx="2.5" fill="#C7C7CC"/>
-  <rect x="34" y="88" width="28" height="5" rx="2.5" fill="#C7C7CC"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="OpenBrowser">
+  <title>OpenBrowser</title>
+  <desc>Flat macOS-style brand mark: squircle plate, diagonal blue gradient, browser window.</desc>
+  <defs>
+    <linearGradient id="obPlate" gradientUnits="userSpaceOnUse" x1="100" y1="100" x2="924" y2="924">
+      <stop offset="0" stop-color="#6FAEFF"/>
+      <stop offset="1" stop-color="#1B44C4"/>
+    </linearGradient>
+    <linearGradient id="obGloss" gradientUnits="userSpaceOnUse" x1="0" y1="100" x2="0" y2="610.9">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.161" stop-color="#FFFFFF" stop-opacity="0.123"/>
+      <stop offset="0.322" stop-color="#FFFFFF" stop-opacity="0.089"/>
+      <stop offset="0.484" stop-color="#FFFFFF" stop-opacity="0.059"/>
+      <stop offset="0.645" stop-color="#FFFFFF" stop-opacity="0.034"/>
+      <stop offset="0.806" stop-color="#FFFFFF" stop-opacity="0.014"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Apple icon grid: 824px content box centred in a 1024px canvas, superellipse n=4.2 -->
+    <clipPath id="obSquircle">
+      <path d="M 512 100 C 897.22 100 924 126.78 924 512 C 924 897.22 897.22 924 512 924 C 126.78 924 100 897.22 100 512 C 100 126.78 126.78 100 512 100 Z"/>
+    </clipPath>
+    <filter id="obWindowShadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="9" stdDeviation="13" flood-color="#091E5C" flood-opacity="0.227"/>
+    </filter>
+  </defs>
+
+  <g clip-path="url(#obSquircle)">
+    <rect width="1024" height="1024" fill="url(#obPlate)"/>
+    <rect width="1024" height="1024" fill="url(#obGloss)"/>
+  </g>
+
+  <rect x="240.08" y="273.86" width="543.84" height="453.2" rx="47.86" fill="#FFFFFF" fill-opacity="0.992" filter="url(#obWindowShadow)"/>
+  <path d="M 240.08 371.3 L 240.08 321.72 A 47.86 47.86 0 0 1 287.94 273.86 L 736.06 273.86 A 47.86 47.86 0 0 1 783.92 321.72 L 783.92 371.3 Z" fill="#EBF0F9"/>
+  <circle cx="300.19" cy="322.58" r="20.95" fill="#FF5F57"/>
+  <circle cx="364.08" cy="322.58" r="20.95" fill="#FEBC2E"/>
+  <circle cx="427.98" cy="322.58" r="20.95" fill="#28C840"/>
+  <rect x="293.38" y="438.9" width="228.41" height="33.8" rx="16.9" fill="#2563EB"/>
+  <rect x="293.38" y="536.73" width="380.69" height="33.8" rx="16.9" fill="#CDD5E3"/>
+  <rect x="293.38" y="632.79" width="299.11" height="33.8" rx="16.9" fill="#CDD5E3"/>
 </svg>

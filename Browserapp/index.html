@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="zh-CN" data-ui-theme="pixel-workstation">
+<html lang="zh-CN" data-ui-theme="oceanic-fingerprint" data-color-mode="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light">
   <title>OpenBrowser</title>
   <script src="i18n.js?v=20260720-aqua"></script>
-  <link rel="icon" type="image/png" href="assets/logo-pixel.png?v=20260720-pixel">
+  <link rel="icon" type="image/png" href="assets/logo-pixel.png?v=20261002-flat">
   <link rel="stylesheet" href="assets/fonts/pixelify-sans.css?v=20260720-ark">
   <link rel="stylesheet" href="styles.css?v=20260720-pixelfont">
   <link rel="stylesheet" href="themes.css?v=20260720-start-progress">
@@ -17,11 +17,12 @@
   <link rel="stylesheet" href="nes-light.css?v=20260720-kraft-desat33">
   <link rel="stylesheet" href="element-admin.css?v=20260720-start-progress">
   <link rel="stylesheet" href="xai-console.css?v=20260824-interaction-perf">
+  <link rel="stylesheet" href="oceanic-fingerprint.css?v=20261002-oceanic">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand"><div class="logo"><img src="assets/logo-pixel.png?v=20260720-pixel" alt="OpenBrowser"></div><div><strong>OpenBrowser</strong><small data-i18n="app.brand.sub">LOCAL WORKSPACE</small></div></div>
+      <div class="brand"><div class="logo"><img src="assets/logo-pixel.png?v=20261002-flat" alt="OpenBrowser"></div><div><strong>OpenBrowser</strong><small data-i18n="app.brand.sub">LOCAL WORKSPACE</small></div></div>
       <button class="new-browser" id="quick-create"><i data-lucide="plus" aria-hidden="true"></i><span data-i18n="nav.newBrowser">新建浏览器</span></button>
       <nav>
         <button class="nav active" data-view="profiles"><i data-lucide="layers-3"></i><span data-i18n="nav.profiles">环境管理</span></button>
@@ -67,6 +68,7 @@
             <div class="theme-popover" id="theme-popover" hidden>
               <div class="theme-popover-head"><strong data-i18n="theme.title">界面皮肤</strong><span id="theme-current" data-i18n="theme.pixel.name">像素工作站</span></div>
               <div class="theme-grid" id="theme-options">
+                <button class="theme-option" type="button" data-ui-theme-option="oceanic-fingerprint" aria-pressed="false"><i></i><span><strong data-i18n="theme.oceanic">深海指纹</strong><small data-i18n="theme.oceanic.desc">防关联生物电光蓝</small></span></button>
                 <button class="theme-option" type="button" data-ui-theme-option="merge-gateway" aria-pressed="false"><i></i><span><strong data-i18n="theme.mergeGateway">Merge Gateway</strong><small data-i18n="theme.mergeGateway.desc">xAI Console</small></span></button>
                 <button class="theme-option active" type="button" data-ui-theme-option="pixel-workstation" aria-pressed="true"><i></i><span><strong data-i18n="theme.pixel">像素工作站</strong><small data-i18n="theme.pixel.desc">深色像素界面</small></span></button>
                 <button class="theme-option" type="button" data-ui-theme-option="nes-light" aria-pressed="false"><i></i><span><strong data-i18n="theme.nes">浅色像素风</strong><small data-i18n="theme.nes.desc">浅色像素界面</small></span></button>

@@ -34,93 +34,158 @@ function normalizeEnvNumber(value) {
 }
 
 /**
- * Exact vector redraw of logo-native.svg (browser chrome icon) via Pillow.
- * Avoids qlmanage padding which leaves a tiny glyph on a huge transparent canvas.
+/**
+ * Pillow renderer for the brand mark: macOS Big Sur+ flat style, supersampled.
+ *
+ * Geometry is expressed as a fraction of `size` (Apple's icon grid: an 824/1024 content box
+ * centred in the canvas) so 16px and 1024px share one shape. The window shadow is scaled the
+ * same way — absolute-pixel blur used to smear across small canvases and paint white squares
+ * around the 16px slot.
+ *
+ * Falls back to a flat rounded plate when numpy is missing; the caller contract is unchanged.
  */
-function renderNativeLogoPil(size, outPng) {
-  const script = `
+const BRAND_RENDER_PY = `
 import sys
 from pathlib import Path
-from PIL import Image, ImageDraw
-size, out = int(sys.argv[1]), sys.argv[2]
-img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-d = ImageDraw.Draw(img)
-s = size / 128.0
-def sc(v): return v * s
-def box(x,y,w,h): return [sc(x), sc(y), sc(x+w), sc(y+h)]
-rr = max(1, int(sc(28)))
-# rounded blue plate
-d.rounded_rectangle([0, 0, size-1, size-1], radius=rr, fill=(0, 122, 255, 255))
-# window body
-d.rounded_rectangle(box(22, 28, 84, 72), radius=max(1, int(sc(12))), fill=(255, 255, 255, 245))
-# title bar
-d.rounded_rectangle(box(22, 28, 84, 18), radius=max(1, int(sc(12))), fill=(232, 232, 237, 255))
-d.rectangle(box(22, 38, 84, 8), fill=(232, 232, 237, 255))
-# traffic lights
-for cx, col in ((34, (255, 95, 87, 255)), (45, (254, 188, 46, 255)), (56, (40, 200, 64, 255))):
-  r = max(1, sc(3.2))
-  d.ellipse([sc(cx)-r, sc(37)-r, sc(cx)+r, sc(37)+r], fill=col)
-# content lines
-d.rounded_rectangle(box(34, 56, 40, 6), radius=max(1, int(sc(3))), fill=(0, 122, 255, 230))
-d.rounded_rectangle(box(34, 68, 56, 5), radius=max(1, int(sc(2.5))), fill=(199, 199, 204, 255))
-d.rounded_rectangle(box(34, 78, 48, 5), radius=max(1, int(sc(2.5))), fill=(199, 199, 204, 255))
-d.rounded_rectangle(box(34, 88, 28, 5), radius=max(1, int(sc(2.5))), fill=(199, 199, 204, 255))
-Path(out).parent.mkdir(parents=True, exist_ok=True)
-img.save(out, format="PNG")
+from PIL import Image, ImageDraw, ImageFilter
+
+try:
+    import numpy as np
+except Exception:
+    np = None
+
+def render(size, out):
+    ss = 8 if size <= 32 else (4 if size <= 128 else 2)
+    W = size * ss
+    s = size / 1024.0
+    inset = 100.0 * s * ss
+    content = 824.0 * s * ss
+    cx = inset + content / 2.0
+
+    win_w = content * 0.660
+    win_h = content * 0.550
+    win_x = inset + (content - win_w) / 2.0
+    win_y = inset + (content - win_h) / 2.0 - content * 0.014
+    win_r = win_w * 0.088
+    bar_h = win_h * 0.215
+    blur_px = max(0.5, 13.0 * s * ss)
+    dy_px = 9.0 * s * ss
+
+    if np is None:
+        img = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        d.rounded_rectangle([0, 0, W - 1, W - 1], radius=max(1, int(round(content * 0.2237))),
+                            fill=(59, 123, 240, 255))
+    else:
+        Y, X = np.mgrid[0:W, 0:W].astype(np.float32)
+        nx = (X - cx) / (content / 2.0)
+        ny = (Y - cx) / (content / 2.0)
+        inside = (np.abs(nx) ** 4.2 + np.abs(ny) ** 4.2) <= 1.0
+
+        t = np.clip(nx * 0.5 + ny * 0.5 + 0.5, 0.0, 1.0) ** 0.95
+        c0 = np.array((111, 174, 255), dtype=np.float32)
+        c1 = np.array((27, 68, 196), dtype=np.float32)
+        rgb = c0[None, None, :] * (1 - t[..., None]) + c1[None, None, :] * t[..., None]
+
+        hy = np.clip((ny + 1.0) / 2.0, 0.0, 1.0)
+        a = (np.clip(1.0 - hy / 0.62, 0.0, 1.0) ** 1.5 * 0.16)[..., None]
+        rgb = rgb * (1 - a) + 255.0 * a
+
+        arr = np.zeros((W, W, 4), dtype=np.uint8)
+        arr[..., 0:3] = np.clip(rgb, 0, 255).astype(np.uint8)
+        arr[..., 3] = np.where(inside, 255, 0).astype(np.uint8)
+        img = Image.fromarray(arr, "RGBA")
+
+        sh = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+        ImageDraw.Draw(sh).rounded_rectangle(
+            [win_x, win_y + dy_px, win_x + win_w, win_y + win_h + dy_px],
+            radius=win_r, fill=(9, 30, 92, 58))
+        img = Image.alpha_composite(img, sh.filter(ImageFilter.GaussianBlur(blur_px)))
+
+        mask = Image.fromarray(np.where(inside, 255, 0).astype(np.uint8), "L")
+        img = Image.composite(img, Image.new("RGBA", (W, W), (0, 0, 0, 0)), mask)
+
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([win_x, win_y, win_x + win_w, win_y + win_h],
+                        radius=win_r, fill=(255, 255, 255, 253))
+    bar = (235, 240, 249, 255)
+    d.rounded_rectangle([win_x, win_y, win_x + win_w, win_y + bar_h], radius=win_r, fill=bar)
+    d.rectangle([win_x, win_y + bar_h - win_r, win_x + win_w, win_y + bar_h], fill=bar)
+
+    dot_r = bar_h * 0.215
+    dot_gap = dot_r * 3.05
+    dot_x = win_x + win_w * 0.072 + dot_r
+    dot_y = win_y + bar_h / 2.0
+    for i, col in enumerate(((255, 95, 87), (254, 188, 46), (40, 200, 64))):
+        x = dot_x + i * dot_gap
+        d.ellipse([x - dot_r, dot_y - dot_r, x + dot_r, dot_y + dot_r], fill=col + (255,))
+
+    body_top = win_y + bar_h
+    body_h = win_h - bar_h
+    lh = body_h * 0.095
+    lx = win_x + win_w * 0.098
+    for ry, rw, col in ((0.19, 0.42, (37, 99, 235)),
+                        (0.465, 0.70, (205, 213, 227)),
+                        (0.735, 0.55, (205, 213, 227))):
+        y = body_top + body_h * ry
+        d.rounded_rectangle([lx, y, lx + win_w * rw, y + lh], radius=lh / 2.0, fill=col + (255,))
+
+    img = img.resize((size, size), Image.Resampling.LANCZOS)
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    img.save(out, format="PNG")
+
+
+for spec in sys.argv[1:]:
+    px, dst = spec.split("=", 1)
+    render(int(px), dst)
 print("OK")
 `;
-  const result = spawnSync('python3', ['-c', script, String(size), outPng], {
+
+/**
+ * Batch entry point: one Python process renders every requested size.
+ * @param {string[]} specs `"<pixels>=<output path>"` pairs.
+ */
+function spawnBrandRender(specs) {
+  if (!specs.length) return false;
+  const result = spawnSync('python3', ['-c', BRAND_RENDER_PY, ...specs], {
     encoding: 'utf8',
-    timeout: 20000,
+    timeout: 60000,
   });
-  return result.status === 0 && fs.existsSync(outPng) && fs.statSync(outPng).size > 64;
+  if (result.status !== 0) return false;
+  return specs.every((spec) => {
+    const dst = spec.slice(spec.indexOf('=') + 1);
+    return fs.existsSync(dst) && fs.statSync(dst).size > 64;
+  });
+}
+
+/** Single-size brand mark (software shortcut icon, environment icon base). */
+function renderBrandIconPil(size, outPng) {
+  return spawnBrandRender([`${size}=${outPng}`]);
 }
 
 /**
- * Exact redraw of logo-pixel.svg (software brand) via Pillow nearest-neighbor upscale.
+ * Render a whole icon set in one process. Rendering each slot natively is what keeps the 16px
+ * and 32px entries legible — downscaling the 1024 master with sips turns them into mush.
+ * @param {Array<[number, string]>} slots `[pixelSize, outputPath]` pairs.
+ */
+function renderBrandIconSet(slots) {
+  return spawnBrandRender(slots.map(([px, out]) => `${px}=${out}`));
+}
+
+/**
+ * logo-native.svg — environment icons (Dock wrappers, marker extension) reuse the brand mark.
+ */
+function renderNativeLogoPil(size, outPng) {
+  return renderBrandIconPil(size, outPng);
+}
+
+/**
+ * logo-pixel.svg — the software shortcut icon reuses the brand mark.
  */
 function renderPixelLogoPil(size, outPng) {
-  const script = `
-import sys
-from pathlib import Path
-from PIL import Image, ImageDraw
-size, out = int(sys.argv[1]), sys.argv[2]
-# draw at 64×64 then scale NEAREST to keep pixel look
-base = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-d = ImageDraw.Draw(base)
-def rect(x,y,w,h,c):
-  d.rectangle([x, y, x+w-1, y+h-1], fill=c)
-rect(0,0,64,64,(17,24,32,255))
-rect(4,4,56,56,(5,9,13,255))
-rect(8,8,48,44,(232,241,232,255))
-rect(12,12,40,32,(12,28,36,255))
-rect(12,12,40,6,(25,201,212,255))
-rect(16,14,2,2,(240,79,79,255))
-rect(20,14,2,2,(246,196,83,255))
-rect(24,14,2,2,(80,232,120,255))
-rect(16,22,20,3,(232,241,232,255))
-rect(16,28,12,3,(80,232,120,255))
-rect(16,34,8,3,(246,196,83,255))
-rect(40,24,4,4,(25,201,212,255))
-rect(44,30,4,4,(80,232,120,255))
-rect(36,34,4,4,(246,196,83,255))
-rect(38,27,2,9,(112,129,138,255))
-rect(40,32,6,2,(112,129,138,255))
-rect(26,52,12,4,(232,241,232,255))
-rect(20,56,24,4,(25,201,212,255))
-rect(8,52,8,8,(240,79,79,255))
-rect(48,52,8,8,(80,232,120,255))
-img = base.resize((size, size), Image.Resampling.NEAREST)
-Path(out).parent.mkdir(parents=True, exist_ok=True)
-img.save(out, format="PNG")
-print("OK")
-`;
-  const result = spawnSync('python3', ['-c', script, String(size), outPng], {
-    encoding: 'utf8',
-    timeout: 20000,
-  });
-  return result.status === 0 && fs.existsSync(outPng) && fs.statSync(outPng).size > 64;
+  return renderBrandIconPil(size, outPng);
 }
+
 
 /**
  * Rasterize SVG → PNG. Prefers exact Pillow redraw; qlmanage only as last resort (often padded).
@@ -362,6 +427,9 @@ function generateEnvIconPng(number, size, outPng) {
  * Software / app shortcut icon: logo-pixel.svg (no env number).
  */
 function generateAppIconPng(size, outPng) {
+  // Render at the target size directly: downscaling a 1024 master with sips softens the
+  // traffic lights and the window edge, and the small slots are where that shows most.
+  if (renderBrandIconPil(size, outPng)) return outPng;
   const base = ensureBaseLogoPng('pixel', Math.max(size, 256));
   if (base) {
     try {
@@ -376,23 +444,36 @@ function generateAppIconPng(size, outPng) {
   throw new Error('Failed to generate app icon from logo-pixel.svg');
 }
 
-function pngToIcns(pngPath, icnsPath) {
+/**
+ * Build an .icns from a master PNG.
+ *
+ * @param {string} pngPath master PNG.
+ * @param {string} icnsPath destination .icns.
+ * @param {(slots: Array<{px: number, out: string}>) => boolean} [renderSlots] optional batched
+ *   native renderer. When it fills the slots, sips is skipped — downscaling a 1024 master
+ *   leaves the 16px entry as a blob, and that is the size Finder and Spotlight fall back to.
+ */
+function pngToIcns(pngPath, icnsPath, renderSlots) {
   if (process.platform !== 'darwin') return null;
   const iconset = icnsPath.replace(/\.icns$/i, '.iconset');
   try {
     fs.rmSync(iconset, { recursive: true, force: true });
     fs.mkdirSync(iconset, { recursive: true });
-    const sizes = [16, 32, 64, 128, 256, 512];
-    for (const size of sizes) {
-      const out = path.join(iconset, `icon_${size}x${size}.png`);
-      execFileSync('sips', ['-z', String(size), String(size), pngPath, '--out', out], { stdio: 'ignore' });
-      if (size <= 256) {
-        const out2x = path.join(iconset, `icon_${size}x${size}@2x.png`);
-        const s2 = size * 2;
-        if (s2 <= 512) {
-          execFileSync('sips', ['-z', String(s2), String(s2), pngPath, '--out', out2x], { stdio: 'ignore' });
-        }
-      }
+    // The full macOS iconset grid. The previous list stopped at 512 and emitted a
+    // non-standard icon_64x64.png while skipping icon_512x512@2x.png, so the Dock had no
+    // 1024 slot and upscaled the 512 one.
+    const grid = [[16, 1], [16, 2], [32, 1], [32, 2], [128, 1], [128, 2], [256, 1], [256, 2], [512, 1], [512, 2]];
+    const plan = grid.map(([base, scale]) => ({
+      px: base * scale,
+      out: path.join(iconset, `icon_${base}x${base}${scale === 2 ? '@2x' : ''}.png`),
+    }));
+    let filled = false;
+    if (typeof renderSlots === 'function') {
+      try { filled = renderSlots(plan) === true; } catch (_) { filled = false; }
+    }
+    for (const { px, out } of plan) {
+      if (filled && fs.existsSync(out)) continue;
+      execFileSync('sips', ['-z', String(px), String(px), pngPath, '--out', out], { stdio: 'ignore' });
     }
     execFileSync('iconutil', ['-c', 'icns', iconset, '-o', icnsPath], { stdio: 'ignore' });
     fs.rmSync(iconset, { recursive: true, force: true });
@@ -407,8 +488,48 @@ function pngToIcns(pngPath, icnsPath) {
  * Rebuild assets/logo.png + logo.icns (+ logo-pixel.png) from logo-pixel.svg.
  * Used by brand-host-dev / packaging / Dock of the app itself.
  */
-function rebuildAppShortcutIcons() {
+/**
+ * Multi-resolution .ico for the Windows shell (build-native.ps1, package-portable).
+ * Pillow resamples each slot from the master with LANCZOS.
+ */
+function writeMultiSizeIco(srcPng, icoPath) {
+  const script = `
+import sys
+from PIL import Image
+src, out = sys.argv[1], sys.argv[2]
+Image.open(src).convert("RGBA").save(
+    out, format="ICO",
+    sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+print("OK")
+`;
+  const result = spawnSync('python3', ['-c', script, srcPng, icoPath], { encoding: 'utf8', timeout: 30000 });
+  return result.status === 0 && fs.existsSync(icoPath) && fs.statSync(icoPath).size > 64;
+}
+
+/**
+ * True when every shortcut-icon output is at least as new as the vector source.
+ * The master PNG lives in tmpdir and is intentionally not part of this check.
+ */
+function appIconOutputsFresh() {
+  try {
+    const source = fs.statSync(LOGO_PIXEL_SVG).mtimeMs;
+    return [LOGO_PIXEL_PNG, LOGO_PNG, LOGO_ICNS,
+            path.join(ASSETS, 'logo-512.png'), path.join(ASSETS, 'logo.ico')]
+      .every((file) => {
+        try { return fs.statSync(file).mtimeMs >= source; } catch (_) { return false; }
+      });
+  } catch (_) {
+    return false;
+  }
+}
+
+function rebuildAppShortcutIcons({ force = false } = {}) {
   const master = path.join(os.tmpdir(), 'ob-app-logo-1024.png');
+  // main.js calls this on every launch. Rendering the master plus ten iconset slots and an
+  // .ico costs seconds, and the result only changes when the vector source does.
+  if (!force && appIconOutputsFresh()) {
+    return { master, logoPng: LOGO_PNG, logoIcns: LOGO_ICNS, logoPixelPng: LOGO_PIXEL_PNG, cached: true };
+  }
   generateAppIconPng(1024, master);
   try {
     fs.copyFileSync(master, LOGO_PIXEL_PNG);
@@ -418,7 +539,18 @@ function rebuildAppShortcutIcons() {
     try {
       execFileSync('sips', ['-z', '512', '512', master, '--out', p512], { stdio: 'ignore' });
     } catch (_) {}
-    pngToIcns(master, LOGO_ICNS);
+    // Render every iconset slot natively in one Python pass; the 1024 slot reuses the master
+    // instead of paying for a second full-size render.
+    pngToIcns(master, LOGO_ICNS, (plan) => {
+      const big = plan.filter(({ px }) => px >= 1024);
+      const rest = plan.filter(({ px }) => px < 1024);
+      let ok = renderBrandIconSet(rest.map(({ px, out }) => [px, out]));
+      for (const { out } of big) {
+        try { fs.copyFileSync(master, out); } catch (_) { ok = false; }
+      }
+      return ok;
+    });
+    writeMultiSizeIco(master, path.join(ASSETS, 'logo.ico'));
   } catch (error) {
     // If assets dir not writable, still return master path for callers
     return { master, error: error.message };
@@ -951,6 +1083,9 @@ module.exports = {
   rebuildAppShortcutIcons,
   rebuildBundledExtensionIcons,
   rasterizeSvg,
+  renderBrandIconPil,
+  renderBrandIconSet,
+  writeMultiSizeIco,
   LOGO_PIXEL_SVG,
   LOGO_NATIVE_SVG,
 };

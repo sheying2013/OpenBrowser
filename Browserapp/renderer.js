@@ -716,32 +716,32 @@ function displayProfileNumber(profile) {
   return String(positiveProfileNumber(profile?.number) || profile?.name || profile?.id || '');
 }
 
-/** 12-Color Precision Studio Jewel Palette — engineered for obsidian dark and ceramic light */
+/** 12-Color Precision Studio Jewel Palette — low-saturation, refined tech minerals engineered for obsidian dark and ceramic light */
 const JEWEL_PALETTE = [
-  // 0: Cobalt Sapphire (青曜)
-  { id: 'sapphire', accent: '#38bdf8', border: '#0284c7', glow: 'rgba(56,189,248,0.3)', dark1: '#131b2e', dark2: '#0b101d', light1: '#f0f9ff', light2: '#e0f2fe', lightBorder: '#7dd3fc', lightText: '#0284c7' },
-  // 1: Iris Amethyst (紫晶)
-  { id: 'amethyst', accent: '#c084fc', border: '#9333ea', glow: 'rgba(192,132,252,0.3)', dark1: '#221533', dark2: '#12091f', light1: '#faf5ff', light2: '#f3e8ff', lightBorder: '#c084fc', lightText: '#7e22ce' },
-  // 2: Velvet Rose (玫瑰)
-  { id: 'rose', accent: '#fb7185', border: '#e11d48', glow: 'rgba(251,113,133,0.3)', dark1: '#29121d', dark2: '#18070e', light1: '#fff1f2', light2: '#ffe4e6', lightBorder: '#fda4af', lightText: '#be123c' },
-  // 3: Warm Amber (琥珀)
-  { id: 'amber', accent: '#fbbf24', border: '#d97706', glow: 'rgba(251,191,36,0.3)', dark1: '#291b0c', dark2: '#170c04', light1: '#fffbeb', light2: '#fef3c7', lightBorder: '#fcd34d', lightText: '#b45309' },
-  // 4: Forest Emerald (翡翠)
-  { id: 'emerald', accent: '#34d399', border: '#059669', glow: 'rgba(52,211,153,0.3)', dark1: '#0e261b', dark2: '#06160e', light1: '#f0fdf4', light2: '#dcfce7', lightBorder: '#86efac', lightText: '#047857' },
-  // 5: Arctic Cyan (海蓝)
-  { id: 'cyan', accent: '#22d3ee', border: '#0891b2', glow: 'rgba(34,211,238,0.3)', dark1: '#0c242c', dark2: '#05151b', light1: '#ecfeff', light2: '#cffafe', lightBorder: '#67e8f9', lightText: '#0e7490' },
-  // 6: Royal Indigo (皇家靛)
-  { id: 'indigo', accent: '#818cf8', border: '#4f46e5', glow: 'rgba(129,140,248,0.3)', dark1: '#181938', dark2: '#0c0d22', light1: '#eef2ff', light2: '#e0e7ff', lightBorder: '#a5b4fc', lightText: '#4338ca' },
-  // 7: Topaz Gold (黄玉)
-  { id: 'topaz', accent: '#facc15', border: '#ca8a04', glow: 'rgba(250,204,21,0.3)', dark1: '#26200a', dark2: '#151103', light1: '#fefce8', light2: '#fef9c3', lightBorder: '#fde047', lightText: '#a16207' },
-  // 8: Marine Teal (碧玉)
-  { id: 'teal', accent: '#2dd4bf', border: '#0d9488', glow: 'rgba(45,212,191,0.3)', dark1: '#0d2624', dark2: '#061615', light1: '#f0fdfa', light2: '#ccfbf1', lightBorder: '#5eead4', lightText: '#0f766e' },
-  // 9: Crimson Coral (珊瑚)
-  { id: 'coral', accent: '#f87171', border: '#dc2626', glow: 'rgba(248,113,113,0.3)', dark1: '#281313', dark2: '#170707', light1: '#fef2f2', light2: '#fee2e2', lightBorder: '#fca5a5', lightText: '#b91c1c' },
-  // 10: Radiant Violet (兰花)
-  { id: 'violet', accent: '#e879f9', border: '#c026d3', glow: 'rgba(232,121,249,0.3)', dark1: '#26112c', dark2: '#16081c', light1: '#fdf4ff', light2: '#fae8ff', lightBorder: '#f0abfc', lightText: '#a21caf' },
-  // 11: Sleek Slate (冷钛)
-  { id: 'slate', accent: '#94a3b8', border: '#475569', glow: 'rgba(148,163,184,0.3)', dark1: '#181e28', dark2: '#0d121a', light1: '#f8fafc', light2: '#f1f5f9', lightBorder: '#cbd5e1', lightText: '#334155' }
+  // 0: Deep Slate Blue (深海板岩蓝 - 高雅冷灰蓝)
+  { id: 'sapphire', accent: '#6287a2', border: '#3b586e', glow: 'rgba(98,135,162,0.22)', dark1: '#0f1722', dark2: '#090e15', light1: '#f0f5fa', light2: '#e1ecf5', lightBorder: '#9ab8cf', lightText: '#3b586e' },
+  // 1: Muted Iris (柔和冷紫灰)
+  { id: 'amethyst', accent: '#8e7fa8', border: '#5f5077', glow: 'rgba(142,127,168,0.22)', dark1: '#16131f', dark2: '#0c0a12', light1: '#f7f5fa', light2: '#ece8f4', lightBorder: '#b9adc9', lightText: '#5f5077' },
+  // 2: Dusty Rose (烟熏冷玫瑰)
+  { id: 'rose', accent: '#a6727c', border: '#784650', glow: 'rgba(166,114,124,0.22)', dark1: '#1a1215', dark2: '#100a0d', light1: '#faf5f6', light2: '#f4e7e9', lightBorder: '#caa6ad', lightText: '#784650' },
+  // 3: Warm Ochre (沉稳赭石金)
+  { id: 'amber', accent: '#9e8156', border: '#6e5531', glow: 'rgba(158,129,86,0.22)', dark1: '#19150f', dark2: '#0f0c08', light1: '#faf8f4', light2: '#f4eedf', lightBorder: '#c6b493', lightText: '#6e5531' },
+  // 4: Sage Pine (冷杉灰绿)
+  { id: 'emerald', accent: '#5f8a75', border: '#3a5e4b', glow: 'rgba(95,138,117,0.22)', dark1: '#0e1813', dark2: '#080f0b', light1: '#f2f8f5', light2: '#e2efe8', lightBorder: '#99beac', lightText: '#3a5e4b' },
+  // 5: Glacial Cyan (极地冰川青灰)
+  { id: 'cyan', accent: '#588894', border: '#345c66', glow: 'rgba(88,136,148,0.22)', dark1: '#0e181c', dark2: '#080e12', light1: '#f1f7f9', light2: '#e0edf1', lightBorder: '#96b9c3', lightText: '#345c66' },
+  // 6: Deep Twilight (薄暮灰靛)
+  { id: 'indigo', accent: '#727ea1', border: '#475373', glow: 'rgba(114,126,161,0.22)', dark1: '#131622', dark2: '#0a0c14', light1: '#f3f5fa', light2: '#e5e9f4', lightBorder: '#aab2cb', lightText: '#475373' },
+  // 7: Sandstone Topaz (暗哑黄玉)
+  { id: 'topaz', accent: '#968858', border: '#695c33', glow: 'rgba(150,136,88,0.22)', dark1: '#18160f', dark2: '#0e0c08', light1: '#f9f8f3', light2: '#f2eedd', lightBorder: '#c3b894', lightText: '#695c33' },
+  // 8: Muted Teal (冷雾青碧)
+  { id: 'teal', accent: '#548782', border: '#325c58', glow: 'rgba(84,135,130,0.22)', dark1: '#0e1817', dark2: '#080e0e', light1: '#f2f8f7', light2: '#e1efed', lightBorder: '#95bcba', lightText: '#325c58' },
+  // 9: Muted Terracotta (暗珊瑚陶土)
+  { id: 'coral', accent: '#a16c68', border: '#73413d', glow: 'rgba(161,108,104,0.22)', dark1: '#1a1211', dark2: '#100a09', light1: '#faf5f5', light2: '#f5e8e7', lightBorder: '#c7a3a0', lightText: '#73413d' },
+  // 10: Heather Lavender (石楠微紫)
+  { id: 'violet', accent: '#97729e', border: '#6a4671', glow: 'rgba(151,114,158,0.22)', dark1: '#18121a', dark2: '#0f0a10', light1: '#f9f5fa', light2: '#f1e7f3', lightBorder: '#c1a6c7', lightText: '#6a4671' },
+  // 11: Mineral Slate (低饱和矿石冷灰)
+  { id: 'slate', accent: '#707e8f', border: '#465363', glow: 'rgba(112,126,143,0.22)', dark1: '#12161c', dark2: '#0a0d11', light1: '#f4f6f9', light2: '#e7ecf2', lightBorder: '#a9b5c4', lightText: '#465363' }
 ];
 
 const ENV_ICON_PALETTE = JEWEL_PALETTE.map((item) => Object.assign([item.dark1, item.dark2], item));
@@ -801,83 +801,64 @@ function escapeXmlAttr(str) {
 function isCurrentThemeLight() {
   if (typeof document === 'undefined' || !document.documentElement) return false;
   const theme = document.documentElement.dataset.uiTheme || 'pixel-workstation';
-  if (theme === 'element-admin') {
+  const def = (typeof UI_THEMES !== 'undefined' && UI_THEMES[theme]) ? UI_THEMES[theme] : null;
+  if (def?.supportsColorMode) {
     const mode = document.documentElement.dataset.colorMode || (typeof uiColorMode !== 'undefined' ? uiColorMode : 'light');
     return mode === 'light';
   }
-  const def = (typeof UI_THEMES !== 'undefined' && UI_THEMES[theme]) ? UI_THEMES[theme] : null;
   return def ? def.colorScheme === 'light' : false;
 }
 
-/** Precision miniature browser sandbox window SVG badge */
+/** Clean, professional environment badge — pure engineering aesthetics, no toy illustration */
 function renderMicroWindowSvg(num, isLight = false, size = UI_MARK_SIZE) {
-  const pal = envBadgeColors(num);
+  const currentTheme = (typeof document !== 'undefined' && document.documentElement?.dataset?.uiTheme) || '';
   const nStr = String(num);
   const len = nStr.length;
+  let fontSize = 12.5;
+  if (len === 3) fontSize = 11;
+  else if (len >= 4) fontSize = 9.5;
 
-  let fontSize = 10.5;
-  let chipWidth = 14;
-  let chipX = 16;
-  if (len === 3) {
-    fontSize = 9;
-    chipWidth = 16.5;
-    chipX = 14;
-  } else if (len >= 4) {
-    fontSize = 7.5;
-    chipWidth = 18.5;
-    chipX = 12.5;
+  if (currentTheme === 'oceanic-fingerprint') {
+    // 水墨青黛指纹浏览器专业微标：暗色为玄石青墨质感，浅色为宣纸冷白配竹青微雕
+    const isLightMode = isCurrentThemeLight();
+    const badgeBg = isLightMode ? '#e7edea' : '#131e22';
+    const badgeBorder = isLightMode ? '#b6c6c1' : '#253a40';
+    const stroke1 = isLightMode ? '#7a968f' : '#36545c';
+    const stroke2 = isLightMode ? '#587971' : '#48707b';
+    const stroke3 = isLightMode ? '#3f6259' : '#5d8b96';
+    const textColor = isLightMode ? '#1e332d' : '#dce6e5';
+
+    return `<svg class="env-window-svg ink-cyan-badge" width="${size}" height="${size}" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0.5" y="0.5" width="33" height="33" rx="5" fill="${badgeBg}" stroke="${badgeBorder}" stroke-width="1"/>
+      <!-- 精雕微缩水墨青指纹回纹 -->
+      <path d="M7 17C7 11.477 11.477 7 17 7C22.523 7 27 11.477 27 17" stroke="${stroke1}" stroke-width="1" stroke-linecap="round" opacity="0.5"/>
+      <path d="M10 17C10 13.134 13.134 10 17 10C20.866 10 24 13.134 24 17" stroke="${stroke2}" stroke-width="1" stroke-linecap="round" opacity="0.65"/>
+      <path d="M13 17C13 14.791 14.791 13 17 13C19.209 13 21 14.791 21 17" stroke="${stroke3}" stroke-width="1" stroke-linecap="round" opacity="0.85"/>
+      <!-- 居中清爽高透环境序号 -->
+      <text x="17" y="23" text-anchor="middle" dominant-baseline="central" 
+            font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif" 
+            font-size="${fontSize}" font-weight="600" fill="${textColor}" 
+            letter-spacing="-0.02em">${escapeXmlAttr(nStr)}</text>
+    </svg>`;
   }
 
+  // 其他主题兼容回落
+  const pal = envBadgeColors(num);
   const safeId = String(num).replace(/[^a-zA-Z0-9_-]/g, '_');
-  const bgGradId = `win-bg-${safeId}-${isLight ? 'l' : 'd'}`;
-  const chipGradId = `chip-bg-${safeId}-${isLight ? 'l' : 'd'}`;
-
-  const winBg1 = isLight ? (pal.light1 || '#f0f9ff') : (pal.dark1 || '#131b2e');
-  const winBg2 = isLight ? (pal.light2 || '#e0f2fe') : (pal.dark2 || '#0b101d');
-  const winBorder = isLight ? (pal.lightBorder || '#7dd3fc') : 'rgba(255,255,255,0.12)';
-  const titlebarBg = isLight ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.06)';
-  const dividerStroke = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)';
-  const pillBg = isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.08)';
-  const pillBorder = isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.14)';
-  const lineMuted1 = isLight ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.22)';
-  const lineMuted2 = isLight ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.14)';
-  const lineMuted3 = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)';
-
-  const chipBg1 = isLight ? '#ffffff' : 'rgba(255,255,255,0.12)';
-  const chipBg2 = isLight ? pal.light2 : 'rgba(255,255,255,0.02)';
-  const chipStroke = isLight ? pal.lightBorder : pal.accent;
-  const chipStrokeOpacity = isLight ? '1' : '0.6';
-  const numColor = isLight ? pal.lightText : '#ffffff';
+  const winBg1 = isLight ? '#f4f6f8' : '#141a20';
+  const winBg2 = isLight ? '#e5e9ec' : '#0c1014';
+  const winBorder = isLight ? '#c8d1d8' : '#222c36';
+  const numColor = isLight ? '#2d3748' : '#d2dbe2';
 
   return `<svg class="env-window-svg" width="${size}" height="${size}" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <linearGradient id="${bgGradId}" x1="0" y1="0" x2="0" y2="34" gradientUnits="userSpaceOnUse">
-        <stop offset="0%" stop-color="${winBg1}"/>
-        <stop offset="100%" stop-color="${winBg2}"/>
-      </linearGradient>
-      <linearGradient id="${chipGradId}" x1="${chipX}" y1="12" x2="${chipX + chipWidth}" y2="28" gradientUnits="userSpaceOnUse">
-        <stop offset="0%" stop-color="${chipBg1}"/>
-        <stop offset="100%" stop-color="${chipBg2}"/>
-      </linearGradient>
-    </defs>
-    <rect x="0.5" y="0.5" width="33" height="33" rx="7" fill="url(#${bgGradId})" stroke="${winBorder}" stroke-width="1" />
-    <path d="M0.5 7.5C0.5 3.63401 3.63401 0.5 7.5 0.5H26.5C30.366 0.5 33.5 3.63401 33.5 7.5V10H0.5V7.5Z" fill="${titlebarBg}"/>
-    <line x1="0.5" y1="10" x2="33.5" y2="10" stroke="${dividerStroke}" stroke-width="0.75"/>
-    <circle cx="4.5" cy="5.2" r="1.3" fill="#ff5f56" />
-    <circle cx="8" cy="5.2" r="1.3" fill="#ffbd2e" />
-    <circle cx="11.5" cy="5.2" r="1.3" fill="#27c93f" />
-    <rect x="15" y="3.2" width="15" height="4" rx="2" fill="${pillBg}" stroke="${pillBorder}" stroke-width="0.6"/>
-    <circle cx="17.5" cy="5.2" r="0.7" fill="${pal.accent}" opacity="0.9"/>
-    <rect x="4.5" y="13.5" width="6.5" height="2" rx="1" fill="${pal.accent}" opacity="0.95"/>
-    <rect x="4.5" y="17.8" width="7.5" height="1.4" rx="0.7" fill="${lineMuted1}"/>
-    <rect x="4.5" y="21.2" width="5.5" height="1.4" rx="0.7" fill="${lineMuted2}"/>
-    <rect x="4.5" y="24.6" width="7" height="1.4" rx="0.7" fill="${lineMuted3}"/>
-    <rect x="${chipX}" y="12.5" width="${chipWidth}" height="16" rx="4" fill="url(#${chipGradId})" stroke="${chipStroke}" stroke-opacity="${chipStrokeOpacity}" stroke-width="0.8"/>
-    <circle cx="${chipX + chipWidth - 3}" cy="15.5" r="1" fill="${pal.accent}" opacity="0.85"/>
-    <text x="${chipX + chipWidth / 2 - 0.5}" y="21.2" text-anchor="middle" dominant-baseline="central" 
-          font-family="system-ui, -apple-system, 'SF Pro Text', 'Segoe UI', Roboto, 'Chakra Petch', sans-serif" 
-          font-size="${fontSize}" font-weight="800" fill="${numColor}" 
-          letter-spacing="-0.02em">${escapeXmlAttr(nStr)}</text>
+    <rect x="0.5" y="0.5" width="33" height="33" rx="5" fill="${winBg1}" stroke="${winBorder}" stroke-width="1" />
+    <line x1="0.5" y1="9" x2="33.5" y2="9" stroke="${winBorder}" stroke-width="0.75"/>
+    <circle cx="5" cy="5" r="1.2" fill="#8896a4" opacity="0.6"/>
+    <circle cx="8.5" cy="5" r="1.2" fill="#8896a4" opacity="0.6"/>
+    <circle cx="12" cy="5" r="1.2" fill="#8896a4" opacity="0.6"/>
+    <text x="17" y="21.5" text-anchor="middle" dominant-baseline="central" 
+          font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif" 
+          font-size="${fontSize}" font-weight="600" fill="${numColor}">${escapeXmlAttr(nStr)}</text>
   </svg>`;
 }
 
@@ -1229,6 +1210,7 @@ async function applySyncSettings(value, announce = false) {
 const UI_THEME_KEY = 'openbrowser-ui-skin-v1';
 const UI_COLOR_MODE_KEY = 'openbrowser-ui-color-mode-v1';
 const UI_THEMES = Object.freeze({
+  'oceanic-fingerprint': { nameKey: 'theme.oceanic.name', colorScheme: 'dark', supportsColorMode: true },
   'merge-gateway': { nameKey: 'theme.mergeGateway.name', colorScheme: 'light' },
   'retro-desktop': { nameKey: 'theme.retro.name', colorScheme: 'light' },
   'pixel-workstation': { nameKey: 'theme.pixel.name', colorScheme: 'dark' },
@@ -1609,7 +1591,8 @@ try {
 function syncAppearanceControls(theme) {
   const panel = $('#theme-appearance');
   if (!panel) return;
-  const show = theme === 'element-admin';
+  const definition = UI_THEMES[theme];
+  const show = Boolean(definition?.supportsColorMode);
   panel.hidden = !show;
   panel.classList.toggle('is-visible', show);
   panel.querySelectorAll('[data-color-mode]').forEach((button) => {
@@ -1629,14 +1612,23 @@ function applyColorMode(pref, persist = true) {
   }
   const theme = document.documentElement.dataset.uiTheme || 'pixel-workstation';
   const definition = UI_THEMES[theme];
-  if (theme === 'element-admin') {
-    document.documentElement.style.colorScheme = uiColorMode;
-  } else if (definition) {
-    document.documentElement.style.colorScheme = definition.colorScheme;
+  const effectiveScheme = definition?.supportsColorMode ? uiColorMode : (definition?.colorScheme || 'dark');
+  document.documentElement.style.colorScheme = effectiveScheme;
+  document.documentElement.dataset.colorMode = effectiveScheme;
+
+  const current = $('#theme-current');
+  if (current) {
+    current.textContent = definition?.supportsColorMode
+      ? `${themeDisplayName(theme)} · ${uiColorPreference === 'auto' ? t('theme.auto') : (uiColorMode === 'dark' ? t('theme.dark') : t('theme.light'))}`
+      : themeDisplayName(theme);
   }
+
   syncAppearanceControls(theme);
   try {
-    window.ops?.setUiChrome?.({ themeId: theme, colorMode: theme === 'element-admin' ? uiColorMode : definition?.colorScheme || 'light' });
+    window.ops?.setUiChrome?.({
+      themeId: theme,
+      colorMode: effectiveScheme
+    });
   } catch (_) {}
   requestAnimationFrame(() => {
     refreshIcons();
@@ -1653,13 +1645,13 @@ function applyUiTheme(value, persist = true) {
   const theme = Object.hasOwn(UI_THEMES, value) ? value : 'pixel-workstation';
   const definition = UI_THEMES[theme];
   document.documentElement.dataset.uiTheme = theme;
-  const effectiveScheme = theme === 'element-admin' ? uiColorMode : definition.colorScheme;
+  const effectiveScheme = definition?.supportsColorMode ? uiColorMode : definition.colorScheme;
   document.documentElement.style.colorScheme = effectiveScheme;
-  document.documentElement.dataset.colorMode = theme === 'element-admin' ? uiColorMode : definition.colorScheme;
+  document.documentElement.dataset.colorMode = effectiveScheme;
   if (persist) { try { localStorage.setItem(UI_THEME_KEY, theme); } catch (_) {} }
   const current = $('#theme-current');
   if (current) {
-    current.textContent = theme === 'element-admin'
+    current.textContent = definition?.supportsColorMode
       ? `${themeDisplayName(theme)} · ${uiColorPreference === 'auto' ? t('theme.auto') : (uiColorMode === 'dark' ? t('theme.dark') : t('theme.light'))}`
       : themeDisplayName(theme);
   }
@@ -1673,7 +1665,7 @@ function applyUiTheme(value, persist = true) {
   try {
     window.ops?.setUiChrome?.({
       themeId: theme,
-      colorMode: theme === 'element-admin' ? uiColorMode : definition.colorScheme,
+      colorMode: effectiveScheme,
     });
   } catch (_) {}
   // Re-apply Lucide after theme CSS (stroke / currentColor) is in effect
@@ -1686,15 +1678,16 @@ function applyUiTheme(value, persist = true) {
   });
 }
 
-let savedUiTheme = 'pixel-workstation';
+let savedUiTheme = 'oceanic-fingerprint';
 try {
-  savedUiTheme = localStorage.getItem(UI_THEME_KEY) || 'pixel-workstation';
-  const migrated = localStorage.getItem('openbrowser-ui-skin-pixel-default-v1');
-  if (!migrated && (savedUiTheme === 'retro-desktop' || savedUiTheme === 'element-admin')) {
-    savedUiTheme = 'pixel-workstation';
+  savedUiTheme = localStorage.getItem(UI_THEME_KEY) || 'oceanic-fingerprint';
+  const migrated = localStorage.getItem('openbrowser-ui-skin-oceanic-light-default-v1');
+  if (!migrated) {
+    savedUiTheme = 'oceanic-fingerprint';
     localStorage.setItem(UI_THEME_KEY, savedUiTheme);
+    localStorage.setItem(UI_COLOR_MODE_KEY, 'light');
+    localStorage.setItem('openbrowser-ui-skin-oceanic-light-default-v1', '1');
   }
-  localStorage.setItem('openbrowser-ui-skin-pixel-default-v1', '1');
 } catch (_) {}
 applyUiTheme(savedUiTheme, false);
 // UI language: default = system; user can pin en/zh/ja/vi/fr/de/th/id

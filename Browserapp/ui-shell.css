@@ -310,7 +310,25 @@ dialog[open] > .themed-select-menu {
 }
 
 .brand { min-height: 56px; gap: 10px; padding: 0 7px; }
-.brand .logo { width: 48px; height: 48px; border-radius: 0; background: transparent; overflow: visible; }
+.brand .logo {
+  width: 48px;
+  height: 48px;
+  border: 0 !important;
+  outline: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  overflow: visible !important;
+  padding: 0 !important;
+}
+.brand .logo img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  border: 0 !important;
+  box-shadow: none !important;
+}
 .brand > div:last-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .brand strong { font-size: 14px; letter-spacing: 0; }
 .brand small { color: var(--ui-muted); font-size: 9px; font-weight: 650; letter-spacing: .06em; }
