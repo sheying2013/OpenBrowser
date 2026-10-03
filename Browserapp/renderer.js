@@ -902,21 +902,21 @@ function buildBrowserEngineIcon(name, size = 26) {
     return `<svg width="${size}" height="${size}" viewBox="0 0 27600 27600" fill="none" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <linearGradient id="edge-b1" x1="6870" x2="24704" y1="18705" y2="18705" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stop-color="#0c59a4"/>
-          <stop offset="1" stop-color="#114a8b"/>
+          <stop offset="0" stop-color="var(--engine-edge-b1-0, #0c59a4)"/>
+          <stop offset="1" stop-color="var(--engine-edge-b1-1, #114a8b)"/>
         </linearGradient>
         <linearGradient id="edge-b2" x1="16272" x2="5133" y1="10968" y2="23102" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stop-color="#1b9de2"/>
-          <stop offset=".16" stop-color="#1595df"/>
-          <stop offset=".67" stop-color="#0680d7"/>
-          <stop offset="1" stop-color="#0078d4"/>
+          <stop offset="0" stop-color="var(--engine-edge-b2-0, #1b9de2)"/>
+          <stop offset=".16" stop-color="var(--engine-edge-b2-1, #1595df)"/>
+          <stop offset=".67" stop-color="var(--engine-edge-b2-2, #0680d7)"/>
+          <stop offset="1" stop-color="var(--engine-edge-b2-3, #0078d4)"/>
         </linearGradient>
         <radialGradient id="edge-b3" cx="2523" cy="4680" r="20243" gradientTransform="matrix(-.03715 .99931 -2.12836 -.07913 13579 3530)" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stop-color="#35c1f1"/>
-          <stop offset=".11" stop-color="#34c1ed"/>
-          <stop offset=".23" stop-color="#2fc2df"/>
-          <stop offset=".31" stop-color="#2bc3d2"/>
-          <stop offset=".67" stop-color="#36c752"/>
+          <stop offset="0" stop-color="var(--engine-edge-b3-0, #35c1f1)"/>
+          <stop offset=".11" stop-color="var(--engine-edge-b3-1, #34c1ed)"/>
+          <stop offset=".23" stop-color="var(--engine-edge-b3-2, #2fc2df)"/>
+          <stop offset=".31" stop-color="var(--engine-edge-b3-3, #2bc3d2)"/>
+          <stop offset=".67" stop-color="var(--engine-edge-b3-4, #36c752)"/>
         </radialGradient>
       </defs>
       <path d="M24105 20053a9345 9345 0 01-1053 472 10202 10202 0 01-3590 646c-4732 0-8855-3255-8855-7432 0-1175 680-2193 1643-2729-4280 180-5380 4640-5380 7253 0 7387 6810 8137 8276 8137 791 0 1984-230 2704-456l130-44a12834 12834 0 006660-5282c220-350-168-757-535-565z" fill="url(#edge-b1)"/>
@@ -927,22 +927,22 @@ function buildBrowserEngineIcon(name, size = 26) {
   return `<svg width="${size}" height="${size}" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <linearGradient id="cr-green" x1="145" x2="34" y1="253" y2="61" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stop-color="#1e8e3e"/>
-        <stop offset="1" stop-color="#34a853"/>
+        <stop offset="0" stop-color="var(--engine-cr-green-0, #1e8e3e)"/>
+        <stop offset="1" stop-color="var(--engine-cr-green-1, #34a853)"/>
       </linearGradient>
       <linearGradient id="cr-yellow" x1="111" x2="222" y1="254" y2="62" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stop-color="#fcc934"/>
-        <stop offset="1" stop-color="#fbbc04"/>
+        <stop offset="0" stop-color="var(--engine-cr-yellow-0, #fcc934)"/>
+        <stop offset="1" stop-color="var(--engine-cr-yellow-1, #fbbc04)"/>
       </linearGradient>
       <linearGradient id="cr-red" x1="17" x2="239" y1="80" y2="80" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stop-color="#d93025"/>
-        <stop offset="1" stop-color="#ea4335"/>
+        <stop offset="0" stop-color="var(--engine-cr-red-0, #d93025)"/>
+        <stop offset="1" stop-color="var(--engine-cr-red-1, #ea4335)"/>
       </linearGradient>
     </defs>
-    <circle cx="128" cy="128" r="64" fill="#ffffff"/>
+    <circle cx="128" cy="128" r="64" fill="var(--engine-cr-center-bg, #ffffff)"/>
     <path fill="url(#cr-green)" d="M96 183.4A63.7 63.7 0 0 1 72.6 160L17.2 64A128 128 0 0 0 128 256l55.4-96A64 64 0 0 1 96 183.4Z"/>
     <path fill="url(#cr-yellow)" d="M192 128a63.7 63.7 0 0 1-8.6 32L128 256A128 128 0 0 0 238.9 64h-111a64 64 0 0 1 64 64Z"/>
-    <circle cx="128" cy="128" r="52" fill="#1a73e8"/>
+    <circle cx="128" cy="128" r="52" fill="var(--engine-cr-center-dot, #1a73e8)"/>
     <path fill="url(#cr-red)" d="M96 72.6a63.7 63.7 0 0 1 32-8.6h110.8a128 128 0 0 0-221.7 0l55.5 96A64 64 0 0 1 96 72.6Z"/>
   </svg>`;
 }

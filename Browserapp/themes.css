@@ -22,6 +22,28 @@
   --theme-sidebar-status-text: #000;
   --theme-code-bg: #111;
   --theme-code-fg: #f5f5f5;
+
+  /* 浏览器内核微标色彩规范（标准原色回退） */
+  --engine-cr-red-0: #d93025;
+  --engine-cr-red-1: #ea4335;
+  --engine-cr-yellow-0: #fcc934;
+  --engine-cr-yellow-1: #fbbc04;
+  --engine-cr-green-0: #1e8e3e;
+  --engine-cr-green-1: #34a853;
+  --engine-cr-center-dot: #1a73e8;
+  --engine-cr-center-bg: #ffffff;
+
+  --engine-edge-b1-0: #0c59a4;
+  --engine-edge-b1-1: #114a8b;
+  --engine-edge-b2-0: #1b9de2;
+  --engine-edge-b2-1: #1595df;
+  --engine-edge-b2-2: #0680d7;
+  --engine-edge-b2-3: #0078d4;
+  --engine-edge-b3-0: #35c1f1;
+  --engine-edge-b3-1: #34c1ed;
+  --engine-edge-b3-2: #2fc2df;
+  --engine-edge-b3-3: #2bc3d2;
+  --engine-edge-b3-4: #36c752;
 }
 
 html, body { background: var(--theme-bg); color: var(--theme-text); }
@@ -264,3 +286,109 @@ html[data-ui-theme="retro-desktop"] #view-profiles .table-card .actions .mini.is
   color: #000 !important;
   box-shadow: 2px 2px 0 #000;
 }
+
+/* ==========================================================================
+   Browser Engine Icons Theme Harmony (契合各个主题风格的极简内核微标)
+   ========================================================================== */
+
+/* 1. 复古桌面 (Retro Desktop)
+   经典 Aqua 铝合金金属蓝与灰白高光 */
+html[data-ui-theme="retro-desktop"] {
+  --engine-cr-red-0: #2f6fad;
+  --engine-cr-red-1: #3b82c4;
+  --engine-cr-yellow-0: #4a90d9;
+  --engine-cr-yellow-1: #63a4e4;
+  --engine-cr-green-0: #24588d;
+  --engine-cr-green-1: #2a66a1;
+  --engine-cr-center-dot: #1c5287;
+  --engine-cr-center-bg: #fbfbfb;
+
+  --engine-edge-b1-0: #194470;
+  --engine-edge-b1-1: #24588d;
+  --engine-edge-b2-0: #2f6fad;
+  --engine-edge-b2-1: #3b82c4;
+  --engine-edge-b2-2: #4a90d9;
+  --engine-edge-b2-3: #63a4e4;
+  --engine-edge-b3-0: #7eb6e8;
+  --engine-edge-b3-1: #a8d0f0;
+  --engine-edge-b3-2: #4a90d9;
+  --engine-edge-b3-3: #2f6fad;
+  --engine-edge-b3-4: #2e8b57;
+}
+
+/* 2. 浅色像素 (NES Light)
+   羊皮纸暖灰褐与复古墨绿灰 */
+html[data-ui-theme="nes-light"] {
+  --engine-cr-red-0: #51787a;
+  --engine-cr-red-1: #5d888a;
+  --engine-cr-yellow-0: #446466;
+  --engine-cr-yellow-1: #4c6f71;
+  --engine-cr-green-0: #334b4c;
+  --engine-cr-green-1: #3c5153;
+  --engine-cr-center-dot: #362f26;
+  --engine-cr-center-bg: #cdc1a9;
+
+  --engine-edge-b1-0: #2b3d3e;
+  --engine-edge-b1-1: #362f26;
+  --engine-edge-b2-0: #3c5153;
+  --engine-edge-b2-1: #446466;
+  --engine-edge-b2-2: #51787a;
+  --engine-edge-b2-3: #5d888a;
+  --engine-edge-b3-0: #6e9da0;
+  --engine-edge-b3-1: #5e8e6e;
+  --engine-edge-b3-2: #51787a;
+  --engine-edge-b3-3: #446466;
+  --engine-edge-b3-4: #3c5153;
+}
+
+/* 3. 像素工作站 (Pixel Workstation)
+   哑光军工青灰与终端深绿层次 */
+html[data-ui-theme="pixel-workstation"] {
+  --engine-cr-red-0: #557f82;
+  --engine-cr-red-1: #609194;
+  --engine-cr-yellow-0: #426365;
+  --engine-cr-yellow-1: #4e7477;
+  --engine-cr-green-0: #2a3d40;
+  --engine-cr-green-1: #354a4c;
+  --engine-cr-center-dot: #70a37f;
+  --engine-cr-center-bg: #111518;
+
+  --engine-edge-b1-0: #1b282a;
+  --engine-edge-b1-1: #26383b;
+  --engine-edge-b2-0: #354a4c;
+  --engine-edge-b2-1: #466467;
+  --engine-edge-b2-2: #557f82;
+  --engine-edge-b2-3: #609194;
+  --engine-edge-b3-0: #7eb3b6;
+  --engine-edge-b3-1: #6ba0a3;
+  --engine-edge-b3-2: #557f82;
+  --engine-edge-b3-3: #4e7477;
+  --engine-edge-b3-4: #70a37f;
+}
+
+/* 4. Merge Gateway (Console)
+   精密纯黑灰阶微标 */
+html[data-ui-theme="merge-gateway"],
+html[data-ui-theme="xai-console"] {
+  --engine-cr-red-0: #1f1f1f;
+  --engine-cr-red-1: #2b2b2b;
+  --engine-cr-yellow-0: #404040;
+  --engine-cr-yellow-1: #525252;
+  --engine-cr-green-0: #666666;
+  --engine-cr-green-1: #787878;
+  --engine-cr-center-dot: #0a0a0a;
+  --engine-cr-center-bg: #ffffff;
+
+  --engine-edge-b1-0: #141414;
+  --engine-edge-b1-1: #242424;
+  --engine-edge-b2-0: #383838;
+  --engine-edge-b2-1: #4c4c4c;
+  --engine-edge-b2-2: #606060;
+  --engine-edge-b2-3: #757575;
+  --engine-edge-b3-0: #9e9e9e;
+  --engine-edge-b3-1: #858585;
+  --engine-edge-b3-2: #6b6b6b;
+  --engine-edge-b3-3: #4a4a4a;
+  --engine-edge-b3-4: #242424;
+}
+

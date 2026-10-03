@@ -43,6 +43,29 @@ html[data-ui-theme="oceanic-fingerprint"] {
   --ink-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
   --ink-shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.6);
 
+  /* 浏览器内核微标色彩规范（水墨青黛 · 暗色玄石墨黛冷玉色系） */
+  --engine-cr-red-0: #4a7482;
+  --engine-cr-red-1: #578594;
+  --engine-cr-yellow-0: #345c68;
+  --engine-cr-yellow-1: #3d6b79;
+  --engine-cr-green-0: #25424b;
+  --engine-cr-green-1: #2a4c56;
+  --engine-cr-center-dot: #6fa2b3;
+  --engine-cr-center-bg: #0d1518;
+
+  --engine-edge-b1-0: #1c323a;
+  --engine-edge-b1-1: #25424b;
+  --engine-edge-b2-0: #345c68;
+  --engine-edge-b2-1: #3d6b79;
+  --engine-edge-b2-2: #4a7482;
+  --engine-edge-b2-3: #507e8c;
+  --engine-edge-b3-0: #6fa2b3;
+  --engine-edge-b3-1: #578594;
+  --engine-edge-b3-2: #4a7482;
+  --engine-edge-b3-3: #3d6b79;
+  --engine-edge-b3-4: #487065;
+
+
   /* 全局重置与字体渲染 */
   background-color: var(--ink-abyss) !important;
   color: var(--ink-text-primary) !important;
@@ -93,6 +116,29 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] {
   --ink-shadow-sm: 0 1px 2px rgba(25, 36, 34, 0.05);
   --ink-shadow-md: 0 4px 12px rgba(25, 36, 34, 0.08);
   --ink-shadow-pop: 0 8px 24px rgba(25, 36, 34, 0.12);
+
+  /* 浏览器内核微标色彩规范（水墨青黛 · 浅色素宣竹青墨玉色系） */
+  --engine-cr-red-0: #3b625a;
+  --engine-cr-red-1: #48756c;
+  --engine-cr-yellow-0: #4a7168;
+  --engine-cr-yellow-1: #5b877c;
+  --engine-cr-green-0: #28443e;
+  --engine-cr-green-1: #32544d;
+  --engine-cr-center-dot: #2a4a42;
+  --engine-cr-center-bg: #eef2f1;
+
+  --engine-edge-b1-0: #28443e;
+  --engine-edge-b1-1: #32544d;
+  --engine-edge-b2-0: #3b625a;
+  --engine-edge-b2-1: #48756c;
+  --engine-edge-b2-2: #4a7168;
+  --engine-edge-b2-3: #5b877c;
+  --engine-edge-b3-0: #6d9c90;
+  --engine-edge-b3-1: #5b877c;
+  --engine-edge-b3-2: #48756c;
+  --engine-edge-b3-3: #3b625a;
+  --engine-edge-b3-4: #42705e;
+
 }
 
 /* 浅色模式专属细节与高对比度控制 */
