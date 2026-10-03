@@ -122,6 +122,16 @@ const injection = String.raw`(() => {
 })();`;
 
 const ALLOWED_INTERNAL_PAGES = new RegExp("^" + "(chrome|edge)://(newtab|new-tab-page|extensions|settings|downloads|history|flags|version|bookmarks|about)", "i");
+// The deep() helper embedded in forwarded expressions walks `path` through querySelector()
+// segment by segment, piercing shadow roots along the way. `path` originates from the
+// openBrowserSync CDP binding, which any script on the master page can call directly with
+// an arbitrary string, so it must be validated against the limited charset real generated
+// selectors use before it is allowed anywhere near querySelector().
+const SAFE_SELECTOR_PATH = /^[\w\-#.:\[\]="'()\s>]*$/;
+function sanitizeSelectorPath(value) {
+  const raw = String(value || '');
+  return SAFE_SELECTOR_PATH.test(raw) ? raw : '';
+}
 function normalTabs(values) {
   return values.filter((tab) => {
     if (!tab || !tab.url) return false;
@@ -349,7 +359,7 @@ class LiveSyncController {
   }
 
   async mappedMousePoint(tab, payload, focus = false) {
-    const selector = JSON.stringify(String(payload.selector || '')); const fallbackX = Number(payload.x) || 0; const fallbackY = Number(payload.y) || 0;
+    const selector = JSON.stringify(sanitizeSelectorPath(payload.selector)); const fallbackX = Number(payload.x) || 0; const fallbackY = Number(payload.y) || 0;
     const rx = Math.max(0, Math.min(1, Number.isFinite(Number(payload.rx)) ? Number(payload.rx) : .5)); const ry = Math.max(0, Math.min(1, Number.isFinite(Number(payload.ry)) ? Number(payload.ry) : .5));
     const tag = JSON.stringify(String(payload.tag || '').toLowerCase()); const role = JSON.stringify(String(payload.role || '')); const aria = JSON.stringify(String(payload.ariaLabel || '')); const text = JSON.stringify(String(payload.text || '').trim().slice(0, 200)); const elementType = JSON.stringify(String(payload.elementType || ''));
     const expression = `(() => { const deep=(path)=>{let root=document,e=null;for(const part of path.split(/\s*>>>\s*/)){e=root.querySelector(part);if(!e)return null;root=e.shadowRoot||e;}return e;}; const visible=(e)=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0}; let e=deep(${selector}); if(!e){const query=${tag}||'button,input,textarea,select,a,[role],[tabindex],[contenteditable="true"]';let score=-1e9;for(const item of document.querySelectorAll(query)){if(!visible(item))continue;let value=0;const itemRole=String(item.getAttribute('role')||'');const itemAria=String(item.getAttribute('aria-label')||'');const itemText=String(item.innerText||item.textContent||'').trim().replace(/\s+/g,' ').slice(0,200);if(${tag}&&item.tagName.toLowerCase()===${tag})value+=100;if(${elementType}&&String(item.type||'')===${elementType})value+=120;if(${role}&&itemRole===${role})value+=250;if(${aria}&&itemAria===${aria})value+=500;if(${text}&&itemText===${text})value+=450;if(value>score){score=value;e=item;}}} if(!e)return{x:${fallbackX},y:${fallbackY},found:false};${focus ? "try{e.focus({preventScroll:true})}catch(_){try{e.focus()}catch(__){}}" : ''}const r=e.getBoundingClientRect();return{x:r.left+r.width*${rx},y:r.top+r.height*${ry},found:true};})()`;
@@ -374,7 +384,7 @@ class LiveSyncController {
     } else if (payload.type === 'scroll') {
       const expression = `scrollTo(${Number(payload.x) || 0},${Number(payload.y) || 0});true`; await this.eachSlave(tabId, (tab) => cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', { expression }));
     } else if (payload.type === 'focus' || payload.type === 'beforeinput') {
-      const selector = JSON.stringify(String(payload.selector || '')); const start = Number.isInteger(payload.start) ? payload.start : null; const end = Number.isInteger(payload.end) ? payload.end : null;
+      const selector = JSON.stringify(sanitizeSelectorPath(payload.selector)); const start = Number.isInteger(payload.start) ? payload.start : null; const end = Number.isInteger(payload.end) ? payload.end : null;
       const x = Number(payload.x) || 0; const y = Number(payload.y) || 0; const tag = JSON.stringify(String(payload.tag || '')); const type = JSON.stringify(String(payload.elementType || '')); const name = JSON.stringify(String(payload.name || '')); const placeholder = JSON.stringify(String(payload.placeholder || ''));
       const expression = `(() => { const deep=(path)=>{let root=document,e=null;for(const part of path.split(/\s*>>>\s*/)){e=root.querySelector(part);if(!e)return null;root=e.shadowRoot||e;}return e;}; const at=(doc,px,py)=>{let e=doc.elementFromPoint(px,py);if(e&&e.tagName==='IFRAME'){try{const r=e.getBoundingClientRect(),d=e.contentDocument;if(d)return at(d,px-r.left,py-r.top);}catch(_){}}return e;}; const similar=()=>{const list=[...document.querySelectorAll('input,textarea,[contenteditable="true"]')];let best=null,score=-1e9;for(const e of list){const r=e.getBoundingClientRect();let s=-Math.hypot(r.left+r.width/2-${x},r.top+r.height/2-${y});if(${tag}&&e.tagName.toLowerCase()===${tag})s+=400;if(${type}&&e.type===${type})s+=120;if(${name}&&e.name===${name})s+=300;if(${placeholder}&&e.placeholder===${placeholder})s+=240;if(s>score){score=s;best=e;}}return best;}; const e=deep(${selector})||at(document,${x},${y})||similar(); if(!e)return false; e.focus(); if(typeof e.setSelectionRange==='function' && ${start}!==null)e.setSelectionRange(${start},${end}); return true; })()`;
       await this.eachSlave(tabId, async (tab) => { const result = await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', { expression, returnByValue: true }); if (result.result?.value || !x || !y) return; await cdp.call(tab.webSocketDebuggerUrl, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }); await cdp.call(tab.webSocketDebuggerUrl, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }); });
