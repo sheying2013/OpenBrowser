@@ -48,7 +48,7 @@ function sanitizeProfile(value) {
     title: String(value.title || value.displayName || "").slice(0, 120),
     startUrl: effectiveStartUrl,
     browser: "Google Chrome",
-    os: String(value.os || "Windows").slice(0, 40),
+    os: String(value.os || value.fingerprint?.os || value.privacy?.fingerprint?.os || "Windows").slice(0, 40),
     location: String(value.location || "Local").slice(0, 80),
     networkMode,
     proxy: networkMode === "direct" ? "Direct" : rawProxy,

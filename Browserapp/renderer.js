@@ -6077,6 +6077,23 @@ window.ops.onEvent(async (value) => {
       }
     }
   }
+  if (value.type === 'profiles' && value.action === 'delete' && Array.isArray(value.ids) && value.ids.length) {
+    const deletedSet = new Set(value.ids);
+    const prevLen = ui.profiles.length;
+    ui.profiles = ui.profiles.filter((item) => !deletedSet.has(item.id));
+    for (const id of value.ids) {
+      selectedProfiles.delete(id);
+      selectedSessions.delete(id);
+    }
+    if (!ui.profiles.length) ui.nextProfileNumber = 1;
+    if (ui.profiles.length !== prevLen) {
+      save();
+      invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
+      scheduleStatusRefresh();
+      scheduleSessionRefresh();
+      scheduleRenderProfiles();
+    }
+  }
   if (value.type === 'extensions') await refreshExtensions();
   if (value.type === 'platform-preflight' && Array.isArray(value.warnings)) {
     for (const w of value.warnings) {
@@ -6215,7 +6232,8 @@ async function initialize() {
     const engineStatus = await window.ops.profileStatus();
     if (Array.isArray(engineStatus) && engineStatus.length) {
       const byId = new Map(engineStatus.map((item) => [item.id, item]));
-      ui.profiles = ui.profiles.map((local) => {
+      // Discard stale localStorage entries deleted in engine (e.g. via Local API)
+      ui.profiles = ui.profiles.filter((local) => byId.has(local.id)).map((local) => {
         const remote = byId.get(local.id);
         if (!remote) return local;
         let mergedProxy = mergeRemoteProxy(local.proxy, remote.proxy);
