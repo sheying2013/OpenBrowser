@@ -922,6 +922,11 @@ function evaluateFingerprintDelivery(profile = {}, fingerprint = {}, liveProbe =
 class BrowserEngine {
   constructor(app, options = {}) {
     this.app = app;
+    // Host display scale provider (Windows). Defaulting the kernel UI scale to the real
+    // display scale keeps browser chrome text/icons matching the rest of the OS on
+    // high-DPI (125%/150%/200%) displays. Supplied by main.js; optional so tests and
+    // non-Windows hosts keep the previous default of 1.
+    this.getHostScaleFactor = typeof options.getHostScaleFactor === 'function' ? options.getHostScaleFactor : null;
     this.profiles = new Map();
     this.running = new Map();
     // Per-profile lifecycle barriers. A browser must finish stopping (including
@@ -3736,6 +3741,15 @@ class BrowserEngine {
     let proxyForwarder = null;
     let kernelWindowName = null;
     let liveItem = null;
+    // Also referenced from the catch blocks below, which cannot see try-block
+    // consts. Keeping them (browser especially) inside the try made every start
+    // failure surface as "ReferenceError: browser is not defined" instead of the
+    // real error. Declare them here so the catches report the actual failure.
+    let browser = null;
+    let item = null;
+    let restoreSession = false;
+    let startUrl = null;
+    let injectionFailed = false;
     const startupResources = {
       root: null,
       profileLock: null,
@@ -3765,7 +3779,7 @@ class BrowserEngine {
       await this.ensureKernelBootstrap();
     }
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
-    const browser = this.chooseBrowser(profile);
+    browser = this.chooseBrowser(profile);
     root = this.profileRoot(profile.id);
     startupResources.root = root;
     const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, root, profile.id, { create: true });
@@ -3778,7 +3792,7 @@ class BrowserEngine {
     startupResources.profileLock = profileLock;
     startupResources.lifecycleGeneration = lifecycleGeneration;
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
-    const restoreSession = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession;
+    restoreSession = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession;
     // Parallelized (independent IO overlaps; Preferences writers stay serialized). See method.
     await this.prepareProfileFilesForStart(root, profile, restoreSession);
     await removeSingletonFiles(root, { attempts: 6, delayMs: 40 });
@@ -3792,7 +3806,7 @@ class BrowserEngine {
         extensions.length
       )
       : null;
-    const startUrl = customStartUrls[0] || infoStartUrl;
+    startUrl = customStartUrls[0] || infoStartUrl;
     const proxyConfig = this.proxyConfig(profile.proxy);
     // Site-stability keeps static marks; refresh-on-start only when stability is off.
     const allowSeedRefresh = profile.privacy.refreshFingerprintOnStart && profile.privacy.stabilityMode === 'off';
@@ -3841,7 +3855,13 @@ class BrowserEngine {
       '--remote-allow-origins=http://127.0.0.1,http://localhost',
     ];
     // Fingerprint chrome flags (UA / webrtc / webgl / lang / window-size)
-    args = mergeFlags(args, chromeArgsForFingerprint(fingerprint, profile), {
+    let hostScaleFactor = null;
+    try {
+      hostScaleFactor = this.getHostScaleFactor ? this.getHostScaleFactor() : null;
+    } catch (_) {
+      hostScaleFactor = null;
+    }
+    args = mergeFlags(args, chromeArgsForFingerprint(fingerprint, profile, { hostScaleFactor }), {
       listFlags: LIST_VALUE_FLAGS,
     });
     const langList = (Array.isArray(fingerprint?.languages) && fingerprint.languages.length)
@@ -4172,7 +4192,7 @@ class BrowserEngine {
       }
     }
     const markerProcess = this.startNativeProfileMarker(child.pid, envNumber);
-    const item = {
+    item = {
       child, cdpConnection: connection, proxyForwarder, markerProcess, profileLock,
       pid: child.pid, browser, root, profile, port,
       launchBinary,
@@ -4328,7 +4348,7 @@ class BrowserEngine {
         this.emit({ type: 'worker-fingerprint-injection-failed', id: profile.id, message: workerError?.message || String(workerError) });
       }
 
-      const injectionFailed = !injectSucceeded || !workerSucceeded;
+      injectionFailed = !injectSucceeded || !workerSucceeded;
 
       if (injectionFailed) {
         const failureDetails = [
@@ -4417,10 +4437,10 @@ class BrowserEngine {
         reported: summarizeFp(item.fingerprint),
       });
     } catch (error) {
-      item.cdpError = error.message;
+      if (item) item.cdpError = error.message;
       await fpLog('start.fail', { profileId: profile.id, error: String(error.message || error) });
       // Last chance: still try to open start page so UI is not stuck on about:blank.
-      if (!restoreSession && startUrl && item.port && !item.verificationBlocked && !injectionFailed) {
+      if (item && !restoreSession && startUrl && item.port && !item.verificationBlocked && !injectionFailed) {
         try {
           await this.keepDefaultTab(item.port, startUrl);
           await fpLog('start.navigate-after-fail', { profileId: profile.id, startUrl });
