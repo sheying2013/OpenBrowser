@@ -6,13 +6,17 @@
  *
  * Issue #19 Verification Matrix:
  * 1. Single-flag injection: chromeArgsForFingerprint under win32 platform injects
- *    exactly one --force-device-scale-factor=1 by default.
+ *    exactly one --force-device-scale-factor=1 by default (no host scale, no override).
  * 2. Windows persona parity: All Windows desktop personas inject exactly one
  *    --force-device-scale-factor=1 on win32 platform.
  * 3. User explicit scale overrides:
  *    - profile.privacy.forceDeviceScaleFactor is honored without duplicate flags.
  *    - profile.deviceScaleFactor is honored when privacy override is absent.
  *    - profile.privacy.forceDeviceScaleFactor takes precedence over profile.deviceScaleFactor.
+ * 3b. Host display scale fallback (high-DPI fix):
+ *    - options.hostScaleFactor is used when no explicit profile override exists.
+ *    - Explicit profile overrides still outrank options.hostScaleFactor.
+ *    - Invalid/absent hostScaleFactor falls back to 1 (previous default).
  * 4. Existing CLI argument stability: Pre-existing user-specified --force-device-scale-factor
  *    flags in the target args array are preserved by mergeFlags, and duplicate flags are discarded.
  * 5. Platform isolation: Non-Windows host platforms (darwin, linux) do not inject
@@ -254,6 +258,50 @@ check('mergeFlags integration: repeated merge passes maintain idempotency', () =
     const scaleFlags = getScaleFactorFlags(args);
     assert.strictEqual(scaleFlags.length, 1, `Repeated merges must not accumulate scale flags, got ${scaleFlags.length}`);
     assert.strictEqual(scaleFlags[0], '--force-device-scale-factor=1');
+  });
+});
+
+// --- SECTION 3b: Host display scale fallback (high-DPI fix) ---
+
+check('win32 platform: hostScaleFactor option is used when no explicit override is set', () => {
+  withPlatform('win32', () => {
+    for (const factor of [1.25, 1.5, 2, 1]) {
+      const args = chromeArgsForFingerprint({}, {}, { hostScaleFactor: factor });
+      const scaleFlags = getScaleFactorFlags(args);
+      assert.strictEqual(scaleFlags.length, 1, `Expected single scale flag for host factor ${factor}`);
+      assert.strictEqual(scaleFlags[0], `--force-device-scale-factor=${factor}`);
+      assert.strictEqual(parseScaleFactorValue(scaleFlags[0]), factor);
+    }
+  });
+});
+
+check('win32 platform: explicit profile override outranks hostScaleFactor', () => {
+  withPlatform('win32', () => {
+    const args = chromeArgsForFingerprint({}, { privacy: { forceDeviceScaleFactor: 2 } }, { hostScaleFactor: 1.5 });
+    const scaleFlags = getScaleFactorFlags(args);
+    assert.strictEqual(scaleFlags.length, 1);
+    assert.strictEqual(scaleFlags[0], '--force-device-scale-factor=2', 'Profile override must win over host scale');
+
+    const args2 = chromeArgsForFingerprint({}, { deviceScaleFactor: 1.75 }, { hostScaleFactor: 1.5 });
+    assert.strictEqual(getScaleFactorFlags(args2)[0], '--force-device-scale-factor=1.75', 'Top-level override must win over host scale');
+  });
+});
+
+check('win32 platform: invalid or absent hostScaleFactor falls back to 1', () => {
+  withPlatform('win32', () => {
+    for (const bad of [undefined, null, NaN, 0, -1, 'nonsense', Infinity]) {
+      const args = chromeArgsForFingerprint({}, {}, { hostScaleFactor: bad });
+      const scaleFlags = getScaleFactorFlags(args);
+      assert.strictEqual(scaleFlags.length, 1, `Expected single scale flag for bad host factor ${String(bad)}`);
+      assert.strictEqual(scaleFlags[0], '--force-device-scale-factor=1', `Bad host factor ${String(bad)} must fall back to 1`);
+    }
+  });
+});
+
+check('darwin platform: hostScaleFactor does not inject a scale flag', () => {
+  withPlatform('darwin', () => {
+    const args = chromeArgsForFingerprint({}, {}, { hostScaleFactor: 1.5 });
+    assert.strictEqual(getScaleFactorFlags(args).length, 0, 'macOS must keep native Retina scaling regardless of host scale');
   });
 });
 
