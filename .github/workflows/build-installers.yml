@@ -42,17 +42,15 @@ env:
 
     ### 中文
 
-    - **版本：** **v1.0.23** —— 应用内显示、npm 版本、Windows 可执行文件元数据与文档全部对齐。
-    - **指纹防护：** 修复 `document.fonts.check()` 与 ClientRects 两处可被页面识别的差异（前者对非画像字体族一律返回 false，后者的噪声层实际完全未生效）。
-    - **代理与网络：** 修复代理串未被识别时静默回落系统路由造成真实 IP 泄漏；SOCKS5 下启动页 DNS 泄露检测不再必然误报；新增单代理并发窗口上限与使用情况。
-    - **稳定性：** 修复字体响应改写失败导致请求永久挂起、网页加载后无响应的问题。
+    - **版本对齐：** 应用内显示、npm 版本、Windows 可执行文件元数据及仓库文档全量严格对齐至 **v1.0.24**。
+    - **Local API 健壮性：** 规范代理检测与同步接口异常返回（杜绝非预期 500）；操作对象不存在明确返回 404；用户列表接口统一补充 `id` / `title` 字段。
+    - **环境生命周期保障：** 删除环境即时向前端广播清理状态，彻底杜绝重启后复活幽灵环境。
 
     ### English
 
-    - **Version:** **v1.0.23** - in-app display, npm metadata, Windows executable metadata and docs are aligned.
-    - **Fingerprint hardening:** fixed two page-detectable differences: `document.fonts.check()` and the ClientRects noise layer (which was silently inert).
-    - **Proxy & network:** fixed a silent fallback to the system route that leaked the real IP; the SOCKS5 DNS-leak check no longer always false-positives; added a per-proxy concurrency cap and usage display.
-    - **Stability:** fixed a stalled font-response rewrite that left pages unresponsive after load.
+    - **Version Alignment:** In-app display, npm package, Windows PE metadata, and docs are aligned to **v1.0.24**.
+    - **Local API Hardening:** Normalized proxy-check and sync errors to clear client codes (no 500s); explicit 404 on missing targets; unified `id` / `title` in user list.
+    - **Profile Lifecycle:** Instant IPC state broadcast upon deletion to eliminate ghost profiles across restarts.
 
     ### 下载 / Downloads
 
