@@ -339,7 +339,8 @@ dialog[open] > .themed-select-menu {
 }
 .new-browser svg { width: 16px; height: 16px; }
 
-.sidebar nav { min-height: 0; padding: 2px 0 8px; overflow-y: auto; scrollbar-width: thin; }
+.sidebar nav { min-height: 0; padding: 2px 0 8px; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; -ms-overflow-style: none; }
+.sidebar nav::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .sidebar-footer {
   display: flex;
   align-items: center;
