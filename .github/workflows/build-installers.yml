@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.23'
+        description: 'Release tag to create, for example v1.0.24'
         required: true
-        default: 'v1.0.23'
+        default: 'v1.0.24'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
