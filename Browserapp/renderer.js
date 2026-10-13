@@ -2059,7 +2059,7 @@ function proxyAuthActionForUpdate(currentValue, nextValue, networkMode = 'proxy'
   return null;
 }
 
-function editorSet(id, value) { const field = $(id); if (field) field.value = value ?? ''; }
+function editorSet(id, value) { const field = $(id); if (field) { field.value = value ?? ''; if (field instanceof HTMLSelectElement && typeof syncThemedSelect === 'function') syncThemedSelect(field); } }
 function editorCheck(id, value) { const field = $(id); if (field) field.checked = Boolean(value); }
 function editorSelectedNetwork() { return document.querySelector('input[name="editor-network"]:checked')?.value || 'direct'; }
 
@@ -2651,6 +2651,7 @@ function openProfileEditor(id) {
   editorSet('#editor-block-urls', advanced.blockUrls || '');
   setEditorTab('basic');
   updateEditorVisibility();
+  if (typeof syncThemedSelects === 'function') syncThemedSelects($('#view-profile-editor'));
   renderEditorSummary();
   switchView('profile-editor');
 }

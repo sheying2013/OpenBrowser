@@ -146,78 +146,86 @@
               <input id="editor-id" type="hidden">
               <input id="editor-name" type="hidden">
               <section class="editor-panel active" data-editor-panel="basic">
-                <h3>平台账号配置</h3>
-                <div class="form-two platform-row">
-                  <label class="platform-select-label">* 平台
-                    <select id="editor-platform-type" class="platform-select">
-                      <option value="blank" data-url="">空白页</option>
-                      <option value="other" data-url="" selected>其他平台</option>
-                      <option value="facebook" data-url="https://www.facebook.com">facebook.com</option>
-                      <option value="amazon" data-url="https://www.amazon.com">amazon.com</option>
-                      <option value="paypal" data-url="https://www.paypal.com">paypal.com</option>
-                      <option value="gmail" data-url="https://mail.google.com">gmail.com</option>
-                      <option value="aliexpress" data-url="https://www.aliexpress.com">aliexpress.com</option>
-                      <option value="ebay" data-url="https://www.ebay.com">ebay.com</option>
-                      <option value="lazada" data-url="https://www.lazada.com">lazada.com</option>
-                      <option value="outlook" data-url="https://outlook.live.com">outlook.com</option>
-                      <option value="payoneer" data-url="https://www.payoneer.com">payoneer.com</option>
-                      <option value="shopify" data-url="https://www.shopify.com">shopify.com</option>
-                      <option value="stripe" data-url="https://dashboard.stripe.com">stripe.com</option>
-                      <option value="walmart" data-url="https://www.walmart.com">walmart.com</option>
-                      <option value="wish" data-url="https://www.wish.com">wish.com</option>
-                      <option value="shopee" data-url="https://shopee.com">shopee.com</option>
-                      <option value="etsy" data-url="https://www.etsy.com">etsy.com</option>
-                      <option value="dhgate" data-url="https://www.dhgate.com">dhgate.com</option>
-                      <option value="alibaba" data-url="https://www.alibaba.com">alibaba.com</option>
-                      <option value="tiktok" data-url="https://www.tiktok.com">tiktok.com</option>
-                      <option value="whatsapp" data-url="https://web.whatsapp.com">web.whatsapp.com</option>
-                      <option value="linkedin" data-url="https://www.linkedin.com">linkedin.com</option>
-                      <option value="discord" data-url="https://discord.com">discord.com</option>
-                      <option value="instagram" data-url="https://www.instagram.com">instagram.com</option>
-                      <option value="twitter" data-url="https://x.com">x.com / twitter</option>
-                      <option value="youtube" data-url="https://www.youtube.com">youtube.com</option>
-                      <option value="google" data-url="https://www.google.com">google.com</option>
-                    </select>
+                <div class="editor-section-card">
+                  <div class="editor-card-header">
+                    <div class="editor-card-title">目标平台与环境标识</div>
+                    <div class="editor-card-desc">定义业务运行的目标电商/社交平台与启动 URL</div>
+                  </div>
+                  <div class="form-two platform-row">
+                    <label class="platform-select-label">* 业务平台
+                      <select id="editor-platform-type" class="platform-select">
+                        <option value="blank" data-url="">空白页</option>
+                        <option value="other" data-url="" selected>其他平台</option>
+                        <option value="facebook" data-url="https://www.facebook.com">facebook.com</option>
+                        <option value="amazon" data-url="https://www.amazon.com">amazon.com</option>
+                        <option value="paypal" data-url="https://www.paypal.com">paypal.com</option>
+                        <option value="gmail" data-url="https://mail.google.com">gmail.com</option>
+                        <option value="aliexpress" data-url="https://www.aliexpress.com">aliexpress.com</option>
+                        <option value="ebay" data-url="https://www.ebay.com">ebay.com</option>
+                        <option value="lazada" data-url="https://www.lazada.com">lazada.com</option>
+                        <option value="outlook" data-url="https://outlook.live.com">outlook.com</option>
+                        <option value="payoneer" data-url="https://www.payoneer.com">payoneer.com</option>
+                        <option value="shopify" data-url="https://www.shopify.com">shopify.com</option>
+                        <option value="stripe" data-url="https://dashboard.stripe.com">stripe.com</option>
+                        <option value="walmart" data-url="https://www.walmart.com">walmart.com</option>
+                        <option value="wish" data-url="https://www.wish.com">wish.com</option>
+                        <option value="shopee" data-url="https://shopee.com">shopee.com</option>
+                        <option value="etsy" data-url="https://www.etsy.com">etsy.com</option>
+                        <option value="dhgate" data-url="https://www.dhgate.com">dhgate.com</option>
+                        <option value="alibaba" data-url="https://www.alibaba.com">alibaba.com</option>
+                        <option value="tiktok" data-url="https://www.tiktok.com">tiktok.com</option>
+                        <option value="whatsapp" data-url="https://web.whatsapp.com">web.whatsapp.com</option>
+                        <option value="linkedin" data-url="https://www.linkedin.com">linkedin.com</option>
+                        <option value="discord" data-url="https://discord.com">discord.com</option>
+                        <option value="instagram" data-url="https://www.instagram.com">instagram.com</option>
+                        <option value="twitter" data-url="https://x.com">x.com / twitter</option>
+                        <option value="youtube" data-url="https://www.youtube.com">youtube.com</option>
+                        <option value="google" data-url="https://www.google.com">google.com</option>
+                      </select>
+                    </label>
+                    <label class="platform-url-label">* 启动时打开的指定地址
+                      <input id="editor-start-url" type="url" placeholder="选择平台后自动填入，也可手动修改" autocomplete="off">
+                    </label>
+                  </div>
+                  <p class="network-mode-hint">选择预设平台会写入对应地址；选「空白页」则启动时不打开任何站点；「其他平台」可手填任意 URL。</p>
+                  <div class="form-three">
+                    <label>窗口显示名称<input id="editor-title" maxlength="120" placeholder="例如：美区主号-01"></label>
+                    <label>归属分组<select id="editor-group"></select></label>
+                    <label>标签分类<input id="editor-tag" maxlength="40" placeholder="例如：主力、养号"></label>
+                  </div>
+                </div>
+
+                <div class="editor-section-card">
+                  <div class="editor-card-header">
+                    <div class="editor-card-title">登录凭据与身份托管</div>
+                    <div class="editor-card-desc">自动托管平台账号、密码、双重身份验证密钥与 Cookie 会话</div>
+                  </div>
+                  <div class="form-three">
+                    <label>用户名 / 邮箱<input id="editor-platform-user" autocomplete="off" placeholder="平台登录用户名"></label>
+                    <label>密码<input id="editor-platform-pass" type="password" autocomplete="new-password" placeholder="平台登录密码"></label>
+                    <label>2FA 密钥 (TOTP)<input id="editor-platform-2fa" autocomplete="off" placeholder="双重验证密钥（可选）"></label>
+                  </div>
+                  <label style="margin-top:10px">Cookie 会话数据 (JSON)
+                    <textarea id="editor-cookies" rows="4" placeholder='[{"name":"session","value":"...","domain":".example.com","path":"/"}]'></textarea>
+                    <small>选填，支持标准 JSON 数组格式。保存后下次启动自动导入；开启云备份后关闭窗口会自动保持最新同步。</small>
                   </label>
-                  <label class="platform-url-label">* 指定地址
-                    <input id="editor-start-url" type="url" placeholder="选择平台后自动填入，也可手动修改" autocomplete="off">
-                  </label>
+                  <div class="storage-actions" style="margin-top:8px;margin-bottom:4px">
+                    <button class="outline" type="button" id="editor-cookie-export">导出 Cookie</button>
+                    <button class="outline" type="button" id="editor-cookie-import-file">从文件导入 Cookie</button>
+                    <button class="outline" type="button" id="editor-clear-cache-cookie">清除缓存及 Cookie</button>
+                  </div>
+                  <input id="editor-cookie-file" type="file" accept=".json,.txt" hidden>
                 </div>
-                <p class="network-mode-hint">选择预设平台会写入指定地址；选「空白页」则启动不打开站点；「其他平台」可手填任意 URL。</p>
-                <label>窗口名称<input id="editor-title" maxlength="120" placeholder="例如：Gmail"></label>
-                <div class="form-two">
-                  <label>选择分组<select id="editor-group"></select></label>
-                  <label>标签<input id="editor-tag" maxlength="40" placeholder="可选标签"></label>
-                </div>
-                <div class="form-two">
-                  <label>用户名<input id="editor-platform-user" autocomplete="off" placeholder="平台登录用户名"></label>
-                  <label>密码<input id="editor-platform-pass" type="password" autocomplete="new-password" placeholder="平台登录密码"></label>
-                </div>
-                <label>2FA 密钥<input id="editor-platform-2fa" autocomplete="off" placeholder="TOTP 密钥（可选）"></label>
-                <label>Cookie JSON<textarea id="editor-cookies" rows="5" placeholder='[{"name":"session","value":"...","domain":".example.com","path":"/"}]'></textarea>
-                  <small>选填，支持 JSON 数组。保存后下次启动导入；开启云备份后关闭窗口会自动刷新。</small>
-                </label>
-                <div class="storage-actions" style="margin-top:4px;margin-bottom:12px">
-                  <button class="outline" type="button" id="editor-cookie-export">导出 Cookie</button>
-                  <button class="outline" type="button" id="editor-cookie-import-file">从文件导入 Cookie</button>
-                  <button class="outline" type="button" id="editor-clear-cache-cookie">清除缓存及 Cookie</button>
-                </div>
-                <input id="editor-cookie-file" type="file" accept=".json,.txt" hidden>
-                <label>备注<textarea id="editor-note" rows="3" maxlength="2000" placeholder="浏览器窗口备注"></textarea></label>
-                <div class="form-two" hidden>
-                  <label>浏览器<select id="editor-browser"><option>Google Chrome</option></select></label>
-                  <label>操作系统<select id="editor-os"><option value="Windows">Windows</option><option value="macOS">macOS</option><option value="Linux">Linux</option><option value="Android">Android</option></select></label>
-                  <label><span data-i18n="common.language">语言</span><select id="editor-language">
-                    <option value="en-US">English (US)</option>
-                    <option value="zh-CN">中文（简体）</option>
-                    <option value="ja-JP">日本語</option>
-                    <option value="vi-VN">Tiếng Việt</option>
-                    <option value="fr-FR">Français</option>
-                    <option value="de-DE">Deutsch</option>
-                    <option value="th-TH">ไทย</option>
-                    <option value="id-ID">Bahasa Indonesia</option>
-                    <option value="ko-KR">한국어</option>
-                  </select></label>
+
+                <div class="editor-section-card">
+                  <div class="editor-card-header">
+                    <div class="editor-card-title">环境备注与附属说明</div>
+                    <div class="editor-card-desc">记录该浏览器环境的操作日志、账号用途或团队交接备忘</div>
+                  </div>
+                  <label>备注内容<textarea id="editor-note" rows="3" maxlength="2000" placeholder="记录该环境的详细说明、历史操作或注意事项"></textarea></label>
+                  <div class="form-two" hidden>
+                    <label>浏览器<select id="editor-browser"><option>Google Chrome</option></select></label>
+                  </div>
                 </div>
               </section>
               <section class="editor-panel" data-editor-panel="proxy">
@@ -302,72 +310,157 @@
                 </div>
               </section>
               <section class="editor-panel" data-editor-panel="privacy">
-                <h3>指纹配置</h3>
-                <label class="check-row"><input id="editor-refresh-fingerprint" type="checkbox"> 每次打开刷新指纹</label>
-                <label>User-Agent
-                  <textarea id="editor-user-agent" rows="2" placeholder="留空 = 按环境 ID 自动生成"></textarea>
-                </label>
-                <div class="ua-tools">
-                  <button type="button" class="outline" id="editor-ua-generate">按系统生成 UA</button>
-                  <button type="button" class="outline" id="editor-ua-random">随机 UA</button>
-                  <button type="button" class="outline" id="editor-ua-clear">跟随自动</button>
-                  <label class="ua-ver">Chrome 主版本 <input id="editor-ua-chrome-major" type="number" min="100" max="200" value="131" style="width:72px"></label>
+                <div class="editor-section-card">
+                  <div class="editor-card-header">
+                    <div class="editor-card-title">系统与底层平台</div>
+                    <div class="editor-card-desc">配置宿主操作系统类型与 User-Agent 基础骨骼</div>
+                  </div>
+                  <div class="form-two">
+                    <label>操作系统
+                      <select id="editor-os">
+                        <option value="Windows">Windows</option>
+                        <option value="macOS">macOS</option>
+                        <option value="Linux">Linux</option>
+                        <option value="Android">Android</option>
+                      </select>
+                    </label>
+                    <label class="check-row" style="margin-top:24px"><input id="editor-refresh-fingerprint" type="checkbox"> 每次打开自动刷新随机指纹</label>
+                  </div>
+                  <label>User-Agent
+                    <textarea id="editor-user-agent" rows="2" placeholder="留空 = 按环境 ID 自动生成真实对应系统的 UA"></textarea>
+                  </label>
+                  <div class="ua-tools">
+                    <button type="button" class="outline" id="editor-ua-generate">按系统生成 UA</button>
+                    <button type="button" class="outline" id="editor-ua-random">随机 UA</button>
+                    <button type="button" class="outline" id="editor-ua-clear">跟随自动</button>
+                    <label class="ua-ver">Chrome 主版本 <input id="editor-ua-chrome-major" type="number" min="100" max="200" value="131" style="width:72px"></label>
+                  </div>
+                  <pre class="ua-meta-preview" id="editor-ua-meta" hidden></pre>
                 </div>
-                <pre class="ua-meta-preview" id="editor-ua-meta" hidden></pre>
-                <div class="settings-row"><span data-i18n="editor.langMode">浏览器语言</span>
-                  <select id="editor-language-mode" class="language-mode-select">
-                    <option value="ip" selected data-i18n="editor.lang.ip">基于出口 IP 所在地（如日本→日语）</option>
-                    <option value="system" data-i18n="editor.lang.system">系统真实</option>
-                    <option value="en-US">English (US)</option>
-                    <option value="en-GB">English (UK)</option>
-                    <option value="zh-CN">中文（简体）</option>
-                    <option value="zh-TW">中文（繁体）</option>
-                    <option value="ja-JP">日本語</option>
-                    <option value="vi-VN">Tiếng Việt</option>
-                    <option value="fr-FR">Français</option>
-                    <option value="de-DE">Deutsch</option>
-                    <option value="th-TH">ไทย</option>
-                    <option value="id-ID">Bahasa Indonesia</option>
-                    <option value="ko-KR">한국어</option>
-                    <option value="es-ES">Español</option>
-                    <option value="pt-BR">Português (BR)</option>
-                    <option value="ru-RU">Русский</option>
-                    <option value="ar-SA">العربية</option>
-                  </select>
+
+                <div class="editor-section-card">
+                  <div class="editor-card-header">
+                    <div class="editor-card-title">语言、地域与网络伪装</div>
+                    <div class="editor-card-desc">语言模式、IP对齐、出口时区与高精度经纬度模拟</div>
+                  </div>
+                  <div class="form-two">
+                    <label><span data-i18n="editor.langMode">语言生成策略</span>
+                      <select id="editor-language-mode" class="language-mode-select">
+                        <option value="ip" selected data-i18n="editor.lang.ip">基于出口 IP 所在地（如日本→日语）</option>
+                        <option value="system" data-i18n="editor.lang.system">系统真实</option>
+                        <option value="en-US">English (US)</option>
+                        <option value="en-GB">English (UK)</option>
+                        <option value="zh-CN">中文（简体）</option>
+                        <option value="zh-TW">中文（繁体）</option>
+                        <option value="ja-JP">日本語</option>
+                        <option value="vi-VN">Tiếng Việt</option>
+                        <option value="fr-FR">Français</option>
+                        <option value="de-DE">Deutsch</option>
+                        <option value="th-TH">ไทย</option>
+                        <option value="id-ID">Bahasa Indonesia</option>
+                        <option value="ko-KR">한국어</option>
+                        <option value="es-ES">Español</option>
+                        <option value="pt-BR">Português (BR)</option>
+                        <option value="ru-RU">Русский</option>
+                        <option value="ar-SA">العربية</option>
+                      </select>
+                    </label>
+                    <label><span data-i18n="common.language">固定首选语言 (Fallback)</span>
+                      <select id="editor-language">
+                        <option value="en-US">English (US)</option>
+                        <option value="zh-CN">中文（简体）</option>
+                        <option value="zh-TW">中文（繁体）</option>
+                        <option value="ja-JP">日本語</option>
+                        <option value="vi-VN">Tiếng Việt</option>
+                        <option value="fr-FR">Français</option>
+                        <option value="de-DE">Deutsch</option>
+                        <option value="th-TH">ไทย</option>
+                        <option value="id-ID">Bahasa Indonesia</option>
+                        <option value="ko-KR">한국어</option>
+                        <option value="es-ES">Español</option>
+                        <option value="pt-BR">Português (BR)</option>
+                        <option value="ru-RU">Русский</option>
+                        <option value="ar-SA">العربية</option>
+                      </select>
+                    </label>
+                  </div>
+                  <p class="network-mode-hint" data-i18n="editor.lang.hint">选「基于出口 IP」时：系统优先检测节点出口国家（如 JP → ja-JP，US → en-US）。当节点不可用或检测超时，回退至下方首选语言。</p>
+                  <input type="hidden" id="editor-ui-language" value="profile">
+                  <input type="checkbox" id="editor-lang-from-ip" checked hidden>
                 </div>
-                <p class="network-mode-hint" data-i18n="editor.lang.hint">选「基于出口 IP」时：日本 IP → ja-JP，美国 → en-US，韩国 → ko-KR 等；启动前会检测出口国家。也可固定为中文/英文/日语等。</p>
-                <input type="hidden" id="editor-ui-language" value="profile">
-                <input type="checkbox" id="editor-lang-from-ip" checked hidden>
-                <div class="settings-row"><span>时区</span>
-                  <select id="editor-timezone-mode"><option value="ip">基于出口 IP</option><option value="real">系统真实</option><option value="custom">自定义</option></select>
-                  <input id="editor-timezone" placeholder="Asia/Shanghai">
+                <div class="editor-section-card">
+                  <div class="editor-card-header">
+                    <div class="editor-card-title">时区、地理位置与网络协议栈</div>
+                    <div class="editor-card-desc">防止 WebRTC 泄漏真实 IP，精确定位经纬度坐标与出口时区</div>
+                  </div>
+                  <div class="form-two">
+                    <label>出口时区
+                      <div class="field-inline-group">
+                        <select id="editor-timezone-mode"><option value="ip">基于出口 IP</option><option value="real">系统真实</option><option value="custom">自定义</option></select>
+                        <input id="editor-timezone" placeholder="例如：Asia/Shanghai">
+                      </div>
+                    </label>
+                    <label>WebRTC 防泄露
+                      <select id="editor-webrtc"><option value="proxy">替换（仅代理）</option><option value="real">真实直通</option><option value="disabled">完全禁用</option></select>
+                    </label>
+                  </div>
+                  <div class="form-two" style="margin-top:12px">
+                    <label>地理位置模拟
+                      <div class="field-inline-group">
+                        <select id="editor-geo-mode"><option value="ip">基于出口 IP</option><option value="prompt">询问</option><option value="disabled">禁用</option><option value="custom">自定义</option></select>
+                        <label class="check-row" style="margin:0;white-space:nowrap"><input id="editor-geo-from-ip" type="checkbox" checked> 基于 IP 自动生成坐标</label>
+                      </div>
+                    </label>
+                  </div>
+                  <div class="form-three geo-custom" style="margin-top:12px"><label>纬度<input id="editor-latitude" type="number" step="0.000001" min="-90" max="90"></label><label>经度<input id="editor-longitude" type="number" step="0.000001" min="-180" max="180"></label><label>精度（米）<input id="editor-accuracy" type="number" min="1" max="100000" value="100"></label></div>
                 </div>
-                <div class="settings-row"><span>地理位置</span>
-                  <select id="editor-geo-mode"><option value="ip">基于出口 IP</option><option value="prompt">询问</option><option value="disabled">禁用</option><option value="custom">自定义</option></select>
-                  <label class="check-row" style="margin:0"><input id="editor-geo-from-ip" type="checkbox" checked> 基于 IP 生成坐标</label>
+
+                <div class="editor-section-card">
+                  <div class="editor-card-header">
+                    <div class="editor-card-title">显示与视口配置</div>
+                    <div class="editor-card-desc">屏幕分辨率、窗口尺寸、像素比与系统默认字体</div>
+                  </div>
+                  <div class="form-two">
+                    <label>视口分辨率
+                      <div class="field-inline-group">
+                        <select id="editor-resolution"><option value="1280x820">1280 × 820</option><option value="1366x768">1366 × 768</option><option value="1440x900">1440 × 900</option><option value="1920x1080">1920 × 1080</option><option value="custom">自定义</option></select>
+                        <input id="editor-width" type="number" min="640" max="7680" placeholder="宽" style="max-width:80px">
+                        <input id="editor-height" type="number" min="480" max="4320" placeholder="高" style="max-width:80px">
+                      </div>
+                    </label>
+                    <label>字体基线
+                      <div class="field-inline-group">
+                        <select id="editor-font-mode"><option value="default">系统默认</option><option value="custom">自定义字号</option></select>
+                        <input id="editor-font-size" type="number" min="9" max="36" value="16" style="max-width:80px">
+                      </div>
+                    </label>
+                  </div>
                 </div>
-                <div class="form-three geo-custom"><label>纬度<input id="editor-latitude" type="number" step="0.000001" min="-90" max="90"></label><label>经度<input id="editor-longitude" type="number" step="0.000001" min="-180" max="180"></label><label>精度（米）<input id="editor-accuracy" type="number" min="1" max="100000" value="100"></label></div>
-                <div class="settings-row"><span>分辨率</span><select id="editor-resolution"><option value="1280x820">1280 × 820</option><option value="1366x768">1366 × 768</option><option value="1440x900">1440 × 900</option><option value="1920x1080">1920 × 1080</option><option value="custom">自定义</option></select><input id="editor-width" type="number" min="640" max="7680" placeholder="宽"><input id="editor-height" type="number" min="480" max="4320" placeholder="高"></div>
-                <div class="settings-row"><span>字体</span><select id="editor-font-mode"><option value="default">系统默认</option><option value="custom">自定义字号</option></select><input id="editor-font-size" type="number" min="9" max="36" value="16"></div>
-                <div class="settings-row"><span>WebRTC</span><select id="editor-webrtc"><option value="proxy">替换（仅代理）</option><option value="real">真实</option><option value="disabled">禁用</option></select></div>
-                <div class="privacy-grid">
-                  <label title="真实机型：CPU 核数、内存、GPU、屏幕与像素比取自同一台真实机器，避免出现现实中不存在的硬件组合">设备档案<select id="editor-device-profile"><option value="persona">真实机型</option><option value="default">独立随机</option></select></label>
-                  <label>Canvas<select id="editor-canvas"><option value="noise">随机</option><option value="real">真实</option><option value="blocked">关闭</option></select></label>
-                  <label>WebGL 图像<select id="editor-webgl"><option value="noise">随机</option><option value="real">真实</option><option value="blocked">关闭</option></select></label>
-                  <label>WebGL 元数据<select id="editor-webgl-meta"><option value="noise">随机</option><option value="real">真实</option><option value="blocked">关闭</option></select></label>
-                  <label>WebGPU<select id="editor-webgpu"><option value="webgl">基于 WebGL</option><option value="real">真实</option><option value="blocked">禁用</option></select></label>
-                  <label>AudioContext<select id="editor-audio"><option value="noise">随机</option><option value="real">真实</option><option value="muted">关闭</option></select></label>
-                  <label>媒体设备<select id="editor-media"><option value="noise">随机</option><option value="real">真实</option><option value="blocked">关闭</option></select></label>
-                  <label>设备枚举<select id="editor-media-devices"><option value="">跟随媒体设备</option><option value="noise">随机</option><option value="real">真实</option><option value="empty">空列表</option></select></label>
-                  <label>电池状态<select id="editor-battery"><option value="noise">随机</option><option value="real">真实</option><option value="blocked">关闭</option></select></label>
-                  <label>蓝牙适配器<select id="editor-bluetooth"><option value="real">真实</option><option value="blocked">关闭</option></select></label>
-                  <label>ClientRects<select id="editor-client-rects"><option value="noise">随机</option><option value="real">真实</option></select></label>
-                  <label>SpeechVoices<select id="editor-speech"><option value="noise">随机</option><option value="real">真实</option><option value="blocked">关闭</option></select></label>
-                  <label>CPU 核心<select id="editor-cores"><option value="">自动</option><option value="0">真实</option><option value="2">2</option><option value="4">4</option><option value="6">6</option><option value="8">8</option><option value="10">10</option><option value="12">12</option><option value="16">16</option></select></label>
-                  <label>内存参数<select id="editor-memory"><option value="">自动</option><option value="0">真实</option><option value="2">2 GB</option><option value="4">4 GB</option><option value="6">6 GB</option><option value="8">8 GB</option></select></label>
-                  <label>设备名称模式<select id="editor-device-name-mode"><option value="noise">随机</option><option value="custom">自定义</option><option value="real">真实</option></select></label>
-                  <label>设备名称<input id="editor-device-name" placeholder="自定义设备名"></label>
-                  <label>Do Not Track<select id="editor-dnt-mode"><option value="default">默认</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+
+                <div class="editor-section-card">
+                  <div class="editor-card-header">
+                    <div class="editor-card-title">硬件掩码与底层传感器矩阵</div>
+                    <div class="editor-card-desc">图形渲染器、音频上下文、硬件拓扑与传感器噪声混淆矩阵</div>
+                  </div>
+                  <div class="privacy-grid">
+                    <label title="真实机型：CPU 核数、内存、GPU、屏幕与像素比取自同一台真实机器，避免出现现实中不存在的硬件组合">设备档案<select id="editor-device-profile"><option value="persona">真实机型</option><option value="default">独立随机</option></select></label>
+                    <label>Canvas 噪声<select id="editor-canvas"><option value="noise">随机混淆</option><option value="real">真实直通</option><option value="blocked">阻断关闭</option></select></label>
+                    <label>WebGL 图像<select id="editor-webgl"><option value="noise">随机混淆</option><option value="real">真实直通</option><option value="blocked">阻断关闭</option></select></label>
+                    <label>WebGL 元数据<select id="editor-webgl-meta"><option value="noise">随机混淆</option><option value="real">真实直通</option><option value="blocked">阻断关闭</option></select></label>
+                    <label>WebGPU 拓扑<select id="editor-webgpu"><option value="webgl">基于 WebGL</option><option value="real">真实直通</option><option value="blocked">禁用</option></select></label>
+                    <label>AudioContext<select id="editor-audio"><option value="noise">随机混淆</option><option value="real">真实直通</option><option value="muted">静音阻断</option></select></label>
+                    <label>媒体设备<select id="editor-media"><option value="noise">随机模拟</option><option value="real">真实直通</option><option value="blocked">阻断关闭</option></select></label>
+                    <label>设备枚举<select id="editor-media-devices"><option value="">跟随媒体设备</option><option value="noise">随机模拟</option><option value="real">真实直通</option><option value="empty">空设备列表</option></select></label>
+                    <label>电池状态<select id="editor-battery"><option value="noise">随机模拟</option><option value="real">真实直通</option><option value="blocked">阻断关闭</option></select></label>
+                    <label>蓝牙适配器<select id="editor-bluetooth"><option value="real">真实直通</option><option value="blocked">阻断关闭</option></select></label>
+                    <label>ClientRects<select id="editor-client-rects"><option value="noise">随机微扰</option><option value="real">真实直通</option></select></label>
+                    <label>SpeechVoices<select id="editor-speech"><option value="noise">随机模拟</option><option value="real">真实直通</option><option value="blocked">阻断关闭</option></select></label>
+                    <label>CPU 核心数<select id="editor-cores"><option value="">自动</option><option value="0">真实</option><option value="2">2 核心</option><option value="4">4 核心</option><option value="6">6 核心</option><option value="8">8 核心</option><option value="10">10 核心</option><option value="12">12 核心</option><option value="16">16 核心</option></select></label>
+                    <label>内存规格<select id="editor-memory"><option value="">自动</option><option value="0">真实</option><option value="2">2 GB</option><option value="4">4 GB</option><option value="6">6 GB</option><option value="8">8 GB</option></select></label>
+                    <label>设备名称模式<select id="editor-device-name-mode"><option value="noise">随机生成</option><option value="custom">自定义输入</option><option value="real">系统真实</option></select></label>
+                    <label>自定义设备名<input id="editor-device-name" placeholder="自定义设备名"></label>
+                    <label>Do Not Track<select id="editor-dnt-mode"><option value="default">默认未设置</option><option value="on">开启 (1)</option><option value="off">关闭 (0)</option></select></label>
+                  </div>
                 </div>
                 <div class="advanced-card" style="margin-top:4px">
                   <strong>站点稳定性</strong>

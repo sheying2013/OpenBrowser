@@ -848,6 +848,118 @@ html #view-profiles .table-card td.col-browser .browser-engine-icon svg,
   border-color: #a5f3fc;
   background: #ecfeff;
 }
+
+/* ==========================================================================
+   Enhanced Environment Editor Layout & Visual Hierarchy (重构环境编辑器)
+   ========================================================================== */
+
+#view-profile-editor .editor-section-card {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 18px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+#view-profile-editor .editor-section-card:hover {
+  border-color: color-mix(in srgb, var(--ui-border) 70%, var(--ui-accent));
+}
+
+#view-profile-editor .editor-card-header {
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--ui-border) 40%, transparent);
+}
+
+#view-profile-editor .editor-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ui-text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#view-profile-editor .editor-card-title::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 14px;
+  background: var(--ui-accent);
+  border-radius: 2px;
+}
+
+#view-profile-editor .editor-card-desc {
+  font-size: 12px;
+  color: var(--ui-muted);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+#view-profile-editor .editor-panel {
+  max-width: 1040px;
+}
+
+#view-profile-editor .editor-panel h3 {
+  display: none; /* 由卡片级标题体系替代原单调的 h3 */
+}
+
+#view-profile-editor .privacy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px 16px;
+  margin-top: 6px;
+}
+
+#view-profile-editor .privacy-grid label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ui-text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+#view-profile-editor .privacy-grid label select,
+#view-profile-editor .privacy-grid label input {
+  height: 32px;
+  font-size: 12px;
+}
+
+#view-profile-editor .form-three {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+#view-profile-editor label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ui-text-muted);
+}
+
+#view-profile-editor input:not([type="checkbox"]):not([type="radio"]),
+#view-profile-editor select,
+#view-profile-editor textarea {
+  border-radius: 6px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+#view-profile-editor input:not([type="checkbox"]):not([type="radio"]):focus,
+#view-profile-editor select:focus,
+#view-profile-editor textarea:focus {
+  border-color: var(--ui-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent) 20%, transparent);
+}
+
+#view-profile-editor .storage-actions button {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 5px;
+}
+
 #view-profiles .table-card .actions .mini:not(.action-icon) {
   flex: 0 1 auto;
   min-width: 0;
