@@ -2265,28 +2265,11 @@ function editorDraft(strict = true) {
     os: $('#editor-os')?.value || current.os || 'Windows',
     userAgent: ($('#editor-user-agent')?.value || '').trim(),
     cookies: strict ? editorCookies() : ($('#editor-cookies')?.value || '').trim(),
-    language: (() => {
-      // 最终语言在 engine.start 时按出口 IP 解析（JP→ja-JP）；此处只存草稿/固定值
-      const mode = $('#editor-language-mode')?.value || 'ip';
-      if (mode === 'ip') {
-        // 若已测过出口国家，先写入对应语言；否则保留原值，启动时再解析
-        const cc = editorNetworkResult?.countryCode || current.exitCountryCode || '';
-        if (cc) {
-          try {
-            // 与 engine locale-from-country 对齐的轻量映射（渲染进程不 require 该模块）
-            const map = { JP: 'ja-JP', CN: 'zh-CN', TW: 'zh-TW', HK: 'zh-HK', KR: 'ko-KR', US: 'en-US', GB: 'en-GB', DE: 'de-DE', FR: 'fr-FR', ES: 'es-ES', BR: 'pt-BR', RU: 'ru-RU', TH: 'th-TH', VN: 'vi-VN', ID: 'id-ID', SA: 'ar-SA', SG: 'en-SG', AU: 'en-AU', CA: 'en-CA', IN: 'en-IN', PH: 'en-PH', MX: 'es-MX', IT: 'it-IT', NL: 'nl-NL', PL: 'pl-PL', TR: 'tr-TR', UA: 'uk-UA', MY: 'ms-MY' };
-            const code = String(cc).toUpperCase();
-            if (map[code]) return map[code];
-          } catch (_) {}
-        }
-        return current.language || 'en-US';
-      }
-      if (mode === 'system') {
-        try { return Intl.DateTimeFormat().resolvedOptions().locale || 'en-US'; } catch (_) { return 'en-US'; }
-      }
-      if (/^[a-z]{2}(-[A-Za-z]{2})?$/i.test(mode)) return mode;
-      return current.language || 'en-US';
-    })(),
+    language: window.OpenBrowserLocale.resolveProfileLanguage({
+      language: $('#editor-language')?.value || current.language || 'en-US',
+      exitCountryCode: current.exitCountryCode,
+      privacy: { languageMode: $('#editor-language-mode')?.value || 'ip' },
+    }, editorNetworkResult || {}),
     tag: ($('#editor-tag')?.value || '').trim(),
     groupId: $('#editor-group')?.value || UNGROUPED_ID,
     note: ($('#editor-note')?.value || '').trim(),
@@ -3887,6 +3870,7 @@ function renderExtensions() {
     toggle.dataset.extensionToggle = extension.id;
     toggle.indeterminate = !extension.enabledAll && Number(extension.assignedProfiles) > 0;
     toggleLabel.title = extension.enabledAll ? tx('全部环境已启用') : toggle.indeterminate ? tx('部分环境已启用') : tx('全部环境已停用');
+    toggle.setAttribute('aria-label', `${extension.name}: ${toggleLabel.title}`);
     toggleLabel.append(toggle, element('span', 'extension-toggle-slider'));
     top.append(createExtensionIcon(extension), toggleLabel);
     card.append(top, element('h3', '', extension.name), element('p', '', extension.description || 'Local unpacked Chrome extension'));

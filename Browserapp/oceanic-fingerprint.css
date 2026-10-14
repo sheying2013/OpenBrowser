@@ -29,14 +29,20 @@ html[data-ui-theme="oceanic-fingerprint"] {
   /* 文字层级：冷玉青白与墨青灰阶，对比柔和舒适不刺眼 */
   --ink-text-primary: #dce5e4;
   --ink-text-secondary: #9cb1b5;
-  --ink-text-muted: #647b82;
+  --ink-text-muted: #80979e;
   --ink-text-dim: #43555b;
+  --ink-log-surface: var(--ink-surface-1);
+  --ink-log-stripe: rgba(255, 255, 255, 0.015);
+  --ink-log-module-text: var(--ink-text-secondary);
 
   /* 状态指示：克制温和的低饱和青绿与赭石 */
   --ink-status-online: #4b806d;
   --ink-status-online-bg: #142822;
   --ink-status-danger: #8a4848;
   --ink-status-danger-bg: #291616;
+  --ink-status-online-text: #91b6a8;
+  --ink-status-warning: #cbb989;
+  --ink-status-warning-bg: #2b261b;
 
   /* 投影系统：极浅极淡环境遮蔽，彻底剥离 AI 荧光光晕 */
   --ink-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
@@ -65,6 +71,26 @@ html[data-ui-theme="oceanic-fingerprint"] {
   --engine-edge-b3-3: #3d6b79;
   --engine-edge-b3-4: #487065;
 
+
+  /* Bridge shared components to the active ink palette in both modes. */
+  --ui-sidebar: var(--ink-abyss);
+  --ui-header: var(--ink-surface-2);
+  --ui-surface: var(--ink-surface-1);
+  --ui-surface-muted: var(--ink-surface-2);
+  --ui-border: var(--ink-border-subtle);
+  --ui-border-strong: var(--ink-border-default);
+  --ui-text: var(--ink-text-primary);
+  --ui-muted: var(--ink-text-muted);
+  --ui-accent: var(--ink-cyan-primary);
+  --ui-accent-soft: var(--ink-surface-active);
+  --ui-danger: var(--ink-status-danger);
+  --ui-shadow: var(--ink-shadow-md);
+  --theme-surface: var(--ink-surface-1);
+  --theme-text: var(--ink-text-primary);
+  --theme-muted: var(--ink-text-muted);
+  --theme-accent-strong: var(--ink-text-secondary);
+  --border: var(--ink-border-subtle);
+  --muted: var(--ink-text-muted);
 
   /* 全局重置与字体渲染 */
   background-color: var(--ink-abyss) !important;
@@ -103,14 +129,20 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] {
   /* 文字层级：徽墨重黑、青石深灰、竹青次级灰 */
   --ink-text-primary: #192422;
   --ink-text-secondary: #3b4d49;
-  --ink-text-muted: #6b807b;
+  --ink-text-muted: #536b65;
   --ink-text-dim: #97a8a4;
+  --ink-log-surface: #ffffff;
+  --ink-log-stripe: #f9fbfb;
+  --ink-log-module-text: var(--ink-cyan-accent);
 
   /* 状态指示：水墨低饱和赭石与春草青 */
   --ink-status-online: #366d58;
   --ink-status-online-bg: #e2f0ea;
   --ink-status-danger: #9a4848;
   --ink-status-danger-bg: #fae8e8;
+  --ink-status-online-text: #366d58;
+  --ink-status-warning: #76571d;
+  --ink-status-warning-bg: #f5edd9;
 
   /* 投影系统：柔和浅灰自然接触影 */
   --ink-shadow-sm: 0 1px 2px rgba(25, 36, 34, 0.05);
@@ -647,19 +679,36 @@ html[data-ui-theme="oceanic-fingerprint"] .settings-grid {
 }
 
 /* 开关控件 (Switch / Toggle) */
-html[data-ui-theme="oceanic-fingerprint"] .extension-toggle,
-html[data-ui-theme="oceanic-fingerprint"] .switch-track {
+html[data-ui-theme="oceanic-fingerprint"] .extension-toggle {
+  background: transparent !important;
+  border: 0 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-toggle-slider {
   background: var(--ink-surface-3) !important;
   border: 1px solid var(--ink-border-default) !important;
+  box-shadow: none;
 }
 
-html[data-ui-theme="oceanic-fingerprint"] .extension-toggle.active,
-html[data-ui-theme="oceanic-fingerprint"] .switch-track.active {
+html[data-ui-theme="oceanic-fingerprint"] .extension-toggle-slider:after {
+  background: #eef2f1;
+  box-shadow: none;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-toggle input:checked + .extension-toggle-slider {
   background: var(--ink-cyan-primary) !important;
-  border-color: var(--ink-border-focus) !important;
+  border-color: var(--ink-cyan-accent) !important;
 }
 
-/* 同步控制台与代码命令框 */
+html[data-ui-theme="oceanic-fingerprint"] .extension-toggle input:indeterminate + .extension-toggle-slider {
+  background: var(--ink-status-warning) !important;
+  border-color: var(--ink-status-warning) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-toggle input:focus-visible + .extension-toggle-slider {
+  outline: 2px solid var(--ink-text-secondary) !important;
+  outline-offset: 3px;
+}
 html[data-ui-theme="oceanic-fingerprint"] .console,
 html[data-ui-theme="oceanic-fingerprint"] .sync-command,
 html[data-ui-theme="oceanic-fingerprint"] pre,
@@ -966,8 +1015,8 @@ html[data-ui-theme="oceanic-fingerprint"] .sidebar-footer,
 html[data-ui-theme="oceanic-fingerprint"] .app-version-wrap,
 html[data-ui-theme="oceanic-fingerprint"] .sidebar-footer a,
 html[data-ui-theme="oceanic-fingerprint"] .sidebar-footer span {
-  color: var(--ink-text-dim) !important;
-  opacity: 0.6 !important;
+  color: var(--ink-text-muted) !important;
+  opacity: 1 !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"] .sidebar-footer a:hover {
@@ -1155,7 +1204,7 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] th {
   background: #f7faf9 !important;
   background-color: #f7faf9 !important;
   border-bottom: 1px solid #d5dfdc !important;
-  color: #6a827d !important;
+  color: var(--ink-text-muted) !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .table-card tbody td,
@@ -1178,7 +1227,7 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-name
 }
 
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-name small {
-  color: #6a827d !important;
+  color: var(--ink-text-muted) !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .mini,
@@ -1206,7 +1255,7 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .net-badge {
 /* 6. 分页与底栏 */
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-pagination,
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .pagination-bar {
-  color: #6a827d !important;
+  color: var(--ink-text-muted) !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-pagination button {
@@ -1311,4 +1360,849 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .theme-appear
   background: #3b625a !important;
   border-color: #2f524b !important;
   color: #ffffff !important;
+}
+
+/* ==========================================================================
+   16. OPERATION LOGS (#view-logs) DUAL-MODE REFINEMENT (操作日志全态适配)
+   ========================================================================== */
+
+/* 1) 日志外框窗口与边框容器 */
+html[data-ui-theme="oceanic-fingerprint"] #view-logs {
+  font-family: ui-monospace, SFMono-Regular, "SF Pro Text", Menlo, Monaco, Consolas, monospace !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-window {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  height: max(160px, calc(100dvh - 122px));
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 8px !important;
+  background: var(--ink-surface-1) !important;
+  box-shadow: none !important;
+}
+
+/* 2) 标题栏与清空按钮 */
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-titlebar {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+  background: var(--ink-surface-2) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-title svg {
+  width: 15px;
+  height: 15px;
+  color: var(--ink-cyan-accent) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-title strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-title span {
+  font-size: 10px;
+  color: var(--ink-text-muted) !important;
+  letter-spacing: 0.5px;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-titlebar .outline {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 11px;
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-titlebar .outline:hover {
+  background: var(--ink-surface-hover) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+/* 3) 运行时说明条 (Chrome / Edge 独立用户目录) */
+html[data-ui-theme="oceanic-fingerprint"] .log-runtime-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+  background: var(--ink-surface-1) !important;
+  color: var(--ink-text-secondary) !important;
+  font-size: 11px;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .log-runtime-note svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ink-cyan-accent) !important;
+}
+
+/* 4) 表头列声明 (时间 / 模块 / 记录) */
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-columns {
+  display: grid;
+  grid-template-columns: 112px 132px minmax(0, 1fr);
+  border-bottom: 1px solid var(--ink-border-default) !important;
+  background: var(--ink-surface-2) !important;
+  color: var(--ink-text-muted) !important;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-columns span {
+  min-width: 0;
+  padding: 8px 14px;
+  border-right: 1px solid var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-columns span:last-child {
+  border-right: 0 !important;
+}
+
+/* 5) 日志卡片滚动区域与行条目 */
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-window .log-card {
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: var(--ink-log-surface) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .log-row {
+  display: grid;
+  grid-template-columns: 112px 132px minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-text-primary) !important;
+  transition: background 0.15s ease;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .log-row:nth-child(even) {
+  background: var(--ink-log-stripe) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .log-row:hover {
+  background: var(--ink-surface-hover) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .log-row span {
+  min-width: 0;
+  padding: 8px 14px;
+  border-right: 1px solid var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .log-row span:last-child {
+  border-right: 0 !important;
+}
+
+/* 时间列：青黛辅助灰阶，柔和清晰 */
+html[data-ui-theme="oceanic-fingerprint"] .log-row span:first-child {
+  color: var(--ink-text-muted) !important;
+  white-space: nowrap;
+}
+
+/* 模块列：墨青冷松强调色，显眼且克制 */
+html[data-ui-theme="oceanic-fingerprint"] .log-row span:nth-child(2) {
+  color: var(--ink-log-module-text) !important;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* 记录内容列：冷玉白 / 徽墨黑主文字色，绝不再出现暗黑看不清 */
+html[data-ui-theme="oceanic-fingerprint"] .log-row span:last-child {
+  color: var(--ink-text-primary) !important;
+  overflow-wrap: anywhere;
+}
+
+/* 空状态 */
+html[data-ui-theme="oceanic-fingerprint"] .retro-log-window .log-empty {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  color: var(--ink-text-muted) !important;
+  font-size: 12px;
+}
+
+/* 6) 扩展中心说明条与系统状态卡片补充覆盖 (消除残余白底/暗斑) */
+html[data-ui-theme="oceanic-fingerprint"] .extension-note {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-note strong {
+  color: var(--ink-cyan-accent) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .local-status-card {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .local-status-card strong {
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .local-status-desc {
+  color: var(--ink-text-muted) !important;
+}
+
+/* 7) 浅色模式专属细修 */
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .retro-log-window {
+  border-color: #d5dfdc !important;
+  background: #ffffff !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .retro-log-titlebar {
+  background: #f7faf9 !important;
+  border-bottom-color: #d5dfdc !important;
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .retro-log-title strong {
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .retro-log-title span {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .log-runtime-note {
+  background: #fafcfb !important;
+  border-bottom-color: #e2ede8 !important;
+  color: #55706a !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .retro-log-columns {
+  background: #f4f7f6 !important;
+  border-bottom-color: #d5dfdc !important;
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .retro-log-columns span,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .log-row span {
+  border-right-color: #e2ede8 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .log-row {
+  border-bottom-color: #e7edea !important;
+  color: #192422 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .log-row:hover {
+  background: #edf3f1 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .extension-note {
+  background: #f4f7f6 !important;
+  border-color: #d5dfdc !important;
+  color: #3b5751 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .extension-note strong {
+  color: #2e544c !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .local-status-card {
+  background: #ffffff !important;
+  border-color: #d5dfdc !important;
+  color: #192422 !important;
+}
+
+/* ==========================================================================
+   17. SYSTEMIC SECONDARY-PAGE REFINEMENT (应用中心、代理列表、本地设置、同步控制台全景适配)
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   (1) 应用中心 (Extension & App Center)
+   -------------------------------------------------------------------------- */
+/* 分页标签 (.tabs / #app-center-tabs) */
+html[data-ui-theme="oceanic-fingerprint"] #view-extensions .tabs,
+html[data-ui-theme="oceanic-fingerprint"] .tabs {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 14px 0 !important;
+  background: transparent !important;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+  padding: 0 0 8px 0 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-extensions .tabs button {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 6px !important;
+  padding: 6px 14px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  transition: all 0.15s ease !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-extensions .tabs button:hover {
+  background: var(--ink-surface-hover) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-extensions .tabs button.active {
+  background: var(--ink-surface-active) !important;
+  border-color: var(--ink-cyan-accent) !important;
+  color: var(--ink-cyan-accent) !important;
+  font-weight: 600 !important;
+}
+
+/* Responsive grid geometry is owned by ui-shell.css, not the palette. */
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-card {
+  display: flex;
+  flex-direction: column;
+  padding: 16px !important;
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 8px !important;
+  color: var(--ink-text-primary) !important;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-card:hover {
+  border-color: var(--ink-border-focus) !important;
+  background: var(--ink-surface-hover) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-card h3 {
+  margin: 10px 0 6px 0 !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-card p {
+  margin: 0 0 12px 0 !important;
+  font-size: 11px !important;
+  line-height: 1.5 !important;
+  color: var(--ink-text-secondary) !important;
+  flex: 1 1 auto;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px !important;
+  color: var(--ink-text-muted) !important;
+  padding: 6px 0 !important;
+  border-top: 1px solid var(--ink-border-subtle) !important;
+  margin-bottom: 12px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-meta span {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-state-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-left: 12px;
+  font-size: 10px;
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-state-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 4px;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-state-legend i.all {
+  background: var(--ink-cyan-primary, #345c68);
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-state-legend i.none {
+  background: var(--ink-text-muted, #647b82);
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .extension-state-legend i.partial {
+  background: var(--ink-status-warning);
+}
+
+/* --------------------------------------------------------------------------
+   (2) 代理列表库 (#view-proxies)
+   -------------------------------------------------------------------------- */
+html[data-ui-theme="oceanic-fingerprint"] #view-proxies .table-card {
+  border: 1px solid var(--ink-border-subtle) !important;
+  background: var(--ink-surface-1) !important;
+  border-radius: 8px !important;
+  overflow: auto !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-proxies table {
+  background: transparent !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-proxies th {
+  background: var(--ink-surface-2) !important;
+  color: var(--ink-text-muted) !important;
+  border-bottom: 1px solid var(--ink-border-default) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-proxies td {
+  background: var(--ink-surface-1) !important;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-proxies tr:hover td {
+  background: var(--ink-surface-hover) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-proxies .env-identity-text strong {
+  color: var(--ink-text-primary) !important;
+  font-size: 12px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-proxies .env-identity-text small {
+  color: var(--ink-text-muted) !important;
+  font-size: 10px !important;
+}
+
+/* --------------------------------------------------------------------------
+   (3) 本地设置与云同步卡片 (#view-system)
+   -------------------------------------------------------------------------- */
+html[data-ui-theme="oceanic-fingerprint"] .storage-settings-card {
+  padding: 18px 20px !important;
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 8px !important;
+  color: var(--ink-text-primary) !important;
+  margin-bottom: 14px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .storage-settings-head h3 {
+  color: var(--ink-text-primary) !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  margin-bottom: 4px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .storage-settings-head p {
+  color: var(--ink-text-secondary) !important;
+  font-size: 11px !important;
+  line-height: 1.5 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .storage-settings-head > span,
+html[data-ui-theme="oceanic-fingerprint"] #ui-locale-badge,
+html[data-ui-theme="oceanic-fingerprint"] #cloud-sync-badge {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-cyan-accent) !important;
+  padding: 4px 10px !important;
+  font-size: 10px !important;
+  border-radius: 999px !important;
+  font-weight: 600 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .storage-path-box {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 6px !important;
+  padding: 10px 14px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .storage-path-box code {
+  color: var(--ink-cyan-accent) !important;
+  background: transparent !important;
+  border: 0 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .storage-warning {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-secondary) !important;
+  font-size: 11px !important;
+  border-radius: 6px !important;
+  padding: 8px 12px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .cloud-preset-btn {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-primary) !important;
+  padding: 6px 12px !important;
+  font-size: 11px !important;
+  border-radius: 6px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .cloud-preset-btn:hover {
+  background: var(--ink-surface-hover) !important;
+  border-color: var(--ink-border-focus) !important;
+}
+
+/* --------------------------------------------------------------------------
+   (4) 窗口同步控制台与文本组 (#view-sync)
+   -------------------------------------------------------------------------- */
+html[data-ui-theme="oceanic-fingerprint"] .sync-toolbar {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 8px !important;
+  padding: 10px 14px !important;
+  margin-bottom: 12px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  flex-wrap: wrap !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .sync-selected {
+  color: var(--ink-text-muted) !important;
+  font-size: 11px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .sync-health.idle {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .sync-health.healthy {
+  background: var(--ink-status-online-bg) !important;
+  border: 1px solid var(--ink-status-online) !important;
+  color: var(--ink-status-online-text) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .sync-health.warning {
+  background: var(--ink-status-warning-bg) !important;
+  border: 1px solid var(--ink-status-warning) !important;
+  color: var(--ink-status-warning) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .console {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .console-head {
+  padding: 12px 14px !important;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+  background: var(--ink-surface-2) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .console-head h2 {
+  color: var(--ink-text-primary) !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .console-tabs {
+  background: var(--ink-surface-1) !important;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
+  padding: 6px 10px !important;
+  display: flex !important;
+  gap: 6px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .console-tabs .sync-tab {
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 6px !important;
+  padding: 6px 10px !important;
+  font-size: 11px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .console-tabs .sync-tab:hover {
+  background: var(--ink-surface-hover) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .console-tabs .sync-tab.active {
+  background: var(--ink-surface-2) !important;
+  border-color: var(--ink-border-default) !important;
+  color: var(--ink-cyan-accent) !important;
+  font-weight: 600 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .simulation-options {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 6px !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .simulation-options strong {
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .random-number-row {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 6px !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .specified-text-section {
+  border-top-color: var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .specified-text-title {
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .specified-text-group {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  border-radius: 6px !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .specified-text-modes {
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .specified-text-group textarea {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+/* --------------------------------------------------------------------------
+   (5) 全景浅色模式专属精修 (Light Mode Alignments)
+   -------------------------------------------------------------------------- */
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-extensions .tabs button {
+  background: #ffffff !important;
+  border-color: #d5dfdc !important;
+  color: #4a635e !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-extensions .tabs button:hover {
+  background: #f0f5f3 !important;
+  color: #192422 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-extensions .tabs button.active {
+  background: #e4eeea !important;
+  border-color: #3b625a !important;
+  color: #264740 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .extension-card {
+  background: #ffffff !important;
+  border-color: #d5dfdc !important;
+  color: #192422 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .extension-card:hover {
+  background: #f7faf9 !important;
+  border-color: #9cbab2 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .extension-card h3 {
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .extension-card p {
+  color: #55706a !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .extension-meta {
+  border-top-color: #e2ede8 !important;
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .extension-meta span {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-proxies .table-card {
+  background: #ffffff !important;
+  border-color: #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-proxies th {
+  background: #f4f7f6 !important;
+  border-bottom-color: #d5dfdc !important;
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-proxies td {
+  background: #ffffff !important;
+  border-bottom-color: #e7edea !important;
+  color: #192422 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-proxies tr:hover td {
+  background: #edf3f1 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-proxies .env-identity-text strong {
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #view-proxies .env-identity-text small {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .storage-settings-card {
+  background: #ffffff !important;
+  border-color: #d5dfdc !important;
+  color: #192422 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .storage-settings-head h3 {
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .storage-settings-head p {
+  color: #55706a !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .storage-settings-head > span,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #ui-locale-badge,
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #cloud-sync-badge {
+  background: #eef4f2 !important;
+  border-color: #cad8d4 !important;
+  color: #264740 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .storage-path-box {
+  background: #f7faf9 !important;
+  border-color: #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .storage-path-box code {
+  color: #264740 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .storage-warning {
+  background: #f4f7f6 !important;
+  border-color: #d5dfdc !important;
+  color: #55706a !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .cloud-preset-btn {
+  background: #ffffff !important;
+  border-color: #cad8d4 !important;
+  color: #192422 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .cloud-preset-btn:hover {
+  background: #edf3f1 !important;
+  border-color: #9cbab2 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .sync-toolbar {
+  background: #ffffff !important;
+  border-color: #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .sync-selected {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .console {
+  background: #ffffff !important;
+  border-color: #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .console-head {
+  background: #f7faf9 !important;
+  border-bottom-color: #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .console-head h2 {
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .console-tabs {
+  background: #ffffff !important;
+  border-bottom-color: #d5dfdc !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .console-tabs .sync-tab {
+  color: #55706a !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .console-tabs .sync-tab:hover {
+  background: #edf3f1 !important;
+  color: #192422 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .console-tabs .sync-tab.active {
+  background: #eef4f2 !important;
+  border-color: #cad8d4 !important;
+  color: #264740 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .simulation-options {
+  background: #f7faf9 !important;
+  border-color: #d5dfdc !important;
+  color: #192422 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .simulation-options strong {
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .random-number-row {
+  background: #f7faf9 !important;
+  border-color: #d5dfdc !important;
+  color: #192422 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .specified-text-section {
+  border-top-color: #e2ede8 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .specified-text-title {
+  color: #142421 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .specified-text-group {
+  background: #f7faf9 !important;
+  border-color: #d5dfdc !important;
+  color: #192422 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .specified-text-modes {
+  color: #55706a !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .specified-text-group textarea {
+  background: #ffffff !important;
+  border-color: #cad8d4 !important;
+  color: #192422 !important;
 }

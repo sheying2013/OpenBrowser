@@ -16,6 +16,8 @@
     "selftest:statestorage": "node automation/state-storage-selftest.js",
     "selftest:prefconsistency": "node automation/profile-file-consistency-selftest.js",
     "selftest:profileui": "node automation/profile-ui-layout-selftest.js",
+    "selftest:secondaryui": "node automation/secondary-ui-runtime-selftest.js",
+    "selftest:localebridge": "node automation/locale-bridge-selftest.js",
     "selftest:isolation": "node automation/isolation-fingerprint-selftest.js",
     "selftest:platform": "node automation/platform-preflight-selftest.js",
     "selftest:waitport": "node waitforport-selftest.js",

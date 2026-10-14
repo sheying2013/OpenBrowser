@@ -365,7 +365,7 @@
                         <option value="ar-SA">العربية</option>
                       </select>
                     </label>
-                    <label><span data-i18n="common.language">固定首选语言 (Fallback)</span>
+                    <label><span data-i18n="editor.lang.fallback">首选语言（IP 检测回退）</span>
                       <select id="editor-language">
                         <option value="en-US">English (US)</option>
                         <option value="zh-CN">中文（简体）</option>
@@ -405,12 +405,13 @@
                     </label>
                   </div>
                   <div class="form-two" style="margin-top:12px">
-                    <label>地理位置模拟
+                    <div class="editor-field-group">
+                      <label for="editor-geo-mode">地理位置模拟</label>
                       <div class="field-inline-group">
                         <select id="editor-geo-mode"><option value="ip">基于出口 IP</option><option value="prompt">询问</option><option value="disabled">禁用</option><option value="custom">自定义</option></select>
-                        <label class="check-row" style="margin:0;white-space:nowrap"><input id="editor-geo-from-ip" type="checkbox" checked> 基于 IP 自动生成坐标</label>
+                        <label class="check-row" style="margin:0"><input id="editor-geo-from-ip" type="checkbox" checked> 基于 IP 自动生成坐标</label>
                       </div>
-                    </label>
+                    </div>
                   </div>
                   <div class="form-three geo-custom" style="margin-top:12px"><label>纬度<input id="editor-latitude" type="number" step="0.000001" min="-90" max="90"></label><label>经度<input id="editor-longitude" type="number" step="0.000001" min="-180" max="180"></label><label>精度（米）<input id="editor-accuracy" type="number" min="1" max="100000" value="100"></label></div>
                 </div>
@@ -635,9 +636,9 @@
             <strong>应用中心（本地自包含）</strong>
             <span>自带应用 = OpenBrowser 随附的扩展；推荐应用 = Chrome 商店一键安装；本地资源 = 本机已安装扩展。</span>
             <span class="extension-state-legend" aria-label="扩展状态说明">
-              <i class="all"></i>蓝色：全部环境已启用
-              <i class="none"></i>灰色：全部环境已停用
-              <i class="partial"></i>黄色：仅部分环境启用
+              <span><i class="all" aria-hidden="true"></i>全部环境已启用</span>
+              <span><i class="none" aria-hidden="true"></i>全部环境已停用</span>
+              <span><i class="partial" aria-hidden="true"></i>部分环境已启用</span>
             </span>
           </div>
           <div class="extension-grid" id="extension-grid"></div>
@@ -1518,6 +1519,7 @@
   <script src="environment-audit.js?v=20260719-environment-audit"></script>
   <script src="assets/vendor/lucide.min.js"></script>
   <script src="ui/ui-profile-list.js"></script>
+  <script src="automation/locale-from-country.js"></script>
   <script src="renderer.js?v=20260720-nes-light"></script>
   <script src="ui/ui-dialogs.js"></script>
   <script src="ui/ui-rpa.js"></script>

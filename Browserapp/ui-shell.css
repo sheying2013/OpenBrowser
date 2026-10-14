@@ -361,6 +361,11 @@ dialog[open] > .themed-select-menu {
 }
 .sidebar-footer a:hover { color: var(--ui-text); }
 .sidebar-footer a .lucide { width: 14px; height: 14px; }
+.extension-state-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .sidebar-footer a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-footer .app-version-wrap {
   display: inline-flex;
@@ -900,6 +905,25 @@ html #view-profiles .table-card td.col-browser .browser-engine-icon svg,
 
 #view-profile-editor .editor-panel {
   max-width: 1040px;
+}
+
+#view-profile-editor .field-inline-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+#view-profile-editor .field-inline-group > input,
+#view-profile-editor .field-inline-group > .themed-select {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+#view-profile-editor .field-inline-group > .check-row {
+  flex: 0 1 auto;
+  white-space: normal;
 }
 
 #view-profile-editor .editor-panel h3 {

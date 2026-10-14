@@ -1,3 +1,4 @@
+(function () {
 'use strict';
 
 /**
@@ -364,7 +365,7 @@ function resolveProfileLanguage(profile = {}, network = {}) {
   return (profile && profile.language) || 'en-US';
 }
 
-module.exports = {
+const api = {
   COUNTRY_TO_LOCALE,
   COUNTRY_TO_TIMEZONE,
   localeFromCountryCode,
@@ -373,3 +374,7 @@ module.exports = {
   resolveProfileTimezone,
   resolveProfileLanguage,
 };
+
+if (typeof module === 'object' && module.exports) module.exports = api;
+else globalThis.OpenBrowserLocale = api;
+})();
