@@ -862,14 +862,13 @@ html #view-profiles .table-card td.col-browser .browser-engine-icon svg,
   background: var(--ui-surface);
   border: 1px solid var(--ui-border);
   border-radius: 8px;
-  padding: 16px 20px;
-  margin-bottom: 18px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  padding: 16px;
+  margin-bottom: 12px;
+  box-shadow: none;
 }
 
 #view-profile-editor .editor-section-card:hover {
-  border-color: color-mix(in srgb, var(--ui-border) 70%, var(--ui-accent));
+  border-color: var(--ui-border);
 }
 
 #view-profile-editor .editor-card-header {
@@ -888,12 +887,7 @@ html #view-profiles .table-card td.col-browser .browser-engine-icon svg,
 }
 
 #view-profile-editor .editor-card-title::before {
-  content: "";
-  display: inline-block;
-  width: 3px;
-  height: 14px;
-  background: var(--ui-accent);
-  border-radius: 2px;
+  display: none;
 }
 
 #view-profile-editor .editor-card-desc {

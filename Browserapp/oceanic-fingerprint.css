@@ -544,6 +544,37 @@ html[data-ui-theme="oceanic-fingerprint"] button.danger {
   box-shadow: none !important;
 }
 
+html[data-ui-theme="oceanic-fingerprint"] .profile-editor-head,
+html[data-ui-theme="oceanic-fingerprint"] #view-profile-editor .editor-actions {
+  background: var(--ink-surface-1) !important;
+  color: var(--ink-text-primary) !important;
+  border-color: var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #editor-summary dt {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #editor-summary dt,
+html[data-ui-theme="oceanic-fingerprint"] #editor-summary dd {
+  font-size: 12px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-summary button,
+html[data-ui-theme="oceanic-fingerprint"] .editor-back {
+  color: var(--ink-text-secondary) !important;
+  background: transparent !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #editor-summary dd,
+html[data-ui-theme="oceanic-fingerprint"] #editor-reset-fingerprint {
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #editor-summary > div {
+  border-color: var(--ink-border-subtle) !important;
+}
+
 /* ==========================================================================
    6. PROFILE & ENVIRONMENT EDITOR (彻底消除白底与杂色)
    ========================================================================== */
@@ -560,7 +591,7 @@ html[data-ui-theme="oceanic-fingerprint"] .editor-tabs {
   border-bottom: 1px solid var(--ink-border-subtle) !important;
 }
 
-html[data-ui-theme="oceanic-fingerprint"] .editor-tab {
+html[data-ui-theme="oceanic-fingerprint"] .editor-tabs button {
   background: transparent !important;
   color: var(--ink-text-muted) !important;
   border: none !important;
@@ -569,11 +600,11 @@ html[data-ui-theme="oceanic-fingerprint"] .editor-tab {
   padding: 8px 16px !important;
 }
 
-html[data-ui-theme="oceanic-fingerprint"] .editor-tab:hover {
+html[data-ui-theme="oceanic-fingerprint"] .editor-tabs button:hover {
   color: var(--ink-text-secondary) !important;
 }
 
-html[data-ui-theme="oceanic-fingerprint"] .editor-tab.active {
+html[data-ui-theme="oceanic-fingerprint"] .editor-tabs button.active {
   color: var(--ink-text-primary) !important;
   border-bottom-color: var(--ink-cyan-accent) !important;
   background: transparent !important;

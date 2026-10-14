@@ -36,7 +36,8 @@ function sanitizeProfile(value) {
   const memory = parseLimitedOption(memoryCandidate, [0, 2, 4, 6, 8]);
   const rawProxy = String(value.proxy || "").trim();
   if (rawProxy.length > MAX_PROFILE_PROXY_LENGTH) throw new Error("Proxy URL is too long");
-  const networkMode = value.networkMode === "direct" || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy) ? "direct" : "proxy";
+  const networkMode = value.networkMode === "proxy" ? "proxy"
+    : value.networkMode === "direct" || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy) ? "direct" : "proxy";
   const effectiveStartUrl = String(value.startUrl || platformValue.startUrl || advancedValue.startUrls || "").trim().slice(0, 2000);
   const proxyAssociation = profileProxyAssociation(value);
   const proxyId = networkMode === "direct" ? null : normalizedProxyAssociationId(proxyAssociation.value);
@@ -93,8 +94,9 @@ function sanitizeProfile(value) {
           ? String(proxyMetaValue.backupProxies).split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8)
           : []),
       fillFingerprint: proxyMetaValue.fillFingerprint !== false,
-      requireReady: proxyMetaValue.requireReady !== false,
-      notReadyPolicy: allowed(proxyMetaValue.notReadyPolicy, ["block", "direct", "continue"], proxyMetaValue.requireReady === false ? "continue" : "block"),
+      requireReady: true,
+      notReadyPolicy: "block",
+      allowDirectFallback: false,
       tlsProfile: allowed(proxyMetaValue.tlsProfile, ["auto", "chrome", "chrome_legacy", "node", "off"], "auto"),
       tlsChromeMajor: (() => {
         const n = Number(proxyMetaValue.tlsChromeMajor);

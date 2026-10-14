@@ -133,7 +133,7 @@
         <section class="view" id="view-profile-editor">
           <div class="profile-editor-head">
             <button class="editor-back" id="editor-back" type="button">‹ 返回</button>
-            <div><h2>修改环境 <span id="editor-profile-id"></span></h2><p>平台账号 · 代理 · 指纹 · 偏好 — 前后端完整生效；可配合云备份跨设备恢复</p></div>
+            <div><h2>修改环境 <span id="editor-profile-id"></span></h2><p>管理账号、网络、指纹与启动设置</p></div>
           </div>
           <div class="editor-tabs" role="tablist">
             <button class="active" type="button" data-editor-tab="basic">平台账号配置</button>
@@ -148,8 +148,8 @@
               <section class="editor-panel active" data-editor-panel="basic">
                 <div class="editor-section-card">
                   <div class="editor-card-header">
-                    <div class="editor-card-title">目标平台与环境标识</div>
-                    <div class="editor-card-desc">定义业务运行的目标电商/社交平台与启动 URL</div>
+                    <div class="editor-card-title">平台与启动页</div>
+                    <div class="editor-card-desc">选择平台及默认打开的页面</div>
                   </div>
                   <div class="form-two platform-row">
                     <label class="platform-select-label">* 业务平台
@@ -197,8 +197,8 @@
 
                 <div class="editor-section-card">
                   <div class="editor-card-header">
-                    <div class="editor-card-title">登录凭据与身份托管</div>
-                    <div class="editor-card-desc">自动托管平台账号、密码、双重身份验证密钥与 Cookie 会话</div>
+                    <div class="editor-card-title">账号与会话</div>
+                    <div class="editor-card-desc">保存账号、两步验证密钥与 Cookie</div>
                   </div>
                   <div class="form-three">
                     <label>用户名 / 邮箱<input id="editor-platform-user" autocomplete="off" placeholder="平台登录用户名"></label>
@@ -219,8 +219,8 @@
 
                 <div class="editor-section-card">
                   <div class="editor-card-header">
-                    <div class="editor-card-title">环境备注与附属说明</div>
-                    <div class="editor-card-desc">记录该浏览器环境的操作日志、账号用途或团队交接备忘</div>
+                    <div class="editor-card-title">备注</div>
+                    <div class="editor-card-desc">记录用途及交接说明</div>
                   </div>
                   <label>备注内容<textarea id="editor-note" rows="3" maxlength="2000" placeholder="记录该环境的详细说明、历史操作或注意事项"></textarea></label>
                   <div class="form-two" hidden>
@@ -269,13 +269,12 @@
                     <label class="check-row"><input id="editor-proxy-fill-fingerprint" type="checkbox" checked> 检测后自动对齐指纹（时区/语言/定位）</label>
                   </div>
                   <div class="form-two">
-                    <label class="check-row"><input id="editor-proxy-require-ready" type="checkbox" checked> 启动要求代理就绪</label>
+                    <label class="check-row"><input id="editor-proxy-require-ready" type="checkbox" checked disabled> 启动要求代理就绪</label>
                     <label>未就绪策略
-                      <select id="editor-proxy-not-ready-policy">
-                        <option value="block">阻断启动</option>
-                        <option value="direct">回退直连（真实 IP 暴露风险）</option>
-                        <option value="continue">继续使用当前代理</option>
+                      <select id="editor-proxy-not-ready-policy" disabled aria-describedby="proxy-fail-closed-note">
+                        <option value="block">连接失败时停止启动</option>
                       </select>
+                      <small id="proxy-fail-closed-note">代理故障不会切换为本地直连。</small>
                     </label>
                   </div>
                   <div class="form-two">
@@ -312,8 +311,8 @@
               <section class="editor-panel" data-editor-panel="privacy">
                 <div class="editor-section-card">
                   <div class="editor-card-header">
-                    <div class="editor-card-title">系统与底层平台</div>
-                    <div class="editor-card-desc">配置宿主操作系统类型与 User-Agent 基础骨骼</div>
+                    <div class="editor-card-title">操作系统与浏览器</div>
+                    <div class="editor-card-desc">选择系统标识及 User-Agent</div>
                   </div>
                   <div class="form-two">
                     <label>操作系统
@@ -340,8 +339,8 @@
 
                 <div class="editor-section-card">
                   <div class="editor-card-header">
-                    <div class="editor-card-title">语言、地域与网络伪装</div>
-                    <div class="editor-card-desc">语言模式、IP对齐、出口时区与高精度经纬度模拟</div>
+                    <div class="editor-card-title">语言与区域</div>
+                    <div class="editor-card-desc">根据代理出口设置语言，或使用固定语言</div>
                   </div>
                   <div class="form-two">
                     <label><span data-i18n="editor.langMode">语言生成策略</span>
@@ -390,8 +389,8 @@
                 </div>
                 <div class="editor-section-card">
                   <div class="editor-card-header">
-                    <div class="editor-card-title">时区、地理位置与网络协议栈</div>
-                    <div class="editor-card-desc">防止 WebRTC 泄漏真实 IP，精确定位经纬度坐标与出口时区</div>
+                    <div class="editor-card-title">时区与位置</div>
+                    <div class="editor-card-desc">设置出口时区、位置及 WebRTC 连接方式</div>
                   </div>
                   <div class="form-two">
                     <label>出口时区
@@ -418,7 +417,7 @@
 
                 <div class="editor-section-card">
                   <div class="editor-card-header">
-                    <div class="editor-card-title">显示与视口配置</div>
+                    <div class="editor-card-title">显示设置</div>
                     <div class="editor-card-desc">屏幕分辨率、窗口尺寸、像素比与系统默认字体</div>
                   </div>
                   <div class="form-two">
@@ -440,8 +439,8 @@
 
                 <div class="editor-section-card">
                   <div class="editor-card-header">
-                    <div class="editor-card-title">硬件掩码与底层传感器矩阵</div>
-                    <div class="editor-card-desc">图形渲染器、音频上下文、硬件拓扑与传感器噪声混淆矩阵</div>
+                    <div class="editor-card-title">硬件与渲染</div>
+                    <div class="editor-card-desc">设置图形、音频、设备及传感器行为</div>
                   </div>
                   <div class="privacy-grid">
                     <label title="真实机型：CPU 核数、内存、GPU、屏幕与像素比取自同一台真实机器，避免出现现实中不存在的硬件组合">设备档案<select id="editor-device-profile"><option value="persona">真实机型</option><option value="default">独立随机</option></select></label>
@@ -633,7 +632,7 @@
             <label class="search"><i data-lucide="search"></i><input id="extension-search" placeholder="关键词搜索"></label>
           </div>
           <div class="extension-note">
-            <strong>应用中心（本地自包含）</strong>
+            <strong>扩展应用</strong>
             <span>自带应用 = OpenBrowser 随附的扩展；推荐应用 = Chrome 商店一键安装；本地资源 = 本机已安装扩展。</span>
             <span class="extension-state-legend" aria-label="扩展状态说明">
               <span><i class="all" aria-hidden="true"></i>全部环境已启用</span>

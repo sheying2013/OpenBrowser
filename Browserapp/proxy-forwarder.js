@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const dns = require('dns');
 const net = require('net');
+const { runProxyProbes } = require('./engine/proxy-probe-runner');
 const { normalizeLatitude, normalizeLongitude } = require('./automation/input-validation');
 const tls = require('tls');
 
@@ -845,9 +846,25 @@ function bridgeResult(server, sockets, protocol, onClose = () => {}) {
 
 async function startAuthenticatedProxy(config, onStatus = () => {}) {
   if (!config) throw new Error('Proxy configuration is required');
-  if (config.protocol === 'socks5') return startHttpToSocks5Bridge(config, onStatus);
-  if (['http', 'https'].includes(config.protocol)) return startHttpBridge(config, onStatus);
-  throw new Error('SOCKS4 bridge is not supported');
+  if (config.probeSignal?.aborted) throw new Error('Proxy probe cancelled');
+  let bridge;
+  if (config.protocol === 'socks5') bridge = await startHttpToSocks5Bridge(config, onStatus);
+  else if (['http', 'https'].includes(config.protocol)) bridge = await startHttpBridge(config, onStatus);
+  else throw new Error('SOCKS4 bridge is not supported');
+  if (!config.probeSignal) return bridge;
+  const close = bridge.close;
+  let closing;
+  const abort = () => { bridge.close().catch(() => {}); };
+  bridge.close = () => {
+    config.probeSignal.removeEventListener('abort', abort);
+    return closing ||= close();
+  };
+  config.probeSignal.addEventListener('abort', abort, { once: true });
+  if (config.probeSignal.aborted) {
+    await bridge.close();
+    throw new Error('Proxy probe cancelled');
+  }
+  return bridge;
 }
 
 async function connectBridge(bridge, hostname, port) {
@@ -904,6 +921,7 @@ async function requestProxyHttp(config, hostname, pathname) {
       socket.on('data', (chunk) => values.push(chunk));
       socket.once('end', () => { clearTimeout(timer); resolve(values); });
       socket.once('error', (error) => { clearTimeout(timer); reject(error); });
+      socket.once('close', () => { clearTimeout(timer); reject(new Error('Proxy probe connection closed')); });
     });
     const response = Buffer.concat(chunks); const marker = response.indexOf('\r\n\r\n');
     if (marker < 0) {
@@ -958,6 +976,7 @@ async function requestProxyHttps(config, hostname, pathname) {
       secure.on('data', (chunk) => chunks.push(chunk));
       secure.once('end', () => { cleanup(); resolve(Buffer.concat(chunks)); });
       secure.once('error', (error) => { cleanup(); reject(error); });
+      secure.once('close', () => { cleanup(); reject(new Error('Proxy probe connection closed')); });
     });
     const marker = response.indexOf('\r\n\r\n');
     if (marker < 0) {
@@ -1724,18 +1743,23 @@ async function lookupProxyCountry(config, options = {}) {
   }
 
   try {
+    const withSignal = (lookup) => (signal) => lookup({ ...config, probeSignal: signal });
     const fallbackLookups = [
-      () => lookupProxyIpApi(config),
-      () => lookupProxyIpWho(config),
-      () => lookupProxyIpInfo(config),
-      () => lookupProxyCloudflareTrace(config),
+      withSignal(lookupProxyIpApi),
+      withSignal(lookupProxyIpWho),
+      withSignal(lookupProxyIpInfo),
+      withSignal(lookupProxyCloudflareTrace),
     ];
     // ifconfig.me is IP-only; keep the existing geo providers in the same
     // request cycle so selecting it does not leave locale/timezone blank.
     const lookups = ipChannel === 'ifconfig-me'
-      ? [() => lookupProxyIfconfigMe(config), ...fallbackLookups]
-      : [...fallbackLookups, () => lookupProxyIfconfigMe(config)];
-    const parts = await raceSettledValues(lookups, { maxWaitMs: 12000 });
+      ? [withSignal(lookupProxyIfconfigMe), ...fallbackLookups]
+      : [...fallbackLookups, withSignal(lookupProxyIfconfigMe)];
+    const parts = await runProxyProbes(lookups, {
+      totalTimeoutMs: options.totalTimeoutMs || 6500,
+      attemptTimeoutMs: options.attemptTimeoutMs || 2200,
+      isLinkError: isProxyLinkError,
+    });
 
     if (!parts.length) {
       // All lookups failed. Check if any failure was a real proxy link failure.
@@ -1752,6 +1776,10 @@ async function lookupProxyCountry(config, options = {}) {
       // No proxy link errors detected: all failures were probe service issues (429, timeouts, 5xx, parse errors)
       // Check for previously successful results to reuse:
       // 1. Check in-memory cache for prior/stale result for this proxy
+      const tunnelVerified = parts.errors?.some((error) => error.httpStatus >= 400 && error.httpStatus !== 407);
+      if (!tunnelVerified) {
+        throw Object.assign(new Error('代理出口检测超时或无响应'), { code: 'proxy-unverified', errorClass: 'unreachable' });
+      }
       const staleCached = probeMemoryCache.get(cacheKey, { allowStale: true });
       if (staleCached && staleCached.value && staleCached.value.ip) {
         const reused = cloneLookupResult(staleCached.value);
@@ -1830,12 +1858,13 @@ async function lookupProxyCountry(config, options = {}) {
 
     const result = mergeNetworkLookups(parts);
     const latencyMs = Date.now() - started;
-    const enriched = await enrichWithIpPure({
+    let enriched = {
       ...result,
       ipChannel,
       latencyMs,
       networkType: networkTypeFromLookup(result),
-    }, () => lookupIpPureProxy(config));
+    };
+    if (options.includeRisk === true) enriched = await enrichWithIpPure(enriched, () => lookupIpPureProxy(config));
 
     probeMemoryCache.set(cacheKey, enriched, ttlMs);
     return enriched;

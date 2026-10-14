@@ -98,7 +98,6 @@ const {
   readEngineStateCandidate,
   engineStateRecoveryCandidates,
   preserveCorruptEngineState,
-  retryProxyOperation,
   assertExtensionTreeSafe,
   sanitizeProfile: sanitizeProfileData,
 } = require("./engine/index");
@@ -3903,6 +3902,9 @@ class BrowserEngine {
     let proxy = proxyForwarder ? proxyForwarder.url : chromeProxyEndpoint(profile.proxy);
     // systemProxy: off = 强制本机直连(不走系统代理)；use/global + Direct = 不传 --proxy-server（跟随系统路由）
     const sysMode = profile.proxyMeta?.systemProxy || 'global';
+    if (profile.networkMode === 'proxy' && (!proxy || proxy === 'direct://')) {
+      throw Object.assign(new Error('代理模式缺少有效路由，已停止启动'), { code: 'proxy-required' });
+    }
     if (!proxy && sysMode === 'off') {
       proxy = 'direct://';
     }
@@ -3915,17 +3917,16 @@ class BrowserEngine {
       args.push(`--proxy-server=${proxy}`);
       // HTTP/SOCKS proxies are IPv4; disable IPv6 so Chrome cannot skip the proxy.
       if (!args.includes('--disable-ipv6')) args.push('--disable-ipv6');
-      if (!args.some((a) => a.startsWith('--force-webrtc-ip-handling-policy='))) {
-        args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
-      }
+      args = args.filter((arg) => !arg.startsWith('--force-webrtc-ip-handling-policy='));
+      args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
       // 本机启动页必须直连，不走代理；可叠加用户直连白名单
       let bypass = '<-loopback>;127.0.0.1;localhost';
-      if (profile.proxyMeta?.directBypass && profile.proxyMeta.bypassList) {
+      if (profile.networkMode !== 'proxy' && profile.proxyMeta?.directBypass && profile.proxyMeta.bypassList) {
         const extra = String(profile.proxyMeta.bypassList).split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
         if (extra.length) bypass += ';' + extra.join(';');
       }
       const existingBypass = args.findIndex((a) => a.startsWith('--proxy-bypass-list='));
-      if (existingBypass >= 0) args[existingBypass] = args[existingBypass] + ';' + bypass;
+      if (existingBypass >= 0) args[existingBypass] = '--proxy-bypass-list=' + bypass;
       else args.push(`--proxy-bypass-list=${bypass}`);
     }
     // Startup URLs: do NOT put the OpenBrowser start page (or first custom URL) on the
@@ -4857,6 +4858,17 @@ class BrowserEngine {
   }
 
   async testProxy(raw, options = {}) {
+    this._proxyTests ||= new Map();
+    const profile = this.sanitizeProfile(raw);
+    const key = JSON.stringify([profile.id, profile.proxy, profile.proxyMeta, options]);
+    if (this._proxyTests.has(key)) return this._proxyTests.get(key);
+    const task = this._testProxy(raw, options);
+    this._proxyTests.set(key, task);
+    try { return await task; }
+    finally { if (this._proxyTests.get(key) === task) this._proxyTests.delete(key); }
+  }
+
+  async _testProxy(raw, options = {}) {
     const profile = this.sanitizeProfile(raw);
     const forcedRaw = String(options.proxy || options.forcedProxy || '').trim();
     let resolved;
@@ -4868,7 +4880,11 @@ class BrowserEngine {
       resolved = await this.resolveProfileProxyConfig(profile, { allowExtract: options.allowExtract !== false });
     }
     try {
-      const result = await retryProxyOperation(() => lookupProxyCountry(resolved.config, {
+      const result = await lookupProxyCountry(resolved.config, {
+        force: true,
+        totalTimeoutMs: options.totalTimeoutMs || 6500,
+        attemptTimeoutMs: options.attemptTimeoutMs || 2200,
+        includeRisk: options.includeRisk === true,
         ipChannel: profile.proxyMeta?.ipChannel,
         // Cold cache + a rate-limited probe service: the profile's last known exit is a valid
         // degradation source, otherwise a 429 would look like a dead proxy.
@@ -4876,7 +4892,7 @@ class BrowserEngine {
         exitIp: profile.exitIp,
         exitCountryCode: profile.exitCountryCode,
         exitTimezone: profile.exitTimezone,
-      }));
+      });
       return {
         ...result,
         protocol: resolved.config.protocol,
@@ -4955,8 +4971,13 @@ class BrowserEngine {
   async prepareProfileProxyForStart(profile) {
     let working = this.resolveStoredProxyProfile(this.sanitizeProfile(profile));
     const meta = working.proxyMeta || {};
-    if (profile?.proxyMeta?.allowDirectFallback !== undefined) {
-      meta.allowDirectFallback = Boolean(profile.proxyMeta.allowDirectFallback);
+    if (working.networkMode === 'direct') return working;
+    if (!working.proxy || /^(direct|offline|none)$/i.test(String(working.proxy))) {
+      const backup = (meta.backupProxies || []).find((value) => value && !/^(direct|offline|none)$/i.test(String(value)));
+      if (backup) working = this.sanitizeProfile({ ...working, proxy: backup, networkMode: 'proxy' });
+    }
+    if ((!working.proxy || /^(direct|offline|none)$/i.test(String(working.proxy))) && !meta.apiExtractUrl) {
+      throw Object.assign(new Error('代理模式缺少有效节点，请配置代理或明确选择本地直连'), { code: 'proxy-required' });
     }
     const hasProxy = working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy));
     const extractUrl = String(meta.apiExtractUrl || '').trim();
@@ -4989,7 +5010,7 @@ class BrowserEngine {
         });
       }
     }
-    const shouldCheck = meta.checkOnStart || meta.refreshOnStart || Boolean(extractUrl);
+    const shouldCheck = working.networkMode === 'proxy';
     if (shouldCheck && working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy))) {
       const candidates = [];
       const push = (value) => {
@@ -5033,7 +5054,7 @@ class BrowserEngine {
             || working.privacy?.timezone
             || this.networkInfo.get(working.id)?.ip
           );
-          if (hasExitGeo) {
+          if (hasExitGeo && lastError.transportVerified === true) {
             this.emit({
               type: 'proxy-warn',
               id: working.id,
@@ -5052,49 +5073,10 @@ class BrowserEngine {
           });
           throw Object.assign(new Error(probeMsg), { code: 'probe-unavailable' });
         }
-        const policy = String(meta.notReadyPolicy || (meta.requireReady === false ? 'continue' : 'block'));
-        const message = '启动前代理未就绪：' + (lastError.message || lastError);
-        this.emit({ type: 'proxy-error', id: working.id, code: 'proxy-not-ready', message, policy });
-        if (policy === 'direct') {
-          const isExplicitOptIn = meta.allowDirectFallback === true || profile?.proxyMeta?.allowDirectFallback === true;
-          if (isExplicitOptIn) {
-            working = this.sanitizeProfile({ ...working, networkMode: 'direct', proxy: 'Direct' });
-            this.emit({
-              type: 'proxy-fallback',
-              id: working.id,
-              danger: true,
-              level: 'danger',
-              message: '【高危警告】代理未就绪，已按显式授权策略回落直连（存在真实公网IP暴露风险）',
-            });
-          } else {
-            const blockMsg = message + '（代理未就绪且未显式配置 allowDirectFallback: true，已默认阻断启动以防止真实IP暴露）';
-            this.emit({
-              type: 'proxy-error',
-              id: working.id,
-              code: 'proxy-direct-fallback-blocked',
-              message: blockMsg,
-              policy: 'block',
-            });
-            throw new Error(blockMsg);
-          }
-        } else if (policy === 'continue') {
-          this.emit({ type: 'proxy-warn', id: working.id, message: message + '（continue 策略，继续启动）' });
-        } else {
-          throw new Error(message);
-        }
+        const message = '代理连接失败，已停止启动：' + (lastError.message || lastError);
+        this.emit({ type: 'proxy-error', id: working.id, code: 'proxy-not-ready', message, policy: 'block' });
+        throw Object.assign(new Error(message), { code: 'proxy-not-ready', errorClass: lastError.errorClass });
       }
-    } else if (
-      working.networkMode === 'proxy'
-      && working.proxy
-      && !/^(direct|offline|none)$/i.test(String(working.proxy))
-      && meta.requireReady !== false
-      && meta.notReadyPolicy === 'block'
-      && !shouldCheck
-      && !this.networkInfo.get(working.id)?.ip
-    ) {
-      // Soft gate: proxy mode without any known exit IP and without deferred check still starts,
-      // but mark not-ready so callers/UI can surface it. Hard block only when check was requested.
-      this.emit({ type: 'proxy-warn', id: working.id, code: 'proxy-unchecked', message: '代理模式尚未检测出口，继续启动' });
     }
     return working;
   }

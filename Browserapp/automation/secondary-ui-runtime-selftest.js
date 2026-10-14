@@ -233,6 +233,46 @@ try {
       assert.equal(state.display, 'flex'); assert.equal(state.nested, 0); assert.equal(state.echo, state.value);
     });
   }
+  check('proxy mode with an empty endpoint blocks save instead of becoming direct', () => {
+    const value = run(() => {
+      openProfileEditor('audit-profile');
+      document.querySelector('input[name="editor-network"][value="custom"]').checked = true;
+      editorSet('#editor-proxy-host', ''); editorSet('#editor-proxy-port', ''); editorSet('#editor-api-extract-url', '');
+      let error = ''; try { editorDraft(true); } catch (e) { error = e.message; }
+      return { error, mode: editorDraft(false).networkMode, normalized: normalizeProfileSettings({networkMode:'proxy',proxy:''}).networkMode };
+    });
+    assert.ok(value.error); assert.equal(value.mode, 'proxy'); assert.equal(value.normalized, 'proxy');
+  });
+  check('legacy direct-fallback profiles are migrated to blocking policy in the UI', () => {
+    const value = run(() => normalizeProfileSettings({networkMode:'proxy',proxy:'socks5://127.0.0.1:9',proxyMeta:{notReadyPolicy:'direct',allowDirectFallback:true}}).proxyMeta);
+    assert.equal(value.notReadyPolicy, 'block'); assert.equal(value.allowDirectFallback, false);
+  });
+  check('proxy test ignores double clicks and restores disabled/busy state', () => {
+    const value = evaluate('(' + (async () => {
+      openProfileEditor('audit-profile');
+      document.querySelector('input[name="editor-network"][value="custom"]').checked = true;
+      editorSet('#editor-proxy-host', '127.0.0.1'); editorSet('#editor-proxy-port', '9');
+      const original = window.ops.testProfileProxy;
+      let finish, calls = 0;
+      window.ops.testProfileProxy = () => { calls++; return new Promise(resolve => {finish=resolve;}); };
+      try {
+        const first = testEditorProxy(); const second = testEditorProxy();
+        const busy = document.querySelector('#editor-test-proxy').disabled;
+        finish({ip:'192.0.2.1',countryCode:'US',latencyMs:20});
+        await Promise.all([first, second]);
+        return {calls,busy,restored:!document.querySelector('#editor-test-proxy').disabled,aria:document.querySelector('#editor-proxy-result').getAttribute('aria-busy')};
+      } finally {window.ops.testProfileProxy=original;}
+    }).toString() + ')()');
+    assert.equal(value.calls, 1); assert.equal(value.busy, true); assert.equal(value.restored, true); assert.equal(value.aria,'false');
+  });
+  for (const mode of ['dark','light']) {
+    evaluate('document.documentElement.dataset.uiTheme="oceanic-fingerprint";document.documentElement.dataset.colorMode=' + JSON.stringify(mode) + ';openProfileEditor("audit-profile");setEditorTab("privacy")');
+    check(mode + ': editor header, footer, tabs and summary remain readable', () => {
+      const values = run(() => ['.profile-editor-head h2', '.editor-tabs button.active', '#editor-summary dd', '.editor-actions .outline', '.profile-summary button', '.editor-back'].map(selector => window.__auditContrast(document.querySelector(selector))));
+      assert.ok(values.every(x => x >= 4.5), JSON.stringify(values));
+    });
+    cli('screenshot',path.join(output, mode + '-editor.png'));
+  }
   check('no page exceptions or renderer Error log', () => {
     const state = evaluate('({errors:window.__uiAuditErrors,logs:ui.logs.filter(x=>x.module==="Error"),unexpectedCalls:window.__uiAuditCalls})');
     assert.deepEqual(state.errors, []); assert.deepEqual(state.logs, []); assert.deepEqual(state.unexpectedCalls, []);

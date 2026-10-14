@@ -288,9 +288,8 @@ function normalizeProfileSettings(profile) {
   const number = positiveProfileNumber(value.number);
   const rawProxy = String(value.proxy || '').trim();
   const legacyDemoProxy = value.networkMode == null && value.id === 'env-004' && rawProxy === '127.0.0.1:7890';
-  const networkMode = value.networkMode === 'direct' || legacyDemoProxy || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy)
-    ? 'direct'
-    : 'proxy';
+  const networkMode = value.networkMode === 'proxy' ? 'proxy'
+    : value.networkMode === 'direct' || legacyDemoProxy || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy) ? 'direct' : 'proxy';
   const profileAssociationKeys = ['proxyId', 'proxy_id', 'proxyLibraryId', 'proxy_library_id'];
   const metaAssociationKeys = ['proxyId', 'proxy_id', 'proxyLibraryId', 'proxy_library_id'];
   const profileAssociation = profileAssociationKeys.find((key) => Object.prototype.hasOwnProperty.call(value, key));
@@ -339,13 +338,8 @@ function normalizeProfileSettings(profile) {
         : String(proxyMeta.backupProxies || '').split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8),
       fillFingerprint: proxyMeta.fillFingerprint !== false,
       requireReady: proxyMeta.requireReady !== false,
-      notReadyPolicy: ['block', 'direct', 'continue'].includes(String(proxyMeta.notReadyPolicy || ''))
-        ? String(proxyMeta.notReadyPolicy)
-        : (proxyMeta.requireReady === false ? 'continue' : 'block'),
-      // Persisted profiles with an explicit 'direct' policy record a real user choice, so they
-      // carry the opt-in; anything else must NOT be allowed to reach the network directly.
-      allowDirectFallback: proxyMeta.allowDirectFallback === true
-        || (String(proxyMeta.notReadyPolicy || '') === 'direct' && proxyMeta.allowDirectFallback !== false),
+      notReadyPolicy: 'block',
+      allowDirectFallback: false,
       tlsProfile: ['auto', 'chrome', 'chrome_legacy', 'node', 'off'].includes(String(proxyMeta.tlsProfile || ''))
         ? String(proxyMeta.tlsProfile)
         : 'auto',
@@ -2194,6 +2188,12 @@ function editorDraft(strict = true) {
   const selectedProxyValue = String($('#editor-proxy-library')?.value || '').trim();
   const selectedProxyId = selectedNetwork === 'direct' ? null : (proxyLibraryItem(selectedProxyValue)?.id || null);
   let proxy = serializeEditorProxy(strict);
+  if (selectedNetwork !== 'direct' && isDirectProxy(proxy)) {
+    if (strict && !String($('#editor-api-extract-url')?.value || '').trim()) {
+      throw new Error(tx('请填写代理地址，或明确选择本地直连'));
+    }
+    proxy = '';
+  }
   const currentProxyParsed = parseEditorProxy(current.proxy);
   const nextProxyParsed = parseEditorProxy(proxy);
   const sameEndpoint = currentProxyParsed.mode === 'custom'
@@ -2298,11 +2298,9 @@ function editorDraft(strict = true) {
       apiExtractUrl: ($('#editor-api-extract-url')?.value || '').trim(),
       backupProxies: ($('#editor-backup-proxies')?.value || '').split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8),
       fillFingerprint: $('#editor-proxy-fill-fingerprint')?.checked !== false,
-      requireReady: $('#editor-proxy-require-ready')?.checked !== false,
-      notReadyPolicy: $('#editor-proxy-not-ready-policy')?.value || 'block',
-      // "回退直连" is a deliberate, high-risk escape hatch. The engine refuses implicit direct
-      // fallback (see proxy-direct-fallback-blocked), so choosing it here IS the explicit opt-in.
-      allowDirectFallback: ($('#editor-proxy-not-ready-policy')?.value || 'block') === 'direct',
+      requireReady: true,
+      notReadyPolicy: 'block',
+      allowDirectFallback: false,
       tlsProfile: $('#editor-proxy-tls-profile')?.value || 'auto',
       tlsChromeMajor: (() => {
         const raw = ($('#editor-proxy-tls-chrome-major')?.value || '').trim();
@@ -2669,12 +2667,18 @@ function applyEditorNetworkResult(result = {}, { fillFingerprint = true } = {}) 
 
 async function testEditorProxy() {
   const output = $('#editor-proxy-result');
+  if (output.getAttribute('aria-busy') === 'true') return;
+  const profileId = editingProfileId;
+  output.setAttribute('aria-busy', 'true');
+  const button = $('#editor-test-proxy');
+  if (button) button.disabled = true;
   try {
     const draft = editorDraft(true);
     if (/^Direct$/i.test(draft.proxy) && !draft.proxyMeta?.apiExtractUrl) throw new Error(tx('本地直连无需代理检测'));
     output.className = 'proxy-test-result';
     output.textContent = tx('正在检测代理出口...');
     const result = await window.ops.testProfileProxy(draft);
+    if (editingProfileId !== profileId) return;
     const fill = $('#editor-proxy-fill-fingerprint')?.checked !== false;
     applyEditorNetworkResult(result, { fillFingerprint: fill });
     output.className = 'proxy-test-result success';
@@ -2682,7 +2686,10 @@ async function testEditorProxy() {
   } catch (error) {
     output.className = 'proxy-test-result error';
     const cls = error?.errorClass ? ` [${error.errorClass}]` : '';
-    output.textContent = tx('检测失败 · ') + error.message + cls;
+    if (editingProfileId === profileId) output.textContent = tx('检测失败 · ') + error.message + cls;
+  } finally {
+    output.setAttribute('aria-busy', 'false');
+    if (button) button.disabled = false;
   }
 }
 
@@ -4955,7 +4962,6 @@ $('#profile-editor-form').addEventListener('submit', async (event) => {
   const shouldSaveEditorProxyToLib = Boolean($('#editor-proxy-save-to-library')?.checked);
   try {
     const previous = ui.profiles[index]; const draft = editorDraft(true); if (!draft.name) throw new Error(tx('环境名称不能为空'));
-    const switchedToDirect = editorSelectedNetwork() !== 'direct' && isDirectProxy(draft.proxy);
     if (draft.proxy !== previous.proxy && !editorNetworkResult) { delete draft.exitIp; delete draft.exitCountryCode; delete draft.exitTimezone; delete draft.exitLatitude; delete draft.exitLongitude; delete draft.exitCheckedAt; }
     draft.updatedAt = new Date().toISOString();
     ui.profiles[index] = draft;
@@ -4993,7 +4999,7 @@ $('#profile-editor-form').addEventListener('submit', async (event) => {
         console.warn('编辑时自动保存代理到代理库失败', saveErr);
       }
     }
-    const running = profileEngine(draft.id).running; log('Profile', '已更新环境 ' + displayProfileNumber(draft)); editingProfileId = null; editorNetworkResult = null; switchView('profiles'); toast(switchedToDirect ? '未填写代理，已自动切换为本地直连' : (running ? '设置已保存，请重启该环境后生效' : '环境设置已保存'));
+    const running = profileEngine(draft.id).running; log('Profile', '已更新环境 ' + displayProfileNumber(draft)); editingProfileId = null; editorNetworkResult = null; switchView('profiles'); toast(running ? '设置已保存，请重启该环境后生效' : '环境设置已保存');
   } catch (error) { toast('保存失败：' + error.message); }
 });
 

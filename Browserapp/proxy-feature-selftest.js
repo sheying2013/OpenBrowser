@@ -101,16 +101,16 @@ async function main() {
   assert.deepStrictEqual(sanitized.proxyMeta.backupProxies, ['socks5://127.0.0.1:1081', 'http://127.0.0.1:8080']);
   assert.ok(sanitized.proxyMeta.apiExtractUrl.includes('/extract-text'));
 
-  // --- prepare without check flags must not throw for static proxy ---
-  const quiet = await engine.prepareProfileProxyForStart({
+  // Proxy startup verifies the route even when older profiles disabled checks.
+  engine.testProxy = async () => { throw Object.assign(new Error('fixture proxy unavailable'), { code: 'ECONNREFUSED' }); };
+  await assert.rejects(engine.prepareProfileProxyForStart({
     id: 'prof_proxy_feature_2',
     name: 'quiet',
     networkMode: 'proxy',
     proxy: 'socks5://127.0.0.1:1080',
     proxyMeta: { checkOnStart: false, refreshOnStart: false },
     privacy: {},
-  });
-  assert.strictEqual(quiet.proxy.includes('127.0.0.1:1080'), true);
+  }), /停止启动/);
 
   // --- prepare direct without extract must stay direct ---
   const direct = await engine.prepareProfileProxyForStart({
@@ -354,8 +354,9 @@ async function main() {
     assert.ok(html.includes(`id="${id}"`), 'missing html id ' + id);
   }
   assert.ok(html.includes('value="ifconfig-me"'), 'ifconfig.me must be selectable as an IP query channel');
-  assert.ok(renderer.includes("requireReady: $('#editor-proxy-require-ready')"), 'editor draft must collect requireReady');
-  assert.ok(renderer.includes("notReadyPolicy: $('#editor-proxy-not-ready-policy')"), 'editor draft must collect notReadyPolicy');
+  assert.ok(renderer.includes('requireReady: true'), 'editor must require a ready proxy');
+  assert.ok(renderer.includes("notReadyPolicy: 'block'"), 'editor must enforce fail-closed policy');
+  assert.ok(!html.includes('value="direct">回退直连'), 'direct fallback must not be selectable');
   assert.ok(renderer.includes("tlsProfile: $('#editor-proxy-tls-profile')"), 'editor draft must collect tlsProfile');
   assert.ok(renderer.includes("apiExtractUrl: String(proxyMeta.apiExtractUrl || '')"), 'normalize must not bleed refreshUrl into apiExtractUrl');
   assert.strictEqual((renderer.match(/\$\('#editor-test-proxy'\)\?\.addEventListener\('click', testEditorProxy\);/g) || []).length, 1, 'test proxy listener should be single');
