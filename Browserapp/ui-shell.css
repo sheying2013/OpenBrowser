@@ -599,6 +599,29 @@ body {
   min-height: 0 !important;
 }
 #view-profiles { min-width: 0; }
+#view-profiles .profile-empty-state {
+  padding: 48px 20px;
+  text-align: center;
+}
+#view-profiles .profile-empty-state > svg {
+  display: block;
+  width: 32px;
+  height: 32px;
+  margin: 0 auto 12px;
+  color: var(--ui-muted);
+}
+#view-profiles .profile-empty-state > strong {
+  display: block;
+  color: var(--ui-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+#view-profiles .profile-empty-state > p {
+  margin: 8px 0 16px;
+  color: var(--ui-muted);
+  font-size: 12px;
+}
+#view-profiles .profile-empty-state button[hidden] { display: none !important; }
 #view-profiles .group-chip-row { margin-bottom: 12px; padding-bottom: 2px; overflow-x: auto; }
 #view-profiles .group-chip { flex: 0 0 auto; min-height: 30px; border-radius: 999px !important; }
 

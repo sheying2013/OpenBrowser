@@ -427,6 +427,88 @@ html[data-ui-theme="oceanic-fingerprint"] select:focus {
 }
 
 /* 数据卡片与表格 */
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .profile-primary-toolbar button {
+  min-height: 32px !important;
+  font-size: 12px !important;
+  padding: 0 10px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .search {
+  height: 32px;
+  flex: 0 1 260px;
+  min-width: 180px;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .search input {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  padding: 0 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .search:focus-within {
+  outline: 2px solid var(--ink-text-secondary) !important;
+  outline-offset: 2px;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #profile-empty > button {
+  min-height: 32px;
+  font-size: 12px;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .table-card th,
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .table-card td {
+  font-size: 12px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .env-identity-text {
+  min-width: 0;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .env-identity-text strong,
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .env-identity-text small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .env-identity-text strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .env-identity-text small {
+  font-size: 11px;
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .table-card tbody tr.selected-row > td {
+  background: var(--ink-surface-active) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-selection-bar {
+  background: var(--ink-surface-active) !important;
+  border-color: var(--ink-border-default) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-selection-bar > strong,
+html[data-ui-theme="oceanic-fingerprint"] #profile-total {
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .status.running {
+  color: var(--ink-status-online-text) !important;
+  background: var(--ink-status-online-bg) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] #view-profiles .profile-primary-toolbar button:focus-visible,
+html[data-ui-theme="oceanic-fingerprint"] #profile-empty button:focus-visible {
+  outline: 2px solid var(--ink-text-secondary);
+  outline-offset: 2px;
+}
+
 html[data-ui-theme="oceanic-fingerprint"] .table-card {
   background: var(--ink-surface-1) !important;
   border: 1px solid var(--ink-border-subtle) !important;

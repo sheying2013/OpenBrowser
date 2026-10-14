@@ -105,7 +105,13 @@
           </div>
           <div class="table-card">
             <table class="profile-table-compact"><thead><tr><th class="col-check"><input type="checkbox" id="select-all-profiles"></th><th class="col-num" data-i18n="profiles.col.num">编号</th><th class="col-name" data-i18n="profiles.col.name">环境名称</th><th class="col-group" data-i18n="profiles.col.group">分组</th><th class="col-browser" data-i18n="profiles.col.browser">内核</th><th class="col-network" data-i18n="profiles.col.network">网络</th><th class="col-exit" data-i18n="profiles.col.exit">出口</th><th class="col-ext" data-i18n="profiles.col.ext">扩展</th><th class="col-status" data-i18n="profiles.col.status">状态</th><th class="col-actions" data-i18n="profiles.col.actions">操作</th></tr></thead><tbody id="profile-table"></tbody></table>
-            <div class="empty" id="profile-empty" hidden data-i18n="profiles.empty">暂无环境</div>
+            <div class="empty profile-empty-state" id="profile-empty" role="status" hidden>
+              <i data-lucide="layers" aria-hidden="true"></i>
+              <strong id="profile-empty-title"></strong>
+              <p id="profile-empty-description"></p>
+              <button class="outline" id="profile-clear-filters" type="button" data-i18n="profiles.clearFilters" hidden>清除筛选</button>
+              <button class="primary" id="profile-empty-create" type="button" data-i18n="profiles.create" hidden>新建环境</button>
+            </div>
           </div>
           <div class="profile-pagination toolbar-pagination" id="profile-pagination"><span class="profile-total"><span data-i18n="profiles.totalLabel">总数：</span><strong id="profile-total">0</strong></span><div class="profile-page-nav"><button type="button" id="profile-prev" aria-label="&#19978;&#19968;&#39029;">&#8249;</button><label><input id="profile-page" type="number" min="1" value="1" aria-label="&#24403;&#21069;&#39029;"> / <span id="profile-pages">1</span></label><button type="button" id="profile-next" aria-label="&#19979;&#19968;&#39029;">&#8250;</button></div><label class="profile-page-size"><select id="profile-page-size" aria-label="&#27599;&#39029;&#25968;&#37327;"><option value="10">10&#26465;/&#39029;</option><option value="20">20&#26465;/&#39029;</option><option value="50">50&#26465;/&#39029;</option><option value="100">100&#26465;/&#39029;</option></select></label></div>
 

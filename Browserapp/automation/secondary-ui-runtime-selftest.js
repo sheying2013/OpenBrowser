@@ -273,6 +273,59 @@ try {
     });
     cli('screenshot',path.join(output, mode + '-editor.png'));
   }
+  run(() => {
+    window.__profileListAudit = { profiles: ui.profiles, engines: engineProfiles, selected: [...selectedProfiles] };
+    ui.profiles = Array.from({length:12}, (_, i) => normalizeProfileSettings({id:'list-'+i,name:String(i+1),number:i+1,networkMode:'direct',proxy:'Direct',title:i===1?'Example long profile title '.repeat(8):'',tag:i===1?'Store team':''}));
+    engineProfiles = ui.profiles.map((profile, i) => ({...profile,running:i===1,port:i===1?9999:undefined}));
+    selectedProfiles.clear(); activeGroupFilter='all'; profilePage=1; profilePageSize=10; $('#profile-search').value='';
+  });
+  for (const width of [1280,900]) {
+    cli('set','viewport',String(width),'900');
+    for (const mode of ['dark','light']) {
+      evaluate('document.documentElement.dataset.uiTheme="oceanic-fingerprint";document.documentElement.dataset.colorMode=' + JSON.stringify(mode) + ';switchView("profiles");renderProfiles()');
+      const prefix=width+'/'+mode+': ';
+      check(prefix+'profile list readable sizes and toolbar controls',()=>{
+        const value=run(()=>({font:parseFloat(getComputedStyle(document.querySelector('#profile-table td')).fontSize),buttons:[...document.querySelectorAll('.profile-primary-toolbar button')].map(x=>x.getBoundingClientRect().height),totalContrast:window.__auditContrast(document.querySelector('#profile-total')),runningContrast:window.__auditContrast(document.querySelector('#profile-table .status.running'))}));
+        assert.ok(value.font>=12,JSON.stringify(value));assert.ok(value.buttons.every(x=>x>=32),JSON.stringify(value));assert.ok(value.totalContrast>=4.5 && value.runningContrast>=4.5,JSON.stringify(value));
+      });
+      check(prefix+'default identity avoids duplicate subtitles and long titles stay bounded',()=>{
+        const value=run(()=>{const title=document.querySelector('#profile-table tr:nth-child(2) .env-identity-text');return {subtitle:document.querySelector('#profile-table tr:first-child .env-identity-text small')?.textContent||'',titleWidth:title.clientWidth,cellWidth:title.closest('td').clientWidth,tooltip:title.title,ellipsis:getComputedStyle(title.querySelector('strong')).textOverflow};});
+        assert.equal(value.subtitle,'');assert.ok(value.titleWidth<=value.cellWidth);assert.equal(value.ellipsis,'ellipsis');assert.ok(value.tooltip.includes('Example long profile title'));
+      });
+      check(prefix+'selection has accessible names and visible row feedback',()=>{
+        const value=run(()=>{selectedProfiles.clear();renderProfiles();const input=document.querySelector('#profile-table [data-profile-select]');input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));const row=input.closest('tr');return {name:input.getAttribute('aria-label'),all:document.querySelector('#select-all-profiles').getAttribute('aria-label'),selected:row.classList.contains('selected-row'),bar:!document.querySelector('#profile-selection-bar').hidden,color:getComputedStyle(row.querySelector('td')).backgroundColor,normal:getComputedStyle(row.nextElementSibling.querySelector('td')).backgroundColor};});
+        assert.ok(value.name && value.all);assert.equal(value.selected,true);assert.equal(value.bar,true);assert.notEqual(value.color,value.normal);
+      });
+      check(prefix+'search miss offers clear filters and restores the list',()=>{
+        const value=run(()=>{$('#profile-search').value='no-such-profile';renderProfiles();const before={empty:!$('#profile-empty').hidden,title:$('#profile-empty-title').textContent,clear:!$('#profile-clear-filters').hidden};$('#profile-clear-filters').click();return {...before,query:$('#profile-search').value,rows:document.querySelectorAll('#profile-table tr').length,focus:document.activeElement===$('#profile-search')};});
+        assert.equal(value.empty,true);assert.equal(value.clear,true);assert.notEqual(value.title,'profiles.noResults');assert.equal(value.query,'');assert.equal(value.rows,10);assert.equal(value.focus,true);
+      });
+      check(prefix+'list action column remains reachable by horizontal scrolling',()=>{
+        const value=run(()=>{const card=document.querySelector('#view-profiles .table-card');card.scrollLeft=card.scrollWidth;const button=card.querySelector('tr:last-child .actions button:last-child');return {overflow:getComputedStyle(card).overflowX,inside:button.getBoundingClientRect().right<=card.getBoundingClientRect().right+1};});
+        assert.equal(value.overflow,'auto');assert.equal(value.inside,true);
+      });
+      if(width===1280){evaluate('document.querySelector("#view-profiles .table-card").scrollLeft=0');cli('screenshot',path.join(output,mode+'-profiles.png'));}
+    }
+  }
+  check('Escape clears only the profile search, without leaving the view',()=>{
+    cli('fill','#profile-search','no-such-profile');
+    cli('wait','--fn','!document.querySelector("#profile-empty").hidden');
+    cli('press','Escape');
+    const value=evaluate('({query:document.querySelector("#profile-search").value,rows:document.querySelectorAll("#profile-table tr").length,view:document.querySelector("#view-profiles").classList.contains("active")})');
+    assert.equal(value.query,'');assert.equal(value.rows,10);assert.equal(value.view,true);
+  });
+  check('profile search uses one visible wrapper focus ring rather than nested input frames',()=>{
+    cli('focus','#profile-search');
+    cli('wait','--fn','getComputedStyle(document.querySelector("#profile-search").closest(".search")).outlineWidth === "2px"');
+    const value=run(()=>{const input=$('#profile-search'),wrap=input.closest('.search');return {border:getComputedStyle(input).borderTopWidth,outline:getComputedStyle(wrap).outlineWidth,style:getComputedStyle(wrap).outlineStyle};});
+    assert.equal(value.border,'0px');assert.equal(value.outline,'2px');assert.equal(value.style,'solid');
+  });
+  check('first-use empty state offers create rather than clear filters',()=>{
+    const value=run(()=>{ui.profiles=[];renderProfiles();return {empty:!$('#profile-empty').hidden,create:!$('#profile-empty-create').hidden,clear:$('#profile-clear-filters').hidden,hint:$('#profile-empty-description').textContent,selected:!$('#profile-selection-bar').hidden,table:document.querySelector('#profile-table').closest('table').hidden,scroll:document.querySelector('#view-profiles .table-card').scrollLeft};});
+    assert.equal(value.empty,true);assert.equal(value.create,true);assert.equal(value.clear,true);assert.equal(value.selected,false);assert.equal(value.table,true);assert.equal(value.scroll,0);assert.ok(value.hint && value.hint!=='profiles.emptyHint');
+  });
+  cli('screenshot',path.join(output,'profiles-empty.png'));
+  run(()=>{ui.profiles=window.__profileListAudit.profiles;engineProfiles=window.__profileListAudit.engines;selectedProfiles.clear();for(const id of window.__profileListAudit.selected)selectedProfiles.add(id);$('#profile-search').value='';activeGroupFilter='all';renderProfiles();delete window.__profileListAudit;});
   check('no page exceptions or renderer Error log', () => {
     const state = evaluate('({errors:window.__uiAuditErrors,logs:ui.logs.filter(x=>x.module==="Error"),unexpectedCalls:window.__uiAuditCalls})');
     assert.deepEqual(state.errors, []); assert.deepEqual(state.logs, []); assert.deepEqual(state.unexpectedCalls, []);
