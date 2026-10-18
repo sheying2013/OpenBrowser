@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.24'
+        description: 'Release tag to create, for example v1.0.25'
         required: true
-        default: 'v1.0.24'
+        default: 'v1.0.25'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -42,15 +42,19 @@ env:
 
     ### 中文
 
-    - **版本对齐：** 应用内显示、npm 版本、Windows 可执行文件元数据及仓库文档全量严格对齐至 **v1.0.24**。
-    - **Local API 健壮性：** 规范代理检测与同步接口异常返回（杜绝非预期 500）；操作对象不存在明确返回 404；用户列表接口统一补充 `id` / `title` 字段。
-    - **环境生命周期保障：** 删除环境即时向前端广播清理状态，彻底杜绝重启后复活幽灵环境。
+    - **版本对齐：** 应用内显示、npm 版本、Windows 可执行文件元数据与仓库文档全部对齐至 **v1.0.25**。
+    - **字体探测性能：** 读元素宽度不再逐层重算样式，500 次读取的 `getComputedStyle` 从 2000 次降到 0 次，重排页面卡顿消除。
+    - **新标签页启动：** 修正附加顺序，改为有界注入后立即恢复，白屏由数秒降到约 0.3 秒。
+    - **字体门安全加固：** `@font-face` / `local()` 解析改线性扫描，注释与未闭合输入不再阻塞。
+    - **跨平台字体：** 同平台不再注入字体子集，避免字形混杂；`toString` 包装加重入保护。
 
     ### English
 
-    - **Version Alignment:** In-app display, npm package, Windows PE metadata, and docs are aligned to **v1.0.24**.
-    - **Local API Hardening:** Normalized proxy-check and sync errors to clear client codes (no 500s); explicit 404 on missing targets; unified `id` / `title` in user list.
-    - **Profile Lifecycle:** Instant IPC state broadcast upon deletion to eliminate ghost profiles across restarts.
+    - **Version Alignment:** In-app display, npm package, Windows PE metadata, and docs are aligned to **v1.0.25**.
+    - **Font probe performance:** reads no longer recompute styles per ancestor (2000 → 0 `getComputedStyle` calls per 500 reads).
+    - **New tab startup:** fixed CDP attach order — bounded inject then immediate resume (white screen ~3s → ~0.3s).
+    - **Font gate hardening:** `@font-face` / `local()` parsing is linear; comments and unterminated input no longer block.
+    - **Cross-platform fonts:** no subset injection when host and persona share a platform; `toString` wrappers are reentrancy-safe.
 
     ### 下载 / Downloads
 
