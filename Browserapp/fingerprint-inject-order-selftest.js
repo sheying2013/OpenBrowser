@@ -47,6 +47,23 @@ function main() {
     fpSrc.slice(fpSrc.indexOf('async function applyFingerprintToTab'))
   ), 'Runtime.evaluate must not swallow inject errors');
 
+  // --- late-created page targets resume before response rewriting is armed ---
+  const latchIdx = engineSrc.indexOf('pausedTargetNeedsResume');
+  assert.ok(latchIdx > 0, 'attach handler must keep a single resume latch');
+  const attachBlock = engineSrc.slice(latchIdx, latchIdx + 8000);
+  const initialIdx = attachBlock.indexOf('if (isInitial) {');
+  const lateIdx = attachBlock.indexOf('Late-created target');
+  const resumeIdx = attachBlock.indexOf('await resumeTarget();');
+  const armIdx = attachBlock.indexOf('if (!isInitial) armResponseRewriting(2500)');
+  assert.ok(initialIdx > 0 && lateIdx > initialIdx, 'page branch must split the startup barrier from late targets');
+  assert.ok(resumeIdx > lateIdx, 'late target must resume after the bounded inject');
+  assert.ok(armIdx > resumeIdx, 'response rewriting for late targets must be armed after the resume');
+  const initialBlock = attachBlock.slice(initialIdx, lateIdx);
+  assert.ok(initialBlock.indexOf('armResponseRewriting(8000)') > 0,
+    'startup barrier must keep arming response rewriting while the target is paused');
+  assert.ok(/finally[\s\S]{0,400}pausedTargetNeedsResume/.test(attachBlock),
+    'every exit path must release the pause through the latch');
+
   // --- start-page re-samples fingerprint after inject settle ---
   const tpl = fs.readFileSync(path.join(__dirname, 'automation/start-page-template.js'), 'utf8');
   // Assert the intent — the page re-samples several times while the inject settles — rather

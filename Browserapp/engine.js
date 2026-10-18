@@ -2171,6 +2171,32 @@ class BrowserEngine {
       const isInitial = Boolean(targetId && pendingInitialTargets.has(targetId));
 
       (async () => {
+        // A fresh tab (window.open with noopener, ctrl-click, or any target opened without an
+        // opener) can attach while its renderer still has no execution context. Every session
+        // command then waits out its full timeout, and because the target stays paused on
+        // waitForDebuggerOnStart until the end of the block, the user faces a blank tab for that
+        // whole time. Keep one resume latch so the pause is released as early as correctness
+        // allows and never released twice.
+        let pausedTargetNeedsResume = Boolean(waitingForDebugger);
+        const resumeTarget = async () => {
+          if (!pausedTargetNeedsResume) return;
+          pausedTargetNeedsResume = false;
+          await connection.command('Runtime.runIfWaitingForDebugger', {}, { sessionId, timeout: 3000 })
+            .catch(() => {});
+        };
+        const armResponseRewriting = async (timeout) => {
+          if (targetInfo.type === 'iframe') return;
+          try {
+            await fontResponseRewriter.enable(connection, { sessionId, timeout });
+            await connection.command('Fetch.enable', {
+              patterns: [
+                { urlPattern: '*', requestStage: 'Request' },
+                { urlPattern: '*', requestStage: 'Response', resourceType: 'Document' },
+                { urlPattern: '*', requestStage: 'Response', resourceType: 'Stylesheet' },
+              ],
+            }, { sessionId, timeout }).catch(() => {});
+          } catch (_) {}
+        };
         try {
           const pageLikeTypes = new Set(['page', 'iframe', 'popup', 'webview']);
           if (targetInfo.type === 'page' || targetInfo.type === 'iframe' || pageLikeTypes.has(targetInfo.type)) {
@@ -2180,38 +2206,38 @@ class BrowserEngine {
               waitForDebuggerOnStart: true,
               flatten: true,
             }, { sessionId }).catch(() => {});
-            // Critical: inject fingerprint BEFORE resuming the page/iframe target.
-            // Polling in startRunningWatch is only a fallback, not the primary path.
-            await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, { ...targetInfo, waitingForDebugger });
-            // Enable Fetch while this page/iframe is paused. The next navigation then receives
-            // sanitized HTML/CSS bytes before the renderer tokenizes its static styles.
-            if (targetInfo.type !== 'iframe') {
-              await fontResponseRewriter.enable(connection, { sessionId, timeout: 8000 });
-              await connection.command('Fetch.enable', {
-                patterns: [
-                  { urlPattern: '*', requestStage: 'Request' },
-                  { urlPattern: '*', requestStage: 'Response', resourceType: 'Document' },
-                  { urlPattern: '*', requestStage: 'Response', resourceType: 'Stylesheet' },
-                ],
-              }, { sessionId, timeout: 8000 }).catch(() => {});
-            }
-
-            if (isInitial && !completedInitialTargets.has(targetId)) {
-              completedInitialTargets.add(targetId);
-              pendingInitialTargets.delete(targetId);
-              if (pendingInitialTargets.size === 0) {
-                settleBarrier();
+            if (isInitial) {
+              // Startup barrier targets are known-ready and must be sanitized before first paint.
+              // Critical: inject fingerprint BEFORE resuming the page/iframe target.
+              // Polling in startRunningWatch is only a fallback, not the primary path.
+              await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, { ...targetInfo, waitingForDebugger });
+              // Enable Fetch while this page/iframe is paused. The next navigation then receives
+              // sanitized HTML/CSS bytes before the renderer tokenizes its static styles.
+              await armResponseRewriting(8000);
+              if (!completedInitialTargets.has(targetId)) {
+                completedInitialTargets.add(targetId);
+                pendingInitialTargets.delete(targetId);
+                if (pendingInitialTargets.size === 0) {
+                  settleBarrier();
+                }
               }
+            } else {
+              // Late-created target: bound the inject, resume, then arm rewriting in the
+              // background. Response rewriting only has to be armed before the *next* document
+              // load, and a tab that the user just opened has no document worth sanitizing yet.
+              const injectBudget = targetInfo.type === 'iframe' ? 1500 : 2500;
+              await Promise.race([
+                Promise.resolve(this.applyFingerprintToSession(connection, sessionId, item, fingerprint, { ...targetInfo, waitingForDebugger }))
+                  .catch((error) => report(error, targetInfo)),
+                new Promise((resolve) => { const timer = setTimeout(resolve, injectBudget); if (timer && typeof timer.unref === 'function') timer.unref(); }),
+              ]);
             }
-            if (waitingForDebugger) {
-              await connection.command('Runtime.runIfWaitingForDebugger', {}, { sessionId }).catch(() => {});
-            }
+            await resumeTarget();
+            if (!isInitial) armResponseRewriting(2500).catch(() => {});
           } else if (workerTypes.has(targetInfo.type) && !internalUrl.test(String(targetInfo.url || ''))) {
             if (!item.attachedWorkerTargets) item.attachedWorkerTargets = new Set();
             if (targetId && item.attachedWorkerTargets.has(targetId)) {
-              if (waitingForDebugger) {
-                await connection.command('Runtime.runIfWaitingForDebugger', {}, { sessionId }).catch(() => {});
-              }
+              await resumeTarget();
               return;
             }
             if (targetId) item.attachedWorkerTargets.add(targetId);
@@ -2258,8 +2284,11 @@ class BrowserEngine {
             settleBarrier(new Error(`Initial target session attach failed for ${targetId}: ${error.message}`));
           }
         } finally {
-          if (waitingForDebugger) {
-            await connection.command('Runtime.runIfWaitingForDebugger', {}, { sessionId })
+          // Release the pause on every path, including a rejected inject: a target left waiting
+          // for the debugger never paints, so failing closed here means a permanent blank tab.
+          if (pausedTargetNeedsResume) {
+            pausedTargetNeedsResume = false;
+            await connection.command('Runtime.runIfWaitingForDebugger', {}, { sessionId, timeout: 3000 })
               .catch((error) => report(error, targetInfo));
           }
         }

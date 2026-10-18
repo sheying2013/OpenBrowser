@@ -94,13 +94,31 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
   const allowedSetJson = JSON.stringify(allowedList.map((name) => name.toLowerCase()));
   const allowedFamiliesSet = new Set(allowedList.map((name) => name.toLowerCase()));
 
-  let subsets = fontSubsets;
-  if (!subsets || !Array.isArray(subsets) || subsets.length === 0) {
-    subsets = loadSubsetsForGate(platform);
+  // A trimmed subset must never shadow a complete font the host already ships: local() resolves
+  // first, the subset then wins for the glyphs it happens to contain, and every other character
+  // falls back on its own, mixing typefaces inside one run of text. Subsets exist for
+  // cross-platform personas, where the host genuinely lacks the family.
+  const hostPlatform = String(options.hostPlatform || process.platform || '').trim().toLowerCase();
+  const personaPlatform = String(options.platform || platform || '').trim().toLowerCase();
+  // 'darwin' contains 'win', so the macOS spellings must be resolved before the Windows ones.
+  const personaIsMac = personaPlatform.indexOf('mac') !== -1 || personaPlatform.indexOf('darwin') !== -1;
+  const personaIsWindows = !personaIsMac && personaPlatform.indexOf('win') !== -1;
+  const hostIsMac = hostPlatform.indexOf('mac') !== -1 || hostPlatform.indexOf('darwin') !== -1;
+  const hostIsWindows = !hostIsMac && hostPlatform.indexOf('win') !== -1;
+  const hostMatchesPersona = (personaIsWindows && hostIsWindows) || (personaIsMac && hostIsMac);
+  // options.injectSubsets can only narrow this decision; a subset never overrides a host font.
+  const injectSubsets = hostMatchesPersona
+    ? false
+    : (options.injectSubsets === undefined ? true : Boolean(options.injectSubsets));
+  const injectSubsetsLiteral = injectSubsets ? 'true' : 'false';
+
+  let subsets = injectSubsets ? fontSubsets : [];
+  if (injectSubsets && (!subsets || !Array.isArray(subsets) || subsets.length === 0)) {
+    subsets = loadSubsetsForGate(personaPlatform || platform);
   }
 
   const subsetMap = {};
-  if (Array.isArray(subsets)) {
+  if (injectSubsets && Array.isArray(subsets)) {
     for (const item of subsets) {
       if (item && item.family && item.base64) {
         const lower = item.family.trim().toLowerCase();
@@ -145,30 +163,175 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
 
   const allowedFamilies = new Set(${allowedSetJson});
   const fontSubsets = ${fontSubsetsDeclaration};
+  // Cross-platform personas need the subset payload so local() resolves on a host that does
+  // not ship the family. When the host platform already provides it, appending the trimmed
+  // subset shadows the complete system font and every missing glyph falls back per character.
+  const injectSubsets = ${injectSubsetsLiteral};
   const BLOCKED_FONT = ${JSON.stringify(blockedFont)};
+
+  // Linear scanners replace the two catastrophic regexes this function used to run over
+  // page-controlled CSS. /@font-face(?:\\s|\\/\\*[\\s\\S]*?\\*\\/)*\\{([^{}]*)\\}/gi needed
+  // seconds for '@font-face' followed by 28 balanced comments, and the local() rule
+  // /local\\s*\\(\\s*(["']?)([^"')]+)\\1\\s*\\)/gi went quadratic on an unterminated local(.
+  // A page can author either input, so both rewrites now walk the string exactly once and
+  // abandon a construct as soon as it stops being well formed.
+
+  function isCssSpaceChar(ch) {
+    const c = ch.charCodeAt(0);
+    return c === 32 || c === 9 || c === 10 || c === 13 || c === 12;
+  }
+
+  function findCommentEnd(css, from) {
+    const end = css.indexOf('*/', from + 2);
+    return end === -1 ? -1 : end + 2;
+  }
+
+  function normalizeFamilyName(name) {
+    let out = '';
+    let pendingSpace = false;
+    for (let i = 0; i < name.length; i += 1) {
+      const ch = name[i];
+      if (isCssSpaceChar(ch)) {
+        pendingSpace = out.length > 0;
+        continue;
+      }
+      if (pendingSpace) {
+        out += ' ';
+        pendingSpace = false;
+      }
+      out += ch;
+    }
+    return out.toLowerCase();
+  }
+
+  // Rewrites the declaration body of every @font-face block and copies everything outside a
+  // body verbatim, so the at-rule prefix bytes stay exactly as the page authored them.
+  function mapFontFaceBlocks(css, rewriteBody) {
+    const lower = css.toLowerCase();
+    if (lower.indexOf('@font-face') === -1) return css;
+    let out = '';
+    let cursor = 0;
+    let search = 0;
+    while (search < css.length) {
+      const at = lower.indexOf('@font-face', search);
+      if (at === -1) break;
+      let i = at + 10;
+      let headUnterminated = false;
+      while (i < css.length) {
+        if (isCssSpaceChar(css[i])) { i += 1; continue; }
+        if (css[i] === '/' && css[i + 1] === '*') {
+          const afterComment = findCommentEnd(css, i);
+          if (afterComment === -1) { headUnterminated = true; break; }
+          i = afterComment;
+          continue;
+        }
+        break;
+      }
+      if (headUnterminated) break;
+      if (css[i] !== '{') { search = at + 10; continue; }
+      const bodyStart = i + 1;
+      let depth = 1;
+      let j = bodyStart;
+      let terminated = false;
+      while (j < css.length) {
+        const ch = css[j];
+        if (ch === '/' && css[j + 1] === '*') {
+          const afterComment = findCommentEnd(css, j);
+          if (afterComment === -1) { break; }
+          j = afterComment;
+          continue;
+        }
+        if (ch === '"' || ch === "'") {
+          j += 1;
+          while (j < css.length && css[j] !== ch) {
+            if (css[j] === '\\\\') j += 1;
+            j += 1;
+          }
+          if (j >= css.length) break;
+          j += 1;
+          continue;
+        }
+        if (ch === '{') {
+          depth += 1;
+        } else if (ch === '}') {
+          depth -= 1;
+          if (depth === 0) { terminated = true; break; }
+        }
+        j += 1;
+      }
+      if (!terminated) { search = at + 10; continue; }
+      out += css.slice(cursor, bodyStart) + rewriteBody(css.slice(bodyStart, j)) + '}';
+      cursor = j + 1;
+      search = cursor;
+    }
+    return cursor === 0 ? css : out + css.slice(cursor);
+  }
+
+  // Visits every local(...) token once. buildReplacement receives the normalized family name,
+  // the untouched token text, and the quote character the caller must reproduce.
+  function rewriteLocalTokens(value, buildReplacement) {
+    if (typeof value !== 'string' || value.length === 0) return value;
+    const lower = value.toLowerCase();
+    if (lower.indexOf('local') === -1) return value;
+    const maxNameLength = 256;
+    let out = '';
+    let cursor = 0;
+    let search = 0;
+    while (search < value.length) {
+      const at = lower.indexOf('local', search);
+      if (at === -1) break;
+      const prev = at > 0 ? value.charCodeAt(at - 1) : 0;
+      const prevIsIdent = (prev >= 97 && prev <= 122) || (prev >= 65 && prev <= 90)
+        || (prev >= 48 && prev <= 57) || prev === 95 || prev === 45 || prev === 36;
+      if (prevIsIdent) { search = at + 5; continue; }
+      let i = at + 5;
+      while (i < value.length && isCssSpaceChar(value[i])) i += 1;
+      if (value[i] !== '(') { search = at + 5; continue; }
+      i += 1;
+      while (i < value.length && isCssSpaceChar(value[i])) i += 1;
+      let quote = '';
+      if (value[i] === '"' || value[i] === "'") { quote = value[i]; i += 1; }
+      const nameStart = i;
+      while (i < value.length && i - nameStart <= maxNameLength) {
+        const ch = value[i];
+        if (ch === ')' || ch === '"' || ch === "'") break;
+        i += 1;
+      }
+      const rawName = value.slice(nameStart, i).trim();
+      if (quote) {
+        if (value[i] !== quote) { search = at + 5; continue; }
+        i += 1;
+      }
+      while (i < value.length && isCssSpaceChar(value[i])) i += 1;
+      if (value[i] !== ')') { search = at + 5; continue; }
+      i += 1;
+      const replacement = buildReplacement(normalizeFamilyName(rawName), value.slice(at, i), quote);
+      if (typeof replacement === 'string') {
+        out += value.slice(cursor, at) + replacement;
+        cursor = i;
+      }
+      search = i;
+    }
+    return cursor === 0 ? value : out + value.slice(cursor);
+  }
+
+  function buildLocalReplacement(cleanName, token, quote) {
+    if (!allowedFamilies.has(cleanName)) {
+      return 'local("' + BLOCKED_FONT + '")';
+    }
+    const sub = injectSubsets ? fontSubsets[cleanName] : null;
+    if (sub && sub.base64) {
+      return 'local(' + quote + cleanName + quote + '), url("data:' + (sub.format || 'font/woff2') + ';base64,' + sub.base64 + '")';
+    }
+    return token;
+  }
 
   function sanitizeCss(css) {
     if (typeof css !== 'string') return css;
-    if (!css.toLowerCase().includes('@font-face')) {
-      return css;
-    }
-    let sanitized = css.replace(/@font-face(?:\\s|\\/\\*[\\s\\S]*?\\*\\/)*\\{([^{}]*)\\}/gi, (match, inner) => {
-      const prefix = match.slice(0, match.indexOf('{') + 1);
-      const sanitizedInner = inner.replace(/local\\s*\\(\\s*(["']?)([^"')]+)\\1\\s*\\)/gi, (localMatch, quote, fontName) => {
-        const cleanName = fontName.trim().replace(/\\s+/g, ' ').toLowerCase();
-        if (allowedFamilies.has(cleanName)) {
-          const sub = fontSubsets[cleanName];
-          if (sub && sub.base64) {
-            return 'local(' + quote + fontName + quote + '), url("data:' + (sub.format || 'font/woff2') + ';base64,' + sub.base64 + '")';
-          }
-          return localMatch;
-        }
-        return 'local("' + BLOCKED_FONT + '")';
-      });
-      return prefix + sanitizedInner + '}';
-    });
+    if (css.toLowerCase().indexOf('@font-face') === -1) return css;
+    let sanitized = mapFontFaceBlocks(css, (body) => rewriteLocalTokens(body, buildLocalReplacement));
 
-    if (sanitized.toLowerCase().includes('@import')) {
+    if (sanitized.toLowerCase().indexOf('@import') !== -1) {
       sanitized = sanitized.replace(/@import\\s+(?:url\\s*\\(\\s*(["']?)([^"')]+)\\1\\s*\\)|(["'])([^"']+)\\3)/gi, (match, q1, u1, q2, u2) => {
         const targetUrl = u1 || u2;
         const q = q1 || q2 || '"';
@@ -190,17 +353,7 @@ function buildCssFontLocalGateSource(personaFonts, fontSubsets, options = {}) {
 
   function sanitizeSrcValue(val) {
     if (typeof val !== 'string') return val;
-    return val.replace(/local\\s*\\(\\s*(["']?)([^"')]+)\\1\\s*\\)/gi, (match, quote, fontName) => {
-      const cleanName = fontName.trim().replace(/\\s+/g, ' ').toLowerCase();
-      if (allowedFamilies.has(cleanName)) {
-        const sub = fontSubsets[cleanName];
-        if (sub && sub.base64) {
-          return 'local(' + quote + fontName + quote + '), url("data:' + (sub.format || 'font/woff2') + ';base64,' + sub.base64 + '")';
-        }
-        return match;
-      }
-      return 'local("' + BLOCKED_FONT + '")';
-    });
+    return rewriteLocalTokens(val, buildLocalReplacement);
   }
 
   const isStyleElement = (el) => {

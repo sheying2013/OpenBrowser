@@ -392,17 +392,35 @@ function buildFontMetricsScript(platformKey, options = {}) {
       } catch (_) {}
       nativeMap.set(patchedFontsGet, 'function get fonts() { [native code] }');
 
+      // Page frameworks (core-js and friends) replace Function.prototype.toString themselves. If
+      // our wrapper falls back to whatever implementation is installed and that implementation
+      // calls back into ours, the pair recurses with no exit and pins a core for as long as the
+      // tab lives. The depth guard answers a re-entrant call from the bridge cache only, so the
+      // cycle terminates at the second hop instead of spinning.
+      let toStringReentryDepth = 0;
       const customToString = function toString(...args) {
         const secret = args[0];
-        if (secret === BRIDGE_TOKEN) {
-          if (nativeMap.has(this)) return { bridge: true, nativeText: nativeMap.get(this) };
-          try {
-            const inherited = origToString.call(this, secret);
-            if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
-          } catch (_) {}
+        if (toStringReentryDepth > 0) {
+          if (nativeMap.has(this)) {
+            if (secret === BRIDGE_TOKEN) return { bridge: true, nativeText: nativeMap.get(this) };
+            return nativeMap.get(this);
+          }
+          return 'function ' + (this && typeof this.name === 'string' ? this.name : 'toString') + '() { [native code] }';
         }
-        if (nativeMap.has(this)) return nativeMap.get(this);
-        return origToString.call(this, ...args);
+        toStringReentryDepth += 1;
+        try {
+          if (secret === BRIDGE_TOKEN) {
+            if (nativeMap.has(this)) return { bridge: true, nativeText: nativeMap.get(this) };
+            try {
+              const inherited = origToString.call(this, secret);
+              if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
+            } catch (_) {}
+          }
+          if (nativeMap.has(this)) return nativeMap.get(this);
+          return origToString.call(this, ...args);
+        } finally {
+          toStringReentryDepth -= 1;
+        }
       };
       nativeMap.set(customToString, 'function toString() { [native code] }');
       try {
@@ -4017,26 +4035,71 @@ function buildInjectionScript(fp) {
       patchCanvasFont(globalThis.CanvasRenderingContext2D && globalThis.CanvasRenderingContext2D.prototype);
       patchCanvasFont(globalThis.OffscreenCanvasRenderingContext2D && globalThis.OffscreenCanvasRenderingContext2D.prototype);
 
-      sanitizeElementFontScope = (element, callback) => {
-        const modified = [];
-        const checkNode = (node) => {
-          if (!node || node.nodeType !== 1) return;
-          let style = null;
-          let originalInline = '';
-          try { style = node.style; originalInline = style ? style.fontFamily : ''; } catch (_) {}
-          let originalAttr = null;
-          try { originalAttr = node.getAttribute ? node.getAttribute('font-family') : null; } catch (_) {}
-          const raw = originalInline || originalAttr || '';
-          let computedFont = '';
-          try {
-            if (typeof globalThis.getComputedStyle === 'function') {
-              const cs = globalThis.getComputedStyle(node);
-              computedFont = cs ? (cs.fontFamily || '') : '';
+      // Metric reads (offsetWidth, clientHeight, getBoundingClientRect, ...) are the hottest DOM
+      // APIs there are: layout libraries and analytics poll them hundreds of times per frame.
+      // Rebuilding the ancestor chain and calling getComputedStyle() for every node on every read
+      // forced a synchronous style recalculation each time, which is what turned ordinary browsing
+      // into a frozen tab. The verdict per node is therefore cached and keyed on the inputs that
+      // can actually change it (inline font-family, font-family attribute, class attribute) plus a
+      // document-wide style epoch. A cache hit costs three string comparisons and touches neither
+      // the style system nor the layout tree.
+      const fontScopeVerdicts = new WeakMap();
+      let fontScopeEpoch = 0;
+      let fontScopeDepth = 0;
+      const bumpFontScopeEpoch = () => { fontScopeEpoch += 1; };
+      if (typeof globalThis.MutationObserver === 'function' && globalThis.document) {
+        try {
+          // Only mutations that can change a *computed* font family invalidate the cache globally:
+          // stylesheet insert/removal and edits to the text of a <style>. Per-element class and
+          // style changes are already covered by the cached attribute comparison, so reacting to
+          // them here would throw the whole cache away on every SPA re-render.
+          const observer = new globalThis.MutationObserver((records) => {
+            for (let i = 0; i < records.length; i += 1) {
+              const record = records[i];
+              if (record.type === 'characterData') {
+                const parent = record.target && record.target.parentNode;
+                if (parent && String(parent.nodeName || '').toUpperCase() === 'STYLE') { bumpFontScopeEpoch(); return; }
+                continue;
+              }
+              if (record.type !== 'childList') continue;
+              const lists = [record.addedNodes, record.removedNodes];
+              for (let l = 0; l < lists.length; l += 1) {
+                const list = lists[l];
+                if (!list) continue;
+                for (let n = 0; n < list.length; n += 1) {
+                  const name = String((list[n] && list[n].nodeName) || '').toUpperCase();
+                  if (name === 'STYLE' || name === 'LINK') { bumpFontScopeEpoch(); return; }
+                }
+              }
             }
-          } catch (_) {}
-          const targetFont = (raw && familyHasForeign(raw)) ? raw : (computedFont && familyHasForeign(computedFont) ? computedFont : '');
-          if (targetFont) {
-            const clean = sanitizeFamilyOnly(targetFont) || 'monospace';
+          });
+          observer.observe(globalThis.document, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+            attributes: true,
+            attributeFilter: ['class', 'style', 'font-family'],
+          });
+        } catch (_) {}
+      }
+      try {
+        const fontSet = globalThis.document && globalThis.document.fonts;
+        if (fontSet && typeof fontSet.addEventListener === 'function') {
+          fontSet.addEventListener('loadingdone', bumpFontScopeEpoch);
+          fontSet.addEventListener('loadingerror', bumpFontScopeEpoch);
+        }
+      } catch (_) {}
+
+      sanitizeElementFontScope = (element, callback) => {
+        // A layout library can read another metric from inside the callback (getBoundingClientRect
+        // feeding an offsetWidth hook, and so on). Nested scopes are legitimate, so they still run
+        // - but only a few levels deep; past that the recursion is a feedback loop, not a
+        // measurement, and reading the native value is both correct and finite.
+        if (fontScopeDepth >= 4) return callback();
+        fontScopeDepth += 1;
+        const modified = [];
+        const applyCleanFamily = (node, style, originalInline, originalAttr, clean) => {
+          try {
             if (style) {
               style.setProperty('font-family', clean, 'important');
               modified.push({ style, originalInline });
@@ -4044,7 +4107,37 @@ function buildInjectionScript(fp) {
               node.setAttribute('font-family', clean);
               modified.push({ element: node, originalAttr });
             }
+          } catch (_) {}
+        };
+        const checkNode = (node) => {
+          if (!node || node.nodeType !== 1) return;
+          let style = null;
+          let originalInline = '';
+          try { style = node.style; originalInline = style ? style.fontFamily : ''; } catch (_) {}
+          let originalAttr = null;
+          try { originalAttr = node.getAttribute ? node.getAttribute('font-family') : null; } catch (_) {}
+          let className = '';
+          try { className = node.getAttribute ? (node.getAttribute('class') || '') : ''; } catch (_) {}
+          const cached = fontScopeVerdicts.get(node);
+          if (cached && cached.inline === originalInline && cached.attr === originalAttr && cached.cls === className && cached.epoch === fontScopeEpoch) {
+            if (cached.clean) applyCleanFamily(node, style, originalInline, originalAttr, cached.clean);
+            return;
           }
+          const raw = originalInline || originalAttr || '';
+          let targetFont = (raw && familyHasForeign(raw)) ? raw : '';
+          if (!targetFont) {
+            let computedFont = '';
+            try {
+              if (typeof globalThis.getComputedStyle === 'function') {
+                const cs = globalThis.getComputedStyle(node);
+                computedFont = cs ? (cs.fontFamily || '') : '';
+              }
+            } catch (_) {}
+            if (computedFont && familyHasForeign(computedFont)) targetFont = computedFont;
+          }
+          const clean = targetFont ? (sanitizeFamilyOnly(targetFont) || 'monospace') : '';
+          fontScopeVerdicts.set(node, { inline: originalInline, attr: originalAttr, cls: className, epoch: fontScopeEpoch, clean });
+          if (clean) applyCleanFamily(node, style, originalInline, originalAttr, clean);
         };
 
         try {
@@ -4053,7 +4146,9 @@ function buildInjectionScript(fp) {
             checkNode(curr);
             curr = curr.parentElement || (curr.parentNode && curr.parentNode.nodeType === 1 ? curr.parentNode : null);
           }
-          if (element && element.getElementsByTagName) {
+          // tspan/textPath only ever live inside SVG, so the descendant scan is skipped for the
+          // HTML elements that make up the overwhelming majority of metric reads.
+          if (element && element.getElementsByTagName && typeof globalThis.SVGElement === 'function' && element instanceof globalThis.SVGElement) {
             const tspans = element.getElementsByTagName('tspan');
             for (let i = 0; i < tspans.length; i++) checkNode(tspans[i]);
             const textPaths = element.getElementsByTagName('textPath');
@@ -4073,6 +4168,7 @@ function buildInjectionScript(fp) {
               }
             } catch (_) {}
           }
+          fontScopeDepth -= 1;
         }
       };
 
@@ -4423,26 +4519,43 @@ function buildInjectionScript(fp) {
         if (subWin.Function && subWin.Function.prototype) {
           try {
             const origSubToString = subWin.Function.prototype.toString;
+            // The frame can carry its own framework that replaced toString and calls back into
+            // this wrapper. A re-entrant call is answered from the bridge cache so the cycle
+            // cannot grow past the second hop.
+            let subToStringReentryDepth = 0;
             const subHolder = {
               toString(...args) {
-                if (args[0] === BRIDGE_TOKEN) {
-                  if (nativeSource.has(this)) return { bridge: true, token: BRIDGE_TOKEN, nativeText: nativeSource.get(this) };
-                  try {
-                    const inherited = origSubToString.call(this, ...args);
-                    if (inherited && typeof inherited === "object" && inherited.bridge === true) return inherited;
-                  } catch (_) {}
-                  return null;
-                }
-                if (nativeSource.has(this)) return nativeSource.get(this);
-                try {
-                  if (typeof this.toString === "function" && this.toString !== patchedSubToString) {
-                    const crossRealm = this.toString(BRIDGE_TOKEN);
-                    if (crossRealm && typeof crossRealm === "object" && crossRealm.bridge === true && crossRealm.nativeText) {
-                      return crossRealm.nativeText;
-                    }
+                const secret = args[0];
+                if (subToStringReentryDepth > 0) {
+                  if (nativeSource.has(this)) {
+                    if (secret === BRIDGE_TOKEN) return { bridge: true, token: BRIDGE_TOKEN, nativeText: nativeSource.get(this) };
+                    return nativeSource.get(this);
                   }
-                } catch (_) {}
-                return origSubToString.call(this, ...args);
+                  return "function " + (this && typeof this.name === "string" ? this.name : "toString") + "() { [native code] }";
+                }
+                subToStringReentryDepth += 1;
+                try {
+                  if (secret === BRIDGE_TOKEN) {
+                    if (nativeSource.has(this)) return { bridge: true, token: BRIDGE_TOKEN, nativeText: nativeSource.get(this) };
+                    try {
+                      const inherited = origSubToString.call(this, ...args);
+                      if (inherited && typeof inherited === "object" && inherited.bridge === true) return inherited;
+                    } catch (_) {}
+                    return null;
+                  }
+                  if (nativeSource.has(this)) return nativeSource.get(this);
+                  try {
+                    if (typeof this.toString === "function" && this.toString !== patchedSubToString) {
+                      const crossRealm = this.toString(BRIDGE_TOKEN);
+                      if (crossRealm && typeof crossRealm === "object" && crossRealm.bridge === true && crossRealm.nativeText) {
+                        return crossRealm.nativeText;
+                      }
+                    }
+                  } catch (_) {}
+                  return origSubToString.call(this, ...args);
+                } finally {
+                  subToStringReentryDepth -= 1;
+                }
               }
             };
             const patchedSubToString = subHolder.toString;
@@ -7296,20 +7409,6 @@ function buildInjectionScript(fp) {
         payloadVar: sharedPayloadVar,
       });
     }
-    // Dynamic stylesheet APIs reach the native local-font resolver without constructing a
-    // FontFace object. The companion source filters those dynamic paths from the same persona
-    // list while leaving web-font url/data candidates untouched.
-    try {
-      const fontSubsets = sharedFontPayload;
-      cssFontLocalGateScript = buildCssFontLocalGateSource(fp.fonts.list, fontSubsets, {
-        blockedFont: deriveFontPlaceholder(fp),
-        bridgeToken,
-        payloadVar: sharedPayloadVar,
-      });
-    } catch (_) {}
-    // Local Font Access exposes a binary blob after user activation. Its returned FontData
-    // records have already been re-labelled above, so their blob() method must not remain bound
-    // to the host record and disclose a different platform's font bytes.
     const platKey = (() => {
       const p = String(fp.uaProfile?.os || fp.os || fp.platform || '').trim().toLowerCase();
       if (p.includes('win')) return 'windows';
@@ -7319,6 +7418,24 @@ function buildInjectionScript(fp) {
       if (p.includes('ios') || p.includes('iphone') || p.includes('ipad')) return 'macos';
       return 'windows';
     })();
+    // Dynamic stylesheet APIs reach the native local-font resolver without constructing a
+    // FontFace object. The companion source filters those dynamic paths from the same persona
+    // list while leaving web-font url/data candidates untouched. The persona platform and the
+    // real host platform decide whether the subset payload may be appended at all: on a host
+    // that already ships the family the subset shadows it and mixes glyphs per character.
+    try {
+      const fontSubsets = sharedFontPayload;
+      cssFontLocalGateScript = buildCssFontLocalGateSource(fp.fonts.list, fontSubsets, {
+        blockedFont: deriveFontPlaceholder(fp),
+        bridgeToken,
+        payloadVar: sharedPayloadVar,
+        platform: platKey,
+        hostPlatform: typeof process !== 'undefined' ? process.platform : '',
+      });
+    } catch (_) {}
+    // Local Font Access exposes a binary blob after user activation. Its returned FontData
+    // records have already been re-labelled above, so their blob() method must not remain bound
+    // to the host record and disclose a different platform's font bytes.
     const lazyFontPayload = fp.lazyFontPayload !== false && fp.lazyPayload !== false && (fp.lazyPayload === true || platKey === 'windows');
     const fontBridgeChannel = String(fp.bridgeChannel || fp.fontBlobBridge?.channelName || ('_' + String(bridgeToken).slice(0, 16)));
     fp.fontBlobBridge = lazyFontPayload ? {
@@ -7602,17 +7719,34 @@ function buildWorkerInjectionScript(fp) {
     return getter;
   };
   try {
+    // originalToString is whatever implementation was installed when this realm was patched. A
+    // site that replaced Function.prototype.toString earlier (core-js) can call back into this
+    // wrapper from inside its own body, which used to recurse until the renderer watchdog fired.
+    // Re-entrant calls are answered from the bridge cache instead of re-entering page code.
+    let toStringReentryDepth = 0;
     const rawToString = function toString(...args) {
       const secret = args[0];
-      if (secret === BRIDGE_TOKEN) {
-        if (sources.has(this)) return { bridge: true, token: BRIDGE_TOKEN, nativeText: sources.get(this) };
-        try {
-          const inherited = originalToString.call(this, secret);
-          if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
-        } catch (_) {}
+      if (toStringReentryDepth > 0) {
+        if (sources.has(this)) {
+          if (secret === BRIDGE_TOKEN) return { bridge: true, token: BRIDGE_TOKEN, nativeText: sources.get(this) };
+          return sources.get(this);
+        }
+        return 'function ' + (this && typeof this.name === 'string' ? this.name : 'toString') + '() { [native code] }';
       }
-      if (sources.has(this)) return sources.get(this);
-      return originalToString.call(this, ...args);
+      toStringReentryDepth += 1;
+      try {
+        if (secret === BRIDGE_TOKEN) {
+          if (sources.has(this)) return { bridge: true, token: BRIDGE_TOKEN, nativeText: sources.get(this) };
+          try {
+            const inherited = originalToString.call(this, secret);
+            if (inherited && typeof inherited === 'object' && inherited.bridge === true) return inherited;
+          } catch (_) {}
+        }
+        if (sources.has(this)) return sources.get(this);
+        return originalToString.call(this, ...args);
+      } finally {
+        toStringReentryDepth -= 1;
+      }
     };
     const patched = nativeLike(rawToString, originalToString, 'toString', 0);
     Object.defineProperty(Function.prototype, 'toString', { configurable: true, writable: true, value: patched });
