@@ -542,6 +542,8 @@ impl LocalProxyBridge {
             http_status, header_code
         );
         let _ = client.write_all(header.as_bytes()).await;
+        let _ = client.flush().await;
+        let _ = client.shutdown().await;
     }
 
     /// Read incoming client headers until \r\n\r\n or \n\n
@@ -686,6 +688,8 @@ impl LocalProxyBridge {
                 let _ = client
                     .write_all(b"HTTP/1.1 408 Request Timeout\r\nX-Proxy-Error: Handshake deadline exceeded\r\nConnection: close\r\n\r\n")
                     .await;
+                let _ = client.flush().await;
+                let _ = client.shutdown().await;
                 if let Some(ref sender) = ctx.status_sender {
                     let _ = sender.try_send("UPSTREAM_CONNECT_FAILED");
                 }
