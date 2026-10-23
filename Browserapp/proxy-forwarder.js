@@ -832,6 +832,15 @@ function listen(server, notify) {
   });
 }
 
+function needsProxyBridge(config) {
+  if (!config) return false;
+  return Boolean(
+    config.authenticated ||
+    config.protocol === 'socks5' ||
+    process.env.OPENBROWSER_ALWAYS_BRIDGE_PROXY === '1'
+  );
+}
+
 function bridgeResult(server, sockets, protocol, onClose = () => {}) {
   const address = server.address();
   return {
@@ -2141,6 +2150,8 @@ module.exports = {
   displayProxy,
   normalizeIpLookupChannel,
   startAuthenticatedProxy,
+  startProxyBridge: startAuthenticatedProxy,
+  needsProxyBridge,
   startSocks5Bridge,
   retryableSocksError,
   lookupProxyCountry,

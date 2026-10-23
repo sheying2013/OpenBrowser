@@ -122,6 +122,13 @@ async function readPreferences(file) {
     return JSON.parse(await fsp.readFile(file, 'utf8'));
   } catch (error) {
     if (error?.code === 'ENOENT') return {};
+    if (error instanceof SyntaxError || error?.name === 'SyntaxError') {
+      try {
+        const backup = file + '.corrupted.' + Date.now();
+        await fsp.rename(file, backup);
+      } catch (_) {}
+      return {};
+    }
     throw error;
   }
 }
@@ -172,4 +179,5 @@ module.exports = {
   verifyLocalStateLanguage,
   syncProfileLanguagePreferences,
   syncProfileLocalState,
+  readPreferences,
 };

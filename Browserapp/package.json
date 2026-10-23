@@ -19,6 +19,7 @@
     "selftest:secondaryui": "node automation/secondary-ui-runtime-selftest.js",
     "selftest:localebridge": "node automation/locale-bridge-selftest.js",
     "selftest:isolation": "node automation/isolation-fingerprint-selftest.js",
+    "selftest:issues": "node automation/issues-37-38-39-selftest.js",
     "selftest:rustcore": "node automation/rust-core-e2e-selftest.js",
     "selftest:rustparity": "node automation/rust-core-parity-selftest.js",
     "selftest:rustchaos": "node automation/rust-core-chaos-selftest.js",

@@ -45,6 +45,8 @@ function sanitizeProfile(value) {
   return {
     id,
     number: Number.isInteger(number) && number > 0 ? number : null,
+    trashed: Boolean(value.trashed),
+    trashedAt: value.trashedAt ? String(value.trashedAt).slice(0, 40) : null,
     name: value.name.slice(0, 100),
     title: String(value.title || value.displayName || "").slice(0, 120),
     startUrl: effectiveStartUrl,

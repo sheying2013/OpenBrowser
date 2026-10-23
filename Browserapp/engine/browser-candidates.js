@@ -13,7 +13,16 @@ function isChildExited(child) {
   return false;
 }
 
-const SINGLETON_FILES = ["SingletonLock", "SingletonSocket", "SingletonCookie", "lockfile", "DevToolsActivePort"];
+const SINGLETON_FILES = [
+  "SingletonLock",
+  "SingletonSocket",
+  "SingletonCookie",
+  "lockfile",
+  "DevToolsActivePort",
+  path.join("Default", "lockfile"),
+  path.join("Default", "SingletonLock"),
+  path.join("Default", "SingletonSocket"),
+];
 
 async function removeSingletonFiles(root, options = {}) {
   if (!root) return;

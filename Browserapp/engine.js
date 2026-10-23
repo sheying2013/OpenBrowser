@@ -2,13 +2,14 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 const cdp = require('./cdp');
 const { mergeFlags, appendFlagValue, LIST_VALUE_FLAGS } = require('./automation/command-line-flags');
 const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
-const { parseProxy, chromeProxyEndpoint, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
+const { parseProxy, chromeProxyEndpoint, displayProxy, startAuthenticatedProxy, needsProxyBridge, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
 const { resolveProfileLanguage, resolveProfileTimezone, localeFromCountryCode } = require('./automation/locale-from-country');
 const { applyLanguagePreferences, verifyLanguagePreferences, syncProfileLocalState } = require('./automation/profile-file-consistency');
 const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
@@ -1615,7 +1616,12 @@ class BrowserEngine {
     if (fs.existsSync(lockF)) {
       try {
         const content = JSON.parse(await fsp.readFile(lockF, 'utf8'));
-        if (content?.pid && !isPidAlive(content.pid)) {
+        const stat = await fsp.stat(lockF).catch(() => null);
+        const uptimeMs = os.uptime() * 1000;
+        const systemBootTimeMs = Date.now() - uptimeMs;
+        const lockTimeMs = Date.parse(content?.createdAt || '') || stat?.mtimeMs || 0;
+        const isFromPriorBoot = lockTimeMs > 0 && lockTimeMs < (systemBootTimeMs - 5000);
+        if (isFromPriorBoot || !content?.pid || !isPidAlive(content.pid)) {
           await fsp.rm(lockF, { force: true }).catch(() => {});
         }
       } catch (_) {
@@ -3843,7 +3849,7 @@ class BrowserEngine {
         chromeMajor: major || undefined,
       };
     }
-    if (proxyConfig?.authenticated) {
+    if (needsProxyBridge(proxyConfig)) {
       proxyForwarder = await startAuthenticatedProxy(proxyConfig, (value) => this.emit({ type: 'proxy-error', id: profile.id, code: value.code, message: value.message }));
       startupResources.proxyForwarder = proxyForwarder;
     }
@@ -4735,6 +4741,55 @@ class BrowserEngine {
     }
     if (failed.length) this.emit({ type: 'sync-error', action: 'stop-all', message: `部分环境停止失败：${[...new Set(failed)].join('; ')}` });
     return { stopped: remaining.length === 0, remaining, errors: [...new Set(failed)] };
+  }
+
+  async trashProfiles(ids) {
+    if (!Array.isArray(ids) || ids.length > 200) throw new Error('Invalid profile selection');
+    const safeIds = [...new Set(ids.map(assertProfileId))];
+    const trashed = [];
+    let stopped = 0;
+    const nowIso = new Date().toISOString();
+    for (const id of safeIds) {
+      const profile = this.profiles.get(id);
+      if (!profile) continue;
+      if (this.running.has(id) || this.starting.has(id) || this.stopping.has(id)) {
+        await this.stop(id);
+        stopped += 1;
+      }
+      profile.trashed = true;
+      profile.trashedAt = nowIso;
+      trashed.push(id);
+    }
+    await this.persist();
+    this.emit({ type: 'profiles', action: 'trash', ids: trashed });
+    return { success: true, trashed: trashed.length, stopped, ids: trashed };
+  }
+
+  async restoreProfiles(ids) {
+    if (!Array.isArray(ids) || ids.length > 200) throw new Error('Invalid profile selection');
+    const safeIds = [...new Set(ids.map(assertProfileId))];
+    const restored = [];
+    for (const id of safeIds) {
+      const profile = this.profiles.get(id);
+      if (!profile) continue;
+      profile.trashed = false;
+      profile.trashedAt = null;
+      restored.push(id);
+    }
+    await this.persist();
+    this.emit({ type: 'profiles', action: 'restore', ids: restored });
+    return { success: true, restored: restored.length, ids: restored };
+  }
+
+  async purgeProfiles(ids, deleteData = true) {
+    return this.deleteProfiles(ids, deleteData);
+  }
+
+  async emptyTrash(deleteData = true) {
+    const trashedIds = [...this.profiles.values()]
+      .filter((p) => Boolean(p.trashed))
+      .map((p) => p.id);
+    return this.purgeProfiles(trashedIds, deleteData);
   }
 
   async deleteProfiles(ids, deleteData = true) {

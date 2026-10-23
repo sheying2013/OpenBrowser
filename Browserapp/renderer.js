@@ -675,9 +675,9 @@ function groupColorOf(profile) {
 
 function countProfilesInGroup(groupId) {
   if (groupId === 'ungrouped' || groupId === UNGROUPED_ID) {
-    return ui.profiles.filter((p) => !p.groupId).length;
+    return ui.profiles.filter((p) => !p.trashed && !p.groupId).length;
   }
-  return ui.profiles.filter((p) => p.groupId === groupId).length;
+  return ui.profiles.filter((p) => !p.trashed && p.groupId === groupId).length;
 }
 
 function fillGroupSelect(selectEl, selectedId = '', { includeAll = false, includeUngrouped = true } = {}) {
@@ -3402,11 +3402,16 @@ function renderGroupFilterChips() {
     btn.append(dot, text, badge);
     return btn;
   };
-  host.append(mk('all', t('groups.all'), ui.profiles.length));
+  const activeProfiles = ui.profiles.filter((p) => !p.trashed);
+  const trashedCount = ui.profiles.filter((p) => Boolean(p.trashed)).length;
+  host.append(mk('all', t('groups.all'), activeProfiles.length));
   host.append(mk('ungrouped', t('groups.ungrouped'), countProfilesInGroup('ungrouped')));
   for (const g of listGroups()) {
     host.append(mk(g.id, localizeSystemLabel(g.name), countProfilesInGroup(g.id)));
   }
+  const trashBtn = mk('trash', t('groups.trash'), trashedCount);
+  trashBtn.classList.add('trash-chip');
+  host.append(trashBtn);
 }
 
 function updateProfileSelectionUi() {
@@ -3419,6 +3424,30 @@ function updateProfileSelectionUi() {
   if (bar) {
     bar.hidden = count === 0;
     bar.classList.toggle('is-visible', count > 0);
+  }
+  const inTrash = activeGroupFilter === 'trash';
+  const restoreBtn = $('#restore-selected');
+  if (restoreBtn) restoreBtn.hidden = !inTrash;
+  const normalActions = [
+    '#start-selected',
+    '#stop-selected',
+    '#copy-selected',
+    '#batch-edit-preferences',
+    '#batch-update',
+    '#batch-set-direct',
+    '.batch-group-assign',
+    '#batch-assign-group-btn',
+  ];
+  for (const sel of normalActions) {
+    const el = $(sel);
+    if (el) el.hidden = inTrash;
+  }
+  const deleteBtn = $('#delete-selected');
+  if (deleteBtn) {
+    const textSpan = deleteBtn.querySelector('span');
+    if (textSpan) {
+      textSpan.textContent = inTrash ? t('trash.purge') : t('profiles.batchDelete');
+    }
   }
   $$('#profile-table tr[data-profile-id]').forEach((row) => {
     row.classList.toggle('selected-row', selectedProfiles.has(row.dataset.profileId));
@@ -3525,6 +3554,47 @@ async function cloneProfile(id) {
   }
 }
 
+async function restoreProfile(id) {
+  try {
+    await window.ops.restoreProfiles([id]);
+    const target = ui.profiles.find((item) => item.id === id);
+    if (target) {
+      delete target.trashed;
+      delete target.trashedAt;
+    }
+    save();
+    invalidateViewCache(['profiles', 'groups', 'sync']);
+    engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    renderGroupFilterChips();
+    updateProfileSelectionUi();
+    renderProfiles();
+    toast(t('trash.restored'));
+  } catch (error) {
+    toast(t('trash.restoreFailed') + ': ' + error.message);
+  }
+}
+
+async function purgeProfile(id) {
+  const target = ui.profiles.find((item) => item.id === id);
+  const name = target ? (target.title || target.name || id) : id;
+  if (!confirm(t('trash.confirmPurgeSingle'))) return;
+  try {
+    await window.ops.purgeProfiles([id], true);
+    ui.profiles = ui.profiles.filter((item) => item.id !== id);
+    selectedProfiles.delete(id);
+    selectedSessions.delete(id);
+    save();
+    invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
+    engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    renderGroupFilterChips();
+    updateProfileSelectionUi();
+    renderProfiles();
+    toast(t('trash.purged'));
+  } catch (error) {
+    toast(t('trash.purgeFailed') + ': ' + error.message);
+  }
+}
+
 function filteredProfilesForCurrentView() {
   const filter = $('#profile-search')?.value || '';
   const profileList = window.OpenBrowserProfileList;
@@ -3538,6 +3608,8 @@ function filteredProfilesForCurrentView() {
     });
   }
   return ui.profiles.filter((profile) => {
+    if (activeGroupFilter === 'trash') return Boolean(profile.trashed);
+    if (profile.trashed) return false;
     if (activeGroupFilter === 'ungrouped') return !profile.groupId;
     if (activeGroupFilter !== 'all' && profile.groupId !== activeGroupFilter) return false;
     return true;
@@ -3607,31 +3679,57 @@ function renderProfiles() {
     const actionCell = document.createElement('td');
     actionCell.className = 'col-actions';
     const actions = element('div', 'actions');
-    const toggle = iconActionButton(info.running ? 'square' : 'play', info.running ? t('action.stop') : (starting ? t('status.starting') : t('action.start')));
-    toggle.dataset.action = info.running ? 'stop' : 'start';
-    toggle.dataset.id = profile.id;
-    if (starting) {
-      toggle.disabled = true;
-      toggle.classList.add('is-starting');
-      toggle.title = startProgressLabel(startingProfiles.get(profile.id));
-      toggle.setAttribute('aria-label', toggle.title);
-      toggle.setAttribute('aria-disabled', 'true');
+    if (activeGroupFilter === 'trash') {
+      const restore = iconActionButton('rotate-ccw', t('trash.restore'), 'mini restore');
+      restore.dataset.action = 'restore';
+      restore.dataset.id = profile.id;
+      const purge = iconActionButton('trash-2', t('trash.purge'), 'mini danger purge');
+      purge.dataset.action = 'purge';
+      purge.dataset.id = profile.id;
+      actions.append(restore, purge);
+    } else {
+      const toggle = iconActionButton(info.running ? 'square' : 'play', info.running ? t('action.stop') : (starting ? t('status.starting') : t('action.start')));
+      toggle.dataset.action = info.running ? 'stop' : 'start';
+      toggle.dataset.id = profile.id;
+      if (starting) {
+        toggle.disabled = true;
+        toggle.classList.add('is-starting');
+        toggle.title = startProgressLabel(startingProfiles.get(profile.id));
+        toggle.setAttribute('aria-label', toggle.title);
+        toggle.setAttribute('aria-disabled', 'true');
+      }
+      const sync = iconActionButton('panels-top-left', t('profiles.syncSelect'), 'mini blue'); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting; if (sync.disabled) sync.setAttribute('aria-disabled', 'true');
+      const edit = iconActionButton('pencil', t('action.edit'), 'mini edit'); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
+      const clone = iconActionButton('copy', t('action.clone') || '克隆', 'mini clone'); clone.dataset.action = 'clone'; clone.dataset.id = profile.id;
+      actions.append(toggle, sync, edit, clone);
     }
-    const sync = iconActionButton('panels-top-left', t('profiles.syncSelect'), 'mini blue'); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting; if (sync.disabled) sync.setAttribute('aria-disabled', 'true');
-    const edit = iconActionButton('pencil', t('action.edit'), 'mini edit'); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
-    const clone = iconActionButton('copy', t('action.clone') || '克隆', 'mini clone'); clone.dataset.action = 'clone'; clone.dataset.id = profile.id;
-    actions.append(toggle, sync, edit, clone); actionCell.append(actions);
+    actionCell.append(actions);
     row.append(selectCell, idCell, nameCell, groupCell, browserCell, proxyCell, networkCell, extensionCell, statusCell, actionCell); table.append(row);
+  }
+  const inTrash = activeGroupFilter === 'trash';
+  const emptyBtn = $('#empty-trash-btn');
+  if (emptyBtn) emptyBtn.hidden = !inTrash;
+  const toolbarLeftButtons = ['#create-profile', '#batch-add', '#batch-import', '#renumber-profiles'];
+  for (const sel of toolbarLeftButtons) {
+    const el = $(sel);
+    if (el) el.hidden = inTrash;
   }
   const empty = $('#profile-empty');
   const hasProfiles = ui.profiles.length > 0;
   empty.hidden = filtered.length !== 0;
   table.closest('table').hidden = filtered.length === 0;
   if (filtered.length === 0) table.closest('.table-card').scrollLeft = 0;
-  $('#profile-empty-title').textContent = t(hasProfiles ? 'profiles.noResults' : 'profiles.empty');
-  $('#profile-empty-description').textContent = t(hasProfiles ? 'profiles.filterHint' : 'profiles.emptyHint');
-  $('#profile-clear-filters').hidden = !hasProfiles;
-  $('#profile-empty-create').hidden = hasProfiles;
+  if (inTrash) {
+    $('#profile-empty-title').textContent = t('trash.emptyTitle');
+    $('#profile-empty-description').textContent = t('trash.emptyHint');
+    $('#profile-clear-filters').hidden = true;
+    $('#profile-empty-create').hidden = true;
+  } else {
+    $('#profile-empty-title').textContent = t(hasProfiles ? 'profiles.noResults' : 'profiles.empty');
+    $('#profile-empty-description').textContent = t(hasProfiles ? 'profiles.filterHint' : 'profiles.emptyHint');
+    $('#profile-clear-filters').hidden = !hasProfiles;
+    $('#profile-empty-create').hidden = hasProfiles;
+  }
   $('#profile-total').textContent = String(filtered.length);
   const totalLabel = document.querySelector('#profile-pagination .profile-total');
   if (totalLabel) {
@@ -4472,6 +4570,8 @@ document.addEventListener('click', async (event) => {
   if (action?.dataset.action === 'stop') stopProfile(action.dataset.id);
   if (action?.dataset.action === 'edit') openProfileEditor(action.dataset.id);
   if (action?.dataset.action === 'clone') cloneProfile(action.dataset.id);
+  if (action?.dataset.action === 'restore') restoreProfile(action.dataset.id);
+  if (action?.dataset.action === 'purge') purgeProfile(action.dataset.id);
   if (action?.dataset.action === 'select-sync') { selectedSessions.add(action.dataset.id); pushSyncSelection(); switchView('sync'); }
 
   const assign = event.target.closest('[data-extension-assign]'); if (assign) openAssign(assign.dataset.extensionAssign);
@@ -4680,7 +4780,10 @@ document.getElementById('profile-group-chips')?.addEventListener('click', (event
   const btn = event.target.closest('[data-group-filter]');
   if (!btn) return;
   activeGroupFilter = btn.dataset.groupFilter || 'all';
+  selectedProfiles.clear();
   profilePage = 1;
+  renderGroupFilterChips();
+  updateProfileSelectionUi();
   renderProfiles();
 });
 
@@ -5156,23 +5259,113 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
 $('#delete-selected').addEventListener('click', async () => {
   pendingDeleteProfiles = ui.profiles.filter((item) => selectedProfiles.has(item.id)).map((item) => item.id);
   if (!pendingDeleteProfiles.length) return toast(tx('请先勾选要删除的环境'));
+  const inTrash = activeGroupFilter === 'trash';
   try {
     const status = await window.ops.profileStatus(); const running = status.filter((item) => item.running && pendingDeleteProfiles.includes(item.id)).length;
-    $('#batch-delete-summary').textContent = tx('已选择 ') + pendingDeleteProfiles.length + ' 个环境，其中 ' + running + ' 个正在运行。'; $('#batch-delete-dialog').showModal();
+    if (inTrash) {
+      $('#batch-delete-title').textContent = t('trash.purge');
+      $('#batch-delete-summary').textContent = t('trash.purgeSummary', { count: pendingDeleteProfiles.length });
+      $('#batch-delete-warning').textContent = t('trash.purgeWarning');
+      $('#batch-delete-data-label').hidden = true;
+      $('#batch-delete-confirm').textContent = t('trash.purge');
+    } else {
+      $('#batch-delete-title').textContent = t('profiles.batchDeleteTitle');
+      $('#batch-delete-summary').textContent = tx('已选择 ') + pendingDeleteProfiles.length + ' 个环境，其中 ' + running + ' 个正在运行。';
+      $('#batch-delete-warning').textContent = t('trash.trashWarning');
+      $('#batch-delete-data-label').hidden = false;
+      $('#batch-delete-confirm').textContent = t('profiles.batchDelete');
+    }
+    $('#batch-delete-dialog').showModal();
   } catch (error) { toast(error.message); }
 });
+
 $('#batch-delete-form').addEventListener('submit', async (event) => {
   event.preventDefault(); if (event.submitter?.value === 'cancel') { pendingDeleteProfiles = []; return $('#batch-delete-dialog').close(); }
   const ids = [...pendingDeleteProfiles]; if (!ids.length) return $('#batch-delete-dialog').close();
   const submitter = event.submitter; if (submitter) submitter.disabled = true;
+  const inTrash = activeGroupFilter === 'trash';
   try {
-    const result = await window.ops.deleteProfiles(ids, $('#batch-delete-data').checked);
-    ui.profiles = ui.profiles.filter((item) => !ids.includes(item.id)); for (const id of ids) { selectedProfiles.delete(id); selectedSessions.delete(id); }
+    const deleteData = inTrash ? true : $('#batch-delete-data').checked;
+    const result = inTrash
+      ? await window.ops.purgeProfiles(ids, deleteData)
+      : (deleteData
+          ? await window.ops.purgeProfiles(ids, true)
+          : await window.ops.trashProfiles(ids));
+    if (inTrash || deleteData) {
+      ui.profiles = ui.profiles.filter((item) => !ids.includes(item.id));
+    } else {
+      for (const id of ids) {
+        const p = ui.profiles.find((item) => item.id === id);
+        if (p) {
+          p.trashed = true;
+          p.trashedAt = new Date().toISOString();
+        }
+      }
+    }
+    for (const id of ids) { selectedProfiles.delete(id); selectedSessions.delete(id); }
     if (!ui.profiles.length) ui.nextProfileNumber = 1;
     pendingDeleteProfiles = []; save(); $('#select-all-profiles').checked = false; $('#batch-delete-dialog').close();
     invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
-    await refreshStatus(); await refreshSessions(); await refreshExtensions(); renderProfiles(); log('Batch', '批量删除 ' + result.deleted + ' 个环境'); toast('已删除 ' + result.deleted + ' 个环境');
-  } catch (error) { toast('批量删除失败：' + error.message); } finally { if (submitter) submitter.disabled = false; }
+    await refreshStatus(); await refreshSessions(); await refreshExtensions();
+    engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    renderGroupFilterChips();
+    updateProfileSelectionUi();
+    renderProfiles();
+    if (inTrash || deleteData) {
+      log('Batch', '彻底删除 ' + result.deleted + ' 个环境');
+      toast(t('trash.purged'));
+    } else {
+      log('Batch', '移入回收站 ' + result.deleted + ' 个环境');
+      toast(t('trash.movedToTrash', { n: result.deleted }));
+    }
+  } catch (error) { toast(error.message); } finally { if (submitter) submitter.disabled = false; }
+});
+
+$('#restore-selected')?.addEventListener('click', async () => {
+  const ids = [...selectedProfiles];
+  if (!ids.length) return toast(tx('请先勾选环境'));
+  try {
+    await window.ops.restoreProfiles(ids);
+    for (const id of ids) {
+      const p = ui.profiles.find((item) => item.id === id);
+      if (p) {
+        delete p.trashed;
+        delete p.trashedAt;
+      }
+      selectedProfiles.delete(id);
+    }
+    save();
+    invalidateViewCache(['profiles', 'groups', 'sync']);
+    engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    renderGroupFilterChips();
+    updateProfileSelectionUi();
+    renderProfiles();
+    toast(t('trash.restored'));
+  } catch (err) {
+    toast(t('trash.restoreFailed') + ': ' + err.message);
+  }
+});
+
+$('#empty-trash-btn')?.addEventListener('click', async () => {
+  const trashedCount = ui.profiles.filter((p) => p.trashed).length;
+  if (!trashedCount) return toast(t('trash.emptyTitle'));
+  if (!confirm(t('trash.confirmEmpty'))) return;
+  try {
+    await window.ops.emptyTrash(true);
+    ui.profiles = ui.profiles.filter((p) => !p.trashed);
+    for (const id of [...selectedProfiles]) {
+      if (!ui.profiles.some((p) => p.id === id)) selectedProfiles.delete(id);
+    }
+    save();
+    invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
+    engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    renderGroupFilterChips();
+    updateProfileSelectionUi();
+    renderProfiles();
+    toast(t('trash.emptied'));
+  } catch (err) {
+    toast(t('trash.emptyFailed') + ': ' + err.message);
+  }
 });
 $('#start-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast(tx('请先选择环境')); for (const id of selectedProfiles) await startProfile(id); });
 $('#stop-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast(tx('请先选择环境')); for (const id of selectedProfiles) await stopProfile(id); });

@@ -28,4 +28,12 @@ assert.strictEqual(secondPage.total, 3);
 assert.deepStrictEqual(secondPage.items.map((profile) => profile.id), ['c']);
 assert.strictEqual(paginate(profiles, 9, 2).currentPage, 2);
 
+const profilesWithTrash = [
+  ...profiles,
+  { id: 'd', number: 4, groupId: 'us', browser: 'Chrome', proxy: 'direct', tag: 'trash-item', trashed: true },
+];
+assert.deepStrictEqual(filterProfiles({ profiles: profilesWithTrash, activeGroupFilter: 'all', ...options }).map((p) => p.id), ['a', 'b', 'c']);
+assert.deepStrictEqual(filterProfiles({ profiles: profilesWithTrash, activeGroupFilter: 'us', ...options }).map((p) => p.id), ['a']);
+assert.deepStrictEqual(filterProfiles({ profiles: profilesWithTrash, activeGroupFilter: 'trash', ...options }).map((p) => p.id), ['d']);
+
 console.log('profile-list-selftest: OK');

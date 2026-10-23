@@ -1895,6 +1895,29 @@ app.whenReady().then(async () => {
     emit({ type: 'sync-state', ...syncSnapshot() });
     return engine.deleteProfiles(ids, payload?.deleteData !== false);
   });
+  registerTrustedIpc('profiles:trash', async (_event, payload) => {
+    const ids = sanitizeIds(payload?.ids || []);
+    if (syncState.active && syncState.selected.some((id) => ids.includes(id))) endSync();
+    syncSelection = syncSelection.filter((id) => !ids.includes(id));
+    syncState = { ...syncState, selected: syncState.selected.filter((id) => !ids.includes(id)) };
+    emit({ type: 'sync-state', ...syncSnapshot() });
+    return engine.trashProfiles(ids);
+  });
+  registerTrustedIpc('profiles:restore', async (_event, payload) => {
+    const ids = sanitizeIds(payload?.ids || []);
+    return engine.restoreProfiles(ids);
+  });
+  registerTrustedIpc('profiles:purge', async (_event, payload) => {
+    const ids = sanitizeIds(payload?.ids || []);
+    if (syncState.active && syncState.selected.some((id) => ids.includes(id))) endSync();
+    syncSelection = syncSelection.filter((id) => !ids.includes(id));
+    syncState = { ...syncState, selected: syncState.selected.filter((id) => !ids.includes(id)) };
+    emit({ type: 'sync-state', ...syncSnapshot() });
+    return engine.purgeProfiles(ids, payload?.deleteData !== false);
+  });
+  registerTrustedIpc('profiles:empty-trash', async (_event, payload) => {
+    return engine.emptyTrash(payload?.deleteData !== false);
+  });
   registerTrustedIpc('profiles:start', (_event, profile) => engine.start(profile));
   registerTrustedIpc('profiles:stop', (_event, id) => engine.stop(id));
   registerTrustedIpc('profiles:clear-cache-cookies', (_event, id) => engine.clearProfileCacheAndCookies(id));

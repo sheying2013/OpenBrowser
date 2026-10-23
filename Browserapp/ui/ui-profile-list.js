@@ -10,12 +10,15 @@ function filterProfiles({ profiles = [], activeGroupFilter = 'all', query = '', 
   const numberOf = typeof displayProfileNumber === 'function' ? displayProfileNumber : (profile) => profile?.number || profile?.id || '';
   const groupOf = typeof groupNameOf === 'function' ? groupNameOf : () => '';
   return profiles.filter((profile) => {
+    if (activeGroupFilter === 'trash') return Boolean(profile.trashed);
+    if (profile.trashed) return false;
     if (activeGroupFilter === 'ungrouped') return !profile.groupId;
     if (activeGroupFilter !== 'all' && profile.groupId !== activeGroupFilter) return false;
     return true;
   }).filter((profile) => {
     if (!needle) return true;
     return [
+      profile.name,
       profile.id,
       numberOf(profile),
       profile.browser,
@@ -39,5 +42,12 @@ function paginate(items = [], page = 1, pageSize = 10) {
   };
 }
 
-window.OpenBrowserProfileList = { filterProfiles, paginate };
+  const api = { filterProfiles, paginate };
+  if (typeof module === 'object' && module.exports) {
+    module.exports = api;
+  } else if (typeof window !== 'undefined') {
+    window.OpenBrowserProfileList = api;
+  } else {
+    globalThis.OpenBrowserProfileList = api;
+  }
 })();

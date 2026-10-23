@@ -18,6 +18,28 @@ const bridge = {
   setSyncSelection: async () => ({}),
   setUiTheme: async () => ({}),
   setUiChrome: async () => ({}),
+  trashProfiles: async (ids) => {
+    for (const id of ids) {
+      const p = (window.__uiAuditSavedProfiles || []).find((x) => x.id === id);
+      if (p) { p.trashed = true; p.trashedAt = new Date().toISOString(); }
+    }
+    return { success: true, trashed: ids.length, ids };
+  },
+  restoreProfiles: async (ids) => {
+    for (const id of ids) {
+      const p = (window.__uiAuditSavedProfiles || []).find((x) => x.id === id);
+      if (p) { p.trashed = false; p.trashedAt = null; }
+    }
+    return { success: true, restored: ids.length, ids };
+  },
+  purgeProfiles: async (ids) => {
+    window.__uiAuditSavedProfiles = (window.__uiAuditSavedProfiles || []).filter((x) => !ids.includes(x.id));
+    return { success: true, purged: ids.length, ids };
+  },
+  emptyTrash: async () => {
+    window.__uiAuditSavedProfiles = (window.__uiAuditSavedProfiles || []).filter((x) => !x.trashed);
+    return { success: true };
+  },
 };
 window.ops = new Proxy(bridge, {
   get(target, key) {

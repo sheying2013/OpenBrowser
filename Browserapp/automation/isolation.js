@@ -4,6 +4,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 const { execFile, execFileSync } = require('child_process');
 
 // PowerShell startup plus the WMI provider can exceed two seconds on a busy
@@ -270,10 +271,35 @@ async function acquireProfileLock(profileRoot, meta = {}) {
       handle = await fsp.open(file, 'wx', 0o600);
     } catch (error) {
       if (error?.code !== 'EEXIST') throw error;
+      const uptimeMs = os.uptime() * 1000;
+      const systemBootTimeMs = Date.now() - uptimeMs;
+      const stat = await fsp.stat(file).catch(() => null);
+      const mtimeMs = stat ? stat.mtimeMs : 0;
+      const isFileFromPriorBoot = mtimeMs > 0 && mtimeMs < (systemBootTimeMs - 5000);
+
       let existing;
-      try { existing = JSON.parse(await fsp.readFile(file, 'utf8')); } catch (_) {
+      let rawContent = '';
+      try {
+        rawContent = await fsp.readFile(file, 'utf8');
+        existing = JSON.parse(rawContent);
+      } catch (_) {
+        if (isFileFromPriorBoot || (mtimeMs > 0 && Date.now() - mtimeMs > UNKNOWN_STARTUP_LOCK_RECOVERY_MS) || !rawContent.trim()) {
+          await fsp.rm(file, { force: true }).catch(() => {});
+          continue;
+        }
         throw lockOwnerError('PROFILE_LOCK_UNRECOVERABLE', 'Profile lock is malformed and cannot be recovered');
       }
+
+      const lockCreatedAtMs = Date.parse(existing?.createdAt || '') || 0;
+      const lockBrowserStartedAtMs = Date.parse(existing?.browserStartedAt || '') || 0;
+      const effectiveLockTimeMs = lockBrowserStartedAtMs || lockCreatedAtMs || mtimeMs;
+      const isLockFromPriorBoot = isFileFromPriorBoot || (effectiveLockTimeMs > 0 && effectiveLockTimeMs < (systemBootTimeMs - 5000));
+
+      if (isLockFromPriorBoot) {
+        await fsp.rm(file, { force: true }).catch(() => {});
+        continue;
+      }
+
       const numericPid = Number(existing?.pid);
       const pidValid = Number.isSafeInteger(numericPid) && numericPid > 0;
       if (!pidValid || !lockBelongsToProfile(existing, identity)) {
@@ -433,6 +459,7 @@ async function releaseProfileLock(profileRoot, owner = null) {
 function isPidAlive(pid) {
   const numeric = Number(pid);
   if (!Number.isSafeInteger(numeric) || numeric <= 0) return false;
+  if (process.platform === 'win32' && numeric <= 4) return false;
   try {
     process.kill(numeric, 0);
     return true;
