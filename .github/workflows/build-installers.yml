@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.25'
+        description: 'Release tag to create, for example v1.0.26'
         required: true
-        default: 'v1.0.25'
+        default: 'v1.0.26'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -38,35 +38,11 @@ env:
   OPENBROWSER_PACKAGE_VARIANT: with-kernel
   OPENBROWSER_BUNDLE_KERNEL: 'true'
   RELEASE_NOTES: |
-    ## OpenBrowser ${{ inputs.release_tag }}
+    ## OpenBrowser **v1.0.26**
 
-    ### 中文
-
-    - **版本对齐：** 应用内显示、npm 版本、Windows 可执行文件元数据与仓库文档全部对齐至 **v1.0.25**。
-    - **字体探测性能：** 读元素宽度不再逐层重算样式，500 次读取的 `getComputedStyle` 从 2000 次降到 0 次，重排页面卡顿消除。
-    - **新标签页启动：** 修正附加顺序，改为有界注入后立即恢复，白屏由数秒降到约 0.3 秒。
-    - **字体门安全加固：** `@font-face` / `local()` 解析改线性扫描，注释与未闭合输入不再阻塞。
-    - **跨平台字体：** 同平台不再注入字体子集，避免字形混杂；`toString` 包装加重入保护。
-
-    ### English
-
-    - **Version Alignment:** In-app display, npm package, Windows PE metadata, and docs are aligned to **v1.0.25**.
-    - **Font probe performance:** reads no longer recompute styles per ancestor (2000 → 0 `getComputedStyle` calls per 500 reads).
-    - **New tab startup:** fixed CDP attach order — bounded inject then immediate resume (white screen ~3s → ~0.3s).
-    - **Font gate hardening:** `@font-face` / `local()` parsing is linear; comments and unterminated input no longer block.
-    - **Cross-platform fonts:** no subset injection when host and persona share a platform; `toString` wrappers are reentrancy-safe.
-
-    ### 下载 / Downloads
-
-    | 标签 / Tag | 文件 / File |
-    | --- | --- |
-    | **Windows x86_64 · 内置内核** | `OpenBrowser-Windows-x86_64-with-kernel.exe` |
-    | **Windows x86_64 · 便携包** | `OpenBrowser-Windows-x86_64-with-kernel.zip` |
-    | **macOS x86_64 · 内置内核** | `OpenBrowser-macOS-x86_64.dmg` |
-    | **macOS arm64 · 内置内核** | `OpenBrowser-macOS-arm64-with-kernel.dmg` |
-    | **Ubuntu x86_64 · 内置内核** | `OpenBrowser-Linux-x86_64-with-kernel.tar.gz` |
-
-    > 标签说明：`with-kernel` = 安装包内置独立浏览器内核，运行时无需再下载内核。
+    - 新增可选 Rust HTTP/SOCKS5 代理核心。
+    - 修复代理协议边界、超时与进程回收问题。
+    - 保持 HTTPS、IP 探测和指纹兼容；统一应用与核心版本。
 
 jobs:
   ensure-release:
@@ -159,6 +135,24 @@ jobs:
           cache: npm
           cache-dependency-path: Browserapp/package-lock.json
       - run: npm ci --include=dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Build and validate native Rust core
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path ../Cargo.toml --all -- --check
+          cargo clippy --manifest-path ../Cargo.toml --workspace --all-targets --locked -- -D warnings
+          cargo test --manifest-path ../Cargo.toml --workspace --locked
+          npm run build:rustcore
+          npm run selftest:rustrelease
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export OPENBROWSER_RUST_CORE_BINARY="$GITHUB_WORKSPACE/Browserapp/rust-core/openbrowser-core.exe"
+          else
+            export OPENBROWSER_RUST_CORE_BINARY="$GITHUB_WORKSPACE/Browserapp/rust-core/openbrowser-core"
+          fi
+          npm run selftest:rustparity
+          npm run selftest:rustchaos
       - name: Verify kernel seed
         run: |
           set -euo pipefail
@@ -189,20 +183,20 @@ jobs:
           set -euo pipefail
           STEM="OpenBrowser-Windows-x86_64-with-kernel"
           APP="dist/${STEM}/runtime/resources/app"
+          CORE="dist/${STEM}/runtime/resources/rust-core/openbrowser-core.exe"
           test -f "$APP/kernels/windows-x64/chrome.exe"
           test -f "$APP/kernels/windows-x64/chrome.dll"
           test ! -e "$APP/kernels/macos-x64"
           test ! -e "$APP/kernels/macos-arm64"
-          test -f "dist/${STEM}.zip"
-          test -f "dist/${STEM}.exe"
+          test -f "$CORE"
+          node -e 'const fs=require("node:fs"),cp=require("node:child_process"),assert=require("node:assert/strict");const [core,app]=process.argv.slice(1);const pkg=JSON.parse(fs.readFileSync(app+"/package.json","utf8"));const v=JSON.parse(cp.execFileSync(core,["version"],{encoding:"utf8",timeout:5000}));assert.equal(pkg.version,require("./package.json").version);assert.equal(v.version,pkg.version);assert.equal(v.control_protocol,1);console.log("Packaged app/core version:",v.version)' "$CORE" "$APP"
+          test -f "dist/${STEM}-setup.exe"
       - name: Upload to release
         run: |
           set -euo pipefail
           notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
           printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
-          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
-            dist/OpenBrowser-Windows-x86_64-with-kernel.exe \
-            dist/OpenBrowser-Windows-x86_64-with-kernel.zip
+          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file"             dist/OpenBrowser-Windows-x86_64-with-kernel-setup.exe
 
   linux-x86_64:
     name: Ubuntu x86_64 (with Google Chrome Stable)
@@ -242,6 +236,24 @@ jobs:
           cache: npm
           cache-dependency-path: Browserapp/package-lock.json
       - run: npm ci --include=dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Build and validate native Rust core
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path ../Cargo.toml --all -- --check
+          cargo clippy --manifest-path ../Cargo.toml --workspace --all-targets --locked -- -D warnings
+          cargo test --manifest-path ../Cargo.toml --workspace --locked
+          npm run build:rustcore
+          npm run selftest:rustrelease
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export OPENBROWSER_RUST_CORE_BINARY="$GITHUB_WORKSPACE/Browserapp/rust-core/openbrowser-core.exe"
+          else
+            export OPENBROWSER_RUST_CORE_BINARY="$GITHUB_WORKSPACE/Browserapp/rust-core/openbrowser-core"
+          fi
+          npm run selftest:rustparity
+          npm run selftest:rustchaos
       - name: Prepare and verify Google Chrome Stable seed
         run: |
           set -euo pipefail
@@ -269,9 +281,12 @@ jobs:
           STEM="OpenBrowser-Linux-x86_64-with-kernel"
           PACKAGE="dist/${STEM}"
           APP="$PACKAGE/runtime/resources/app"
+          CORE="$PACKAGE/runtime/resources/rust-core/openbrowser-core"
           KERNEL="$APP/kernels/chrome-stable/opt/google/chrome/chrome"
           test -x "$PACKAGE/OpenBrowser"
           test -x "$KERNEL"
+          test -x "$CORE"
+          node -e 'const fs=require("node:fs"),cp=require("node:child_process"),assert=require("node:assert/strict");const [core,app]=process.argv.slice(1);const pkg=JSON.parse(fs.readFileSync(app+"/package.json","utf8"));const v=JSON.parse(cp.execFileSync(core,["version"],{encoding:"utf8",timeout:5000}));assert.equal(pkg.version,require("./package.json").version);assert.equal(v.version,pkg.version);assert.equal(v.control_protocol,1);console.log("Packaged app/core version:",v.version)' "$CORE" "$APP"
           test -f "dist/${STEM}.tar.gz"
           test ! -e "$APP/kernels/windows-x64"
           test ! -e "$APP/kernels/macos-x64"
@@ -293,8 +308,7 @@ jobs:
           set -euo pipefail
           notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
           printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
-          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
-            dist/OpenBrowser-Linux-x86_64-with-kernel.tar.gz
+          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file"             dist/OpenBrowser-Linux-x86_64-with-kernel.tar.gz
 
   macos-x86_64:
     name: macOS x86_64 (with kernel)
@@ -331,6 +345,24 @@ jobs:
           cache: npm
           cache-dependency-path: Browserapp/package-lock.json
       - run: npm ci --include=dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Build and validate native Rust core
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path ../Cargo.toml --all -- --check
+          cargo clippy --manifest-path ../Cargo.toml --workspace --all-targets --locked -- -D warnings
+          cargo test --manifest-path ../Cargo.toml --workspace --locked
+          npm run build:rustcore
+          npm run selftest:rustrelease
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export OPENBROWSER_RUST_CORE_BINARY="$GITHUB_WORKSPACE/Browserapp/rust-core/openbrowser-core.exe"
+          else
+            export OPENBROWSER_RUST_CORE_BINARY="$GITHUB_WORKSPACE/Browserapp/rust-core/openbrowser-core"
+          fi
+          npm run selftest:rustparity
+          npm run selftest:rustchaos
       - name: Verify kernel seed
         run: |
           set -euo pipefail
@@ -367,20 +399,23 @@ jobs:
       - name: Verify package
         run: |
           set -euo pipefail
-          APP="dist/OpenBrowser-macOS-x86_64/OpenBrowser.app/Contents/Resources/app"
+          PACKAGE="dist/OpenBrowser-macOS-x86_64/OpenBrowser.app"
+          APP="$PACKAGE/Contents/Resources/app"
+          CORE="$PACKAGE/Contents/Resources/rust-core/openbrowser-core"
           test -f "$APP/kernels/macos-x64/chrome_148/openbrowser_148/OpenBrowser.app/Contents/MacOS/OpenBrowser"
           test ! -e "$APP/kernels/windows-x64"
           test ! -e "$APP/kernels/macos-arm64"
+          test -x "$CORE"
+          node -e 'const fs=require("node:fs"),cp=require("node:child_process"),assert=require("node:assert/strict");const [core,app]=process.argv.slice(1);const pkg=JSON.parse(fs.readFileSync(app+"/package.json","utf8"));const v=JSON.parse(cp.execFileSync(core,["version"],{encoding:"utf8",timeout:5000}));assert.equal(pkg.version,require("./package.json").version);assert.equal(v.version,pkg.version);assert.equal(v.control_protocol,1);console.log("Packaged app/core version:",v.version)' "$CORE" "$APP"
           test -f "dist/OpenBrowser-macOS-x86_64.dmg"
-          codesign --verify --deep --strict "dist/OpenBrowser-macOS-x86_64/OpenBrowser.app"
-          codesign -dv --verbose=2 "dist/OpenBrowser-macOS-x86_64/OpenBrowser.app" | head -20 || true
+          codesign --verify --deep --strict "$PACKAGE"
+          codesign -dv --verbose=2 "$PACKAGE" | head -20 || true
       - name: Upload to release
         run: |
           set -euo pipefail
           notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
           printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
-          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
-            dist/OpenBrowser-macOS-x86_64.dmg
+          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file"             dist/OpenBrowser-macOS-x86_64.dmg
 
   macos-arm64:
     name: macOS arm64 (with kernel)
@@ -417,6 +452,24 @@ jobs:
           cache: npm
           cache-dependency-path: Browserapp/package-lock.json
       - run: npm ci --include=dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Build and validate native Rust core
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path ../Cargo.toml --all -- --check
+          cargo clippy --manifest-path ../Cargo.toml --workspace --all-targets --locked -- -D warnings
+          cargo test --manifest-path ../Cargo.toml --workspace --locked
+          npm run build:rustcore
+          npm run selftest:rustrelease
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export OPENBROWSER_RUST_CORE_BINARY="$GITHUB_WORKSPACE/Browserapp/rust-core/openbrowser-core.exe"
+          else
+            export OPENBROWSER_RUST_CORE_BINARY="$GITHUB_WORKSPACE/Browserapp/rust-core/openbrowser-core"
+          fi
+          npm run selftest:rustparity
+          npm run selftest:rustchaos
       - name: Verify kernel seed
         run: |
           set -euo pipefail
@@ -450,20 +503,23 @@ jobs:
       - name: Verify package
         run: |
           set -euo pipefail
-          APP="dist/OpenBrowser-macOS-arm64-with-kernel/OpenBrowser.app/Contents/Resources/app"
+          PACKAGE="dist/OpenBrowser-macOS-arm64-with-kernel/OpenBrowser.app"
+          APP="$PACKAGE/Contents/Resources/app"
+          CORE="$PACKAGE/Contents/Resources/rust-core/openbrowser-core"
           test -x "$APP/kernels/macos-arm64/Wayfern.app/Contents/MacOS/Wayfern"
           test ! -e "$APP/kernels/macos-x64"
           test ! -e "$APP/kernels/windows-x64"
+          test -x "$CORE"
+          node -e 'const fs=require("node:fs"),cp=require("node:child_process"),assert=require("node:assert/strict");const [core,app]=process.argv.slice(1);const pkg=JSON.parse(fs.readFileSync(app+"/package.json","utf8"));const v=JSON.parse(cp.execFileSync(core,["version"],{encoding:"utf8",timeout:5000}));assert.equal(pkg.version,require("./package.json").version);assert.equal(v.version,pkg.version);assert.equal(v.control_protocol,1);console.log("Packaged app/core version:",v.version)' "$CORE" "$APP"
           test -f "dist/OpenBrowser-macOS-arm64-with-kernel.dmg"
-          codesign --verify --deep --strict "dist/OpenBrowser-macOS-arm64-with-kernel/OpenBrowser.app"
-          codesign -dv --verbose=2 "dist/OpenBrowser-macOS-arm64-with-kernel/OpenBrowser.app" | head -20 || true
+          codesign --verify --deep --strict "$PACKAGE"
+          codesign -dv --verbose=2 "$PACKAGE" | head -20 || true
       - name: Upload to release
         run: |
           set -euo pipefail
           notes_file="$RUNNER_TEMP/openbrowser-release-notes.md"
           printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
-          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file" \
-            dist/OpenBrowser-macOS-arm64-with-kernel.dmg
+          bash scripts/publish-release.sh "$RELEASE_TAG" "$notes_file"             dist/OpenBrowser-macOS-arm64-with-kernel.dmg
 
   finalize-release:
     name: Publish completed release
@@ -478,8 +534,7 @@ jobs:
         run: |
           set -euo pipefail
           expected_assets=(
-            "OpenBrowser-Windows-x86_64-with-kernel.exe"
-            "OpenBrowser-Windows-x86_64-with-kernel.zip"
+            "OpenBrowser-Windows-x86_64-with-kernel-setup.exe"
             "OpenBrowser-Linux-x86_64-with-kernel.tar.gz"
             "OpenBrowser-macOS-x86_64.dmg"
             "OpenBrowser-macOS-arm64-with-kernel.dmg"

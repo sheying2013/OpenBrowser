@@ -19,3 +19,7 @@ dist/
 # Internal maintenance documentation (confidential - never commit)
 CODE_OVERVIEW.md
 **/CODE_OVERVIEW.md
+
+# Rust build output and packaged native helpers
+/target/
+/Browserapp/rust-core/

@@ -848,9 +848,39 @@ async function startAuthenticatedProxy(config, onStatus = () => {}) {
   if (!config) throw new Error('Proxy configuration is required');
   if (config.probeSignal?.aborted) throw new Error('Proxy probe cancelled');
   let bridge;
-  if (config.protocol === 'socks5') bridge = await startHttpToSocks5Bridge(config, onStatus);
-  else if (['http', 'https'].includes(config.protocol)) bridge = await startHttpBridge(config, onStatus);
-  else throw new Error('SOCKS4 bridge is not supported');
+
+  // Keep HTTPS TLS and probe orchestration/error classification on their proven JS paths.
+  if (process.env.OPENBROWSER_USE_RUST_CORE === '1' && !config.probeSignal && ['socks5', 'http'].includes(config.protocol)) {
+    try {
+      const { startRustProxyBridge } = require('./automation/rust-core-bridge');
+      const rustBridge = await startRustProxyBridge({
+        protocol: config.protocol,
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        password: config.password,
+        remark: config.remark,
+      }, onStatus, config.probeSignal);
+      bridge = {
+        protocol: 'http',
+        port: rustBridge.port,
+        url: 'http://127.0.0.1:' + rustBridge.port,
+        engine: 'rust-core',
+        close: async () => {
+          await rustBridge.stop();
+        },
+      };
+    } catch (rustErr) {
+      if (config.probeSignal?.aborted) throw new Error('Proxy probe cancelled');
+      console.warn('[proxy-forwarder] Rust Core unavailable; retaining configured JS proxy backend:', rustErr.message);
+    }
+  }
+
+  if (!bridge) {
+    if (config.protocol === 'socks5') bridge = await startHttpToSocks5Bridge(config, onStatus);
+    else if (['http', 'https'].includes(config.protocol)) bridge = await startHttpBridge(config, onStatus);
+    else throw new Error('SOCKS4 bridge is not supported');
+  }
   if (!config.probeSignal) return bridge;
   const close = bridge.close;
   let closing;

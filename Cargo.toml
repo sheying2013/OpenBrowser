@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "crates/openbrowser-core",
+]
+resolver = "2"

@@ -352,7 +352,7 @@ function checkSevenVersionLocations(targetVersion = EXPECTED_VERSION, baseRepo =
     if (!content.includes("--draft") || !content.includes("name: Publish completed release") || !content.includes("--draft=false")) {
       issues.push({ location: 7, file: ".github/workflows/build-installers.yml", message: "workflow draft-first release finalization enforcement missing" });
     }
-    for (const requiredAsset of ["OpenBrowser-Windows-x86_64-with-kernel.exe", "OpenBrowser-Windows-x86_64-with-kernel.zip", "OpenBrowser-Linux-x86_64-with-kernel.tar.gz", "OpenBrowser-macOS-x86_64.dmg", "OpenBrowser-macOS-arm64-with-kernel.dmg"]) {
+    for (const requiredAsset of ["OpenBrowser-Windows-x86_64-with-kernel-setup.exe", "OpenBrowser-Linux-x86_64-with-kernel.tar.gz", "OpenBrowser-macOS-x86_64.dmg", "OpenBrowser-macOS-arm64-with-kernel.dmg"]) {
       if (!content.includes(requiredAsset)) issues.push({ location: 7, file: ".github/workflows/build-installers.yml", message: `workflow release asset contract missing ${requiredAsset}` });
     }
     if (!content.includes("default: all")) {

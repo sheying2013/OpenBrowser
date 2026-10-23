@@ -217,6 +217,7 @@ function appResourceExcludes() {
     '.git',
     'CODE_OVERVIEW.md',
     'bundled-kernels',
+    'rust-core',
     'reports',
     '__pycache__',
     '.DS_Store',
@@ -396,7 +397,25 @@ function assertKernelPackagePolicy(resourceApp) {
   }
 }
 
+function copyRustCore(resourceApp, sourceDirectory = path.join(appRoot, 'rust-core')) {
+  const executable = process.platform === 'win32' ? 'openbrowser-core.exe' : 'openbrowser-core';
+  const source = path.join(sourceDirectory, executable);
+  const result = spawnSync(source, ['version'], {
+    encoding: 'utf8', timeout: 5000, windowsHide: true,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error('Build the native Rust core before packaging: npm run build:rustcore');
+  }
+  const version = JSON.parse(result.stdout.trim());
+  if (version.name !== 'openbrowser-core' || version.version !== readProductVersion() || version.control_protocol !== 1) {
+    throw new Error('Packaged Rust core version/control protocol does not match the application');
+  }
+  const destination = path.join(path.dirname(resourceApp), 'rust-core', executable);
+  copyRecursive(source, destination);
+}
+
 function copyAppResources(resourceApp) {
+  copyRustCore(resourceApp);
   const excluded = appResourceExcludes();
   fs.mkdirSync(resourceApp, { recursive: true });
   for (const entry of fs.readdirSync(appRoot)) {
@@ -441,7 +460,7 @@ function nsisGlob(value) {
 
 function packageWindowsInstaller(packageRoot) {
   const appVersion = require('../package.json').version || '1.0.0';
-  const output = path.join(distRoot, `${packageArtifactStem()}.exe`);
+  const output = path.join(distRoot, `${packageArtifactStem()}-setup.exe`);
   const script = path.join(distRoot, 'OpenBrowser-Windows-installer.nsi');
   const installSource = nsisGlob(packageRoot);
   const installDir = '$LOCALAPPDATA\\OpenBrowser';
@@ -570,18 +589,8 @@ function packageWindows() {
     '',
   ].join('\r\n'));
 
-  const zip = path.join(distRoot, `${packageArtifactStem()}.zip`);
-  removeIfExists(zip);
-  run('powershell', ['-NoProfile', '-Command', `Compress-Archive -LiteralPath '${packageRoot.replace(/'/g, "''")}' -DestinationPath '${zip.replace(/'/g, "''")}' -CompressionLevel Optimal`]);
-  console.log('便携版压缩包：' + zip);
-  try {
-    packageWindowsInstaller(packageRoot);
-  } catch (error) {
-    // Portable zip is the required artifact. Keep CI green if NSIS still chokes on huge kernels.
-    console.warn('[package] NSIS installer skipped: ' + (error.message || error));
-    console.warn('[package] portable zip remains available: ' + zip);
-  }
-  console.log('便携版目录：' + packageRoot);
+  packageWindowsInstaller(packageRoot);
+  console.log('Windows installer payload: ' + packageRoot);
 }
 
 function readProductVersion() {
@@ -831,4 +840,5 @@ module.exports = {
   appResourceExcludes,
   isPackagingExcluded,
   copyRecursive,
+  copyRustCore,
 };
