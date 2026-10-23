@@ -1,5 +1,7 @@
 use openbrowser_core::error::Result;
-use openbrowser_core::process::{FileLock, ProcessGuardian, ProcessLock, ProcessSupervisor};
+#[cfg(not(windows))]
+use openbrowser_core::process::ProcessGuardian;
+use openbrowser_core::process::{FileLock, ProcessLock, ProcessSupervisor};
 use openbrowser_core::sync::{
     CascadeLayout, CoordinateMapper, JitterConfig, JitterEngine, ScreenBounds, TileGridLayout,
 };

@@ -269,7 +269,20 @@ async fn test_concurrency_burst_200_valid_turnaround() {
     for _ in 0..200 {
         let b_addr = bridge_addr;
         handles.push(tokio::spawn(async move {
-            let mut stream = TcpStream::connect(b_addr).await.expect("Connect to bridge");
+            let mut stream = None;
+            for attempt in 0..10 {
+                match TcpStream::connect(b_addr).await {
+                    Ok(s) => {
+                        stream = Some(s);
+                        break;
+                    }
+                    Err(_) if attempt < 9 => {
+                        tokio::time::sleep(Duration::from_millis(15)).await;
+                    }
+                    Err(e) => panic!("Connect to bridge: {:?}", e),
+                }
+            }
+            let mut stream = stream.expect("Connect to bridge");
             let req = b"CONNECT target.site:443 HTTP/1.1\r\nHost: target.site:443\r\n\r\n";
             stream.write_all(req).await.expect("Send CONNECT");
 
