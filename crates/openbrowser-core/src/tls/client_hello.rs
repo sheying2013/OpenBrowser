@@ -347,7 +347,7 @@ impl ClientHelloBuilder {
             return Err(CoreError::Tls("Truncated cipher suites data".into()));
         }
         let mut ciphers = Vec::with_capacity(ciphers_len / 2);
-        for chunk in body[offset..offset + ciphers_len].chunks_exact(2) {
+        for chunk in body[offset..offset + ciphers_len].as_chunks::<2>().0 {
             ciphers.push(u16::from_be_bytes([chunk[0], chunk[1]]));
         }
         offset += ciphers_len;

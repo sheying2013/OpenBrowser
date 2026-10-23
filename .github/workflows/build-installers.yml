@@ -76,7 +76,7 @@ jobs:
               echo "Refusing to mutate an already-published release; create a new release tag instead." >&2
               exit 1
             fi
-            edit_args=("$RELEASE_TAG" --repo "$GH_REPO" --draft --title "OpenBrowser $RELEASE_TAG" --notes-file "$notes_file")
+            edit_args=("$RELEASE_TAG" --repo "$GH_REPO" --target "${{ github.sha }}" --draft --title "OpenBrowser $RELEASE_TAG" --notes-file "$notes_file")
             if [[ "${{ inputs.prerelease }}" == "true" ]]; then
               edit_args+=(--prerelease)
             fi

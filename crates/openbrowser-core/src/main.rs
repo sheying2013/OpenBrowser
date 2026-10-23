@@ -129,7 +129,7 @@ fn option_pairs(args: &[String], allowed: &[&str]) -> Result<Vec<(String, String
         return Err(invalid("Every option requires a value"));
     }
     let mut result = Vec::new();
-    for pair in args.chunks_exact(2) {
+    for pair in args.as_chunks::<2>().0 {
         if !allowed.contains(&pair[0].as_str()) || result.iter().any(|(key, _)| key == &pair[0]) {
             return Err(invalid("Unknown or duplicate option"));
         }
