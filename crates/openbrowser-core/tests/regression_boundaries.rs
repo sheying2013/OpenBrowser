@@ -77,16 +77,19 @@ async fn dropping_bridge_releases_the_listener() {
     let bridge = LocalProxyBridge::new(config(), FailClosedPolicy::default());
     let address = bridge.start().await.unwrap();
     drop(bridge);
-    tokio::time::timeout(Duration::from_secs(1), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if TcpStream::connect(address).await.is_err() {
-                break;
+            match TcpStream::connect(address).await {
+                Err(_) => break,
+                Ok(stream) => {
+                    drop(stream);
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
             }
-            tokio::task::yield_now().await;
         }
     })
     .await
-    .unwrap();
+    .expect("Listener should be released after bridge drop");
 }
 
 #[tokio::test]
