@@ -182,10 +182,11 @@ async fn test_socks5_udp_associate_unauthenticated_echo() {
 
     // Receive echoed datagram
     let mut buf = [0u8; 512];
-    let (n, from_addr, from_port) = tokio::time::timeout(Duration::from_secs(2), session.recv_from(&mut buf))
-        .await
-        .expect("timeout")
-        .expect("recv_from must succeed");
+    let (n, from_addr, from_port) =
+        tokio::time::timeout(Duration::from_secs(2), session.recv_from(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("recv_from must succeed");
 
     assert_eq!(&buf[..n], b"ECHO:hello udp");
     assert_eq!(from_addr, target);
@@ -220,10 +221,11 @@ async fn test_socks5_udp_associate_authenticated_success() {
         .expect("send must succeed");
 
     let mut buf = [0u8; 512];
-    let (n, from_addr, from_port) = tokio::time::timeout(Duration::from_secs(2), session.recv_from(&mut buf))
-        .await
-        .expect("timeout")
-        .expect("recv must succeed");
+    let (n, from_addr, from_port) =
+        tokio::time::timeout(Duration::from_secs(2), session.recv_from(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("recv must succeed");
 
     assert_eq!(&buf[..n], b"ECHO:test auth udp");
     assert_eq!(from_addr, target);
@@ -274,5 +276,8 @@ async fn test_socks5_udp_associate_control_termination() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Per RFC 1928: session is terminated when TCP control is dropped
-    assert!(!session.is_control_alive(), "Session must recognize dropped TCP control");
+    assert!(
+        !session.is_control_alive(),
+        "Session must recognize dropped TCP control"
+    );
 }

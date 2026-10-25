@@ -182,8 +182,10 @@ async fn test_upstream_reuse_disabled_comparison() {
     };
 
     // Disabled prewarm
-    let pool_no_prewarm = Arc::new(UpstreamTunnelPool::new(16, Duration::from_secs(30)).with_prewarm(false));
-    let bridge = LocalProxyBridge::new(config, FailClosedPolicy::default()).with_tunnel_pool(pool_no_prewarm);
+    let pool_no_prewarm =
+        Arc::new(UpstreamTunnelPool::new(16, Duration::from_secs(30)).with_prewarm(false));
+    let bridge = LocalProxyBridge::new(config, FailClosedPolicy::default())
+        .with_tunnel_pool(pool_no_prewarm);
     let bridge_addr = bridge.start().await.expect("bridge starts");
     let target = "cdn.example.com:443";
 
@@ -236,7 +238,10 @@ async fn test_tunnel_pool_stop_lifecycle_clears_all_sockets() {
 
     // Active tunnels in pool before stop
     let pool = bridge.tunnel_pool().clone();
-    assert!(pool.active_tunnel_count().await > 0, "Standby tunnel should be pooled");
+    assert!(
+        pool.active_tunnel_count().await > 0,
+        "Standby tunnel should be pooled"
+    );
 
     // Stopping bridge must clear all pooled sockets
     let total_connects = proxy.connect_count.load(Ordering::Relaxed);

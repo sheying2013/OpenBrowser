@@ -49,7 +49,7 @@ pub fn is_stream_healthy(stream: &TcpStream) -> bool {
         Ok(0) => false, // EOF / remote peer closed the connection
         Ok(_) => false, // Unexpected unread bytes on idle tunnel
         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => true, // Still alive, non-blocking check
-        Err(_) => false, // Socket error or RST
+        Err(_) => false,                                                  // Socket error or RST
     }
 }
 
@@ -88,7 +88,11 @@ pub struct UpstreamTunnelPool {
 
 impl UpstreamTunnelPool {
     pub fn new(max_total_tunnels: usize, ttl: Duration) -> Self {
-        let max_total = if max_total_tunnels == 0 { 16 } else { max_total_tunnels };
+        let max_total = if max_total_tunnels == 0 {
+            16
+        } else {
+            max_total_tunnels
+        };
         Self {
             tunnels: Mutex::new(HashMap::new()),
             raw_tcp: Mutex::new(Vec::new()),

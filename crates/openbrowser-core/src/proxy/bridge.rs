@@ -384,7 +384,9 @@ impl LocalProxyBridge {
 
         stream.set_nodelay(true)?;
 
-        let remainder = Self::connect_http_upstream_on_stream(config, &mut stream, target_host, target_port).await?;
+        let remainder =
+            Self::connect_http_upstream_on_stream(config, &mut stream, target_host, target_port)
+                .await?;
         Ok((stream, remainder))
     }
 
@@ -497,7 +499,14 @@ impl LocalProxyBridge {
         pool: &UpstreamTunnelPool,
     ) -> Result<(TcpStream, Vec<u8>)> {
         if let Some(mut stream) = pool.take_upstream_tcp().await {
-            match Self::connect_http_upstream_on_stream(config, &mut stream, target_host, target_port).await {
+            match Self::connect_http_upstream_on_stream(
+                config,
+                &mut stream,
+                target_host,
+                target_port,
+            )
+            .await
+            {
                 Ok(remainder) => return Ok((stream, remainder)),
                 Err(_) => {
                     // Stale connection in pool; fall through to fresh dial
@@ -717,7 +726,10 @@ impl LocalProxyBridge {
                 if ctx.config.protocol == ProxyProtocol::Http
                     && ctx.tunnel_pool.is_prewarm_enabled()
                     && ctx.limiter.available_permits() > 4
-                    && ctx.tunnel_pool.should_prewarm(&target.host, target.port).await
+                    && ctx
+                        .tunnel_pool
+                        .should_prewarm(&target.host, target.port)
+                        .await
                 {
                     let pool_clone = ctx.tunnel_pool.clone();
                     let config_clone = ctx.config.clone();
@@ -735,7 +747,9 @@ impl LocalProxyBridge {
                         })
                         .await;
                         if let Ok(Ok((stream, remainder))) = res {
-                            pool_clone.put_tunnel(target_host, target_port, stream, remainder).await;
+                            pool_clone
+                                .put_tunnel(target_host, target_port, stream, remainder)
+                                .await;
                         }
                     });
                 }

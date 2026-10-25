@@ -197,9 +197,10 @@ impl Socks5UdpAssociate {
 
         // 4. Read UDP ASSOCIATE Reply
         let mut head = [0u8; 4];
-        stream.read_exact(&mut head).await.map_err(|e| {
-            CoreError::Socks5(format!("Failed to read UDP ASSOCIATE reply: {}", e))
-        })?;
+        stream
+            .read_exact(&mut head)
+            .await
+            .map_err(|e| CoreError::Socks5(format!("Failed to read UDP ASSOCIATE reply: {}", e)))?;
 
         if head[0] != SOCKS5_VERSION {
             return Err(CoreError::Socks5(
@@ -240,7 +241,10 @@ impl Socks5UdpAssociate {
                 let resolved = tokio::net::lookup_host(format!("{}:0", domain))
                     .await
                     .map_err(|e| {
-                        CoreError::Socks5(format!("Failed to resolve relay domain {}: {}", domain, e))
+                        CoreError::Socks5(format!(
+                            "Failed to resolve relay domain {}: {}",
+                            domain, e
+                        ))
                     })?
                     .next()
                     .ok_or_else(|| {
