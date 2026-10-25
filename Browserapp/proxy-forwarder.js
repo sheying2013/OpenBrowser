@@ -1691,8 +1691,38 @@ class ProbeMemoryCache {
 
 const probeMemoryCache = new ProbeMemoryCache();
 
+const providerCooldowns = new Map();
+let probeRotationCounter = 0;
+
+function recordProviderRateLimit(providerName, cooldownMs = 60000) {
+  if (providerName) {
+    providerCooldowns.set(providerName, Date.now() + cooldownMs);
+  }
+}
+
+function isProviderCoolingDown(providerName) {
+  const until = providerCooldowns.get(providerName);
+  if (!until) return false;
+  if (Date.now() >= until) {
+    providerCooldowns.delete(providerName);
+    return false;
+  }
+  return true;
+}
+
+function clearProviderCooldowns() {
+  providerCooldowns.clear();
+}
+
+function rotateArray(arr, offset) {
+  if (!arr || arr.length <= 1) return arr ? [...arr] : [];
+  const shift = ((offset % arr.length) + arr.length) % arr.length;
+  return [...arr.slice(shift), ...arr.slice(0, shift)];
+}
+
 function clearProbeCache() {
   probeMemoryCache.clear();
+  clearProviderCooldowns();
 }
 
 function getProbeCacheStats() {
@@ -1783,10 +1813,18 @@ async function lookupProxyCountry(config, options = {}) {
 
   try {
     const withSignal = (lookup) => (signal) => lookup({ ...config, probeSignal: signal });
+    const richProviders = [
+      { name: 'ip-api.com', fn: lookupProxyIpApi },
+      { name: 'ipwho.is', fn: lookupProxyIpWho },
+      { name: 'ipinfo.io', fn: lookupProxyIpInfo },
+      { name: 'ipwhois.app', fn: lookupProxyIpWhoisApp },
+      { name: 'freeipapi.com', fn: lookupProxyFreeIpApi },
+    ];
+    const active = richProviders.filter((p) => !isProviderCoolingDown(p.name));
+    const cooling = richProviders.filter((p) => isProviderCoolingDown(p.name));
+    const ordered = [...active, ...cooling];
     const fallbackLookups = [
-      withSignal(lookupProxyIpApi),
-      withSignal(lookupProxyIpWho),
-      withSignal(lookupProxyIpInfo),
+      ...ordered.map((p) => withSignal(p.fn)),
       withSignal(lookupProxyCloudflareTrace),
     ];
     // ifconfig.me is IP-only; keep the existing geo providers in the same
@@ -1949,6 +1987,65 @@ function normalizeIpWhoResult(value) {
   };
 }
 
+function normalizeIpWhoisAppResult(value) {
+  const ip = String(value.ip || '').trim();
+  const countryCode = String(value.country_code || value.countryCode || '').toUpperCase();
+  if (value.success === false || !ip || !/^[A-Z]{2}$/.test(countryCode)) {
+    throw new Error(String(value.message || 'ipwhois.app exit lookup response was incomplete'));
+  }
+  const tz = value.timezone && typeof value.timezone === 'object'
+    ? String(value.timezone.id || value.timezone.name || '')
+    : String(value.timezone || '');
+  return {
+    ip,
+    country: String(value.country || ''),
+    countryCode,
+    region: String(value.region || ''),
+    city: String(value.city || ''),
+    zip: String(value.postal || value.zip || ''),
+    timezone: tz,
+    latitude: normalizeLatitude(value.latitude),
+    longitude: normalizeLongitude(value.longitude),
+    isp: String(value.isp || ''),
+    organization: String(value.org || ''),
+    asn: String(value.asn || '').split(/\s+/, 1)[0],
+    asName: String(value.org || value.isp || ''),
+    mobile: false,
+    proxy: false,
+    hosting: false,
+    geoRole: 'registry',
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeFreeIpApiResult(value) {
+  const ip = String(value.ipAddress || value.ip || '').trim();
+  const countryCode = String(value.countryCode || value.country_code || '').toUpperCase();
+  if (!ip || !/^[A-Z]{2}$/.test(countryCode)) {
+    throw new Error('freeipapi exit lookup response was incomplete');
+  }
+  return {
+    ip,
+    country: String(value.countryName || value.country || ''),
+    countryCode,
+    region: String(value.regionName || value.region || ''),
+    city: String(value.cityName || value.city || ''),
+    zip: String(value.zipCode || value.zip || value.postal || ''),
+    timezone: String(value.timeZone || value.timezone || ''),
+    latitude: normalizeLatitude(value.latitude),
+    longitude: normalizeLongitude(value.longitude),
+    isp: '',
+    organization: '',
+    asn: '',
+    asName: '',
+    mobile: false,
+    proxy: false,
+    hosting: false,
+    geoRole: 'registry',
+    checkedAt: new Date().toISOString(),
+  };
+}
+
 async function lookupDirectIpApi() {
   const fields = 'status,message,country,countryCode,regionName,city,zip,timezone,lat,lon,isp,org,as,asname,mobile,proxy,hosting,query';
   const { status, body } = await fetchUrlText(`http://ip-api.com/json/?fields=${fields}`, { timeout: 10000 });
@@ -1976,6 +2073,18 @@ async function lookupDirectIpInfo() {
   return normalizeIpInfoResult(JSON.parse(body));
 }
 
+async function lookupDirectIpWhoisApp() {
+  const { status, body } = await fetchUrlText('https://ipwhois.app/json/', { timeout: 10000 });
+  if (status !== 200) throw new Error('HTTP ' + status);
+  return normalizeIpWhoisAppResult(JSON.parse(body));
+}
+
+async function lookupDirectFreeIpApi() {
+  const { status, body } = await fetchUrlText('https://freeipapi.com/api/json', { timeout: 10000 });
+  if (status !== 200) throw new Error('HTTP ' + status);
+  return normalizeFreeIpApiResult(JSON.parse(body));
+}
+
 async function lookupDirectCloudflareTrace() {
   const { status, body } = await fetchUrlText('https://www.cloudflare.com/cdn-cgi/trace', { timeout: 10000 });
   if (status !== 200) throw new Error('HTTP ' + status);
@@ -1988,6 +2097,8 @@ async function lookupDirectCountry() {
     lookupDirectIpApi,
     lookupDirectIpWho,
     lookupDirectIpInfo,
+    lookupDirectIpWhoisApp,
+    lookupDirectFreeIpApi,
     lookupDirectCloudflareTrace,
   ], { maxWaitMs: 11000 });
   if (!parts.length) throw new Error('本地出口查询失败：所有公开源均不可用');
@@ -2004,6 +2115,9 @@ async function lookupProxyIpApi(config) {
   const fields = 'status,message,country,countryCode,regionName,city,zip,timezone,lat,lon,isp,org,as,asname,mobile,proxy,hosting,query';
   const response = await requestProxyHttp(config, 'ip-api.com', '/json/?fields=' + fields);
   if (response.status !== 200) {
+    if (response.status === 429) {
+      recordProviderRateLimit('ip-api.com');
+    }
     const err = new Error('Proxy exit lookup returned HTTP ' + response.status);
     err.httpStatus = response.status;
     if (response.status === 429 || (response.status >= 400 && response.status !== 407)) {
@@ -2027,6 +2141,9 @@ async function lookupProxyIpApi(config) {
 async function lookupProxyIpWho(config) {
   const response = await requestProxyHttps(config, 'ipwho.is', '/');
   if (response.status !== 200) {
+    if (response.status === 429) {
+      recordProviderRateLimit('ipwho.is');
+    }
     const err = new Error('Proxy exit lookup returned HTTP ' + response.status);
     err.httpStatus = response.status;
     if (response.status === 429 || (response.status >= 400 && response.status !== 407)) {
@@ -2050,6 +2167,9 @@ async function lookupProxyIpWho(config) {
 async function lookupProxyIpInfo(config) {
   const response = await requestProxyHttps(config, 'ipinfo.io', '/json');
   if (response.status !== 200) {
+    if (response.status === 429) {
+      recordProviderRateLimit('ipinfo.io');
+    }
     const err = new Error('Proxy exit lookup returned HTTP ' + response.status);
     err.httpStatus = response.status;
     if (response.status === 429 || (response.status >= 400 && response.status !== 407)) {
@@ -2068,6 +2188,70 @@ async function lookupProxyIpInfo(config) {
     throw err;
   }
   return normalizeIpInfoResult(json);
+}
+
+async function lookupProxyIpWhoisApp(config) {
+  let response;
+  try {
+    response = await requestProxyHttps(config, 'ipwhois.app', '/json/');
+  } catch (httpsErr) {
+    if (isProxyLinkError(httpsErr)) throw httpsErr;
+    response = await requestProxyHttp(config, 'ipwhois.app', '/json/');
+  }
+  if (response.status !== 200) {
+    if (response.status === 429) {
+      recordProviderRateLimit('ipwhois.app');
+    }
+    const err = new Error('Proxy exit lookup returned HTTP ' + response.status);
+    err.httpStatus = response.status;
+    if (response.status === 429 || (response.status >= 400 && response.status !== 407)) {
+      err.code = 'probe-unavailable';
+      err.probeUnavailable = true;
+    }
+    throw err;
+  }
+  let json;
+  try {
+    json = JSON.parse(response.body.toString('utf8'));
+  } catch (parseErr) {
+    const err = new Error('Proxy exit lookup JSON parsing failed: ' + parseErr.message);
+    err.code = 'probe-unavailable';
+    err.probeUnavailable = true;
+    throw err;
+  }
+  return normalizeIpWhoisAppResult(json);
+}
+
+async function lookupProxyFreeIpApi(config) {
+  let response;
+  try {
+    response = await requestProxyHttps(config, 'freeipapi.com', '/api/json');
+  } catch (httpsErr) {
+    if (isProxyLinkError(httpsErr)) throw httpsErr;
+    response = await requestProxyHttp(config, 'freeipapi.com', '/api/json');
+  }
+  if (response.status !== 200) {
+    if (response.status === 429) {
+      recordProviderRateLimit('freeipapi.com');
+    }
+    const err = new Error('Proxy exit lookup returned HTTP ' + response.status);
+    err.httpStatus = response.status;
+    if (response.status === 429 || (response.status >= 400 && response.status !== 407)) {
+      err.code = 'probe-unavailable';
+      err.probeUnavailable = true;
+    }
+    throw err;
+  }
+  let json;
+  try {
+    json = JSON.parse(response.body.toString('utf8'));
+  } catch (parseErr) {
+    const err = new Error('Proxy exit lookup JSON parsing failed: ' + parseErr.message);
+    err.code = 'probe-unavailable';
+    err.probeUnavailable = true;
+    throw err;
+  }
+  return normalizeFreeIpApiResult(json);
 }
 
 async function lookupProxyCloudflareTrace(config) {
@@ -2186,4 +2370,9 @@ module.exports = {
   isProbeServiceError,
   ProbeMemoryCache,
   DEFAULT_PROBE_CACHE_TTL_MS,
+  normalizeIpWhoisAppResult,
+  normalizeFreeIpApiResult,
+  recordProviderRateLimit,
+  isProviderCoolingDown,
+  clearProviderCooldowns,
 };

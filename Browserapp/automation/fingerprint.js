@@ -21,7 +21,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { mergeFlags, LIST_VALUE_FLAGS } = require('./command-line-flags');
-const { pickPersona, fontsForOs, exclusiveFontsForOtherOs, HOST_WEBGL_LIMITS, getHostWebglLimits, isPersonaWebglCompatible, compatiblePersonasForOs, resolveCompatiblePersona } = require('./device-personas');
+const { pickPersona, fontsForOs, exclusiveFontsForOtherOs, HOST_WEBGL_LIMITS, getHostWebglLimits, isPersonaWebglCompatible, compatiblePersonasForOs, resolveCompatiblePersona, applyPersonaPerturbations } = require('./device-personas');
+const { createWebRtcFallbackSource } = require('./webrtc-fallback');
 const { mobilePersona, supportsRuntimePersona } = require('./mobile-personas');
 const { buildCssFontLocalGateSource } = require('./css-font-local-gate');
 const { deriveFontPlaceholder, deriveBridgeToken } = require('./font-placeholder');
@@ -1208,11 +1209,19 @@ function desktopOs(os) {
   return ['windows', 'macos', 'macos_arm', 'linux'].includes(os) ? os : null;
 }
 
+const LEGACY_MACOS_WEBGL_PRESETS = Object.freeze([
+  { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)', gpu: { vendor: 'apple', architecture: 'common-3' } },
+  { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)', gpu: { vendor: 'apple', architecture: 'common-3' } },
+  { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)', gpu: { vendor: 'apple', architecture: 'common-3' } },
+  { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics 640, Unspecified Version)', gpu: { vendor: 'intel', architecture: 'gen9' } },
+]);
+
 function webglPresetsForOs(os, options = {}) {
   let list = WEBGL_PRESETS.windows;
   // "macos" is the x86 Chrome build (Intel Mac); "macos_arm" is the Apple Silicon build.
   // Mixing the two pools is a contradiction detectors score directly.
-  if (os === 'macos') list = WEBGL_PRESETS.macos_intel;
+  if (options.legacy && (os === 'macos' || os === 'macos_arm')) list = LEGACY_MACOS_WEBGL_PRESETS;
+  else if (os === 'macos') list = WEBGL_PRESETS.macos_intel;
   else if (os === 'macos_arm') list = WEBGL_PRESETS.macos_apple;
   else if (os === 'linux') list = WEBGL_PRESETS.linux;
   else if (os === 'android') list = WEBGL_PRESETS.android;
@@ -1648,6 +1657,7 @@ function buildFingerprint(profile = {}) {
     if (useGating && !isPersonaWebglCompatible(devicePersona, process.platform)) {
       devicePersona = resolveCompatiblePersona(devicePersona, process.platform);
     }
+    devicePersona = applyPersonaPerturbations(devicePersona, seed) || devicePersona;
     if (!hasCoresOverride) cores = devicePersona.cores;
     if (!hasMemoryOverride) memory = Math.min(8, devicePersona.memory);
     colorDepth = isHdrRequested ? (devicePersona.colorDepth || 30) : 24;
@@ -1762,7 +1772,7 @@ function buildFingerprint(profile = {}) {
     : Math.max(480, Math.round(Number(fpIn.screenHeight) || devicePersona?.screen?.height || height));
   const taskbarHeight = mobileScreen
     ? 0
-    : Math.max(0, Math.round(Number(fpIn.taskbarHeight) || (uaOs === 'macos' || uaOs === 'macos_arm' ? 25 : 40)));
+    : Math.max(0, Math.round(Number(fpIn.taskbarHeight) || devicePersona?.screen?.taskbarHeight || (uaOs === 'macos' || uaOs === 'macos_arm' ? 25 : 40)));
   const availLeft = Math.round(Number(fpIn.availLeft) || 0);
   const availTop = Math.round(Number(fpIn.availTop) || 0);
   const availWidth = Math.min(screenWidth, Math.max(1, Math.round(Number(fpIn.availWidth) || screenWidth)));
@@ -2000,7 +2010,8 @@ function buildFingerprint(profile = {}) {
     fonts: (() => {
       const hostPlatformNorm = process.platform === "darwin" ? "macos" : (process.platform === "win32" ? "windows" : (process.platform === "linux" ? "linux" : process.platform));
       const foreignFonts = exclusiveFontsForOtherOs(uaOs);
-      const shouldEnableFonts = Boolean(devicePersona || mobileDevice || (uaOs !== hostPlatformNorm));
+      const isCrossOs = String(uaOs || '').replace(/_arm$/, '') !== hostPlatformNorm;
+      const shouldEnableFonts = Boolean(devicePersona || mobileDevice || isCrossOs);
       return (shouldEnableFonts && Array.isArray(foreignFonts) && foreignFonts.length > 0)
         ? {
           os: uaOs,
@@ -2373,6 +2384,8 @@ function buildInjectionScript(fp) {
   // wrapper: two independent nativeLike wrappers would make replaceMethod treat the second
   // one as an existing bridge and silently skip it.
   let sanitizeElementFontScope = (element, callback) => callback();
+  let sanitizeCanvasFontShorthand = (font) => font;
+  let isForeignCanvasFont = (family) => false;
   const inspectBridge = (fn) => {
     try {
       if (typeof fn !== 'function') return null;
@@ -2980,6 +2993,7 @@ function buildInjectionScript(fp) {
       const realMap = await origGetLayoutMap.call(this);
       if (!realMap || typeof realMap.get !== "function") return realMap;
       const targetLayout = US_KEYBOARD_LAYOUT;
+      const layoutMapInstance = new Map(Object.entries(targetLayout));
       const origGet = realMap.get.bind(realMap);
       const origHas = realMap.has.bind(realMap);
       realMap.get = nativeLike(function get(key) {
@@ -2988,25 +3002,19 @@ function buildInjectionScript(fp) {
       }, realMap.get, "get", 1);
       realMap.has = nativeLike(function has(key) {
         if (key in targetLayout) return true;
-        return origHas(key);
+        return origHas ? Boolean(origHas(key)) : false;
       }, realMap.has, "has", 1);
-      realMap.entries = nativeLike(function* entries() {
-        for (const [k, v] of Object.entries(targetLayout)) {
-          yield [k, v];
-        }
+      realMap.entries = nativeLike(function entries() {
+        return layoutMapInstance.entries();
       }, realMap.entries, "entries", 0);
-      realMap.keys = nativeLike(function* keys() {
-        for (const k of Object.keys(targetLayout)) {
-          yield k;
-        }
+      realMap.keys = nativeLike(function keys() {
+        return layoutMapInstance.keys();
       }, realMap.keys, "keys", 0);
-      realMap.values = nativeLike(function* values() {
-        for (const v of Object.values(targetLayout)) {
-          yield v;
-        }
+      realMap.values = nativeLike(function values() {
+        return layoutMapInstance.values();
       }, realMap.values, "values", 0);
       realMap.forEach = nativeLike(function forEach(callback, thisArg) {
-        for (const [k, v] of Object.entries(targetLayout)) {
+        for (const [k, v] of layoutMapInstance.entries()) {
           callback.call(thisArg, v, k, realMap);
         }
       }, realMap.forEach, "forEach", 1);
@@ -3052,19 +3060,83 @@ function buildInjectionScript(fp) {
     if (typeof window !== "undefined") {
       if (isIosPersona) {
         try {
-          Object.defineProperty(Window.prototype, "chrome", {
-            get() { return undefined; },
-            configurable: true,
+          Object.defineProperty(window, "chrome", {
+            value: undefined,
+            writable: false,
           });
+        } catch (_) {
+          try { window.chrome = undefined; } catch (_) {}
+        }
+        try {
+          if (typeof Window !== "undefined" && Window.prototype) {
+            delete Window.prototype.chrome;
+          }
         } catch (_) {}
-        try { delete window.chrome; } catch (_) {}
         try { delete globalThis.chrome; } catch (_) {}
-        if (typeof window.chrome !== "undefined" || window.chrome) {
+        if (typeof window.chrome !== "undefined" && window.chrome) {
           try { delete window.chrome.app; } catch (_) {}
           try { delete window.chrome.loadTimes; } catch (_) {}
           try { delete window.chrome.csi; } catch (_) {}
           try { window.chrome = undefined; } catch (_) {}
         }
+        try {
+          replaceMethod(Object.prototype, "hasOwnProperty", (orig) => function hasOwnProperty(prop) {
+            if (this === window && (prop === "chrome" || prop === "loadTimes" || prop === "csi" || prop === "app")) return false;
+            return orig.call(this, prop);
+          });
+          if (typeof Object.hasOwn === "function") {
+            const origHasOwn = Object.hasOwn;
+            Object.defineProperty(Object, "hasOwn", {
+              configurable: true,
+              writable: true,
+              value: nativeLike(function hasOwn(obj, prop) {
+                if (obj === window && (prop === "chrome" || prop === "loadTimes" || prop === "csi" || prop === "app")) return false;
+                return origHasOwn(obj, prop);
+              }, origHasOwn, "hasOwn", 2),
+            });
+          }
+          const origGetDesc = Object.getOwnPropertyDescriptor;
+          Object.defineProperty(Object, "getOwnPropertyDescriptor", {
+            configurable: true,
+            writable: true,
+            value: nativeLike(function getOwnPropertyDescriptor(obj, prop) {
+              if (obj === window && prop === "chrome") return undefined;
+              return origGetDesc(obj, prop);
+            }, origGetDesc, "getOwnPropertyDescriptor", 2),
+          });
+          if (typeof Reflect !== "undefined" && typeof Reflect.getOwnPropertyDescriptor === "function") {
+            const origReflectGetDesc = Reflect.getOwnPropertyDescriptor;
+            Object.defineProperty(Reflect, "getOwnPropertyDescriptor", {
+              configurable: true,
+              writable: true,
+              value: nativeLike(function getOwnPropertyDescriptor(obj, prop) {
+                if (obj === window && prop === "chrome") return undefined;
+                return origReflectGetDesc(obj, prop);
+              }, origReflectGetDesc, "getOwnPropertyDescriptor", 2),
+            });
+          }
+          if (typeof Reflect !== "undefined" && typeof Reflect.has === "function") {
+            const origReflectHas = Reflect.has;
+            Object.defineProperty(Reflect, "has", {
+              configurable: true,
+              writable: true,
+              value: nativeLike(function has(obj, prop) {
+                if (obj === window && prop === "chrome") return false;
+                return origReflectHas(obj, prop);
+              }, origReflectHas, "has", 2),
+            });
+          }
+          const origGetNames = Object.getOwnPropertyNames;
+          Object.defineProperty(Object, "getOwnPropertyNames", {
+            configurable: true,
+            writable: true,
+            value: nativeLike(function getOwnPropertyNames(obj) {
+              const names = origGetNames(obj);
+              if (obj === window) return names.filter((n) => n !== "chrome");
+              return names;
+            }, origGetNames, "getOwnPropertyNames", 1),
+          });
+        } catch (_) {}
       } else {
         if (!window.chrome) window.chrome = {};
         if (isAndroidPersona) {
@@ -4005,6 +4077,9 @@ function buildInjectionScript(fp) {
       const sanitizeFamilyOnly = (value) => sanitizeFamilyList(splitFamilyList(String(value || '')));
       const familyHasForeign = (value) => splitFamilyList(String(value || '')).some(isForeignFamily);
 
+      sanitizeCanvasFontShorthand = sanitizeFontShorthand;
+      isForeignCanvasFont = isForeignFamily;
+
       const patchCanvasFont = (proto) => {
         if (!proto) return;
         const descriptor = Object.getOwnPropertyDescriptor(proto, 'font');
@@ -4034,6 +4109,12 @@ function buildInjectionScript(fp) {
       };
       patchCanvasFont(globalThis.CanvasRenderingContext2D && globalThis.CanvasRenderingContext2D.prototype);
       patchCanvasFont(globalThis.OffscreenCanvasRenderingContext2D && globalThis.OffscreenCanvasRenderingContext2D.prototype);
+      subWindowSyncHooks.push((subWin) => {
+        try {
+          if (subWin.CanvasRenderingContext2D) patchCanvasFont(subWin.CanvasRenderingContext2D.prototype);
+          if (subWin.OffscreenCanvasRenderingContext2D) patchCanvasFont(subWin.OffscreenCanvasRenderingContext2D.prototype);
+        } catch (_) {}
+      });
 
       // Metric reads (offsetWidth, clientHeight, getBoundingClientRect, ...) are the hottest DOM
       // APIs there are: layout libraries and analytics poll them hundreds of times per frame.
@@ -5234,17 +5315,38 @@ function buildInjectionScript(fp) {
           }
           if (proto.measureText) {
             replaceMethod(proto, 'measureText', (origMeasure) => function measureText(text, ...args) {
-              const tm = origMeasure.call(this, text, ...args);
+              const currentFont = String(this.font || '');
+              const cleanFont = sanitizeCanvasFontShorthand(currentFont);
+              let fontSwapped = false;
+              if (cleanFont !== currentFont) {
+                try {
+                  this.font = cleanFont;
+                  fontSwapped = true;
+                } catch (_) {}
+              }
+              let tm;
+              try {
+                tm = origMeasure.call(this, text, ...args);
+              } finally {
+                if (fontSwapped) {
+                  try { this.font = currentFont; } catch (_) {}
+                }
+              }
               try {
                 const s = String(text || '');
+                const originStr = String(targetWin?.location?.origin || globalThis.location?.origin || '');
+                const seedStr = String(CFG.seed || CFG.canvas?.mark || '1');
+                const hashKey = originStr + ':' + seedStr + ':' + currentFont + ':' + s;
                 let h = 0;
-                for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+                for (let i = 0; i < hashKey.length; i++) h = ((h << 5) - h + hashKey.charCodeAt(i)) | 0;
                 const jitter = ((h % 100) / 10000);
+                const widthJitter = (((h % 200) - 100) / 10000);
                 return new Proxy(tm, {
                   get(target, prop, receiver) {
                     if (prop === 'constructor') return target.constructor;
                     const val = Reflect.get(target, prop, target);
                     if (typeof val === 'number') {
+                      if (prop === 'width') return val === 0 ? 0 : Math.max(0, val + widthJitter);
                       if (prop === 'actualBoundingBoxRight') return val + jitter;
                       if (prop === 'actualBoundingBoxLeft') return val - jitter;
                       if (prop === 'actualBoundingBoxAscent') return val + (jitter * 0.5);
@@ -7454,7 +7556,18 @@ function buildInjectionScript(fp) {
     } catch (_) {}
   }
 
-  const composed = [mainScript, fontMetricsScript, cssFontLocalGateScript, queryLocalFontBlobGateScript].filter(Boolean).join('\n');
+  let webrtcFallbackScript = '';
+  if (fp && fp.webrtc !== 'disabled') {
+    try {
+      webrtcFallbackScript = createWebRtcFallbackSource({
+        publicIp: fp.webrtcAddress || (fp.network && fp.network.exitIp) || '203.0.113.9',
+        localIp: fp.webrtcLocalAddress || (fp.webrtc && fp.webrtc.localIp) || '192.168.1.100',
+        bridgeToken,
+      });
+    } catch (_) {}
+  }
+
+  const composed = [mainScript, webrtcFallbackScript, fontMetricsScript, cssFontLocalGateScript, queryLocalFontBlobGateScript].filter(Boolean).join('\n');
   const output = sharedFontPayloadForOutput
     ? '(() => {\nconst ' + SHARED_FONT_PAYLOAD_VAR + ' = ' + JSON.stringify(sharedFontPayloadForOutput) + ';\n' + composed + '\n})();'
     : composed;

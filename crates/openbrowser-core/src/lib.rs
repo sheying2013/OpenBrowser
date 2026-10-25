@@ -8,7 +8,8 @@ pub use error::{CoreError, Result};
 pub use process::{FileLock, ProcessGuardian, ProcessLock, ProcessSupervisor};
 pub use proxy::{
     copy_bidirectional, BridgeInfo, ConcurrencyLimiter, FailClosedPolicy, HttpConnectTarget,
-    LocalProxyBridge, ProxyConfig, ProxyForwarder, ProxyProtocol, SocksAddress, StreamStats,
+    LocalProxyBridge, ProxyConfig, ProxyForwarder, ProxyProtocol, Socks5UdpAssociate,
+    Socks5UdpPacket, SocksAddress, StreamStats, UpstreamTunnelPool,
 };
 pub use sync::{
     CascadeLayout, CoordinateMapper, JitterConfig, JitterEngine, ScreenBounds, SlaveDispatchPlan,

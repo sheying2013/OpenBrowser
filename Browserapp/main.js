@@ -28,6 +28,7 @@ const { createCoalescedWriter } = require('./automation/coalesced-writer');
 const { deepEqual } = require('./automation/object-utils');
 const { startAutomation } = require('./automation');
 const cloudSync = require('./automation/cloud-sync');
+const credentialCrypto = require('./credential-crypto');
 const { validateDataRootIsolationSecure, ensureDataRootIsolationSecure, assertProfileId } = require('./automation/isolation');
 const { createCrashHandler, buildHelperProcessGoneReport } = require('./automation/crash-report');
 const { writeBrowserStartupDiagnostic } = require('./engine/diagnostics');
@@ -543,13 +544,29 @@ let localSettingsCache = {
 
 async function loadLocalSettings() {
   try {
-    const saved = JSON.parse(await fsp.readFile(localSettingsFile, 'utf8'));
+    const raw = await fsp.readFile(localSettingsFile);
+    let jsonStr;
+    let needsMigration = false;
+    if (credentialCrypto.isEncrypted(raw)) {
+      jsonStr = credentialCrypto.decryptCredential(raw);
+    } else {
+      jsonStr = raw.toString('utf8');
+      needsMigration = true;
+    }
+    const saved = JSON.parse(jsonStr);
     localSettingsCache = {
       profileDataRoot: normalizeProfileDataRoot(saved.profileDataRoot),
       cloud: { ...cloudSync.defaultCloudConfig(), ...(saved.cloud || {}) },
       uiGroups: Array.isArray(saved.uiGroups) ? saved.uiGroups : [],
       closeAction: normalizeCloseAction(saved.closeAction),
     };
+    if (needsMigration) {
+      try {
+        await writeLocalSettingsFile();
+      } catch (migrateError) {
+        console.warn('OpenBrowser settings encryption migration warning:', migrateError.message);
+      }
+    }
     return localSettingsCache;
   } catch (_) {
     localSettingsCache = {
@@ -571,7 +588,15 @@ async function writeLocalSettingsFile() {
   await fsp.mkdir(path.dirname(localSettingsFile), { recursive: true });
   const temporary = localSettingsFile + '.tmp';
   const serialized = JSON.stringify({ version: 2, ...localSettingsCache }, null, 2);
-  await fsp.writeFile(temporary, serialized, 'utf8');
+  const payload = credentialCrypto.encryptCredential(serialized);
+
+  // Preserve backup of existing file before atomic rewrite
+  try {
+    const existing = await fsp.readFile(localSettingsFile);
+    await fsp.writeFile(localSettingsFile + '.bak', existing);
+  } catch (_) {}
+
+  await fsp.writeFile(temporary, payload);
   await fsp.rm(localSettingsFile, { force: true });
   await fsp.rename(temporary, localSettingsFile);
   persistedSettingsSnapshot = JSON.parse(JSON.stringify(localSettingsCache));

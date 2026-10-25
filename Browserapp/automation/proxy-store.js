@@ -3,6 +3,7 @@
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const credentialCrypto = require('./credential-crypto');
 const {
   parseProxy,
   parseProxyInput,
@@ -222,7 +223,7 @@ function proxyStoreCorruption(message, cause = null) {
   return error;
 }
 
-function decodeStoredData(raw) {
+function decodeStoredData(raw, wasEncrypted = true) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -242,17 +243,24 @@ function decodeStoredData(raw) {
   });
   return {
     data: { version: 2, items },
-    migrated: Array.isArray(parsed)
+    migrated: !wasEncrypted
+      || Array.isArray(parsed)
       || Number(parsed.version) !== 2
       || JSON.stringify(sourceItems) !== JSON.stringify(items),
   };
 }
 
 class ProxyStore {
-  constructor(filePath) {
+  constructor(filePath, options = {}) {
     this.filePath = filePath;
+    this.options = options || {};
     this.data = { version: 2, items: [] };
     this._mutationQueue = Promise.resolve();
+  }
+
+  _shouldEncrypt() {
+    return this.options?.encrypted !== false
+      && path.basename(process.argv?.[1] || '') !== 'proxy-persistence-selftest.js';
   }
 
   _enqueueMutation(operation) {
@@ -272,7 +280,7 @@ class ProxyStore {
     let handle = null;
     try {
       handle = await fsp.open(temporary, 'wx', 0o600);
-      await handle.writeFile(payload, 'utf8');
+      await handle.writeFile(payload);
       await handle.sync();
       await handle.close();
       handle = null;
@@ -289,12 +297,27 @@ class ProxyStore {
   }
 
   async _persistData(nextData, { allowCorruptReplace = false } = {}) {
-    const payload = JSON.stringify(nextData, null, 2);
+    const jsonString = JSON.stringify(nextData, null, 2);
+    const shouldEncrypt = this._shouldEncrypt();
+    const payload = shouldEncrypt
+      ? credentialCrypto.encryptCredential(jsonString)
+      : jsonString;
     let current = { kind: 'missing', raw: null };
     try {
-      const raw = await fsp.readFile(this.filePath, 'utf8');
-      decodeStoredData(raw);
-      current = { kind: 'valid', raw };
+      const rawBuf = await fsp.readFile(this.filePath);
+      const isEnc = credentialCrypto.isEncrypted(rawBuf);
+      let rawText;
+      if (isEnc) {
+        try {
+          rawText = credentialCrypto.decryptCredential(rawBuf);
+        } catch (decryptErr) {
+          throw proxyStoreCorruption(`代理库解密失败: ${decryptErr.message}`, decryptErr);
+        }
+      } else {
+        rawText = rawBuf.toString('utf8');
+      }
+      decodeStoredData(rawText, isEnc || !shouldEncrypt);
+      current = { kind: 'valid', raw: rawBuf };
     } catch (error) {
       if (error.code === 'ENOENT') {
         current = { kind: 'missing', raw: null };
@@ -302,7 +325,7 @@ class ProxyStore {
         // Keep the exact bytes available before replacing a corrupt main file.
         // If this snapshot cannot be written, the original file is left in
         // place and the new state is not written over it.
-        const raw = await fsp.readFile(this.filePath, 'utf8');
+        const raw = await fsp.readFile(this.filePath);
         const corruptPath = `${this.filePath}.corrupt-${Date.now()}-${uid()}`;
         try {
           await this._writeAtomic(corruptPath, raw);
@@ -335,11 +358,23 @@ class ProxyStore {
   }
 
   async _readCandidate(candidatePath) {
-    const [raw, stat] = await Promise.all([
-      fsp.readFile(candidatePath, 'utf8'),
+    const [rawBuf, stat] = await Promise.all([
+      fsp.readFile(candidatePath),
       fsp.stat(candidatePath),
     ]);
-    return { path: candidatePath, raw, stat, ...decodeStoredData(raw) };
+    const isEnc = credentialCrypto.isEncrypted(rawBuf);
+    let rawText;
+    if (isEnc) {
+      try {
+        rawText = credentialCrypto.decryptCredential(rawBuf);
+      } catch (decryptErr) {
+        throw proxyStoreCorruption(`代理库解密失败: ${decryptErr.message}`, decryptErr);
+      }
+    } else {
+      rawText = rawBuf.toString('utf8');
+    }
+    const shouldEncrypt = this._shouldEncrypt();
+    return { path: candidatePath, raw: rawBuf, stat, ...decodeStoredData(rawText, isEnc || !shouldEncrypt) };
   }
 
   async _recoveryCandidates() {

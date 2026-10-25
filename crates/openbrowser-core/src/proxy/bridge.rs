@@ -5,7 +5,7 @@ use crate::proxy::forwarder::ProxyForwarder;
 use crate::proxy::http::{
     basic_auth_header, format_forwarded_proxy_request, format_origin_request, HttpConnectTarget,
 };
-use crate::proxy::pool::ConcurrencyLimiter;
+use crate::proxy::pool::{ConcurrencyLimiter, UpstreamTunnelPool};
 use crate::proxy::socks5::{
     ATYP_DOMAIN, ATYP_IPV4, ATYP_IPV6, AUTH_METHOD_NONE, AUTH_METHOD_USER_PASS, CMD_CONNECT,
     REP_SUCCEEDED, SOCKS5_AUTH_SUBNEGOTIATION_VERSION, SOCKS5_VERSION,
@@ -27,6 +27,7 @@ struct ClientHandlerContext {
     config: ProxyConfig,
     fail_closed: FailClosedPolicy,
     limiter: ConcurrencyLimiter,
+    tunnel_pool: Arc<UpstreamTunnelPool>,
     handshake_timeout: Duration,
     status_sender: Option<tokio::sync::mpsc::Sender<&'static str>>,
     total_c2s: Arc<AtomicU64>,
@@ -50,6 +51,7 @@ pub struct LocalProxyBridge {
     config: ProxyConfig,
     fail_closed: FailClosedPolicy,
     limiter: ConcurrencyLimiter,
+    tunnel_pool: Arc<UpstreamTunnelPool>,
     handshake_timeout: Duration,
     status_sender: Option<tokio::sync::mpsc::Sender<&'static str>>,
     running: Arc<tokio::sync::Mutex<Option<BridgeRunning>>>,
@@ -70,6 +72,7 @@ impl LocalProxyBridge {
             config,
             fail_closed,
             limiter: ConcurrencyLimiter::new(128),
+            tunnel_pool: Arc::new(UpstreamTunnelPool::new(16, Duration::from_secs(30))),
             handshake_timeout: Duration::from_secs(8),
             status_sender: None,
             running: Arc::new(tokio::sync::Mutex::new(None)),
@@ -83,6 +86,15 @@ impl LocalProxyBridge {
     pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
         self.limiter = ConcurrencyLimiter::new(limit);
         self
+    }
+
+    pub fn with_tunnel_pool(mut self, pool: Arc<UpstreamTunnelPool>) -> Self {
+        self.tunnel_pool = pool;
+        self
+    }
+
+    pub fn tunnel_pool(&self) -> &Arc<UpstreamTunnelPool> {
+        &self.tunnel_pool
     }
 
     pub fn with_handshake_timeout(mut self, timeout: Duration) -> Self {
@@ -372,6 +384,17 @@ impl LocalProxyBridge {
 
         stream.set_nodelay(true)?;
 
+        let remainder = Self::connect_http_upstream_on_stream(config, &mut stream, target_host, target_port).await?;
+        Ok((stream, remainder))
+    }
+
+    /// Perform HTTP CONNECT handshake over an already-connected TCP stream.
+    pub async fn connect_http_upstream_on_stream(
+        config: &ProxyConfig,
+        stream: &mut TcpStream,
+        target_host: &str,
+        target_port: u16,
+    ) -> Result<Vec<u8>> {
         let mut connect_req = format!(
             "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\nProxy-Connection: Keep-Alive\r\n",
             target_host, target_port, target_host, target_port
@@ -463,7 +486,25 @@ impl LocalProxyBridge {
             )));
         }
 
-        Ok((stream, remainder))
+        Ok(remainder)
+    }
+
+    /// Connect to HTTP upstream using a prewarmed raw TCP stream if available, falling back to fresh dial.
+    pub async fn connect_http_upstream_with_pool(
+        config: &ProxyConfig,
+        target_host: &str,
+        target_port: u16,
+        pool: &UpstreamTunnelPool,
+    ) -> Result<(TcpStream, Vec<u8>)> {
+        if let Some(mut stream) = pool.take_upstream_tcp().await {
+            match Self::connect_http_upstream_on_stream(config, &mut stream, target_host, target_port).await {
+                Ok(remainder) => return Ok((stream, remainder)),
+                Err(_) => {
+                    // Stale connection in pool; fall through to fresh dial
+                }
+            }
+        }
+        Self::connect_http_upstream_raw(config, target_host, target_port).await
     }
 
     /// Single unified upstream dialer for both CONNECT and plain HTTP
@@ -472,6 +513,7 @@ impl LocalProxyBridge {
         is_connect: bool,
         target_host: &str,
         target_port: u16,
+        pool: &UpstreamTunnelPool,
     ) -> Result<DialedUpstream> {
         match config.protocol {
             ProxyProtocol::Socks5 => {
@@ -484,23 +526,28 @@ impl LocalProxyBridge {
             ProxyProtocol::Http => {
                 if is_connect {
                     let (stream, remainder) =
-                        Self::connect_http_upstream_raw(config, target_host, target_port).await?;
+                        Self::connect_http_upstream_with_pool(config, target_host, target_port, pool).await?;
                     Ok(DialedUpstream {
                         stream,
                         upstream_remainder: remainder,
                     })
                 } else {
                     config.validate()?;
-                    let upstream_addr = format!("{}:{}", config.host, config.port);
-                    let stream = TcpStream::connect(&upstream_addr)
-                        .await
-                        .map_err(|e| {
-                            CoreError::Http(format!(
-                                "Failed to connect to HTTP upstream {}: {}",
-                                upstream_addr, e
-                            ))
-                        })?;
-                    let _ = stream.set_nodelay(true);
+                    let stream = if let Some(stream) = pool.take_upstream_tcp().await {
+                        stream
+                    } else {
+                        let upstream_addr = format!("{}:{}", config.host, config.port);
+                        let s = TcpStream::connect(&upstream_addr)
+                            .await
+                            .map_err(|e| {
+                                CoreError::Http(format!(
+                                    "Failed to connect to HTTP upstream {}: {}",
+                                    upstream_addr, e
+                                ))
+                            })?;
+                        let _ = s.set_nodelay(true);
+                        s
+                    };
                     Ok(DialedUpstream {
                         stream,
                         upstream_remainder: Vec::new(),
@@ -623,9 +670,28 @@ impl LocalProxyBridge {
             // 4. Concurrency acquire right before dialing upstream
             let permit = ctx.limiter.acquire().await?;
 
-            // 5. Dial upstream using single dial_target
-            let mut dialed =
-                Self::dial_target(&ctx.config, is_connect, &target.host, target.port).await?;
+            // 5. Dial upstream: check tunnel pool first for CONNECT, otherwise dial_target
+            let pooled = if is_connect {
+                ctx.tunnel_pool.take_tunnel(&target.host, target.port).await
+            } else {
+                None
+            };
+
+            let mut dialed = if let Some((stream, remainder)) = pooled {
+                DialedUpstream {
+                    stream,
+                    upstream_remainder: remainder,
+                }
+            } else {
+                Self::dial_target(
+                    &ctx.config,
+                    is_connect,
+                    &target.host,
+                    target.port,
+                    &ctx.tunnel_pool,
+                )
+                .await?
+            };
 
             // 6. Complete handshake
             if is_connect {
@@ -645,6 +711,33 @@ impl LocalProxyBridge {
                     client.write_all(&dialed.upstream_remainder).await?;
                     ctx.total_s2c
                         .fetch_add(dialed.upstream_remainder.len() as u64, Ordering::Relaxed);
+                }
+
+                // Speculatively prewarm an idle standby tunnel for this target for HTTP upstream if capacity permits
+                if ctx.config.protocol == ProxyProtocol::Http
+                    && ctx.tunnel_pool.is_prewarm_enabled()
+                    && ctx.limiter.available_permits() > 4
+                    && ctx.tunnel_pool.should_prewarm(&target.host, target.port).await
+                {
+                    let pool_clone = ctx.tunnel_pool.clone();
+                    let config_clone = ctx.config.clone();
+                    let target_host = target.host.clone();
+                    let target_port = target.port;
+                    tokio::spawn(async move {
+                        let prewarm_timeout = Duration::from_secs(5);
+                        let res = tokio::time::timeout(prewarm_timeout, async {
+                            LocalProxyBridge::connect_http_upstream_raw(
+                                &config_clone,
+                                &target_host,
+                                target_port,
+                            )
+                            .await
+                        })
+                        .await;
+                        if let Ok(Ok((stream, remainder))) = res {
+                            pool_clone.put_tunnel(target_host, target_port, stream, remainder).await;
+                        }
+                    });
                 }
             } else {
                 let outgoing_header = if ctx.config.protocol == ProxyProtocol::Http {
@@ -744,6 +837,7 @@ impl ProxyForwarder for LocalProxyBridge {
             config: self.config.clone(),
             fail_closed: self.fail_closed.clone(),
             limiter: self.limiter.clone(),
+            tunnel_pool: self.tunnel_pool.clone(),
             handshake_timeout: self.handshake_timeout,
             status_sender: self.status_sender.clone(),
             total_c2s: self.total_c2s.clone(),
@@ -797,6 +891,7 @@ impl ProxyForwarder for LocalProxyBridge {
             join_set.abort_all();
             while join_set.join_next().await.is_some() {}
 
+            ctx.tunnel_pool.clear().await;
             is_running.store(false, Ordering::SeqCst);
             *local_addr.write().unwrap() = None;
             info!("LocalProxyBridge stopped and all active sessions reaped");
@@ -826,6 +921,7 @@ impl ProxyForwarder for LocalProxyBridge {
         if let Some(mut running) = guard.take() {
             let _ = running.shutdown_tx.send(true);
             let _ = (&mut running.server_handle).await;
+            self.tunnel_pool.clear().await;
             self.is_running.store(false, Ordering::SeqCst);
             *self.local_addr.write().unwrap() = None;
         }

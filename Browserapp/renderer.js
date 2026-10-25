@@ -622,10 +622,7 @@ const migratedGroups = migrateGroups(loadedUi.groups, migratedUi.profiles);
 let ui = { ...loadedUi, ...migratedUi, groups: migratedGroups };
 // Immediate migration: purge secrets from any older localStorage dumps.
 try {
-  localStorage.setItem(UI_KEY, JSON.stringify({
-    ...ui,
-    profiles: (ui.profiles || []).map((item) => redactProfileForStorage(item)),
-  }));
+  save();
 } catch (_) {}
 
 let activeGroupFilter = 'all'; // 'all' | 'ungrouped' | groupId
@@ -1173,17 +1170,63 @@ function redactProfileForStorage(profile) {
   };
 }
 
+let lastQuotaWarningAt = 0;
+function notifyStorageQuotaExceeded(error) {
+  const now = Date.now();
+  if (now - lastQuotaWarningAt > 5000) {
+    lastQuotaWarningAt = now;
+    if (typeof toast === 'function') {
+      try {
+        toast(tx('本地存储空间不足，已降级精简持久化字段，部分UI状态可能未保存'), { tone: 'error' });
+      } catch (_) {}
+    }
+  }
+  console.warn('[OpenBrowser Storage] localStorage save failed, quota exceeded:', error?.message || error);
+}
+
+function trimProfileForUiStorage(profile) {
+  const value = redactProfileForStorage(profile);
+  return {
+    id: value.id,
+    number: value.number,
+    name: value.name,
+    groupId: value.groupId,
+    tags: value.tags,
+    trashed: value.trashed,
+    trashedAt: value.trashedAt,
+    notes: value.notes,
+    networkMode: value.networkMode,
+    proxy: value.proxy,
+    proxyId: value.proxyId,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+  };
+}
+
 const save = () => {
   if (!Array.isArray(ui.groups)) ui.groups = defaultGroups();
+  const safe = {
+    ...ui,
+    profiles: (ui.profiles || []).map((item) => redactProfileForStorage(item)),
+  };
   try {
     // Never persist cookies / platform secrets / proxy passwords in renderer localStorage.
-    // Secrets stay in main-process engine state (openbrowser-engine.json).
-    const safe = {
-      ...ui,
-      profiles: (ui.profiles || []).map((item) => redactProfileForStorage(item)),
-    };
+    // Secrets stay in main-process engine state (openbrowser-data.db).
     localStorage.setItem(UI_KEY, JSON.stringify(safe));
-  } catch (_) {}
+  } catch (err) {
+    notifyStorageQuotaExceeded(err);
+    // 降级策略：修剪非核心状态（丢弃全部日志、精简 profile 仅保留 UI 展示字段）
+    try {
+      const trimmed = {
+        ...ui,
+        logs: [],
+        profiles: (ui.profiles || []).map((item) => trimProfileForUiStorage(item)),
+      };
+      localStorage.setItem(UI_KEY, JSON.stringify(trimmed));
+    } catch (fallbackErr) {
+      console.warn('[OpenBrowser Storage] Trimmed localStorage fallback also failed:', fallbackErr?.message || fallbackErr);
+    }
+  }
 };
 function textDelayRange() { return syncSettings.delayInput ? [syncSettings.inputMinMs / 1000, syncSettings.inputMaxMs / 1000] : [0, 0]; }
 function fillSyncSettingsForm() {

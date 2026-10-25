@@ -1,5 +1,7 @@
 "use strict";
 
+const crypto = require("crypto");
+
 /**
  * Coherent device personas.
  *
@@ -217,6 +219,37 @@ const ANDROID_PERSONAS = [
   },
 ];
 
+/** Modern iOS mobile device personas: Retina DPR (2 - 3), Apple GPU, iPhone viewports. */
+const IOS_PERSONAS = [
+  {
+    os: "ios", cores: 6, memory: 6, colorDepth: 30, devicePixelRatio: 3,
+    screen: { width: 393, height: 852 },
+    webgl: {
+      vendor: "Apple Inc.",
+      renderer: "Apple GPU",
+      gpu: { vendor: "apple", architecture: "common-3" },
+    },
+  },
+  {
+    os: "ios", cores: 6, memory: 8, colorDepth: 30, devicePixelRatio: 3,
+    screen: { width: 430, height: 932 },
+    webgl: {
+      vendor: "Apple Inc.",
+      renderer: "Apple GPU",
+      gpu: { vendor: "apple", architecture: "common-3" },
+    },
+  },
+  {
+    os: "ios", cores: 6, memory: 4, colorDepth: 30, devicePixelRatio: 2,
+    screen: { width: 390, height: 844 },
+    webgl: {
+      vendor: "Apple Inc.",
+      renderer: "Apple GPU",
+      gpu: { vendor: "apple", architecture: "common-3" },
+    },
+  },
+];
+
 /**
  * Fonts shipped with a stock install of each platform. Font probing is one of the strongest
  * OS signals there is — Segoe UI and Calibri only exist on Windows, Helvetica Neue and the
@@ -358,13 +391,13 @@ const PERSONAS_BY_OS = Object.freeze({
   macos_arm: Object.freeze(MACOS_APPLE_PERSONAS),
   linux: Object.freeze(LINUX_PERSONAS),
   android: Object.freeze(ANDROID_PERSONAS),
+  ios: Object.freeze(IOS_PERSONAS),
 });
 
 function personasForOs(os) {
   const k = String(os || "").toLowerCase();
   if (k.includes("ios") || k.includes("iphone") || k.includes("ipad")) {
-    // iPhone/iPad share the Apple GPU family with Apple Silicon Macs, never with Intel Macs.
-    return PERSONAS_BY_OS.macos_arm;
+    return PERSONAS_BY_OS.ios;
   }
   return PERSONAS_BY_OS[k] || WINDOWS_PERSONAS;
 }
@@ -493,11 +526,48 @@ function isCoherent(persona) {
   return true;
 }
 
+/**
+ * Applies deterministic micro-perturbations within per-axis tolerance thresholds:
+ * - taskbarHeight: ±4px on Windows (36-44px), ±3px on macOS (22-28px)
+ * - availBounds: adjusted accordingly
+ */
+function applyPersonaPerturbations(persona, seedInput) {
+  if (!persona) return null;
+  const hash = crypto.createHash("sha256").update(String(seedInput || "")).digest();
+  const u32 = (offset) => hash.readUInt32BE(offset % (hash.length - 3));
+
+  const isMac = String(persona.os || "").startsWith("macos");
+  const isMobile = persona.os === "android" || persona.os === "ios";
+
+  const taskbarBase = isMobile ? 0 : (isMac ? 25 : 40);
+  const taskbarDelta = isMobile ? 0 : (isMac ? ((u32(8) % 7) - 3) : ((u32(8) % 9) - 4));
+  const taskbarHeight = Math.max(0, taskbarBase + taskbarDelta);
+
+  const screenObj = persona.screen || { width: 1920, height: 1080 };
+  const width = screenObj.width;
+  const height = screenObj.height;
+  const availHeight = Math.max(0, height - taskbarHeight);
+
+  return {
+    ...persona,
+    screen: {
+      ...screenObj,
+      availWidth: width,
+      availHeight,
+      taskbarHeight,
+    },
+    fonts: fontsForOs(persona.os),
+    perturbed: true,
+  };
+}
+
 module.exports = {
   WINDOWS_PERSONAS,
   MACOS_PERSONAS,
   MACOS_APPLE_PERSONAS,
   MACOS_INTEL_PERSONAS,
+  ANDROID_PERSONAS,
+  IOS_PERSONAS,
   PERSONAS_BY_OS,
   DEVICE_PERSONAS: PERSONAS_BY_OS,
   OS_FONTS,
@@ -512,4 +582,5 @@ module.exports = {
   fontsForOs,
   exclusiveFontsForOtherOs,
   APPLE_HOST_ONLY_FONTS,
+  applyPersonaPerturbations,
 };

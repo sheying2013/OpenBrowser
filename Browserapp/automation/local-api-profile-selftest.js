@@ -106,6 +106,20 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  PASS  ' + nam
   r = await route('POST', '/api/v1/user/delete', {});
   ok('delete missing id rejected', r && r.code !== 0);
 
+  // ---- browser/start ws.puppeteer returns standard ws:// endpoint ----
+  engine.start = async (profile) => ({ port: 9222, id: profile.id });
+  r = await route('POST', '/api/v1/browser/start', { user_id: 'auto-named' });
+  ok('start returns code 0', r && r.code === 0);
+  ok('start debug_port is 9222', r.data.debug_port === 9222);
+  ok('start ws.puppeteer is ws protocol', typeof r.data.ws?.puppeteer === 'string' && r.data.ws.puppeteer.startsWith('ws://127.0.0.1:9222/devtools/browser/'));
+  ok('start ws.puppeteer is NOT http protocol', !r.data.ws.puppeteer.startsWith('http://'));
+
+  // ---- user/detail ws.puppeteer returns standard ws:// endpoint ----
+  engine.running.set('auto-named', { port: 9222, id: 'auto-named' });
+  r = await route('GET', '/api/v1/user/detail', { user_id: 'auto-named' });
+  ok('detail returns code 0', r && r.code === 0);
+  ok('detail ws.puppeteer is ws protocol', typeof r.data.ws?.puppeteer === 'string' && r.data.ws.puppeteer.startsWith('ws://127.0.0.1:9222/devtools/browser/'));
+
   // ---- cleanup ----
   await api.stop().catch(() => {});
   await fsp.rm(userData, { recursive: true, force: true }).catch(() => {});

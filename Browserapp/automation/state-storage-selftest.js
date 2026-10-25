@@ -10,6 +10,7 @@ const path = require('path');
 const {
   writeJsonAtomically,
   writeRawAtomically,
+  readEngineStateCandidate,
 } = require('../engine/state-storage');
 
 const results = [];
@@ -87,14 +88,19 @@ async function withPatchedRename(failures, fn) {
     }
   });
 
-  await check('writeJsonAtomically creates a backup and keeps the new state', async () => {
+  await check('writeJsonAtomically encrypts at rest, backs up raw previous bytes and round-trips', async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'state-storage-'));
     const file = path.join(root, 'state.json');
     try {
       await writeJsonAtomically(file, '{"version":1}');
       await writeJsonAtomically(file, '{"version":2}');
-      assert.strictEqual(await fsp.readFile(file, 'utf8'), '{"version":2}');
-      assert.strictEqual(await fsp.readFile(file + '.bak', 'utf8'), '{"version":1}');
+      const atRest = await fsp.readFile(file, 'utf8');
+      assert.ok(atRest.startsWith('OBE1') || atRest.startsWith('OBS1'), 'state file must carry an encryption header');
+      assert.ok(!atRest.includes('"version"'), 'plaintext must not be readable at rest');
+      assert.strictEqual((await readEngineStateCandidate(file)).saved.version, 2);
+      const bak = await fsp.readFile(file + '.bak');
+      assert.ok(bak.length > 0, '.bak must preserve previous raw bytes');
+      assert.strictEqual((await readEngineStateCandidate(file + '.bak')).saved.version, 1);
     } finally {
       await fsp.rm(root, { recursive: true, force: true }).catch(() => {});
     }

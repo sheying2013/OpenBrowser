@@ -3,6 +3,8 @@
 const fsp = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
+// 引擎状态文件含代理凭据/Cookies，落盘一律走 credential-crypto 加密（读路径兼容明文旧档并自动迁移）
+const credentialCrypto = require("../credential-crypto");
 
 const TRANSIENT_WRITE_ERRORS = new Set(["ENOENT", "EEXIST", "EINVAL", "EBUSY", "EAGAIN"]);
 
@@ -44,19 +46,25 @@ async function writeRawAtomically(filePath, value, mode = 0o600) {
 async function writeJsonAtomically(filePath, value, mode = 0o600) {
   let previous = null;
   try {
-    const raw = await fsp.readFile(filePath, "utf8");
-    JSON.parse(raw);
+    // 原始字节留作 .bak（可能是旧明文，也可能是旧密文），不再解析校验
+    const raw = await fsp.readFile(filePath);
     previous = raw;
   } catch (error) {
     if (error.code === "ENOENT") previous = null;
   }
   if (previous != null) await writeRawAtomically(`${filePath}.bak`, previous, mode);
-  await writeRawAtomically(filePath, value, mode);
+  const payload = credentialCrypto.isEncrypted(value)
+    ? value
+    : credentialCrypto.encryptCredential(typeof value === "string" ? value : JSON.stringify(value));
+  await writeRawAtomically(filePath, payload, mode);
 }
 
 async function readEngineStateCandidate(filePath) {
-  const raw = await fsp.readFile(filePath, "utf8");
-  const saved = JSON.parse(raw);
+  const raw = await fsp.readFile(filePath);
+  const jsonText = credentialCrypto.isEncrypted(raw)
+    ? credentialCrypto.decryptCredential(raw)
+    : raw.toString("utf8");
+  const saved = JSON.parse(jsonText);
   if (!saved || typeof saved !== "object" || Array.isArray(saved)) {
     throw new Error("引擎状态文件格式无效");
   }

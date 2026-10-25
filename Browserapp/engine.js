@@ -3,13 +3,31 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
+const { ProfileStoreSqlite } = require('./automation/profile-store-sqlite');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 const cdp = require('./cdp');
 const { mergeFlags, appendFlagValue, LIST_VALUE_FLAGS } = require('./automation/command-line-flags');
 const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
-const { parseProxy, chromeProxyEndpoint, displayProxy, startAuthenticatedProxy, needsProxyBridge, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError } = require('./proxy-forwarder');
+let proxyForwarderModule = {};
+try {
+  proxyForwarderModule = require('./proxy-forwarder');
+} catch (pfErr) {
+  console.warn('[BrowserEngine] Note: proxy-forwarder module load warning:', pfErr.message);
+}
+const {
+  parseProxy = (v) => ({ protocol: 'direct', host: '', port: 0 }),
+  chromeProxyEndpoint = () => '',
+  displayProxy = (v) => String(v || ''),
+  startAuthenticatedProxy = async () => ({ port: 0, close: () => {} }),
+  needsProxyBridge = () => false,
+  lookupProxyCountry = async () => ({ ip: '', country: '', countryCode: '' }),
+  lookupDirectCountry = async () => ({ ip: '', country: '', countryCode: '' }),
+  extractProxyFromApi = async () => '',
+  invokeProxyRefresh = async () => '',
+  classifyProxyError = () => 'proxy-unknown',
+} = proxyForwarderModule;
 const { resolveProfileLanguage, resolveProfileTimezone, localeFromCountryCode } = require('./automation/locale-from-country');
 const { applyLanguagePreferences, verifyLanguagePreferences, syncProfileLocalState } = require('./automation/profile-file-consistency');
 const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
@@ -945,6 +963,9 @@ class BrowserEngine {
     this.assignments = new Map();
     this.listeners = new Set();
     this.stateFile = path.join(app.getPath('userData'), 'openbrowser-engine.json');
+    this.dbFile = options.dbPath || path.join(app.getPath('userData'), 'openbrowser-data.db');
+    this.sqliteStore = null;
+    this.usingSqlite = false;
     const profileDataRoot = String(options.profileDataRoot || path.join(app.getPath('userData'), 'browser-profiles-v2'));
     const profileDataRootCheck = validateDataRootIsolationSecure(profileDataRoot);
     if (!profileDataRootCheck.ok) throw new Error(profileDataRootCheck.message);
@@ -1007,29 +1028,31 @@ class BrowserEngine {
     await this.kernelManager.loadMeta();
     let migrateKernelPolicy = false;
     let recoveredState = false;
-    let state = null;
-    let primaryStateError = null;
-    try {
-      state = await readEngineStateCandidate(this.stateFile);
-    } catch (error) {
-      primaryStateError = error;
-    }
-    if (!state) {
-      const recovery = await engineStateRecoveryCandidates(this.stateFile);
-      if (recovery.length) {
-        state = recovery[0];
-        recoveredState = true;
-        if (primaryStateError && primaryStateError.code !== 'ENOENT') {
-          await preserveCorruptEngineState(this.stateFile);
+
+    if (ProfileStoreSqlite.isSupported()) {
+      try {
+        const sqlite = new ProfileStoreSqlite({
+          dbPath: this.dbFile,
+          legacyJsonPath: this.stateFile,
+          wal: true,
+          backupOldJson: true,
+        });
+        const initRes = await sqlite.init();
+        this.sqliteStore = sqlite;
+        this.usingSqlite = true;
+        if (initRes.migrated) {
+          this.emit({ type: 'storage-migrated', engine: 'sqlite' });
         }
+      } catch (err) {
+        console.warn(`[BrowserEngine] SQLite initialization failed, falling back to legacy JSON: ${err.message}`);
+        this.sqliteStore = null;
+        this.usingSqlite = false;
       }
     }
-    if (!state && primaryStateError && primaryStateError.code !== 'ENOENT') {
-      throw new Error(`引擎状态文件损坏且没有可用备份: ${primaryStateError.message || primaryStateError}`);
-    }
-    if (state) {
-      const saved = state.saved;
-      for (const extension of saved.extensions || []) {
+
+    if (this.usingSqlite && this.sqliteStore) {
+      const extensions = this.sqliteStore.listExtensions();
+      for (const extension of extensions) {
         if (fs.existsSync(extension.path)) {
           try {
             const refreshed = await this.readExtension(extension.path, Boolean(extension.builtIn));
@@ -1040,27 +1063,87 @@ class BrowserEngine {
           }
         }
       }
-      for (const [profileId, ids] of Object.entries(saved.assignments || {})) this.assignments.set(profileId, new Set(ids));
-      // Profiles (incl. cookies / proxy auth / platform secrets) live in main-process state,
-      // not renderer localStorage, so XSS cannot dump them from the UI store.
-      if (Array.isArray(saved.profiles)) {
-        for (const raw of saved.profiles.slice(0, 1000)) {
-          try {
-            const profile = this.sanitizeProfile(raw);
-            this.profiles.set(profile.id, profile);
-          } catch (_) {}
-        }
+      const assignments = this.sqliteStore.getAssignments();
+      for (const [profileId, ids] of assignments.entries()) {
+        this.assignments.set(profileId, ids);
       }
-      if (typeof saved.preferIndependentKernel === 'boolean') this.preferIndependentKernel = saved.preferIndependentKernel;
-      if (saved.kernelPolicyVersion !== KERNEL_POLICY_VERSION) {
-        // Prior releases could select a system browser implicitly. Migrate to
-        // the explicit-selection policy and keep fallback disabled by default.
+      const loadedProfiles = this.sqliteStore.getAllProfiles();
+      for (const raw of loadedProfiles.slice(0, 1000)) {
+        try {
+          const profile = this.sanitizeProfile(raw);
+          this.profiles.set(profile.id, profile);
+        } catch (_) {}
+      }
+      const meta = this.sqliteStore.getAllMeta();
+      if (typeof meta.preferIndependentKernel === 'boolean') {
+        this.preferIndependentKernel = meta.preferIndependentKernel;
+      }
+      if (meta.kernelPolicyVersion !== KERNEL_POLICY_VERSION) {
         this.allowSystemBrowserFallback = false;
         this.systemBrowserPath = null;
         migrateKernelPolicy = true;
-      } else if (typeof saved.allowSystemBrowserFallback === 'boolean') {
-        this.allowSystemBrowserFallback = saved.allowSystemBrowserFallback;
-        if (typeof saved.systemBrowserPath === 'string') this.systemBrowserPath = saved.systemBrowserPath;
+      } else if (typeof meta.allowSystemBrowserFallback === 'boolean') {
+        this.allowSystemBrowserFallback = meta.allowSystemBrowserFallback;
+        if (typeof meta.systemBrowserPath === 'string') {
+          this.systemBrowserPath = meta.systemBrowserPath;
+        }
+      }
+    } else {
+      let state = null;
+      let primaryStateError = null;
+      try {
+        state = await readEngineStateCandidate(this.stateFile);
+      } catch (error) {
+        primaryStateError = error;
+      }
+      if (!state) {
+        const recovery = await engineStateRecoveryCandidates(this.stateFile);
+        if (recovery.length) {
+          state = recovery[0];
+          recoveredState = true;
+          if (primaryStateError && primaryStateError.code !== 'ENOENT') {
+            await preserveCorruptEngineState(this.stateFile);
+          }
+        }
+      }
+      if (!state && primaryStateError && primaryStateError.code !== 'ENOENT') {
+        throw new Error(`引擎状态文件损坏且没有可用备份: ${primaryStateError.message || primaryStateError}`);
+      }
+      if (state) {
+        const saved = state.saved;
+        for (const extension of saved.extensions || []) {
+          if (fs.existsSync(extension.path)) {
+            try {
+              const refreshed = await this.readExtension(extension.path, Boolean(extension.builtIn));
+              refreshed.addedAt = extension.addedAt || refreshed.addedAt;
+              this.extensions.set(refreshed.id, refreshed);
+            } catch (_) {
+              this.extensions.set(extension.id, extension);
+            }
+          }
+        }
+        for (const [profileId, ids] of Object.entries(saved.assignments || {})) this.assignments.set(profileId, new Set(ids));
+        // Profiles (incl. cookies / proxy auth / platform secrets) live in main-process state,
+        // not renderer localStorage, so XSS cannot dump them from the UI store.
+        if (Array.isArray(saved.profiles)) {
+          for (const raw of saved.profiles.slice(0, 1000)) {
+            try {
+              const profile = this.sanitizeProfile(raw);
+              this.profiles.set(profile.id, profile);
+            } catch (_) {}
+          }
+        }
+        if (typeof saved.preferIndependentKernel === 'boolean') this.preferIndependentKernel = saved.preferIndependentKernel;
+        if (saved.kernelPolicyVersion !== KERNEL_POLICY_VERSION) {
+          // Prior releases could select a system browser implicitly. Migrate to
+          // the explicit-selection policy and keep fallback disabled by default.
+          this.allowSystemBrowserFallback = false;
+          this.systemBrowserPath = null;
+          migrateKernelPolicy = true;
+        } else if (typeof saved.allowSystemBrowserFallback === 'boolean') {
+          this.allowSystemBrowserFallback = saved.allowSystemBrowserFallback;
+          if (typeof saved.systemBrowserPath === 'string') this.systemBrowserPath = saved.systemBrowserPath;
+        }
       }
     }
     if (bundledExtensionPath && fs.existsSync(path.join(bundledExtensionPath, 'manifest.json'))) {
@@ -1146,6 +1229,25 @@ class BrowserEngine {
   }
 
   persist() {
+    if (this.usingSqlite && this.sqliteStore) {
+      const write = async () => {
+        this.sqliteStore.setMeta('kernelPolicyVersion', KERNEL_POLICY_VERSION);
+        this.sqliteStore.setMeta('preferIndependentKernel', this.preferIndependentKernel);
+        this.sqliteStore.setMeta('allowSystemBrowserFallback', this.allowSystemBrowserFallback);
+        this.sqliteStore.setMeta('systemBrowserPath', this.systemBrowserPath);
+
+        this.sqliteStore.saveExtensions([...this.extensions.values()]);
+        for (const [profileId, assignedSet] of this.assignments.entries()) {
+          this.sqliteStore.setAssignments(profileId, assignedSet);
+        }
+        this.sqliteStore.saveProfiles([...this.profiles.values()]);
+      };
+      const previous = this._persistQueue || Promise.resolve();
+      const queued = previous.then(write, write);
+      this._persistQueue = queued.catch(() => {});
+      return queued;
+    }
+
     const assignments = Object.fromEntries([...this.assignments].map(([id, values]) => [id, [...values]]));
     const payload = JSON.stringify({
       extensions: [...this.extensions.values()],
@@ -1165,6 +1267,38 @@ class BrowserEngine {
 
   flushPersistence() {
     return this._persistQueue || Promise.resolve();
+  }
+
+  dumpToJson(indent = 2) {
+    if (this.usingSqlite && this.sqliteStore) {
+      return this.sqliteStore.dumpToJson(indent);
+    }
+    const assignments = Object.fromEntries([...this.assignments].map(([id, values]) => [id, [...values]]));
+    return JSON.stringify({
+      extensions: [...this.extensions.values()],
+      assignments,
+      profiles: [...this.profiles.values()],
+      kernelPolicyVersion: KERNEL_POLICY_VERSION,
+      preferIndependentKernel: this.preferIndependentKernel,
+      allowSystemBrowserFallback: this.allowSystemBrowserFallback,
+      systemBrowserPath: this.systemBrowserPath,
+    }, null, indent);
+  }
+
+  exportEngineState() {
+    if (this.usingSqlite && this.sqliteStore) {
+      return this.sqliteStore.exportEngineState();
+    }
+    const assignments = Object.fromEntries([...this.assignments].map(([id, values]) => [id, [...values]]));
+    return {
+      extensions: [...this.extensions.values()],
+      assignments,
+      profiles: [...this.profiles.values()],
+      kernelPolicyVersion: KERNEL_POLICY_VERSION,
+      preferIndependentKernel: this.preferIndependentKernel,
+      allowSystemBrowserFallback: this.allowSystemBrowserFallback,
+      systemBrowserPath: this.systemBrowserPath,
+    };
   }
 
   kernelStatus() {
@@ -1340,6 +1474,10 @@ class BrowserEngine {
       }
     }
     // Do not drop unknown engine profiles here — deleteProfiles is the explicit path.
+    if (this.usingSqlite && this.sqliteStore) {
+      const incomingList = [...incomingIds].map((id) => this.profiles.get(id)).filter(Boolean);
+      this.sqliteStore.saveProfiles(incomingList);
+    }
     await this.persist();
     return this.status();
   }
@@ -2877,10 +3015,10 @@ class BrowserEngine {
 
   resetFingerprintVerificationFailures(profileId) {
     if (profileId) {
-      this.deliveryVerificationFailures.delete(profileId);
+      this.deliveryVerificationFailures?.delete(profileId);
       this.deliveryVerificationFailureTimestamps?.delete(profileId);
     } else {
-      this.deliveryVerificationFailures.clear();
+      this.deliveryVerificationFailures?.clear();
       this.deliveryVerificationFailureTimestamps?.clear();
     }
   }
@@ -4760,6 +4898,9 @@ class BrowserEngine {
       profile.trashedAt = nowIso;
       trashed.push(id);
     }
+    if (this.usingSqlite && this.sqliteStore) {
+      this.sqliteStore.trashProfiles(trashed, nowIso);
+    }
     await this.persist();
     this.emit({ type: 'profiles', action: 'trash', ids: trashed });
     return { success: true, trashed: trashed.length, stopped, ids: trashed };
@@ -4775,6 +4916,9 @@ class BrowserEngine {
       profile.trashed = false;
       profile.trashedAt = null;
       restored.push(id);
+    }
+    if (this.usingSqlite && this.sqliteStore) {
+      this.sqliteStore.restoreProfiles(restored);
     }
     await this.persist();
     this.emit({ type: 'profiles', action: 'restore', ids: restored });
@@ -4834,6 +4978,9 @@ class BrowserEngine {
       this.profiles.delete(id);
       this.assignments.delete(id);
       this.networkInfo.delete(id);
+      if (this.usingSqlite && this.sqliteStore) {
+        this.sqliteStore.deleteProfiles([id]);
+      }
       try {
         await this.persist();
       } catch (error) {
@@ -5245,7 +5392,17 @@ class BrowserEngine {
     this.emit({ type: 'extensions' });
     return results;
   }
-  async removeExtension(id) { const value = this.extensions.get(id); if (!value || value.builtIn) throw new Error('Built-in extension cannot be removed'); this.extensions.delete(id); for (const set of this.assignments.values()) set.delete(id); await this.persist(); return { success: true }; }
+  async removeExtension(id) {
+    const value = this.extensions.get(id);
+    if (!value || value.builtIn) throw new Error('Built-in extension cannot be removed');
+    this.extensions.delete(id);
+    for (const set of this.assignments.values()) set.delete(id);
+    if (this.usingSqlite && this.sqliteStore) {
+      this.sqliteStore.deleteExtension(id);
+    }
+    await this.persist();
+    return { success: true };
+  }
   on(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emit(value) { for (const listener of this.listeners) listener(value); }
   runningWithCdp(ids) {

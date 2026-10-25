@@ -6,12 +6,14 @@ pub mod http;
 pub mod pool;
 pub mod socks5;
 pub mod stream;
+pub mod udp;
 
 pub use bridge::LocalProxyBridge;
 pub use config::{ProxyConfig, ProxyProtocol};
 pub use fail_closed::FailClosedPolicy;
 pub use forwarder::{BridgeInfo, ProxyForwarder};
 pub use http::HttpConnectTarget;
-pub use pool::ConcurrencyLimiter;
+pub use pool::{ConcurrencyLimiter, UpstreamTunnelPool};
 pub use socks5::{SocksAddress, SOCKS5_VERSION};
 pub use stream::{copy_bidirectional, StreamStats};
+pub use udp::{Socks5UdpAssociate, Socks5UdpPacket};

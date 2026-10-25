@@ -95,7 +95,7 @@ function scanProcessesUsingProfile(profileRoot) {
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); [Console]::Out.Write((Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress))',
+        '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); try { [Console]::Out.Write((Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { try { [Console]::Out.Write((Get-WmiObject Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { [Console]::Out.Write(\'[]\') } }',
       ], {
         encoding: null,
         windowsHide: true,
@@ -147,7 +147,7 @@ async function scanProcessesUsingProfileAsync(profileRoot) {
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); [Console]::Out.Write((Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress))',
+        '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); try { [Console]::Out.Write((Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { try { [Console]::Out.Write((Get-WmiObject Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { [Console]::Out.Write(\'[]\') } }',
       ], {
         encoding: 'buffer',
         windowsHide: true,
@@ -338,7 +338,7 @@ async function acquireProfileLock(profileRoot, meta = {}) {
       // updateProfileLock() writing its pid. Search the OS process list by the
       // exact --user-data-dir argument before deciding that a pending lock is
       // stale. This keeps an app restart from stealing a live Chromium profile.
-      const processScan = scanProcessesUsingProfile(profileRoot);
+      const processScan = await scanProcessesUsingProfileAsync(profileRoot);
       const activeScanPids = (processScan.pids || []).filter(isPidAlive);
       if (activeScanPids.length) {
         throw lockOwnerError(
@@ -348,11 +348,31 @@ async function acquireProfileLock(profileRoot, meta = {}) {
         );
       }
       if (!isSelfOwner && !processScan.known) {
-        throw lockOwnerError(
-          'PROFILE_LOCK_UNRECOVERABLE',
-          'Profile process scan is unconfirmed; refusing to remove profile lock',
-          existing,
-        );
+        // Conservative non-fatal semantics:
+        // When WMI / PowerShell process enumeration fails (e.g. WMI corruption,
+        // permission denial, timeout, or high system load), do NOT permanently
+        // deadlock the profile if both the primary owner PID and the recorded
+        // browserPid (if present) are confirmed dead.
+        //
+        // Conservative guard:
+        // If the lock has no recorded browserPid (startup crashed in the initial
+        // window) AND the lock was created recently (< UNKNOWN_STARTUP_LOCK_RECOVERY_MS),
+        // we conservatively refuse to steal the lock unless forceRecover is requested.
+        // Once the lock has aged past the startup recovery threshold (15s), or if
+        // the recorded browserPid is confirmed dead, allow safe lock reclamation.
+        const age = lockAgeMs(existing);
+        const hasKnownDeadBrowser = hasLockField(existing, 'browserPid')
+          && validPid(existing.browserPid)
+          && !isPidAlive(Number(existing.browserPid));
+        const isStaleStartupLock = age !== null && age >= UNKNOWN_STARTUP_LOCK_RECOVERY_MS;
+
+        if (!meta.forceRecover && !hasKnownDeadBrowser && !isStaleStartupLock) {
+          throw lockOwnerError(
+            'PROFILE_LOCK_UNRECOVERABLE',
+            'Profile process scan is unconfirmed and startup lock is recent; refusing to remove profile lock',
+            existing,
+          );
+        }
       }
       if (hasLockField(existing, 'browserPid') && existing.browserPid === null && !meta.forceRecover) {
         const age = lockAgeMs(existing);

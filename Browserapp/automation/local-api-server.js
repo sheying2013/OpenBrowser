@@ -398,6 +398,22 @@ function proxySummary(profile, proxyStore, explicitProxyId = undefined) {
   };
 }
 
+async function resolveWebSocketDebuggerUrl(port, profileId) {
+  if (!port) return null;
+  const fallback = `ws://127.0.0.1:${port}/devtools/browser/${profileId || 'default'}`;
+  try {
+    const cdp = require('../cdp');
+    const ws = await Promise.race([
+      cdp.browserSocket(port),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('cdp version timeout')), 1500)),
+    ]);
+    if (typeof ws === 'string' && ws.startsWith('ws://')) {
+      return ws;
+    }
+  } catch (_) {}
+  return fallback;
+}
+
 /**
  * Local HTTP API for OpenBrowser control plane.
  * Response envelope uses {code,msg,data}.
@@ -646,7 +662,7 @@ class LocalApiServer {
         title: item.title || item.name,
         number: item.number,
         status: item.running ? 'Active' : 'Inactive',
-        ws: item.port ? { puppeteer: `http://127.0.0.1:${item.port}`, selenium: `127.0.0.1:${item.port}` } : null,
+        ws: item.port ? { puppeteer: `ws://127.0.0.1:${item.port}/devtools/browser/${item.id}`, selenium: `127.0.0.1:${item.port}` } : null,
         debug_port: item.port || null,
         ...proxySummary(item, this.proxyStore),
       }));
@@ -884,12 +900,14 @@ class LocalApiServer {
       const profile = this.engine.profiles.get(id);
       if (!profile) return fail('profile not found');
       const started = await this.engine.start(profile);
+      const port = started?.port || this.engine.running?.get(id)?.port || null;
+      const puppeteerWs = port ? await resolveWebSocketDebuggerUrl(port, id) : null;
       return ok({
         user_id: id,
         profile_id: id,
-        debug_port: started?.port || this.engine.running.get(id)?.port || null,
+        debug_port: port,
         ws: {
-          puppeteer: started?.port ? `http://127.0.0.1:${started.port}` : null,
+          puppeteer: puppeteerWs,
         },
       });
     }
@@ -931,7 +949,7 @@ class LocalApiServer {
         title: profile.title,
         status: running ? 'Active' : 'Inactive',
         debug_port: running?.port || null,
-        ws: running?.port ? { puppeteer: 'http://127.0.0.1:' + running.port, selenium: '127.0.0.1:' + running.port } : null,
+        ws: running?.port ? { puppeteer: await resolveWebSocketDebuggerUrl(running.port, id), selenium: '127.0.0.1:' + running.port } : null,
         profile,
         ...proxySummary(profile, this.proxyStore),
       });
@@ -960,12 +978,14 @@ class LocalApiServer {
       const profile = this.engine.profiles?.get(id);
       if (!profile) return fail('profile not found', 404);
       const started = await this.engine.start({ ...profile, startUrl: targetUrl });
+      const port = started?.port || null;
+      const puppeteerWs = port ? await resolveWebSocketDebuggerUrl(port, id) : null;
       return ok({
         profile_id: id,
         url: targetUrl,
         started: true,
-        debug_port: started?.port || null,
-        ws: started?.port ? { puppeteer: 'http://127.0.0.1:' + started.port } : null,
+        debug_port: port,
+        ws: port ? { puppeteer: puppeteerWs } : null,
       });
     }
 
@@ -1344,4 +1364,4 @@ class LocalApiServer {
   }
 }
 
-module.exports = { LocalApiServer };
+module.exports = { LocalApiServer, resolveWebSocketDebuggerUrl };
