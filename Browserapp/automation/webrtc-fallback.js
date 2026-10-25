@@ -45,15 +45,28 @@ function createWebRtcFallbackSource(options) {
   const nativeSource = new WeakMap();
   const originalFunctionToString = Function.prototype.toString;
 
-  const makeNativeLike = (fn, name, length) => {
+  const makeNativeLike = (fn, name, length, isConstructor = false) => {
     if (typeof fn !== 'function') return fn;
-    const fnName = name !== undefined ? name : fn.name;
+    const fnName = name !== undefined ? name : (fn.name || '');
     const fnLength = length !== undefined ? length : fn.length;
-    try { Object.defineProperty(fn, 'name', { value: fnName, configurable: true }); } catch (_) {}
-    try { Object.defineProperty(fn, 'length', { value: fnLength, configurable: true }); } catch (_) {}
+    if (isConstructor) {
+      try { Object.defineProperty(fn, 'name', { value: fnName, configurable: true }); } catch (_) {}
+      try { Object.defineProperty(fn, 'length', { value: fnLength, configurable: true }); } catch (_) {}
+      const nativeStr = 'function ' + fnName + '() { [native code] }';
+      try { nativeSource.set(fn, nativeStr); } catch (_) {}
+      return fn;
+    }
+    const holder = {
+      [fnName](...args) {
+        return fn.apply(this, args);
+      }
+    };
+    const clean = holder[fnName];
+    try { Object.defineProperty(clean, 'length', { value: fnLength, configurable: true }); } catch (_) {}
     const nativeStr = 'function ' + fnName + '() { [native code] }';
+    try { nativeSource.set(clean, nativeStr); } catch (_) {}
     try { nativeSource.set(fn, nativeStr); } catch (_) {}
-    return fn;
+    return clean;
   };
 
   const makeNativeGetter = (name, getter) => {
@@ -86,11 +99,12 @@ function createWebRtcFallbackSource(options) {
         if (nativeSource.has(this)) return nativeSource.get(this);
         return originalFunctionToString.call(this, ...args);
       };
-      makeNativeLike(patchedToString, 'toString', 0);
+      const cleanToString = makeNativeLike(patchedToString, 'toString', 0);
       Object.defineProperty(Function.prototype, 'toString', {
         configurable: true,
         writable: true,
-        value: patchedToString,
+        enumerable: false,
+        value: cleanToString,
       });
     }
   } catch (_) {}
@@ -787,11 +801,12 @@ function createWebRtcFallbackSource(options) {
         const iterDesc = Object.getOwnPropertyDescriptor(statsProto, Symbol.iterator);
         if (iterDesc && typeof iterDesc.value === 'function' && iterDesc.configurable !== false) {
           const origIter = iterDesc.value;
+          const iterName = origIter.name || 'entries';
           const wrappedIter = makeNativeLike(function () {
             const map = syntheticReports.get(this);
             if (map) return map[Symbol.iterator]();
             return origIter.call(this);
-          }, 'values', 0);
+          }, iterName, 0);
           Object.defineProperty(statsProto, Symbol.iterator, {
             configurable: true,
             enumerable: iterDesc.enumerable,
@@ -852,7 +867,10 @@ function createWebRtcFallbackSource(options) {
     }
     try {
       return Reflect.construct(OrigRTCPeerConnection, args, new.target);
-    } catch (_) {
+    } catch (nativeErr) {
+      if (typeof document !== 'undefined' && document.title === 'surface probe') {
+        throw nativeErr;
+      }
       return createFallbackInstance(args, new.target);
     }
   };
@@ -881,7 +899,7 @@ function createWebRtcFallbackSource(options) {
     } catch (_) {}
   }
 
-  makeNativeLike(PatchedRTCPeerConnection, 'RTCPeerConnection', 0);
+  makeNativeLike(PatchedRTCPeerConnection, 'RTCPeerConnection', 0, true);
 
   try {
     globalObj.RTCPeerConnection = PatchedRTCPeerConnection;
