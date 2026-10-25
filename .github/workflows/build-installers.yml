@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.26'
+        description: 'Release tag to create, for example v1.0.27'
         required: true
-        default: 'v1.0.26'
+        default: 'v1.0.27'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -38,7 +38,7 @@ env:
   OPENBROWSER_PACKAGE_VARIANT: with-kernel
   OPENBROWSER_BUNDLE_KERNEL: 'true'
   RELEASE_NOTES: |
-    ## OpenBrowser **v1.0.26**
+    ## OpenBrowser **v1.0.27**
 
     - 新增可选 Rust HTTP/SOCKS5 代理核心。
     - 修复代理协议边界、超时与进程回收问题。
