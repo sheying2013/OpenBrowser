@@ -43,6 +43,8 @@ function cftBinary(root) {
 
 async function main() {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'openbrowser-kernel-'));
+  // Windows 下 SQLite WAL 的 -shm/-wal 被打开的连接锁定，清理前必须显式关闭全部引擎
+  const openEngines = [];
   try {
     const binary = cftBinary(root);
     await fsp.mkdir(path.dirname(binary), { recursive: true });
@@ -245,6 +247,7 @@ async function main() {
       allowSystemBrowserFallback: true,
     }), 'utf8');
     const engine = new BrowserEngine(app);
+    openEngines.push(engine);
     await engine.init(null);
     assert.strictEqual(engine.allowSystemBrowserFallback, false);
     assert.strictEqual(engine.browserSelection().mode, 'independent');
@@ -292,11 +295,24 @@ async function main() {
     assert.strictEqual(engine.browserSelection().browser.path, manualBrowser);
     engine.kernelManager.resolveInstalled = resolveInstalled;
     const reloaded = new BrowserEngine(app);
+    openEngines.push(reloaded);
     await reloaded.init(null);
     assert.strictEqual(reloaded.allowSystemBrowserFallback, true);
     console.log('  PASS  system-browser fallback requires explicit manual selection');
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    for (const eng of openEngines) {
+      try { eng.sqliteStore?.close?.(); } catch (_) {}
+    }
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await fsp.rm(root, { recursive: true, force: true });
+        break;
+      } catch (error) {
+        const retriable = error?.code === 'EBUSY' || error?.code === 'ENOTEMPTY' || error?.code === 'EPERM';
+        if (!retriable || attempt >= 4) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
   }
 }
 

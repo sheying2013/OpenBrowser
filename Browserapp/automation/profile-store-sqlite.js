@@ -403,6 +403,10 @@ class ProfileStoreSqlite {
 
   close() {
     if (this.db) {
+      // Windows 下 WAL 的 -shm 映射在 close 后才释放，先 checkpoint 再关闭，确保临时目录可清理
+      try {
+        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+      } catch (_) {}
       try {
         this.db.close();
       } catch (_) {}
