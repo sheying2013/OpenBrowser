@@ -752,6 +752,25 @@ function extractPrimaryLanguage(val) {
   return first.toLowerCase().replace(/_/g, '-');
 }
 
+function backgroundNetworkFlagsForProfile(profile) {
+  const flags = [
+    '--disable-component-update',
+    '--disable-default-apps',
+    '--disable-client-side-phishing-detection',
+    '--disable-domain-reliability',
+    '--disable-breakpad',
+    '--disable-hang-monitor',
+    '--disable-ipc-flooding-protection',
+    '--metrics-recording-only',
+    '--no-pings',
+    '--dns-prefetch-disable',
+  ];
+  if (profile?.advanced?.blockNotifications !== false) {
+    flags.unshift('--disable-background-networking');
+  }
+  return flags;
+}
+
 function evaluateFingerprintDelivery(profile = {}, fingerprint = {}, liveProbe = null) {
   const mismatches = [];
   const warnings = [];
@@ -4112,19 +4131,7 @@ class BrowserEngine {
     }
     // Cross-platform process overhead reducers (safe for multi-profile fleets).
     // Applied for all envs — not only proxied ones — so Win/mac idle CPU stays low.
-    const perfFlags = [
-      '--disable-background-networking',
-      '--disable-component-update',
-      '--disable-default-apps',
-      '--disable-client-side-phishing-detection',
-      '--disable-domain-reliability',
-      '--disable-breakpad',
-      '--disable-hang-monitor',
-      '--disable-ipc-flooding-protection',
-      '--metrics-recording-only',
-      '--no-pings',
-      '--dns-prefetch-disable',
-    ];
+    const perfFlags = backgroundNetworkFlagsForProfile(profile);
     for (const flag of perfFlags) {
       if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) args.push(flag);
     }
@@ -5432,4 +5439,5 @@ module.exports = {
   extractGpuBrand,
   normalizeTimezone,
   extractPrimaryLanguage,
+  backgroundNetworkFlagsForProfile,
 };

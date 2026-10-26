@@ -8,6 +8,7 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const read = (name) => fs.readFileSync(path.join(root, name), 'utf8');
+const { backgroundNetworkFlagsForProfile } = require('../engine');
 
 const results = [];
 function check(name, fn) {
@@ -57,6 +58,45 @@ check('the system defaults action keeps WebGPU on the product default', () => {
     'reading local defaults must not switch WebGPU to the host adapter');
   assert.ok(!body.includes("editorSet('#editor-webgpu', 'real')"),
     'an explicit real WebGPU default contradicts the profile WebGL identity');
+});
+
+check('Merge Gateway keeps the selected profile-editor segmented option legible', () => {
+  const css = read('xai-console.css');
+  const rule = 'html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form .segmented label:has(input:checked)';
+  const ruleIndex = css.lastIndexOf(rule);
+  assert.notStrictEqual(ruleIndex, -1, 'selected segmented labels need an editor-specific override');
+  const bodyStart = css.indexOf('{', ruleIndex);
+  const bodyEnd = css.indexOf('}', bodyStart);
+  const body = css.slice(bodyStart + 1, bodyEnd);
+  assert.match(body, /color:\s*var\(--xai-inverse\)/,
+    'selected label text must contrast with the ink-console background');
+  assert.ok(ruleIndex > css.lastIndexOf('#view-profile-editor .editor-form label:not(.check-row)'),
+    'the segmented override must follow the broader editor label color rule');
+  assert.match(css, /#view-profile-editor \.editor-form \.segmented input\[type="radio"\][\s\S]*?accent-color:\s*var\(--xai-ink-console\)/,
+    'the selected radio control should use the theme accent color');
+});
+
+check('Merge Gateway resets checkbox geometry inside editor check rows', () => {
+  const css = read('xai-console.css');
+  assert.match(css, /#view-profile-editor \.editor-form \.check-row input\[type="checkbox"\][\s\S]*?padding:\s*0;/,
+    'editor checkboxes must not inherit text-input padding');
+});
+
+
+check('X push notifications retain Chromium background networking when allowed', () => {
+  const allowed = backgroundNetworkFlagsForProfile({ advanced: { blockNotifications: false } });
+  assert.ok(!allowed.includes('--disable-background-networking'),
+    'allowing site notifications must not disable Chromium background networking');
+  assert.ok(allowed.includes('--disable-component-update'),
+    'notification support must retain unrelated background/update reducers');
+
+  const blocked = backgroundNetworkFlagsForProfile({ advanced: { blockNotifications: true } });
+  assert.ok(blocked.includes('--disable-background-networking'),
+    'the explicit block-notifications setting keeps the background network disabled');
+
+  const legacy = backgroundNetworkFlagsForProfile({ advanced: {} });
+  assert.ok(legacy.includes('--disable-background-networking'),
+    'legacy profiles without a notification preference keep the previous default');
 });
 
 check('every editor control the renderer reaches for exists in the page', () => {

@@ -2152,3 +2152,25 @@ html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-save-state[data
   html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-action-buttons button,
   html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-head button { min-height: 44px; }
 }
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form .segmented label {
+  color: var(--xai-secondary);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form .segmented label:has(input:checked) {
+  color: var(--xai-inverse);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form .segmented input[type="radio"] {
+  accent-color: var(--xai-ink-console);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form .check-row input[type="checkbox"],
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form .check-row input[type="radio"] {
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+}
+
+@media (max-width: 480px) {
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form .segmented label { min-height: 44px; }
+}
