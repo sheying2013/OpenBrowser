@@ -51,6 +51,96 @@ function setProxyDohResolver(resolver) {
   proxyDohLookup = null;
 }
 
+// ── Proxy dial address book ──────────────────────────────────────────────────────────────────
+// Why this exists: passing a custom `lookup` to net.connect() opts that socket out of Node's
+// Happy-Eyeballs fallback, so the dial only ever used the FIRST A record. A shared proxy
+// front-end can resolve to a dozen addresses of which only a couple answer; landing on a dead
+// one burned the whole retry chain (~24.5 s) while another record was live the whole time.
+// So we resolve here, walk the candidates serially, and remember which ones refused.
+//
+// Scope is deliberately PROCESS-LOCAL ONLY (never persisted): residential proxy addresses
+// rotate, and a file-backed blacklist would turn a momentary blip into a permanent verdict.
+// 1000 ms, not the 2000 ms first proposed: on gate.decodo.com only 2 of 12 records answer and
+// the dead ones are TIMEOUT black holes, so they eat a whole slot each. At 2000 ms an 8 s dial
+// budget covers 4 candidates — fewer than the distance to the first live record on a bad
+// ordering — and the walk reported "budget spent" with a usable address untried. A SOCKS5
+// handshake finishes far inside 1 s, so the shorter slot costs live records nothing.
+const PROXY_DIAL_ADDRESS_MS = 1000;      // per-candidate dial timeout; serial, never concurrent
+const PROXY_DIAL_DEAD_TTL_BASE_MS = 30 * 1000;   // first failure parks a record for 30 s
+const PROXY_DIAL_DEAD_TTL_MAX_MS = 5 * 60 * 1000; // doubling backoff ceiling
+const PROXY_DIAL_AFFINITY_MAX = 256;     // cap the per-host maps so long-lived shells do not grow
+const proxyDialAffinity = new Map();     // host -> last address that actually connected
+const proxyDeadAddresses = new Map();    // host -> Map(address -> deadUntil)
+const proxyDialAddressAttempts = new Map(); // host -> blackholed attempt strength per address
+
+function isProxyAddressDead(host, address) {
+  const dead = proxyDeadAddresses.get(host);
+  if (!dead) return false;
+  const until = dead.get(address);
+  if (!until) return false;
+  if (until <= Date.now()) { dead.delete(address); return false; }
+  return true;
+}
+
+function markProxyAddressDead(host, address) {
+  if (!host || !address) return;
+  const attempts = (proxyDialAddressAttempts.get(address) || 0) + 1;
+  proxyDialAddressAttempts.set(address, attempts);
+  // Doubling backoff (capped) keeps a flapping record from being retried on every single dial,
+  // without ever reaching a TTL long enough to outlive the process.
+  const ttl = Math.min(PROXY_DIAL_DEAD_TTL_BASE_MS * (2 ** (attempts - 1)), PROXY_DIAL_DEAD_TTL_MAX_MS);
+  let dead = proxyDeadAddresses.get(host);
+  if (!dead) { dead = new Map(); proxyDeadAddresses.set(host, dead); }
+  dead.set(address, Date.now() + ttl);
+  if (proxyDeadAddresses.size > PROXY_DIAL_AFFINITY_MAX) {
+    proxyDeadAddresses.delete(proxyDeadAddresses.keys().next().value);
+  }
+  trimProxyDialAttempts();
+}
+
+function markProxyAddressAlive(host, address) {
+  if (!host || !address) return;
+  proxyDialAddressAttempts.delete(address);
+  const dead = proxyDeadAddresses.get(host);
+  if (dead) dead.delete(address);
+  proxyDialAffinity.delete(host);
+  proxyDialAffinity.set(host, address);
+  if (proxyDialAffinity.size > PROXY_DIAL_AFFINITY_MAX) {
+    proxyDialAffinity.delete(proxyDialAffinity.keys().next().value);
+  }
+}
+
+function trimProxyDialAttempts() {
+  while (proxyDialAddressAttempts.size > PROXY_DIAL_AFFINITY_MAX) {
+    proxyDialAddressAttempts.delete(proxyDialAddressAttempts.keys().next().value);
+  }
+}
+
+// last known-good first, unseen next, recently dead last. Dead records are demoted, not skipped:
+// the black hole rotates, so a fixed sort order would keep re-picking the same doomed head.
+function orderProxyAddresses(host, addresses) {
+  const preferred = proxyDialAffinity.get(host);
+  const rank = (entry) => {
+    if (preferred && entry.address === preferred) return 0;
+    return isProxyAddressDead(host, entry.address) ? 2 : 1;
+  };
+  return addresses.slice().sort((a, b) => rank(a) - rank(b));
+}
+
+function resolveAllProxyAddresses(host) {
+  const lookup = getProxyDohLookup();
+  return new Promise((resolve, reject) => {
+    lookup(host, { all: true, family: 0 }, (error, addresses) => {
+      if (error) return reject(error);
+      const list = (Array.isArray(addresses) ? addresses : [{ address: addresses }])
+        .filter((entry) => entry && entry.address)
+        .map((entry) => ({ address: entry.address, family: entry.family || (net.isIP(entry.address) === 6 ? 6 : 4) }));
+      if (!list.length) return reject(Object.assign(new Error(`No address for ${host}`), { code: 'ENOTFOUND' }));
+      resolve(list);
+    });
+  });
+}
+
 const IP_LOOKUP_CHANNELS = Object.freeze(['ip-api', 'ip2location', 'ifconfig-me']);
 
 function normalizeIpLookupChannel(value) {
@@ -463,14 +553,10 @@ class BufferedReader {
   }
 }
 
-function connectSocket(host, port, timeout = 8000, signal = null) {
+function connectAddress(host, port, timeout = 8000, signal = null) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error('Proxy bridge closed'));
-    const connectOptions = { host, port };
-    if (host && !net.isIP(host)) {
-      connectOptions.lookup = getProxyDohLookup();
-    }
-    const socket = net.connect(connectOptions);
+    const socket = net.connect({ host, port });
     let onAbort = null;
     const cleanup = () => {
       socket.off('error', onError);
@@ -486,6 +572,85 @@ function connectSocket(host, port, timeout = 8000, signal = null) {
     }
     socket.once('error', onError); socket.once('connect', onConnect);
   });
+}
+
+/**
+ * Walk the candidate address list serially and return the first socket that connects.
+ *
+ * The dial strategy is separated out so it can be exercised without a live network: the caller
+ * resolves the names, this function decides the order, the timeouts and the blacklisting.
+ *
+ * @param {Array<{address: string, family?: number}>} addresses candidates, dead ones already demoted
+ * @param {(entry: object, port: number, timeout: number) => Promise<net.Socket>} tryConnect dials one
+ * @param {{port: number, deadline: number, timeout?: number, signal?: AbortSignal}} options
+ */
+async function walkProxyCandidates(addresses, tryConnect, { port, deadline, timeout = 8000, signal = null } = {}) {
+  const failures = [];
+  const refused = [];   // candidates that actually refused a dial, for blacklisting by the caller
+  let lastError = null;
+  for (const entry of addresses) {
+    if (signal?.aborted) throw new Error('Proxy bridge closed');
+    const left = deadline - Date.now();
+    if (left <= 0) {
+      failures.push(`${entry.address} (not tried: ${timeout} ms dial budget spent)`);
+      lastError = lastError || Object.assign(new Error('Proxy connection timed out'), { code: 'ETIMEDOUT' });
+      break;
+    }
+    try {
+      return await tryConnect(entry, port, Math.min(left, PROXY_DIAL_ADDRESS_MS));
+    } catch (error) {
+      lastError = error;
+      refused.push(entry);
+      failures.push(`${entry.address} (${error?.code || error?.message || 'unknown error'})`);
+      if (String(error?.message || '') === 'Proxy bridge closed') throw error;
+    }
+  }
+  // Diagnosable on purpose: "timed out" repeated ten times tells the operator nothing about which
+  // records were dead, so the aggregate carries the per-candidate verdicts.
+  const detail = failures.length ? `tried ${failures.length}/${addresses.length} -> ${failures.join(', ')}` : 'no candidate address';
+  throw Object.assign(
+    new Error(`Proxy dial failed for port ${port} (${detail})`),
+    { code: lastError?.code || 'ECONNREFUSED', addressFailures: failures.slice(), refusedAddresses: refused.slice(), cause: lastError || undefined },
+  );
+}
+
+/**
+ * Dial a proxy endpoint, walking every A/AAAA record instead of only the first one.
+ *
+ * Passing a custom `lookup` to net.connect() opts the socket out of Node's Happy-Eyeballs
+ * fallback, so the old implementation silently pinned the dial to record #1: landing on a
+ * black-holed record exhausted the retry chain while a sibling record was alive the whole time.
+ * Resolving ourselves and walking the list serially restores that fallback — serial, not
+ * parallel, so we never race half-open sockets against each other.
+ *
+ * A candidate that refuses is recorded in proxyDeadAddresses (PROCESS-LOCAL, never persisted)
+ * so the next dial demotes a known-bad record instead of paying for it again.
+ */
+async function connectSocket(host, port, timeout = 8000, signal = null) {
+  if (!host) throw new Error('Proxy dial failed: no host');
+  if (net.isIP(host)) return connectAddress(host, port, timeout, signal);
+
+  // Resolve BEFORE the budget starts: DoH in a restricted network costs ~5 s up front, and
+  // charging that to the dial budget left a single 2 s slot out of 8 s — the walk never got
+  // past candidate #1, which made the whole multi-A fallback a no-op in exactly the network
+  // it was written for. Resolution latency is not dial latency, so it stays outside the budget.
+  const resolved = await resolveAllProxyAddresses(host);
+  const deadline = Date.now() + timeout;
+  const addresses = orderProxyAddresses(host, resolved);
+  try {
+    const socket = await walkProxyCandidates(addresses, async (entry, dialPort, dialTimeout) => {
+      const candidate = await connectAddress(entry.address, dialPort, dialTimeout, signal);
+      markProxyAddressAlive(host, entry.address);
+      return candidate;
+    }, { port, deadline, timeout, signal });
+    return socket;
+  } catch (error) {
+    // Only reached once every candidate is spent. Walk the recorded refusals rather than parsing
+    // the message: two records can differ by a suffix, and a string match would blame the wrong one.
+    for (const entry of error.refusedAddresses || []) markProxyAddressDead(host, entry.address);
+    error.message = `Proxy dial failed for ${host}:${port}${error.message.replace(/^Proxy dial failed for port \d+/, '')}`;
+    throw error;
+  }
 }
 
 function makeNotifier(onStatus) {
@@ -2361,6 +2526,14 @@ module.exports = {
   tlsConnectOptionsFromProfile,
   TLS_PROFILE_PRESETS,
   connectSocket,
+  connectAddress,
+  walkProxyCandidates,
+  orderProxyAddresses,
+  resolveAllProxyAddresses,
+  isProxyAddressDead,
+  markProxyAddressDead,
+  markProxyAddressAlive,
+  PROXY_DIAL_ADDRESS_MS,
   getProxyDohLookup,
   setProxyDohResolver,
   clearProbeCache,
