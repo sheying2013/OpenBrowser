@@ -9124,7 +9124,7 @@ function buildWorkerInjectionScript(fp) {
 ();`;
 }
 
-function chromeArgsForFingerprint(fp, profile = {}) {
+function chromeArgsForFingerprint(fp, profile = {}, options = {}) {
   let args = [];
   // Critical: without this, Chromium/CDP sets navigator.webdriver = true
   args.push('--disable-blink-features=AutomationControlled');
@@ -9171,9 +9171,16 @@ function chromeArgsForFingerprint(fp, profile = {}) {
     if (primary) args.push(`--lang=${primary}`);
   }
   if (process.platform === 'win32') {
-    // Keep consistent UI scale across all multi-environment windows on Windows
-    // to prevent some windows having 1.25x enlarged toolbars/tabbars.
-    const scaleFactor = profile.privacy?.forceDeviceScaleFactor || profile.deviceScaleFactor || 1;
+    // Keep a *single* consistent UI scale across all multi-environment windows on Windows
+    // (so no window ends up with 1.25x enlarged toolbars/tabbars), but default it to the host
+    // display's real scale instead of hardcoding 1. Hardcoding 1 renders the whole browser
+    // chrome (tabs, toolbar, omnibox, icons, page baseline) at 100% physical pixels, so on a
+    // 125%/150%/200% Windows display everything looks proportionally too small.
+    // Resolution order: explicit profile override -> host display scale -> 1.
+    const hostScale = Number(options?.hostScaleFactor);
+    const scaleFactor = profile.privacy?.forceDeviceScaleFactor
+      || profile.deviceScaleFactor
+      || (Number.isFinite(hostScale) && hostScale > 0 ? hostScale : 1);
     args.push(`--force-device-scale-factor=${scaleFactor}`);
   }
   // Cloudflare 验证优化：关闭时更激进（可能卡盾）；开启时减少部分干扰
