@@ -62,6 +62,10 @@ function sanitizeProfile(value) {
     language: String(value.language || "en-US").slice(0, 20),
     width,
     height,
+    deviceScaleFactor: (() => {
+      const n = Number(value.deviceScaleFactor);
+      return Number.isFinite(n) && n > 0 ? Math.min(5, Math.max(0.5, Math.round(n * 100) / 100)) : null;
+    })(),
     userAgent: String(value.userAgent || "").replace(/[\r\n]/g, " ").slice(0, 1000),
     cookies: String(value.cookies || "").slice(0, 500000),
     note: String(value.note || "").slice(0, 2000),
@@ -166,6 +170,12 @@ function sanitizeProfile(value) {
       portScanAllow: String(privacyValue.portScanAllow || "").slice(0, 500),
       cfOptimize: privacyValue.cfOptimize !== false,
       refreshFingerprintOnStart: Boolean(privacyValue.refreshFingerprintOnStart),
+      // Windows UI scale override for the managed kernel window (browser chrome size).
+      // Absent -> null, so chromeArgsForFingerprint falls back to the host display scale.
+      forceDeviceScaleFactor: (() => {
+        const n = Number(privacyValue.forceDeviceScaleFactor);
+        return Number.isFinite(n) && n > 0 ? Math.min(5, Math.max(0.5, Math.round(n * 100) / 100)) : null;
+      })(),
       cores,
       memory,
       ...(fingerprintValue ? { fingerprint: {

@@ -900,6 +900,26 @@ function pickWorkArea() {
   return screen.getPrimaryDisplay().workArea;
 }
 
+// Real display scale of the screen the user is on. The managed browser kernel used to be
+// launched with a hardcoded --force-device-scale-factor=1, which renders its chrome (tabs,
+// toolbar, icons, text) at 100% on a 125%/150%/200% Windows display so everything looked
+// too small. Return the display's actual scale factor so the kernel matches the OS; return
+// null when it cannot be determined (or off Windows) so callers fall back to the old default.
+function pickDisplayScaleFactor() {
+  if (process.platform !== 'win32') return null;
+  try {
+    let display = null;
+    const point = screen.getCursorScreenPoint?.();
+    if (point) display = screen.getDisplayNearestPoint(point);
+    if (!display) display = screen.getPrimaryDisplay();
+    const factor = Number(display?.scaleFactor);
+    if (!Number.isFinite(factor) || factor <= 0) return null;
+    return Math.round(factor * 100) / 100;
+  } catch (_) {
+    return null;
+  }
+}
+
 let tray = null;
 const forceCloseWindowIds = new Set();
 
@@ -1705,7 +1725,10 @@ app.whenReady().then(async () => {
   const localSettings = await loadLocalSettings();
   const initialRootCheck = await ensureDataRootIsolationSecure(localSettings.profileDataRoot);
   if (!initialRootCheck.ok) throw new Error(initialRootCheck.message);
-  engine = new BrowserEngine(app, { profileDataRoot: localSettings.profileDataRoot });
+  engine = new BrowserEngine(app, {
+    profileDataRoot: localSettings.profileDataRoot,
+    getHostScaleFactor: pickDisplayScaleFactor,
+  });
   liveSync = new LiveSyncController(engine, handleLiveSyncEvent);
   await engine.init(path.join(__dirname, 'bundled-extension'));
   try {
