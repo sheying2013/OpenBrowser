@@ -29,7 +29,9 @@ async function startAutomation(context = {}) {
     setSelection,
     tile,
     emit = () => {},
-    port = Number(process.env.OPENBROWSER_API_PORT || 50325),
+    port = (context.port !== undefined && Number.isFinite(Number(context.port)))
+      ? Number(context.port)
+      : require('./local-api-server').resolveDefaultApiPort(),
   } = context;
 
   const userDataPath = app.getPath('userData');

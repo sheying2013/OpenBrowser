@@ -17,8 +17,40 @@
 
 const http = require('http');
 const { resolveApiKey, apiKeyFileCandidates } = require('./api-key');
+const { readDiscoveryPort } = require('./local-api-server');
 
-const PORT = Number(process.env.OPENBROWSER_API_PORT || process.env.PORT || 50325);
+function resolveMcpPort() {
+  const envVal = process.env.OPENBROWSER_API_PORT !== undefined && String(process.env.OPENBROWSER_API_PORT).trim() !== ''
+    ? process.env.OPENBROWSER_API_PORT
+    : process.env.PORT;
+  if (envVal !== undefined && String(envVal).trim() !== '') {
+    const parsed = Number(envVal);
+    if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535) {
+      return parsed;
+    }
+  }
+  const discovered = readDiscoveryPort();
+  if (Number.isInteger(discovered) && discovered > 0 && discovered <= 65535) {
+    return discovered;
+  }
+  return null;
+}
+
+let cachedPort = null;
+function getApiPort(forceReload = false) {
+  if (!forceReload && cachedPort !== null) return cachedPort;
+  const port = resolveMcpPort();
+  if (port === null) {
+    throw new Error(
+      'MCP: Local API port not found. OpenBrowser is not running (automation-info.json not found) ' +
+      'and OPENBROWSER_API_PORT is unset. Please launch OpenBrowser or set OPENBROWSER_API_PORT.'
+    );
+  }
+  cachedPort = port;
+  return cachedPort;
+}
+
+let PORT = resolveMcpPort();
 const HOST = process.env.OPENBROWSER_API_HOST || '127.0.0.1';
 
 let cachedApiKey = null;
@@ -131,6 +163,8 @@ function withInputAliases(schema) {
 function request(method, path, body, options = {}) {
   const payload = body === undefined ? null : JSON.stringify(body);
   const currentKey = getApiKey(Boolean(options._retried), Boolean(options._retried));
+  const currentPort = getApiPort(Boolean(options._retried));
+  PORT = currentPort;
   const timeoutMs = options.timeout || 60000;
   return new Promise((resolve, reject) => {
     const headers = {
@@ -144,7 +178,7 @@ function request(method, path, body, options = {}) {
     }
     const req = http.request({
       host: HOST,
-      port: PORT,
+      port: currentPort,
       path,
       method,
       headers,
@@ -163,7 +197,7 @@ function request(method, path, body, options = {}) {
           const challengeHint = challenge ? ` Server challenge: ${challenge}.` : '';
           const candidates = apiKeyFileCandidates();
           const candidateHint = candidates.length ? ` Checked locations: ${candidates.join(', ')}.` : '';
-          return reject(new Error(`MCP: Local API at http://${HOST}:${PORT} rejected all supplied API credentials (401). Set OPENBROWSER_API_KEY or OPENBROWSER_API_KEY_FILE to the key shown on the OpenBrowser API & MCP page.${challengeHint}${candidateHint}`));
+          return reject(new Error(`MCP: Local API at http://${HOST}:${currentPort} rejected all supplied API credentials (401). Set OPENBROWSER_API_KEY or OPENBROWSER_API_KEY_FILE to the key shown on the OpenBrowser API & MCP page.${challengeHint}${candidateHint}`));
         }
         let parsed;
         try { parsed = JSON.parse(data || '{}'); }
@@ -676,4 +710,12 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { TOOLS: toolsForMode().map(toTool), callTool, request, toolsMeta, LEVEL_ORDER };
+module.exports = {
+  TOOLS: toolsForMode().map(toTool),
+  callTool,
+  request,
+  toolsMeta,
+  LEVEL_ORDER,
+  resolveMcpPort,
+  getApiPort,
+};

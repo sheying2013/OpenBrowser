@@ -23,3 +23,7 @@ CODE_OVERVIEW.md
 # Rust build output and packaged native helpers
 /target/
 /Browserapp/rust-core/
+
+# Kernel tracker cache
+**/.kernel-track-cache.json
+.kernel-track-cache.json

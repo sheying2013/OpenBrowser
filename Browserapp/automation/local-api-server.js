@@ -2,12 +2,220 @@
 
 const http = require('http');
 const crypto = require('crypto');
+const fs = require('fs');
+const fsp = require('fs').promises;
+const path = require('path');
+const os = require('os');
 const { URL } = require('url');
 const { cleanApiKey, isApiKeyPlaceholder, resolveApiKey } = require('./api-key');
 const { resolveAvailablePort } = require('./port-utils');
 
 const MAX_BODY_BYTES = 1024 * 1024;
-const DEFAULT_API_PORT = 50325;
+const DYNAMIC_PORT_MIN = 41000;
+const DYNAMIC_PORT_MAX = 59999;
+const EXCLUDED_PORTS = Object.freeze(new Set([
+  50325, // ThirdPartySuite default Local API & legacy OpenBrowser port
+  50725, // ThirdPartySuite alternate
+  60725, // ThirdPartySuite alternate
+  42222, // Known debugger / telemetry port
+  44444, // Known debugging / metasploit port
+  55555, // Android ADB Wi-Fi default
+]));
+const AUTOMATION_INFO_FILE = 'automation-info.json';
+
+function selectRandomApiPort(min = DYNAMIC_PORT_MIN, max = DYNAMIC_PORT_MAX) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const candidate = crypto.randomInt(min, max + 1);
+    if (!EXCLUDED_PORTS.has(candidate)) {
+      return candidate;
+    }
+  }
+  return 41000;
+}
+
+function resolveConfiguredApiPort(env = process.env) {
+  const envVal = env.OPENBROWSER_API_PORT;
+  if (envVal !== undefined && String(envVal).trim() !== '') {
+    const parsed = Number(envVal);
+    if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function resolveDefaultApiPort(env = process.env) {
+  const configured = resolveConfiguredApiPort(env);
+  if (configured !== null) return configured;
+  return selectRandomApiPort();
+}
+
+const DEFAULT_API_PORT = 0;
+
+async function writeAutomationInfo(userDataPath, info = {}) {
+  if (!userDataPath) return null;
+  const targetPath = path.join(userDataPath, AUTOMATION_INFO_FILE);
+  const tempPath = path.join(
+    userDataPath,
+    `.${AUTOMATION_INFO_FILE}.tmp-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
+  );
+  const payload = {
+    port: Number(info.port),
+    pid: process.pid,
+    startedAt: Number(info.startedAt || Date.now()),
+    host: info.host || '127.0.0.1',
+    url: info.url || `http://${info.host || '127.0.0.1'}:${info.port}/`,
+    apiKeyRequired: info.apiKeyRequired !== false,
+  };
+  await fsp.mkdir(userDataPath, { recursive: true });
+  await fsp.writeFile(tempPath, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 });
+  await fsp.rename(tempPath, targetPath);
+  return targetPath;
+}
+
+function writeAutomationInfoSync(userDataPath, info = {}) {
+  if (!userDataPath) return null;
+  const targetPath = path.join(userDataPath, AUTOMATION_INFO_FILE);
+  const tempPath = path.join(
+    userDataPath,
+    `.${AUTOMATION_INFO_FILE}.tmp-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
+  );
+  const payload = {
+    port: Number(info.port),
+    pid: process.pid,
+    startedAt: Number(info.startedAt || Date.now()),
+    host: info.host || '127.0.0.1',
+    url: info.url || `http://${info.host || '127.0.0.1'}:${info.port}/`,
+    apiKeyRequired: info.apiKeyRequired !== false,
+  };
+  fs.mkdirSync(userDataPath, { recursive: true });
+  fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tempPath, targetPath);
+  return targetPath;
+}
+
+function defaultUserDataPaths() {
+  const paths = [];
+  const home = os.homedir();
+  if (process.platform === 'darwin') {
+    paths.push(path.join(home, 'Library', 'Application Support', 'OpenBrowser'));
+    paths.push(path.join(home, 'Library', 'Application Support', 'openbrowser'));
+    paths.push(path.join(home, 'Library', 'Application Support', 'Electron'));
+  } else if (process.platform === 'win32') {
+    if (process.env.APPDATA) {
+      paths.push(path.join(process.env.APPDATA, 'OpenBrowser'));
+      paths.push(path.join(process.env.APPDATA, 'openbrowser'));
+      paths.push(path.join(process.env.APPDATA, 'Electron'));
+    }
+    paths.push(path.join(home, 'AppData', 'Roaming', 'OpenBrowser'));
+    paths.push(path.join(home, 'AppData', 'Roaming', 'openbrowser'));
+    paths.push(path.join(home, 'AppData', 'Roaming', 'Electron'));
+  } else {
+    if (process.env.XDG_CONFIG_HOME) {
+      paths.push(path.join(process.env.XDG_CONFIG_HOME, 'OpenBrowser'));
+      paths.push(path.join(process.env.XDG_CONFIG_HOME, 'openbrowser'));
+      paths.push(path.join(process.env.XDG_CONFIG_HOME, 'Electron'));
+    }
+    paths.push(path.join(home, '.config', 'OpenBrowser'));
+    paths.push(path.join(home, '.config', 'openbrowser'));
+    paths.push(path.join(home, '.config', 'Electron'));
+  }
+  return paths;
+}
+
+function automationInfoFileCandidates({ env = process.env, userDataPath = '' } = {}) {
+  const candidates = [
+    env.OPENBROWSER_AUTOMATION_INFO_FILE,
+    env.OPENBROWSER_API_INFO_FILE,
+    userDataPath ? path.join(userDataPath, AUTOMATION_INFO_FILE) : '',
+    env.OPENBROWSER_USER_DATA ? path.join(env.OPENBROWSER_USER_DATA, AUTOMATION_INFO_FILE) : '',
+  ];
+  for (const base of defaultUserDataPaths()) {
+    candidates.push(path.join(base, AUTOMATION_INFO_FILE));
+  }
+  candidates.push(path.join(process.cwd(), AUTOMATION_INFO_FILE));
+  candidates.push(path.join(__dirname, '..', AUTOMATION_INFO_FILE));
+  return [...new Set(candidates.map((v) => String(v || '').trim()).filter(Boolean))];
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+function readAutomationInfoSync(userDataPath = '') {
+  for (const filePath of automationInfoFileCandidates({ userDataPath })) {
+    try {
+      if (fs.existsSync(filePath)) {
+        const raw = fs.readFileSync(filePath, 'utf8');
+        const data = JSON.parse(raw);
+        if (data && Number.isInteger(data.port) && data.port > 0) {
+          if (data.pid !== undefined && data.pid !== null) {
+            if (!isProcessAlive(Number(data.pid))) {
+              continue;
+            }
+          }
+          return data;
+        }
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+async function readAutomationInfo(userDataPath = '') {
+  for (const filePath of automationInfoFileCandidates({ userDataPath })) {
+    try {
+      const raw = await fsp.readFile(filePath, 'utf8');
+      const data = JSON.parse(raw);
+      if (data && Number.isInteger(data.port) && data.port > 0) {
+        if (data.pid !== undefined && data.pid !== null) {
+          if (!isProcessAlive(Number(data.pid))) {
+            continue;
+          }
+        }
+        return data;
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+function readDiscoveryPort(userDataPath = '') {
+  const data = readAutomationInfoSync(userDataPath);
+  return data?.port || null;
+}
+
+async function removeAutomationInfo(userDataPath, expectedPid = process.pid) {
+  if (!userDataPath) return;
+  const filePath = path.join(userDataPath, AUTOMATION_INFO_FILE);
+  try {
+    const raw = await fsp.readFile(filePath, 'utf8');
+    const data = JSON.parse(raw);
+    if (expectedPid && data && Number.isInteger(data.pid) && data.pid !== expectedPid) {
+      return;
+    }
+    await fsp.rm(filePath, { force: true }).catch(() => {});
+  } catch (_) {}
+}
+
+function removeAutomationInfoSync(userDataPath, expectedPid = process.pid) {
+  if (!userDataPath) return;
+  const filePath = path.join(userDataPath, AUTOMATION_INFO_FILE);
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const data = JSON.parse(raw);
+    if (expectedPid && data && Number.isInteger(data.pid) && data.pid !== expectedPid) {
+      return;
+    }
+    fs.rmSync(filePath, { force: true });
+  } catch (_) {}
+}
 
 function responseHeaders(origin = '', extra = {}) {
   const headers = {
@@ -421,9 +629,18 @@ async function resolveWebSocketDebuggerUrl(port, profileId) {
 class LocalApiServer {
   constructor(options = {}) {
     this.host = options.host || '127.0.0.1';
-    const configuredPort = options.port === undefined ? DEFAULT_API_PORT : Number(options.port);
-    const usable = Number.isInteger(configuredPort) && configuredPort >= 0 && configuredPort <= 65535;
-    this.requestedPort = usable ? configuredPort : DEFAULT_API_PORT;
+    let targetPort;
+    if (options.port !== undefined) {
+      const explicit = Number(options.port);
+      if (Number.isInteger(explicit) && explicit >= 0 && explicit <= 65535) {
+        targetPort = explicit;
+      } else {
+        targetPort = resolveDefaultApiPort();
+      }
+    } else {
+      targetPort = resolveDefaultApiPort();
+    }
+    this.requestedPort = targetPort;
     // A busy port must not take the whole automation stack down with it, so by
     // default we fall back to an OS-assigned one and report the real port back.
     this.allowPortFallback = options.allowPortFallback !== false;
@@ -518,6 +735,13 @@ class LocalApiServer {
       console.warn(`[local-api] port ${this.portFallback.requested} is unavailable (${this.portFallback.reason}); listening on ${this.port}`);
     }
     this.startedAt = Date.now();
+    if (this.userDataPath) {
+      try {
+        await writeAutomationInfo(this.userDataPath, this.info());
+      } catch (err) {
+        console.warn(`[local-api] failed to write automation discovery info: ${err.message}`);
+      }
+    }
     return this.info();
   }
 
@@ -571,6 +795,11 @@ class LocalApiServer {
     const server = this.server;
     this.server = null;
     this.portFallback = null;
+    if (this.userDataPath) {
+      try {
+        await removeAutomationInfo(this.userDataPath, process.pid);
+      } catch (_) {}
+    }
     await new Promise((resolve) => {
       server.close(() => resolve());
       // Idle keep-alive sockets keep close() waiting forever, which would hang
@@ -1012,6 +1241,50 @@ class LocalApiServer {
       }
     }
 
+    if (pathname === '/human-typing' || pathname === '/api/human-typing' || pathname === '/api/v1/browser/human-typing') {
+      if (!this.engine) return fail('browser engine unavailable');
+      const id = firstString(input, ['profile_id', 'profileId', 'user_id', 'userId', 'id']);
+      if (!id) return fail('profile id required');
+      const text = input?.text !== undefined ? String(input.text) : (input?.content !== undefined ? String(input.content) : '');
+      if (text.length > 5000) return fail('text exceeds maximum allowed length of 5000 characters', 400);
+      const target = input?.target ?? input?.targetDescription ?? input?.selector ?? null;
+      const speed = input?.speed || input?.profileSpeed || input?.typingSpeed || 'medium';
+      const clear = Boolean(input?.clear || input?.isClear);
+      const sensitive = Boolean(input?.sensitive || input?.isPassword || input?.password);
+      const typoRate = input?.typoRate !== undefined ? Number(input.typoRate) : undefined;
+      const delayRange = Array.isArray(input?.delayRange) ? input.delayRange : undefined;
+      const options = input?.options && typeof input.options === 'object' ? input.options : {};
+      const mergedOptions = {
+        ...options,
+        speed,
+        clear,
+        sensitive,
+        ...(typoRate !== undefined ? { typoRate } : {}),
+        ...(delayRange !== undefined ? { delayRange } : {}),
+      };
+
+      if (!this.typingQueues) this.typingQueues = new Map();
+      const prev = this.typingQueues.get(id) || Promise.resolve();
+      let release;
+      const lock = new Promise((resolve) => { release = resolve; });
+      this.typingQueues.set(id, lock);
+
+      try {
+        await prev;
+        const result = await this.engine.dispatchHumanTyping(id, target, text, mergedOptions);
+        return ok(result);
+      } catch (error) {
+        const msg = String(error?.message || error || 'human typing failed');
+        const status = /not found/i.test(msg) ? 404 : (/not running|unavailable|required/i.test(msg) ? 400 : 500);
+        return fail(msg, status);
+      } finally {
+        release();
+        if (this.typingQueues.get(id) === lock) {
+          this.typingQueues.delete(id);
+        }
+      }
+    }
+
     // ---- proxy library ----
     if (pathname === '/api/v2/proxy-list/list' || pathname === '/api/proxy/list') {
       if (!this.proxyStore) return fail('proxy store unavailable');
@@ -1112,7 +1385,9 @@ class LocalApiServer {
     if (pathname === '/api/sync/start' || pathname === '/api/window-sync/start') {
       if (!this.syncBridge) return fail('sync bridge unavailable');
       if (Object.prototype.hasOwnProperty.call(input || {}, 'settings')) {
-        return fail('sync settings must be updated through /api/sync/settings', 400);
+        const err = new Error('sync settings must be updated through /api/sync/settings');
+        err.statusCode = 400;
+        throw err;
       }
       let ids;
       try {
@@ -1364,4 +1639,23 @@ class LocalApiServer {
   }
 }
 
-module.exports = { LocalApiServer, resolveWebSocketDebuggerUrl };
+module.exports = {
+  LocalApiServer,
+  resolveWebSocketDebuggerUrl,
+  selectRandomApiPort,
+  resolveConfiguredApiPort,
+  resolveDefaultApiPort,
+  writeAutomationInfo,
+  writeAutomationInfoSync,
+  readAutomationInfo,
+  readAutomationInfoSync,
+  readDiscoveryPort,
+  removeAutomationInfo,
+  removeAutomationInfoSync,
+  isProcessAlive,
+  DEFAULT_API_PORT,
+  DYNAMIC_PORT_MIN,
+  DYNAMIC_PORT_MAX,
+  EXCLUDED_PORTS,
+  AUTOMATION_INFO_FILE,
+};

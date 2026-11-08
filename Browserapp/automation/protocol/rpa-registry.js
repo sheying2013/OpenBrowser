@@ -28,6 +28,7 @@ const RPA_PLUS_ACTIONS = Object.freeze([
   'focusElement',
   'click',
   'inputContent',
+  'humanTyping',
   'scrollPage',
   'uploadAttachment',
   'javaScript',
@@ -84,6 +85,10 @@ const ACTION_PARAM_SCHEMA = Object.freeze({
     defaults: { selectorRadio: 'CSS', button: 'left', type: 'click' },
   },
   inputContent: { fields: ['selector', 'selectorRadio', 'serial', 'content', 'intervals', 'isClear'], defaults: { selectorRadio: 'CSS' } },
+  humanTyping: {
+    fields: ['selector', 'selectorRadio', 'serial', 'content', 'text', 'speed', 'isClear', 'clear', 'typoRate', 'sensitive'],
+    defaults: { selectorRadio: 'CSS', speed: 'medium' },
+  },
   scrollPage: {
     fields: ['distance', 'type', 'scrollType', 'position', 'rangeType', 'selectorRadio', 'selector', 'serial', 'randomWheelDistance', 'randomWheelSleepTime'],
     defaults: { type: 'smooth', rangeType: 'window', selectorRadio: 'CSS' },

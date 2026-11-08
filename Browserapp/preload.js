@@ -28,6 +28,10 @@ contextBridge.exposeInMainWorld('ops', Object.freeze({
   stopProfile: (id) => ipcRenderer.invoke('profiles:stop', id),
   clearProfileCacheCookies: (id) => ipcRenderer.invoke('profiles:clear-cache-cookies', id),
   profileStatus: () => ipcRenderer.invoke('profiles:status'),
+  queryProfiles: (options) => ipcRenderer.invoke('profiles:query', options),
+  profileQuery: (options) => ipcRenderer.invoke('profiles:query', options),
+  getProfile: (id) => ipcRenderer.invoke('profiles:get', id),
+  profileGet: (id) => ipcRenderer.invoke('profiles:get', id),
   testProfileProxy: (profile) => ipcRenderer.invoke('profiles:test-proxy', profile),
   checkProfileProxy: (profile) => ipcRenderer.invoke('profiles:check-proxy', profile),
   refreshProfileProxy: (profile) => ipcRenderer.invoke('profiles:refresh-proxy', profile),
@@ -88,6 +92,10 @@ contextBridge.exposeInMainWorld('ops', Object.freeze({
   proxyDelete: (ids) => ipcRenderer.invoke('proxy:delete', ids),
   proxyCheck: (payload) => ipcRenderer.invoke('proxy:check', payload),
   proxyCheckMany: (payload) => ipcRenderer.invoke('proxy:check-many', payload || {}),
+  proxyProviderFetch: (payload) => ipcRenderer.invoke('proxy:provider-fetch', payload || {}),
+  fetchProviderProxies: (payload) => ipcRenderer.invoke('proxy:provider-fetch', payload || {}),
+  proxyBatchSpeedTest: (payload) => ipcRenderer.invoke('proxy:batch-speed-test', payload || {}),
+  batchSpeedTest: (payload) => ipcRenderer.invoke('proxy:batch-speed-test', payload || {}),
   cloudGetConfig: () => ipcRenderer.invoke('cloud:get-config'),
   cloudSetConfig: (cloud) => ipcRenderer.invoke('cloud:set-config', cloud),
   cloudChooseDir: () => ipcRenderer.invoke('cloud:choose-dir'),
@@ -97,6 +105,10 @@ contextBridge.exposeInMainWorld('ops', Object.freeze({
   cloudProfilePull: (payload) => ipcRenderer.invoke('cloud:profile-pull', payload || {}),
   cloudExportFile: (payload) => ipcRenderer.invoke('cloud:export-file', payload || {}),
   cloudImportFile: (payload) => ipcRenderer.invoke('cloud:import-file', payload || {}),
+  startCookieRobot: (profileId, config) => ipcRenderer.invoke('cookie-robot:start', profileId, config),
+  stopCookieRobot: (profileId) => ipcRenderer.invoke('cookie-robot:stop', profileId),
+  getCookieRobotRecords: (profileId) => ipcRenderer.invoke('cookie-robot:get-records', profileId),
+  getCookieRobotStatus: (profileId) => ipcRenderer.invoke('cookie-robot:status', profileId),
   onEvent: (callback) => {
     const handler = (_event, value) => callback(value);
     ipcRenderer.on('engine:event', handler);

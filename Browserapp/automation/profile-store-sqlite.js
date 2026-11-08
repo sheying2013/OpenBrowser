@@ -477,6 +477,138 @@ class ProfileStoreSqlite {
   }
 
   /**
+   * SQL-level paginated query with lightweight summary projection.
+   * Decrypts only the current page slice rather than the entire table.
+   *
+   * @param {Object} [options]
+   * @param {number} [options.page=1]
+   * @param {number} [options.pageSize=50]
+   * @param {Object} [options.filters]
+   * @param {string|Object} [options.sort='number ASC']
+   * @returns {{ total: number, page: number, pageSize: number, rows: Array<Object> }}
+   */
+  queryProfilesPage(options = {}) {
+    if (!this.db || !this.isOpen) {
+      throw new Error('Database is not open');
+    }
+
+    const page = Math.max(1, Number.parseInt(options.page, 10) || 1);
+    const pageSize = Math.max(1, Math.min(1000, Number.parseInt(options.pageSize, 10) || 50));
+    const offset = (page - 1) * pageSize;
+
+    const filters = options.filters || {};
+    const whereClauses = [];
+    const params = [];
+
+    // 1. Trashed filter
+    if (typeof filters.trashed === 'boolean') {
+      whereClauses.push('trashed = ?');
+      params.push(filters.trashed ? 1 : 0);
+    } else if (typeof filters.trashed === 'number') {
+      whereClauses.push('trashed = ?');
+      params.push(filters.trashed ? 1 : 0);
+    } else if (filters.activeGroupFilter === 'trash') {
+      whereClauses.push('trashed = 1');
+    } else if (filters.trashed === 'all' || filters.includeTrashed === true) {
+      // Do not filter on trashed
+    } else {
+      whereClauses.push('trashed = 0');
+    }
+
+    // 2. Group filter
+    const targetGroup = filters.groupId !== undefined ? filters.groupId : filters.activeGroupFilter;
+    if (targetGroup === 'ungrouped') {
+      whereClauses.push('(group_id IS NULL OR group_id = \'\')');
+    } else if (targetGroup && targetGroup !== 'all' && targetGroup !== 'trash') {
+      whereClauses.push('group_id = ?');
+      params.push(String(targetGroup));
+    }
+
+    // 3. Name filter (SQL LIKE with % and _ escaped)
+    const nameTerm = String(filters.name || filters.query || filters.search || '').trim();
+    if (nameTerm) {
+      const escaped = nameTerm.replace(/([\\%_])/g, '\\$1');
+      whereClauses.push("name LIKE ? ESCAPE '\\'");
+      params.push(`%${escaped}%`);
+    }
+
+    // 4. Exact ID filter
+    if (filters.id) {
+      whereClauses.push('id = ?');
+      params.push(String(filters.id));
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    // 5. Total count query
+    const countSql = `SELECT count(*) as total FROM profiles ${whereSql};`;
+    const countRow = this.db.prepare(countSql).get(...params);
+    const total = Number(countRow?.total || 0);
+
+    if (total === 0 || offset >= total) {
+      return { total, page, pageSize, rows: [] };
+    }
+
+    // 6. Sort clause
+    let sortCol = 'number';
+    let sortDir = 'ASC';
+    const rawSort = options.sort;
+    if (typeof rawSort === 'string') {
+      const parts = rawSort.trim().split(/\s+/);
+      if (parts[0]) sortCol = parts[0].toLowerCase();
+      if (parts[1] && /^desc$/i.test(parts[1])) sortDir = 'DESC';
+    } else if (rawSort && typeof rawSort === 'object') {
+      if (rawSort.field) sortCol = String(rawSort.field).toLowerCase();
+      if (rawSort.order && /^desc$/i.test(String(rawSort.order))) sortDir = 'DESC';
+    }
+
+    let orderSql = `ORDER BY number ${sortDir}, id ${sortDir}`;
+    if (sortCol === 'name') {
+      orderSql = `ORDER BY name ${sortDir}, id ASC`;
+    } else if (sortCol === 'createdat' || sortCol === 'created_at') {
+      orderSql = `ORDER BY created_at ${sortDir}, id ASC`;
+    } else if (sortCol === 'updatedat' || sortCol === 'updated_at') {
+      orderSql = `ORDER BY updated_at ${sortDir}, id ASC`;
+    }
+
+    // 7. Page data query (limit/offset)
+    const pageSql = `SELECT id, number, name, group_id, trashed, trashed_at, created_at, updated_at, data FROM profiles ${whereSql} ${orderSql} LIMIT ? OFFSET ?;`;
+    const queryParams = [...params, pageSize, offset];
+    const rawRows = this.db.prepare(pageSql).all(...queryParams);
+
+    // 8. Decrypt and project lightweight summary rows (only for current page)
+    const rows = rawRows.map((row) => {
+      const decoded = decodeProfileData(row.data) || {};
+      return {
+        id: String(row.id),
+        number: row.number != null ? Number(row.number) : (decoded.number != null ? Number(decoded.number) : null),
+        name: String(row.name || decoded.name || row.id),
+        title: decoded.title || '',
+        groupId: row.group_id != null ? String(row.group_id) : (decoded.groupId != null ? String(decoded.groupId) : null),
+        browser: decoded.browser || 'Google Chrome',
+        proxy: decoded.proxy || 'direct',
+        proxyId: decoded.proxyId || null,
+        networkMode: decoded.networkMode || 'direct',
+        tag: decoded.tag || '',
+        tags: Array.isArray(decoded.tags) ? decoded.tags : (decoded.tag ? [decoded.tag] : []),
+        notes: decoded.notes || '',
+        exitIp: decoded.exitIp || null,
+        exitCountryCode: decoded.exitCountryCode || null,
+        exitCheckedAt: decoded.exitCheckedAt || null,
+        platform: decoded.platform ? { type: decoded.platform.type, startUrl: decoded.platform.startUrl } : undefined,
+        os: decoded.os || undefined,
+        running: Boolean(decoded.running),
+        trashed: Boolean(row.trashed),
+        trashedAt: row.trashed_at || (decoded.trashedAt ? String(decoded.trashedAt) : null),
+        createdAt: row.created_at || (decoded.createdAt ? String(decoded.createdAt) : null),
+        updatedAt: row.updated_at || (decoded.updatedAt ? String(decoded.updatedAt) : null),
+      };
+    });
+
+    return { total, page, pageSize, rows };
+  }
+
+  /**
    * Soft-delete profiles into the Recycle Bin (Issue #37)
    * @param {string[]} ids
    * @param {string} [nowIso]

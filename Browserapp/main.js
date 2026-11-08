@@ -28,6 +28,7 @@ const { createCoalescedWriter } = require('./automation/coalesced-writer');
 const { deepEqual } = require('./automation/object-utils');
 const { startAutomation } = require('./automation');
 const cloudSync = require('./automation/cloud-sync');
+const { fetchProviderProxies, batchSpeedTest } = require('./automation/proxy-providers');
 const credentialCrypto = require('./credential-crypto');
 const { validateDataRootIsolationSecure, ensureDataRootIsolationSecure, assertProfileId } = require('./automation/isolation');
 const { createCrashHandler, buildHelperProcessGoneReport } = require('./automation/crash-report');
@@ -1781,9 +1782,14 @@ app.whenReady().then(async () => {
       },
       tile,
       emit,
-      port: Number(process.env.OPENBROWSER_API_PORT || 50325),
+      port: (process.env.OPENBROWSER_API_PORT !== undefined && String(process.env.OPENBROWSER_API_PORT).trim() !== '' && Number.isFinite(Number(process.env.OPENBROWSER_API_PORT)))
+        ? Number(process.env.OPENBROWSER_API_PORT)
+        : require('./automation/local-api-server').selectRandomApiPort(),
       apiKey: process.env.OPENBROWSER_API_KEY || undefined,
     });
+    if (automation?.info) {
+      await require('./automation/local-api-server').writeAutomationInfo(app.getPath('userData'), automation.info);
+    }
   } catch (error) {
     emit({ type: 'local-api-error', message: error.message });
     console.error('Local API failed to start:', error.message);
@@ -1970,6 +1976,8 @@ app.whenReady().then(async () => {
   registerTrustedIpc('profiles:stop', (_event, id) => engine.stop(id));
   registerTrustedIpc('profiles:clear-cache-cookies', (_event, id) => engine.clearProfileCacheAndCookies(id));
   registerTrustedIpc('profiles:status', () => engine.status());
+  registerTrustedIpc('profiles:query', (_event, options) => engine.queryProfilesPage(options));
+  registerTrustedIpc('profiles:get', (_event, id) => engine.getProfile(id));
   registerTrustedIpc('profiles:test-proxy', (_event, profile) => engine.testProxy(profile));
   registerTrustedIpc('profiles:check-proxy', (_event, profile) => engine.checkProxy(profile, { persist: true }));
 
@@ -2201,6 +2209,32 @@ app.whenReady().then(async () => {
     }
     return { results, ok: results.filter((r) => r.ok).length, fail: results.filter((r) => !r.ok).length };
   });
+  registerTrustedIpc('proxy:provider-fetch', async (_event, payload) => {
+    const url = String(payload?.url || '').trim();
+    if (!url) throw new Error('提取 URL 不能为空');
+    return await fetchProviderProxies(url, {
+      template: payload?.template,
+      protocol: payload?.protocol,
+      fieldMapping: payload?.fieldMapping,
+      limit: payload?.limit,
+      timeoutMs: payload?.timeoutMs,
+      remark: payload?.remark,
+    });
+  });
+  registerTrustedIpc('proxy:batch-speed-test', async (_event, payload) => {
+    const store = proxyStore();
+    const ids = Array.isArray(payload?.ids) ? payload.ids.map(String) : [];
+    const allProxies = store.list();
+    const targetProxies = ids.length
+      ? ids.map((id) => store.get(id)).filter(Boolean)
+      : allProxies;
+    if (!targetProxies.length) throw new Error('没有可测速的代理');
+    return await batchSpeedTest(targetProxies, {
+      store,
+      concurrency: payload?.concurrency || 16,
+      timeoutMs: payload?.timeoutMs || 6000,
+    });
+  });
   registerTrustedIpc('profiles:refresh-proxy', (_event, profile) => engine.refreshProfileProxy(profile));
   registerTrustedIpc('profiles:apply-proxy-fingerprint', async (_event, profile) => {
     const network = await engine.checkProxy(profile, { persist: true });
@@ -2362,11 +2396,26 @@ app.whenReady().then(async () => {
   registerTrustedIpc('automation:mcp-paths', () => ({
     mcpScript: path.join(__dirname, 'automation', 'mcp-server.js'),
     appRoot: __dirname,
-    port: automation?.info?.port || Number(process.env.OPENBROWSER_API_PORT || 50325),
+    port: automation?.info?.port
+      || (process.env.OPENBROWSER_API_PORT !== undefined && Number.isFinite(Number(process.env.OPENBROWSER_API_PORT)) ? Number(process.env.OPENBROWSER_API_PORT) : null)
+      || require('./automation/local-api-server').readDiscoveryPort(app.getPath('userData')),
     apiKey: automation?.apiKey || process.env.OPENBROWSER_API_KEY || '',
     apiKeyFile: automation?.apiKeyFile || path.join(app.getPath('userData'), 'local-api-key.txt'),
     localApi: automation?.info || null,
   }));
+
+  registerTrustedIpc('cookie-robot:start', async (_event, profileId, config) => {
+    return engine.startCookieRobot(String(profileId || ''), config || {});
+  });
+  registerTrustedIpc('cookie-robot:stop', async (_event, profileId) => {
+    return engine.stopCookieRobot(String(profileId || ''));
+  });
+  registerTrustedIpc('cookie-robot:get-records', async (_event, profileId) => {
+    return engine.getCookieRobotRecords(String(profileId || ''));
+  });
+  registerTrustedIpc('cookie-robot:status', async (_event, profileId) => {
+    return engine.getCookieRobotStatus(String(profileId || ''));
+  });
 
   await createWindow();
   startAppUpdateWatcher();

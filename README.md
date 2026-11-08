@@ -59,7 +59,7 @@ The app supports multiple UI languages, currently including English and Chinese.
 | **Extension center** | Built-in, recommended, and local extensions loaded per environment. |
 | **Window sync** | CDP-based synchronization for clicks, scrolling, input, and tabs. |
 | **Local RPA** | Flows for navigation, waiting, clicking, typing, and screenshots. |
-| **Local API / MCP** | Local integration endpoint on `127.0.0.1:50325` by default. |
+| **Local API / MCP** | Dynamic high-port (41000-59999) endpoint with discovery file (`automation-info.json`) or custom `OPENBROWSER_API_PORT`. |
 | **Independent kernel** | Download a standalone Chromium kernel or use a custom local path. |
 | **Backup options** | Local, WebDAV, GitHub, and cloud-drive backups when explicitly enabled. |
 

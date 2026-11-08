@@ -72,6 +72,7 @@ if (!userAgentModule.__navigatorProtoHardened) {
 const { buildUaProfile, cdpUserAgentOverride, buildAcceptLanguageHeader } = require('./automation/user-agent');
 const { sanitizeUrlForLog } = require('./automation/log-sanitizer');
 const { getPlatformFontPayload } = require('./automation/query-local-font-blob-gate');
+const { CookieRobot } = require('./automation/cookie-robot');
 
 // Stable identity of the document-start config. Two inject payloads built from the same
 // fingerprint serialise identically, so this is what decides whether a live tab still matches
@@ -1876,11 +1877,13 @@ class BrowserEngine {
     // merge IP-detected geo/tz into profile for fingerprint apply
     const enriched = {
       ...profile,
+      kernelVersion: profile.kernelVersion || this.kernelStatus()?.kernel?.version || '',
       exitTimezone: profile.exitTimezone || network.timezone || '',
       exitLatitude: profile.exitLatitude ?? network.latitude,
       exitLongitude: profile.exitLongitude ?? network.longitude,
+      engine: this,
     };
-    const fp = fingerprint || buildFingerprint(enriched);
+    const fp = fingerprint || buildFingerprint(enriched, { engine: this });
     const fpHash = fingerprintConfigHash(fp);
     // Track which CDP page targets already received inject (new tabs must not skip FP)
     const applied = options.appliedTargetIds instanceof Set ? options.appliedTargetIds : new Set();
@@ -1946,7 +1949,6 @@ class BrowserEngine {
         if (fontBlobBridge?.channelName && tab.webSocketDebuggerUrl) {
           if (options?.trackOn) { options.trackOn.fontBlobBridge = fontBlobBridge; options.trackOn.fingerprint = fp; }
           try {
-            await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.enable', {}).catch(() => {});
             await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.addBinding', { name: fontBlobBridge.channelName }).catch((err) => {
               const msg = String(err?.message || err);
               if (!/already exists/i.test(msg)) {}
@@ -2066,11 +2068,13 @@ class BrowserEngine {
     const network = this.networkInfo.get(profile.id) || {};
     const enriched = {
       ...profile,
+      kernelVersion: profile.kernelVersion || this.kernelStatus()?.kernel?.version || '',
       exitTimezone: profile.exitTimezone || network.timezone || '',
       exitLatitude: profile.exitLatitude ?? network.latitude,
       exitLongitude: profile.exitLongitude ?? network.longitude,
+      engine: this,
     };
-    const baseFp = fingerprint || item.fingerprint || buildFingerprint(enriched);
+    const baseFp = fingerprint || item.fingerprint || buildFingerprint(enriched, { engine: this });
     const injectFp = item.nativeKernelFingerprint
       ? fingerprintForNativeKernelInject(baseFp)
       : baseFp;
@@ -2097,7 +2101,6 @@ class BrowserEngine {
     if (fontBlobBridge?.channelName) {
       if (!item.fontBlobBridge) item.fontBlobBridge = fontBlobBridge;
       try {
-        await sessionCall('Runtime.enable', {}).catch(() => {});
         await sessionCall('Runtime.addBinding', { name: fontBlobBridge.channelName }).catch((err) => {
           const msg = String(err?.message || err);
           if (!/already exists/i.test(msg)) {
@@ -2563,7 +2566,7 @@ class BrowserEngine {
       ? (this.profiles.get(profileOrId) || this.running.get(profileOrId)?.profile)
       : profileOrId;
     if (!profile) throw new Error('profile not found');
-    return buildFingerprint(profile);
+    return buildFingerprint(profile, { engine: this });
   }
 
   isolationAudit() {
@@ -2859,7 +2862,6 @@ class BrowserEngine {
       const fontBlobBridge = injectFp?.fontBlobBridge || profile?.fingerprint?.fontBlobBridge || item?.fontBlobBridge;
       if (fontBlobBridge?.channelName && page?.webSocketDebuggerUrl) {
         try {
-          await cdp.call(page.webSocketDebuggerUrl, 'Runtime.enable', {}).catch(() => {});
           await cdp.call(page.webSocketDebuggerUrl, 'Runtime.addBinding', { name: fontBlobBridge.channelName }).catch((err) => {
             const msg = String(err?.message || err);
             if (!/already exists/i.test(msg)) {}
@@ -3082,7 +3084,8 @@ class BrowserEngine {
           exitTimezone: timezone,
           exitLatitude: pageNetwork?.latitude ?? profile.exitLatitude,
           exitLongitude: pageNetwork?.longitude ?? profile.exitLongitude,
-        });
+          engine: this,
+        }, { engine: this });
       } catch (_) {
         return null;
       }
@@ -3333,6 +3336,10 @@ class BrowserEngine {
       item.cleanedUp = false;
       item.stopping = true;
       this.clearRunningWatch(item);
+      if (item.cookieRobot) {
+        try { item.cookieRobot.stop(); } catch (_) {}
+        item.cookieRobot = null;
+      }
       item.workerFingerprintConnection?.close();
       item.workerFingerprintConnection = null;
 
@@ -4008,7 +4015,8 @@ class BrowserEngine {
       exitTimezone: profile.exitTimezone || pageNetwork.timezone || '',
       exitLatitude: profile.exitLatitude ?? pageNetwork.latitude,
       exitLongitude: profile.exitLongitude ?? pageNetwork.longitude,
-    });
+      engine: this,
+    }, { engine: this });
     if (proxyConfig) {
       const meta = profile.proxyMeta || {};
       const major = Number(meta.tlsChromeMajor)
@@ -4803,6 +4811,10 @@ class BrowserEngine {
   async _stop(safe, item) {
     item.stopping = true;
     this.clearRunningWatch(item);
+    if (item.cookieRobot) {
+      try { item.cookieRobot.stop(); } catch (_) {}
+      item.cookieRobot = null;
+    }
     item.workerFingerprintConnection?.close();
     item.workerFingerprintConnection = null;
     const profile = this.profiles.get(safe) || item.profile || {};
@@ -5024,6 +5036,126 @@ class BrowserEngine {
 
   status() { return [...this.profiles.values()].map((profile) => ({ ...profile, ...this.publicRunning(profile.id), network: this.networkInfo.get(profile.id) || null, assignedExtensions: [...(this.assignments.get(profile.id) || [])] })); }
 
+  getProfile(id) {
+    const key = String(id);
+    if (this.usingSqlite && this.sqliteStore) {
+      const stored = this.sqliteStore.getProfile(key);
+      if (stored) {
+        const sanitized = this.sanitizeProfile(stored);
+        if (stored.fingerprint && !sanitized.fingerprint) {
+          sanitized.fingerprint = stored.fingerprint;
+        }
+        if (stored.cookies && !sanitized.cookies) {
+          sanitized.cookies = stored.cookies;
+        }
+        return sanitized;
+      }
+    }
+    const mem = this.profiles.get(key);
+    return mem ? this.sanitizeProfile(mem) : null;
+  }
+
+  queryProfilesPage(options = {}) {
+    if (this.usingSqlite && this.sqliteStore) {
+      const result = this.sqliteStore.queryProfilesPage(options);
+      const rows = result.rows.map((row) => ({
+        ...row,
+        ...this.publicRunning(row.id),
+        network: this.networkInfo.get(row.id) || null,
+        assignedExtensions: [...(this.assignments.get(row.id) || [])],
+      }));
+      return {
+        ...result,
+        rows,
+      };
+    }
+
+    // 非 SQLite 回退（旧 JSON 环境全量降级）
+    const all = [...this.profiles.values()];
+    const filters = options.filters || {};
+    const filtered = all.filter((p) => {
+      if (typeof filters.trashed === 'boolean') {
+        if (Boolean(p.trashed) !== filters.trashed) return false;
+      } else if (filters.activeGroupFilter === 'trash') {
+        if (!p.trashed) return false;
+      } else if (filters.trashed !== 'all' && !filters.includeTrashed) {
+        if (p.trashed) return false;
+      }
+
+      const targetGroup = filters.groupId !== undefined ? filters.groupId : filters.activeGroupFilter;
+      if (targetGroup === 'ungrouped') {
+        if (p.groupId) return false;
+      } else if (targetGroup && targetGroup !== 'all' && targetGroup !== 'trash') {
+        if (String(p.groupId) !== String(targetGroup)) return false;
+      }
+
+      const term = String(filters.name || filters.query || filters.search || '').trim().toLowerCase();
+      if (term) {
+        const name = String(p.name || p.id).toLowerCase();
+        if (!name.includes(term)) return false;
+      }
+      return true;
+    });
+
+    const rawSort = options.sort;
+    let sortCol = 'number';
+    let sortDir = 'ASC';
+    if (typeof rawSort === 'string') {
+      const parts = rawSort.trim().split(/\s+/);
+      if (parts[0]) sortCol = parts[0].toLowerCase();
+      if (parts[1] && /^desc$/i.test(parts[1])) sortDir = 'DESC';
+    } else if (rawSort && typeof rawSort === 'object') {
+      if (rawSort.field) sortCol = String(rawSort.field).toLowerCase();
+      if (rawSort.order && /^desc$/i.test(String(rawSort.order))) sortDir = 'DESC';
+    }
+    const dirMult = sortDir === 'DESC' ? -1 : 1;
+    filtered.sort((a, b) => {
+      if (sortCol === 'name') {
+        return dirMult * String(a.name || a.id).localeCompare(String(b.name || b.id));
+      }
+      if (sortCol === 'createdat' || sortCol === 'created_at') {
+        return dirMult * String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+      }
+      const numA = a.number != null ? Number(a.number) : 0;
+      const numB = b.number != null ? Number(b.number) : 0;
+      return dirMult * (numA - numB);
+    });
+
+    const page = Math.max(1, Number.parseInt(options.page, 10) || 1);
+    const pageSize = Math.max(1, Math.min(1000, Number.parseInt(options.pageSize, 10) || 50));
+    const total = filtered.length;
+    const offset = (page - 1) * pageSize;
+    const sliced = filtered.slice(offset, offset + pageSize);
+    const rows = sliced.map((profile) => ({
+      id: profile.id,
+      number: profile.number,
+      name: profile.name,
+      title: profile.title || '',
+      groupId: profile.groupId || null,
+      browser: profile.browser || 'Google Chrome',
+      proxy: profile.proxy || 'direct',
+      proxyId: profile.proxyId || null,
+      networkMode: profile.networkMode || 'direct',
+      tag: profile.tag || '',
+      tags: Array.isArray(profile.tags) ? profile.tags : (profile.tag ? [profile.tag] : []),
+      notes: profile.notes || '',
+      exitIp: profile.exitIp || null,
+      exitCountryCode: profile.exitCountryCode || null,
+      exitCheckedAt: profile.exitCheckedAt || null,
+      platform: profile.platform ? { type: profile.platform.type, startUrl: profile.platform.startUrl } : undefined,
+      os: profile.os,
+      trashed: Boolean(profile.trashed),
+      trashedAt: profile.trashedAt || null,
+      createdAt: profile.createdAt || null,
+      updatedAt: profile.updatedAt || null,
+      ...this.publicRunning(profile.id),
+      network: this.networkInfo.get(profile.id) || null,
+      assignedExtensions: [...(this.assignments.get(profile.id) || [])],
+    }));
+
+    return { total, page, pageSize, rows };
+  }
+
   async resolveProfileProxyConfig(profile, { allowExtract = true } = {}) {
     const working = this.resolveStoredProxyProfile(this.sanitizeProfile(profile));
     let lastError = null;
@@ -5237,6 +5369,14 @@ class BrowserEngine {
     if ((!working.proxy || /^(direct|offline|none)$/i.test(String(working.proxy))) && !meta.apiExtractUrl) {
       throw Object.assign(new Error('代理模式缺少有效节点，请配置代理或明确选择本地直连'), { code: 'proxy-required' });
     }
+    const allowBroken = Boolean(meta.allowFailedProxy || meta.ignoreBrokenProxy || working.allowFailedProxy || working.ignoreBrokenProxy);
+    if (this.proxyStore && !allowBroken && typeof this.proxyStore.assertLaunchAvailable === 'function') {
+      const proxyItem = (working.proxyId ? this.proxyStore.get?.(working.proxyId) : null)
+        || this.proxyStore.list?.().find((item) => item.raw === working.proxy);
+      if (proxyItem) {
+        this.proxyStore.assertLaunchAvailable(proxyItem, { allowBroken });
+      }
+    }
     const hasProxy = working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy));
     const extractUrl = String(meta.apiExtractUrl || '').trim();
     // Align with refreshProfileProxy: refresh first (rotate IP), then extract current endpoint.
@@ -5437,10 +5577,207 @@ class BrowserEngine {
       .filter((entry) => entry.item?.port && !entry.item.cleanedUp && !entry.item.stopping);
   }
   async sessions() { const result = []; for (const { id, item } of this.runningWithCdp([...this.running.keys()])) { try { result.push({ id, profile: this.profiles.get(id), port: item.port, browser: item.browser.name, tabs: await cdp.tabs(item.port) }); } catch (error) { result.push({ id, profile: this.profiles.get(id), port: item.port, browser: item.browser.name, tabs: [], error: error.message }); } } return result; }
+  async startCookieRobot(profileId, config = {}) {
+    const safeId = String(profileId || '').trim();
+    const item = this.running.get(safeId);
+    if (!item || item.stopping || item.cleanedUp) {
+      const err = new Error(`Environment ${safeId} is not currently running`);
+      err.code = 'PROFILE_NOT_RUNNING';
+      throw err;
+    }
+    if (item.cookieRobot && item.cookieRobot.isRunning()) {
+      const err = new Error(`CookieRobot is already running for environment ${safeId}`);
+      err.code = 'ROBOT_ALREADY_RUNNING';
+      throw err;
+    }
+
+    const robot = new CookieRobot({
+      port: item.port,
+      cdpConnection: item.cdpConnection,
+      profileId: safeId,
+      profile: item.profile,
+      root: item.root,
+      config,
+      emit: (evt) => {
+        this.emit(evt);
+        if (evt.type && evt.type.startsWith('robot-')) {
+          this.emit({ ...evt, type: 'cookie-' + evt.type });
+        }
+      },
+    });
+
+    item.cookieRobot = robot;
+
+    robot.start().catch((err) => {
+      this.emit({
+        type: 'robot-failed',
+        id: safeId,
+        profileId: safeId,
+        error: err.message,
+      });
+      this.emit({
+        type: 'cookie-robot-failed',
+        id: safeId,
+        profileId: safeId,
+        error: err.message,
+      });
+    }).finally(() => {
+      if (item.cookieRobot === robot) {
+        item.cookieRobot = null;
+      }
+    });
+
+    return {
+      started: true,
+      profileId: safeId,
+      status: robot.getStatus(),
+    };
+  }
+  async stopCookieRobot(profileId) {
+    const safeId = String(profileId || '').trim();
+    const item = this.running.get(safeId);
+    if (!item?.cookieRobot) {
+      return { success: false, message: 'CookieRobot is not running for this profile' };
+    }
+    await item.cookieRobot.stop();
+    item.cookieRobot = null;
+    return { success: true, stopped: true, profileId: safeId };
+  }
+  getCookieRobotRecords(profileId) {
+    const safeId = String(profileId || '').trim();
+    const item = this.running.get(safeId);
+    if (item?.cookieRobot) {
+      return item.cookieRobot.getRecords();
+    }
+    const profile = this.profiles.get(safeId);
+    const root = item?.root || (profile ? path.join(this.profileDataRootPath, safeId) : null);
+    if (root) {
+      const recordFile = path.join(root, 'cookie-robot-history.jsonl');
+      if (fs.existsSync(recordFile)) {
+        try {
+          return fs.readFileSync(recordFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+        } catch (_) {}
+      }
+    }
+    return [];
+  }
+  getCookieRobotStatus(profileId) {
+    const safeId = String(profileId || '').trim();
+    const item = this.running.get(safeId);
+    if (item?.cookieRobot) return item.cookieRobot.getStatus();
+    return { running: false, profileId: safeId };
+  }
+  async dispatchHumanTyping(profileId, targetDescription, text, options = {}) {
+    const id = String(profileId || '').trim();
+    if (!id) throw new Error('profileId is required');
+    const item = this.running.get(id);
+    if (!item || !item.port || item.cleanedUp || item.stopping) {
+      throw new Error(`Profile ${id} is not running or CDP session is unavailable`);
+    }
+
+    const { dispatchHumanTyping } = require('./automation/human-typing');
+    const tabs = await cdp.tabs(item.port);
+    if (!tabs || tabs.length === 0) {
+      throw new Error(`No active tab found in profile ${id}`);
+    }
+
+    let targetTab = null;
+    let selector = null;
+    let clear = Boolean(options.clear || options.isClear);
+
+    if (typeof targetDescription === 'string') {
+      const desc = targetDescription.trim();
+      const matchingTab = tabs.find((t) => t.id === desc || t.webSocketDebuggerUrl === desc);
+      if (matchingTab) {
+        targetTab = matchingTab;
+      } else {
+        selector = desc;
+      }
+    } else if (targetDescription && typeof targetDescription === 'object') {
+      const targetId = targetDescription.targetId || targetDescription.tabId;
+      if (targetId) {
+        targetTab = tabs.find((t) => t.id === targetId || t.webSocketDebuggerUrl === targetId);
+        if (!targetTab) {
+          throw new Error(`Target ${targetId} does not belong to active CDP session for profile ${id}`);
+        }
+      }
+      selector = targetDescription.selector || null;
+      if (targetDescription.clear !== undefined) clear = Boolean(targetDescription.clear);
+    }
+
+    if (!targetTab) {
+      targetTab = await cdp.firstTab(item.port);
+      if (!targetTab) targetTab = tabs[0];
+    }
+
+    if (!tabs.some((t) => t.id === targetTab.id)) {
+      throw new Error(`Target tab ${targetTab.id} does not belong to profile ${id}`);
+    }
+
+    let isPassword = Boolean(options.sensitive);
+    if (selector) {
+      const focusResult = await cdp.call(targetTab.webSocketDebuggerUrl, 'Runtime.evaluate', {
+        expression: `(() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return { found: false };
+          el.focus();
+          if (${clear}) {
+            const proto = el instanceof HTMLInputElement ? HTMLInputElement.prototype : (el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : null);
+            const desc = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+            if (desc && desc.set) {
+              desc.set.call(el, '');
+            } else if ('value' in el) {
+              el.value = '';
+            } else {
+              el.textContent = '';
+            }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          return {
+            found: true,
+            tag: String(el.tagName || '').toLowerCase(),
+            type: String(el.getAttribute('type') || '').toLowerCase(),
+            isPassword: el.type === 'password',
+          };
+        })()`,
+        returnByValue: true,
+      });
+      const elInfo = focusResult?.result?.value;
+      if (!elInfo || !elInfo.found) {
+        if (!options.optional) {
+          throw new Error(`Element not found for selector: ${selector}`);
+        }
+        return { success: false, skipped: true, reason: 'selector not found' };
+      }
+      if (elInfo.isPassword) isPassword = true;
+    } else if (clear) {
+      await cdp.clearFocused(item.port).catch(() => {});
+    }
+
+    const profile = this.profiles?.get(id) || item.profile;
+    const speed = options.speed || profile?.simulateInputSpeed || profile?.typingSpeed || 'medium';
+
+    const mergedOptions = {
+      ...options,
+      speed,
+      sensitive: isPassword,
+      clear,
+    };
+
+    const stats = await dispatchHumanTyping(cdp, targetTab.webSocketDebuggerUrl, text, mergedOptions);
+    return {
+      success: true,
+      profileId: id,
+      targetId: targetTab.id,
+      ...stats,
+    };
+  }
 }
 
 module.exports = {
   BrowserEngine,
+  CookieRobot,
   sanitizeInjectionScript,
   appendDiagnosticOutput,
   formatBrowserStartupError,

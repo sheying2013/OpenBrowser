@@ -150,24 +150,34 @@ function newServer(options) {
     await api.stop();
   });
 
+  function assertValidDynamicDefault(port) {
+    if (process.env.OPENBROWSER_API_PORT) {
+      assert.strictEqual(port, Number(process.env.OPENBROWSER_API_PORT));
+    } else {
+      assert.ok(Number.isInteger(port), `port should be integer: ${port}`);
+      assert.ok(port >= 41000 && port <= 59999, `port should be in dynamic range [41000, 59999]: ${port}`);
+      assert.notStrictEqual(port, 50325, 'default port must not be legacy 50325');
+    }
+  }
+
   // ---------- invalid preference ----------
-  check('a nonsense port falls back to the documented default', () => {
+  check('a nonsense port falls back to the dynamic default', () => {
     const api = newServer({ port: 'not-a-port' });
-    assert.strictEqual(api.requestedPort, 50325);
-    assert.strictEqual(api.port, 50325);
+    assertValidDynamicDefault(api.requestedPort);
+    assert.strictEqual(api.port, api.requestedPort);
   });
 
-  check('an out-of-range port falls back to the documented default', () => {
-    assert.strictEqual(newServer({ port: 99999 }).requestedPort, 50325);
-    assert.strictEqual(newServer({ port: 70000 }).requestedPort, 50325);
+  check('an out-of-range port falls back to the dynamic default', () => {
+    assertValidDynamicDefault(newServer({ port: 99999 }).requestedPort);
+    assertValidDynamicDefault(newServer({ port: 70000 }).requestedPort);
   });
 
-  check('a negative port falls back to the documented default', () => {
-    assert.strictEqual(newServer({ port: -1 }).requestedPort, 50325);
+  check('a negative port falls back to the dynamic default', () => {
+    assertValidDynamicDefault(newServer({ port: -1 }).requestedPort);
   });
 
-  check('an omitted port keeps the documented default', () => {
-    assert.strictEqual(newServer({}).requestedPort, 50325);
+  check('an omitted port keeps the dynamic default', () => {
+    assertValidDynamicDefault(newServer({}).requestedPort);
   });
 
   // ---------- lifecycle ----------

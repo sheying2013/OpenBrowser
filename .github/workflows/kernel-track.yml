@@ -1,0 +1,83 @@
+name: Kernel Version Drift Monitor
+
+on:
+  schedule:
+    # 每日一次 (UTC 03:00 / 北京时间 11:00)
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force_alert:
+        description: 'Force issue creation/updating for verification even if no drift'
+        required: false
+        type: boolean
+        default: false
+      baseline_path:
+        description: 'Custom baseline file path (optional, relative to workspace)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  track-kernel:
+    name: Check Kernel Drift & Upstream Releases
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run Kernel Track Pipeline
+        id: track
+        working-directory: Browserapp
+        env:
+          CUSTOM_BASELINE: ${{ github.event.inputs.baseline_path }}
+        run: |
+          set -euo pipefail
+          EXTRA_ARGS=""
+          if [[ -n "$CUSTOM_BASELINE" ]]; then
+            EXTRA_ARGS="--baseline $CUSTOM_BASELINE"
+          fi
+          node scripts/kernel-track.mjs --ci $EXTRA_ARGS
+
+      - name: Manage Drift Issue (Create or Update)
+        # Fork 仓库保护：仅主仓库自动开单，或在 workflow_dispatch 手动触发时允许；兼具 gh 命令软容错
+        if: ${{ (steps.track.outputs.has_drift == 'true' || github.event.inputs.force_alert == 'true') && (github.repository == 'sheying2013/OpenBrowser' || github.event_name == 'workflow_dispatch') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ISSUE_TITLE="[Kernel Tracker] Chromium Upstream Version Drift Alert"
+          ISSUE_BODY_FILE="${{ github.workspace }}/reports/kernel-track/issue-body.md"
+
+          if [[ ! -f "$ISSUE_BODY_FILE" ]]; then
+            echo "Warning: Issue body file not found at $ISSUE_BODY_FILE, skipping issue dispatch."
+            exit 0
+          fi
+
+          echo "Searching for open issue in $GH_REPO with title: $ISSUE_TITLE"
+          EXISTING_ISSUE=$(gh issue list --repo "$GH_REPO" --state open --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" 2>/dev/null | head -n 1 || true)
+
+          if [[ -n "$EXISTING_ISSUE" ]]; then
+            echo "Updating existing open issue #$EXISTING_ISSUE..."
+            gh issue edit "$EXISTING_ISSUE" --repo "$GH_REPO" --body-file "$ISSUE_BODY_FILE" || echo "Warning: Failed to update issue #$EXISTING_ISSUE (check repo permissions)."
+            gh issue comment "$EXISTING_ISSUE" --repo "$GH_REPO" --body "🔄 **[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] 定时巡检发现漂移持续存在或有新版本更新。** 报告正文已自动刷新为最新矩阵。" || echo "Warning: Failed to append issue comment."
+          else
+            echo "Creating new tracking issue..."
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" --body-file "$ISSUE_BODY_FILE" || echo "Warning: Failed to create issue in $GH_REPO (check repo permissions)."
+          fi
+
+      - name: Upload Kernel Track Report Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-track-report
+          path: reports/kernel-track/
+          retention-days: 14

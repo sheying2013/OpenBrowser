@@ -42,7 +42,53 @@ function paginate(items = [], page = 1, pageSize = 10) {
   };
 }
 
-  const api = { filterProfiles, paginate };
+function calculateVirtualRange({ total = 0, scrollTop = 0, viewportHeight = 600, rowHeight = 44, overscan = 5 } = {}) {
+  if (total <= 0) {
+    return { startIndex: 0, endIndex: 0, topPadding: 0, bottomPadding: 0 };
+  }
+  const h = Math.max(1, rowHeight);
+  const start = Math.max(0, Math.floor(scrollTop / h) - overscan);
+  const visibleCount = Math.ceil(viewportHeight / h);
+  const end = Math.min(total, Math.floor(scrollTop / h) + visibleCount + overscan);
+  const topPadding = start * h;
+  const bottomPadding = Math.max(0, (total - end) * h);
+  return {
+    startIndex: start,
+    endIndex: end,
+    topPadding,
+    bottomPadding,
+  };
+}
+
+function projectProfileSummary(profile) {
+  if (!profile || typeof profile !== 'object') return null;
+  return {
+    id: String(profile.id),
+    number: profile.number != null ? Number(profile.number) : null,
+    name: String(profile.name || profile.id),
+    title: profile.title || '',
+    groupId: profile.groupId != null ? String(profile.groupId) : null,
+    browser: profile.browser || 'Google Chrome',
+    proxy: profile.proxy || 'direct',
+    proxyId: profile.proxyId || null,
+    networkMode: profile.networkMode || 'direct',
+    tag: profile.tag || '',
+    tags: Array.isArray(profile.tags) ? profile.tags : (profile.tag ? [profile.tag] : []),
+    notes: profile.notes || '',
+    exitIp: profile.exitIp || null,
+    exitCountryCode: profile.exitCountryCode || null,
+    exitCheckedAt: profile.exitCheckedAt || null,
+    platform: profile.platform ? { type: profile.platform.type, startUrl: profile.platform.startUrl } : undefined,
+    os: profile.os,
+    running: Boolean(profile.running),
+    trashed: Boolean(profile.trashed),
+    trashedAt: profile.trashedAt || null,
+    createdAt: profile.createdAt || null,
+    updatedAt: profile.updatedAt || null,
+  };
+}
+
+  const api = { filterProfiles, paginate, calculateVirtualRange, projectProfileSummary };
   if (typeof module === 'object' && module.exports) {
     module.exports = api;
   } else if (typeof window !== 'undefined') {

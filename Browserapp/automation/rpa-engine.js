@@ -622,7 +622,7 @@ class RpaEngine {
       return;
     }
 
-    if (type === 'typetext' || type === 'type' || type === 'input' || type === 'inserttext' || type === 'inputcontent') {
+    if (type === 'typetext' || type === 'type' || type === 'input' || type === 'inserttext' || type === 'inputcontent' || type === 'humantyping' || type === 'simulatetype' || type === 'simulatetyping' || type === '仿真输入') {
       const isRandom = params.isRandom === '1' || params.isRandom === 1 || params.isRandom === true;
       let inputText = '';
       if (isRandom && params.randomContent) {
@@ -639,6 +639,10 @@ class RpaEngine {
       const optional = isOptionalElementStep(params);
       const target = resolveElementTarget(params, variables);
       const selector = target.selector;
+      const isHumanAction = type === 'humantyping' || type === 'simulatetype' || type === 'simulatetyping' || type === '仿真输入';
+      const humanTyping = isHumanAction || Boolean(params.human || params.intervals);
+      const speed = params.speed || 'medium';
+      const sensitive = Boolean(params.sensitive);
 
       if (clear && !selector) await cdp.clearFocused(port).catch(() => {});
       if (selector) {
@@ -655,9 +659,10 @@ class RpaEngine {
             // (keydown/keyup with a Shift bracket where the layout needs one)
             // rather than written straight into the element. Pass `human` to
             // add slip-and-correct behaviour on top of the key timing.
-            const humanTyping = Boolean(params.human || params.intervals);
             await humanInput.typeText(cdp, ws, inputText, {
               human: humanTyping,
+              speed,
+              sensitive,
               delayRange: inputDelayRange(params, humanTyping),
               typoConfig: params.typoConfig,
             });
@@ -672,9 +677,10 @@ class RpaEngine {
       } else {
         const focused = await cdp.focusedEditableTab(port);
         if (!focused) throw new Error('No focused text input was found in the visible tab');
-        const humanTyping = Boolean(params.human || params.intervals);
         await humanInput.typeText(cdp, focused.tab.webSocketDebuggerUrl, inputText, {
           human: humanTyping,
+          speed,
+          sensitive,
           delayRange: inputDelayRange(params, humanTyping),
           typoConfig: params.typoConfig,
         });

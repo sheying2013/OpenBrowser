@@ -9,6 +9,7 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const read = (name) => fs.readFileSync(path.join(root, name), 'utf8');
 const { backgroundNetworkFlagsForProfile } = require('../engine');
+const { buildFingerprint } = require('./fingerprint');
 
 const results = [];
 function check(name, fn) {
@@ -110,6 +111,44 @@ check('every editor control the renderer reaches for exists in the page', () => 
   assert.ok(referenced.size >= 100, `expected the editor to drive many controls (found ${referenced.size})`);
   const missing = [...referenced].filter((id) => !html.includes(`id="${id}"`));
   assert.deepStrictEqual(missing, [], `renderer references controls that do not exist: ${missing.join(', ')}`);
+});
+
+check('custom userAgent validates Chrome major version against kernelMajor and emits ua-kernel-version-mismatch', () => {
+  const fpSource = read('automation/fingerprint.js');
+  assert.match(fpSource, /ua-kernel-version-mismatch/, 'fingerprint.js must emit ua-kernel-version-mismatch');
+  assert.match(fpSource, /kernelMajor/, 'fingerprint.js must compare against kernelMajor');
+  assert.match(fpSource, /uaMajor/, 'fingerprint.js must extract uaMajor from uaOverride');
+
+  const events = [];
+  const mockEngine = { emit: (ev) => events.push(ev) };
+  const customUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+  // Mismatch: UA major 120 vs kernel major 148
+  const fpMismatch = buildFingerprint({
+    id: 'profile-mismatch-test',
+    userAgent: customUa,
+    kernelVersion: '148.0.7777.0',
+    engine: mockEngine,
+  });
+  // Must respect user UA
+  assert.strictEqual(fpMismatch.userAgent, customUa, 'user UA must be respected even when versions differ');
+  assert.strictEqual(events.length, 1, 'must emit mismatch event when UA version differs from kernel');
+  assert.strictEqual(events[0].type, 'ua-kernel-version-mismatch');
+  assert.strictEqual(events[0].uaMajor, 120);
+  assert.strictEqual(events[0].kernelMajor, 148);
+  assert.strictEqual(events[0].id, 'profile-mismatch-test');
+
+  // Match: UA major 148 vs kernel major 148
+  events.length = 0;
+  const matchUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
+  const fpMatch = buildFingerprint({
+    id: 'profile-match-test',
+    userAgent: matchUa,
+    kernelVersion: '148.0.7777.0',
+    engine: mockEngine,
+  });
+  assert.strictEqual(fpMatch.userAgent, matchUa);
+  assert.strictEqual(events.length, 0, 'no mismatch event when UA version matches kernel');
 });
 
 const failed = results.filter((item) => !item.ok);

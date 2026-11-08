@@ -1481,7 +1481,7 @@ function expectedClientHintPlatform(os) {
 /**
  * Build fingerprint config from profile + optional privacy.fingerprint overrides.
  */
-function buildFingerprint(profile = {}) {
+function buildFingerprint(profile = {}, options = {}) {
   const stableIdentity = profile.id || profile.name || 'default';
   const launchSeed = String(profile.fingerprintLaunchSeed || '').trim();
   const seed = hashSeed(launchSeed ? `${stableIdentity}:${launchSeed}` : stableIdentity);
@@ -1572,10 +1572,25 @@ function buildFingerprint(profile = {}) {
     ? fpIn.clientHints
     : (privacy.clientHints && typeof privacy.clientHints === 'object' ? privacy.clientHints
       : (profile.clientHints && typeof profile.clientHints === 'object' ? profile.clientHints : {}));
-  const kernelMajor = Number(String(profile.kernelVersion || '').match(/^\d+/)?.[0]) || 0;
+  const kernelMajor = Number(String(profile.kernelVersion || options.kernelVersion || '').match(/^\d+/)?.[0]) || 0;
   let uaProfile;
   if (uaOverride) {
     const osFromUa = parseOsFromUa(uaOverride);
+    const uaChromeMatch = String(uaOverride).match(/(?:Chrome|CriOS)\/(\d+)/i);
+    const uaMajor = uaChromeMatch ? Number(uaChromeMatch[1]) : 0;
+    if (kernelMajor && uaMajor && kernelMajor !== uaMajor) {
+      const emitter = options?.engine || profile.engine || profile._engine || null;
+      if (emitter && typeof emitter.emit === 'function') {
+        emitter.emit({
+          type: 'ua-kernel-version-mismatch',
+          id: profile.id,
+          profileId: profile.id,
+          uaMajor,
+          kernelMajor,
+          userAgent: uaOverride,
+        });
+      }
+    }
     // buildUaProfile keys OS_PRESETS with exact lowercase ids; profile records may carry
     // aliases ("iOS", "Mac", "Win11") that would otherwise fall through to the host OS.
     const normalizeOsKey = (value) => {
@@ -9266,7 +9281,6 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
 
   // Page domain must be enabled or addScriptToEvaluateOnNewDocument is a no-op on some hosts.
   await invoke('Page.enable', {}).catch(() => {});
-  await invoke('Runtime.enable', {}).catch(() => {});
 
   // Soft overrides: CDP rejects a second setLocale/setTimezone with
   // "Another locale override is already in effect" — must not abort the whole inject.

@@ -56,6 +56,7 @@ function sanitizeProfile(value) {
     networkMode,
     proxy: networkMode === "direct" ? "Direct" : rawProxy,
     proxyId,
+    allowFailedProxy: Boolean(value.allowFailedProxy ?? value.ignoreBrokenProxy ?? proxyMetaValue.allowFailedProxy ?? proxyMetaValue.ignoreBrokenProxy),
     tag: String(value.tag || "").slice(0, 40),
     groupId: String(value.groupId || "").slice(0, 64),
     group_name: String(value.group_name || value.groupName || "").slice(0, 40),
@@ -103,6 +104,7 @@ function sanitizeProfile(value) {
       requireReady: true,
       notReadyPolicy: "block",
       allowDirectFallback: false,
+      allowFailedProxy: Boolean(proxyMetaValue.allowFailedProxy ?? proxyMetaValue.ignoreBrokenProxy ?? value.allowFailedProxy ?? value.ignoreBrokenProxy),
       tlsProfile: allowed(proxyMetaValue.tlsProfile, ["auto", "chrome", "chrome_legacy", "node", "off"], "auto"),
       tlsChromeMajor: (() => {
         const n = Number(proxyMetaValue.tlsChromeMajor);

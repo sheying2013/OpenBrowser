@@ -200,13 +200,15 @@ function normalizeProxyRecord(input = {}, existing = null) {
     ipChannel,
     maxConcurrency,
     remark,
-    lastCheck: existing?.lastCheck || null,
-    lastIp: existing?.lastIp || '',
-    lastCountryCode: existing?.lastCountryCode || '',
-    lastLatencyMs: existing?.lastLatencyMs ?? null,
-    lastNetworkType: existing?.lastNetworkType || '',
-    lastErrorClass: existing?.lastErrorClass || '',
-    lastCheckOk: existing?.lastCheckOk ?? null,
+    lastCheck: existing?.lastCheck || input.lastCheck || input.lastProbeAt || null,
+    lastIp: existing?.lastIp || input.lastIp || '',
+    lastCountryCode: existing?.lastCountryCode || input.lastCountryCode || '',
+    lastLatencyMs: existing?.lastLatencyMs ?? input.lastLatencyMs ?? null,
+    lastNetworkType: existing?.lastNetworkType || input.lastNetworkType || '',
+    lastErrorClass: existing?.lastErrorClass || input.lastErrorClass || '',
+    lastCheckOk: existing?.lastCheckOk !== undefined ? existing.lastCheckOk : (input.lastCheckOk !== undefined ? input.lastCheckOk : (input.lastProbeOk !== undefined ? Boolean(input.lastProbeOk) : null)),
+    lastProbeAt: existing?.lastProbeAt || input.lastProbeAt || existing?.lastCheck || input.lastCheck || null,
+    lastProbeOk: existing?.lastProbeOk !== undefined ? existing.lastProbeOk : (input.lastProbeOk !== undefined ? Boolean(input.lastProbeOk) : (existing?.lastCheckOk !== undefined ? existing.lastCheckOk : (input.lastCheckOk !== undefined ? input.lastCheckOk : null))),
     create_time: existing?.create_time || now,
     update_time: isMigration ? (existing?.update_time || now) : now,
   };
@@ -570,6 +572,8 @@ class ProxyStore {
       item.lastNetworkType = String(result.networkType || '');
       item.lastErrorClass = result.errorClass ? String(result.errorClass) : '';
       item.lastCheckOk = !result.errorClass && Boolean(result.ip);
+      item.lastProbeAt = item.lastCheck;
+      item.lastProbeOk = item.lastCheckOk;
       item.update_time = item.lastCheck;
       return item;
     });
@@ -583,6 +587,8 @@ class ProxyStore {
       item.lastLatencyMs = Number.isFinite(Number(error.latencyMs)) ? Number(error.latencyMs) : null;
       item.lastErrorClass = String(error.errorClass || error.code || 'unknown');
       item.lastCheckOk = false;
+      item.lastProbeAt = item.lastCheck;
+      item.lastProbeOk = false;
       item.update_time = item.lastCheck;
       return item;
     });
@@ -607,6 +613,16 @@ class ProxyStore {
   assertAssignmentAvailable(proxyOrId, profiles, targetOrOptions = null) {
     const proxy = typeof proxyOrId === 'string' ? this.get(proxyOrId) : proxyOrId;
     return assertProxyAssignmentAvailable(proxy, profiles, targetOrOptions);
+  }
+
+  assertLaunchAvailable(proxyOrId, options = {}) {
+    const proxy = typeof proxyOrId === 'string' ? this.get(proxyOrId) : proxyOrId;
+    return assertProxyLaunchAvailable(proxy, { ...options, store: this });
+  }
+
+  checkLaunchHealth(proxyOrId, options = {}) {
+    const proxy = typeof proxyOrId === 'string' ? this.get(proxyOrId) : proxyOrId;
+    return checkProxyLaunchHealth(proxy, { ...options, store: this });
   }
 
   display(item) {
@@ -825,12 +841,79 @@ function assertProxyAssignmentAvailable(proxyOrId, profiles, targetOrOptions = n
   return result;
 }
 
+const DEFAULT_PROBE_RETRY_WINDOW_MS = 60 * 1000;
+
+/**
+ * Check whether a proxy is usable for profile launch.
+ * If the proxy's last probe failed and the elapsed time has exceeded the retry window,
+ * returns { ok: false, reason, code: 'proxy-required' }.
+ * Can be explicitly overridden via allowFailed / allowBroken / ignoreBrokenProxy / force options.
+ */
+function checkProxyLaunchHealth(proxy, options = {}) {
+  if (!proxy || typeof proxy !== 'object') return { ok: true, reason: null };
+  const allowBroken = Boolean(
+    options.allowBroken ||
+    options.allowFailed ||
+    options.ignoreBrokenProxy ||
+    options.allowFailedProxy ||
+    options.force
+  );
+  if (allowBroken) {
+    return { ok: true, reason: null, override: true };
+  }
+  const lastProbeOk = proxy.lastProbeOk !== undefined ? proxy.lastProbeOk : proxy.lastCheckOk;
+  if (lastProbeOk === false) {
+    const probeAt = proxy.lastProbeAt || proxy.lastCheck;
+    const retryWindowMs = Number.isFinite(options.retryWindowMs)
+      ? options.retryWindowMs
+      : DEFAULT_PROBE_RETRY_WINDOW_MS;
+    const elapsed = probeAt ? (Date.now() - new Date(probeAt).getTime()) : Infinity;
+    if (elapsed >= retryWindowMs) {
+      const name = proxy.name || (proxy.host && proxy.port ? `${proxy.host}:${proxy.port}` : proxy.raw || proxy.id || '代理节点');
+      const seconds = Number.isFinite(elapsed) && elapsed !== Infinity ? Math.round(elapsed / 1000) : 0;
+      const reason = `代理「${name}」最近一次探测失败且已过重试窗口（${seconds}s前），已阻断启动以防真实 IP 泄漏。可勾选「仍要启动」忽略此提示。`;
+      return {
+        ok: false,
+        code: 'proxy-required',
+        reason,
+        proxy,
+        elapsed,
+        retryWindowMs,
+      };
+    }
+  }
+  return { ok: true, reason: null };
+}
+
+/**
+ * Assert that a proxy is healthy to launch.
+ * Throws a typed Error with code 'proxy-required' if failed past retry window.
+ */
+function assertProxyLaunchAvailable(proxyOrId, options = {}) {
+  const proxy = (typeof proxyOrId === 'string' && options.store?.get)
+    ? options.store.get(proxyOrId)
+    : proxyOrId;
+  const result = checkProxyLaunchHealth(proxy, options);
+  if (!result.ok) {
+    const error = new Error(result.reason);
+    error.code = result.code || 'proxy-required';
+    error.proxyId = result.proxy?.id || null;
+    error.elapsed = result.elapsed;
+    error.retryWindowMs = result.retryWindowMs;
+    throw error;
+  }
+  return result;
+}
+
 module.exports = {
   ProxyStore,
   normalizeProxyRecord,
   summarizeProxyUsage,
   canAssignProxy,
   assertProxyAssignmentAvailable,
+  checkProxyLaunchHealth,
+  assertProxyLaunchAvailable,
   profileMatchesProxy,
   MAX_PROXY_CONCURRENCY,
+  DEFAULT_PROBE_RETRY_WINDOW_MS,
 };

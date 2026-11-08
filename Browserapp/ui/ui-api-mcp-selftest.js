@@ -130,21 +130,21 @@ function buildSandbox(info, paths) {
 }
 
 const LIVE_PORT = 51423;
-const BUSY_PORT = 50325;
+const REQUESTED_PORT = 48523;
 
 (async () => {
   // ---- default port, no fallback ----
   {
     const { window, elements } = buildSandbox(
-      { host: '127.0.0.1', port: BUSY_PORT, requestedPort: BUSY_PORT, portFallback: null, url: `http://127.0.0.1:${BUSY_PORT}/`, apiKeyRequired: true },
-      { mcpScript: '/app/automation/mcp-server.js', apiKey: 'k-123', apiKeyFile: '/app/local-api-key.txt', port: BUSY_PORT },
+      { host: '127.0.0.1', port: REQUESTED_PORT, requestedPort: REQUESTED_PORT, portFallback: null, url: `http://127.0.0.1:${REQUESTED_PORT}/`, apiKeyRequired: true },
+      { mcpScript: '/app/automation/mcp-server.js', apiKey: 'k-123', apiKeyFile: '/app/local-api-key.txt', port: REQUESTED_PORT },
     );
     await window.refreshApiMcpPage();
     case_('config uses the default port when nothing moved', () => {
       const cfg = JSON.parse(elements.get('mcp-config-json').textContent);
       const env = cfg.mcpServers['openbrowser-local-api'].env;
-      assert.strictEqual(env.OPENBROWSER_API_PORT, String(BUSY_PORT));
-      assert.strictEqual(env.PORT, String(BUSY_PORT));
+      assert.strictEqual(env.OPENBROWSER_API_PORT, String(REQUESTED_PORT));
+      assert.strictEqual(env.PORT, String(REQUESTED_PORT));
       assert.ok(!elements.get('mcp-key-note').textContent.includes('已自动改用'));
     });
   }
@@ -152,13 +152,13 @@ const BUSY_PORT = 50325;
   // ---- preferred port busy: the API moved ----
   {
     const { window, elements } = buildSandbox(
-      { host: '127.0.0.1', port: LIVE_PORT, requestedPort: BUSY_PORT, portFallback: { requested: BUSY_PORT, port: LIVE_PORT, reason: 'in-use' }, url: `http://127.0.0.1:${LIVE_PORT}/`, apiKeyRequired: true },
+      { host: '127.0.0.1', port: LIVE_PORT, requestedPort: REQUESTED_PORT, portFallback: { requested: REQUESTED_PORT, port: LIVE_PORT, reason: 'in-use' }, url: `http://127.0.0.1:${LIVE_PORT}/`, apiKeyRequired: true },
       { mcpScript: '/app/automation/mcp-server.js', apiKey: 'k-123', apiKeyFile: '/app/local-api-key.txt', port: LIVE_PORT },
     );
     await window.refreshApiMcpPage();
     case_('panel shows the live port, not the requested one', () => {
       assert.ok(elements.get('api-status-url').textContent.includes(String(LIVE_PORT)));
-      assert.ok(!elements.get('api-status-url').textContent.includes(String(BUSY_PORT)));
+      assert.ok(!elements.get('api-status-url').textContent.includes(String(REQUESTED_PORT)));
     });
     case_('generated client config points at the live port', () => {
       const cfg = JSON.parse(elements.get('mcp-config-json').textContent);
@@ -190,7 +190,7 @@ const BUSY_PORT = 50325;
   // ---- platform tab regenerates from the stored config ----
   {
     const { window, elements } = buildSandbox(
-      { host: '127.0.0.1', port: LIVE_PORT, requestedPort: BUSY_PORT, portFallback: { requested: BUSY_PORT, port: LIVE_PORT, reason: 'in-use' }, url: `http://127.0.0.1:${LIVE_PORT}/`, apiKeyRequired: true },
+      { host: '127.0.0.1', port: LIVE_PORT, requestedPort: REQUESTED_PORT, portFallback: { requested: REQUESTED_PORT, port: LIVE_PORT, reason: 'in-use' }, url: `http://127.0.0.1:${LIVE_PORT}/`, apiKeyRequired: true },
       { mcpScript: '/app/automation/mcp-server.js', apiKey: 'k-123', apiKeyFile: '/app/local-api-key.txt', port: LIVE_PORT },
     );
     await window.refreshApiMcpPage();
@@ -202,7 +202,7 @@ const BUSY_PORT = 50325;
 
   // ---- server not reachable ----
   {
-    const { window, elements } = buildSandbox(null, { mcpScript: '', apiKey: '', apiKeyFile: '', port: BUSY_PORT });
+    const { window, elements } = buildSandbox(null, { mcpScript: '', apiKey: '', apiKeyFile: '', port: REQUESTED_PORT });
     await window.refreshApiMcpPage();
     case_('a missing API marks the panel as stopped without throwing', () => {
       assert.strictEqual(elements.get('api-conn-pill').textContent, '未启动');

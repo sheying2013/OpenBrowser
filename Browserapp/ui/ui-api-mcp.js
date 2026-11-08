@@ -38,15 +38,15 @@ async function refreshApiMcpPage() {
   try {
     const info = await window.ops.localApiInfo();
     const paths = await window.ops.mcpPaths();
-    const port = info?.port || paths?.port || 50325;
-    const base = (info?.url || ('http://127.0.0.1:' + port + '/')).replace(/\/?$/, '/');
+    const port = info?.port || paths?.port || (typeof paths?.discoveryPort === 'number' ? paths.discoveryPort : null);
+    const base = (info?.url || (port ? 'http://127.0.0.1:' + port + '/' : '')).replace(/\/?$/, '/');
     const apiKey = paths?.apiKey || '';
     const apiKeyFile = paths?.apiKeyFile || '';
     if (pill) {
       pill.textContent = info ? tx('运行中') : tx('未启动');
       pill.classList.toggle('off', !info);
     }
-    if (urlEl) urlEl.textContent = base.replace(/\/$/, '');
+    if (urlEl) urlEl.textContent = base ? base.replace(/\/$/, '') : tx('未启动');
     if (keyEl) keyEl.value = apiKey;
     if (keyEl && !apiKey) keyEl.placeholder = tx('未设置（可选环境变量 OPENBROWSER_API_KEY）');
     const mcpScript = paths?.mcpScript || '';
@@ -75,8 +75,7 @@ async function refreshApiMcpPage() {
           command: 'node',
           args: [mcpScript],
           env: {
-            PORT: String(port),
-            OPENBROWSER_API_PORT: String(port),
+            ...(port ? { PORT: String(port), OPENBROWSER_API_PORT: String(port) } : {}),
             ...authEnv,
           },
         },
@@ -89,7 +88,7 @@ async function refreshApiMcpPage() {
           command: 'node',
           args: [mcpScript],
           env: {
-            OPENBROWSER_API_PORT: String(port),
+            ...(port ? { OPENBROWSER_API_PORT: String(port) } : {}),
             ...authEnv,
           },
         },
@@ -98,12 +97,13 @@ async function refreshApiMcpPage() {
     const tab = document.querySelector('#mcp-config-tabs button.active')?.dataset.mcpTab || 'common';
     if (mcpTa) mcpTa.textContent = JSON.stringify(tab === 'platform' ? window.__mcpConfigPlatform : window.__mcpConfigCommon, null, 2);
     if (mcpHint) {
+      const portEnv = port ? 'OPENBROWSER_API_PORT=' + shellQuote(port) : '';
       const keyEnv = apiKey
         ? ' OPENBROWSER_API_KEY=' + shellQuote(apiKey)
         : (apiKeyFile ? ' OPENBROWSER_API_KEY_FILE=' + shellQuote(apiKeyFile) : ' OPENBROWSER_API_KEY=' + shellQuote(keyPlaceholder));
-      mcpHint.textContent = 'OPENBROWSER_API_PORT=' + shellQuote(port) + keyEnv + ' node ' + shellQuote(mcpScript);
+      mcpHint.textContent = (portEnv ? portEnv + keyEnv : keyEnv.trim()) + ' node ' + shellQuote(mcpScript);
     }
-    if (curlHint) curlHint.textContent = 'curl -s -H ' + shellQuote('api-key: ' + keyPlaceholder) + ' ' + shellQuote(base + 'api/getVersion');
+    if (curlHint) curlHint.textContent = 'curl -s -H ' + shellQuote('api-key: ' + keyPlaceholder) + ' ' + shellQuote((base || 'http://127.0.0.1/') + 'api/getVersion');
     setLocalApiStatus(!!info);
   } catch (error) {
     if (pill) { pill.textContent = tx('未启动'); pill.classList.add('off'); }

@@ -340,6 +340,7 @@ function normalizeProfileSettings(profile) {
       requireReady: proxyMeta.requireReady !== false,
       notReadyPolicy: 'block',
       allowDirectFallback: false,
+      allowFailedProxy: Boolean(proxyMeta.allowFailedProxy ?? proxyMeta.ignoreBrokenProxy),
       tlsProfile: ['auto', 'chrome', 'chrome_legacy', 'node', 'off'].includes(String(proxyMeta.tlsProfile || ''))
         ? String(proxyMeta.tlsProfile)
         : 'auto',
@@ -2345,6 +2346,7 @@ function editorDraft(strict = true) {
       requireReady: true,
       notReadyPolicy: 'block',
       allowDirectFallback: false,
+      allowFailedProxy: Boolean($('#editor-allow-failed-proxy')?.checked),
       tlsProfile: $('#editor-proxy-tls-profile')?.value || 'auto',
       tlsChromeMajor: (() => {
         const raw = ($('#editor-proxy-tls-chrome-major')?.value || '').trim();
@@ -2475,8 +2477,8 @@ function setEditorTab(tab, focus = false) {
   $$('[data-editor-panel]').forEach((panel) => panel.classList.toggle('active', panel.dataset.editorPanel === tab));
 }
 
-function openProfileEditor(id) {
-  const profile = normalizeProfileSettings(ui.profiles.find((item) => item.id === id)); if (!profile?.id) return;
+function applyProfileToEditor(profile) {
+  if (!profile?.id) return;
   editorNetworkResult = profile.exitIp ? { ip: profile.exitIp, countryCode: profile.exitCountryCode, timezone: profile.exitTimezone, latitude: profile.exitLatitude, longitude: profile.exitLongitude, checkedAt: profile.exitCheckedAt } : null;
   editingProfileId = profile.id;
   editorSet('#editor-id', profile.id);
@@ -2561,6 +2563,7 @@ function openProfileEditor(id) {
   editorCheck('#editor-proxy-refresh-start', profile.proxyMeta.refreshOnStart);
   editorCheck('#editor-proxy-fill-fingerprint', profile.proxyMeta.fillFingerprint !== false);
   editorCheck('#editor-proxy-require-ready', profile.proxyMeta.requireReady !== false);
+  editorCheck('#editor-allow-failed-proxy', Boolean(profile.proxyMeta.allowFailedProxy ?? profile.proxyMeta.ignoreBrokenProxy));
   editorSet('#editor-proxy-not-ready-policy', profile.proxyMeta.notReadyPolicy || (profile.proxyMeta.requireReady === false ? 'continue' : 'block'));
   editorSet('#editor-proxy-tls-profile', profile.proxyMeta.tlsProfile || 'auto');
   editorSet('#editor-proxy-tls-chrome-major', profile.proxyMeta.tlsChromeMajor == null ? '' : profile.proxyMeta.tlsChromeMajor);
@@ -2679,6 +2682,24 @@ function openProfileEditor(id) {
   if (typeof syncThemedSelects === 'function') syncThemedSelects($('#view-profile-editor'));
   renderEditorSummary();
   switchView('profile-editor');
+}
+
+async function openProfileEditor(id) {
+  let profile = ui.profiles.find((item) => item.id === id);
+  if (profile) {
+    applyProfileToEditor(normalizeProfileSettings(profile));
+  }
+  if ((!profile || !profile.fingerprint) && !window.__uiAuditCalls && typeof window.ops?.getProfile === 'function') {
+    try {
+      const full = await window.ops.getProfile(id);
+      if (full && full.id) {
+        const idx = ui.profiles.findIndex((p) => p.id === id);
+        if (idx >= 0) ui.profiles[idx] = full;
+        else ui.profiles.push(full);
+        applyProfileToEditor(normalizeProfileSettings(full));
+      }
+    } catch (_) {}
+  }
 }
 
 function formatProxyCheckResult(result = {}) {
@@ -3302,6 +3323,19 @@ function renderProxies() {
     if (usage.limit > 0) limitText.title = tx('该代理最多允许同时运行这么多窗口');
     limitCell.append(limitText);
 
+    const speedCell = document.createElement('td');
+    const isProbeOk = item.lastProbeOk !== undefined ? item.lastProbeOk : item.lastCheckOk;
+    if (isProbeOk === true) {
+      const badge = element('span', 'net-badge net-badge-direct', Number.isFinite(Number(item.lastLatencyMs)) ? `${Number(item.lastLatencyMs)}ms` : tx('可用'));
+      if (item.lastCountryCode) badge.title = item.lastCountryCode;
+      speedCell.append(badge);
+    } else if (isProbeOk === false) {
+      const badge = element('span', 'net-badge net-badge-full', item.lastErrorClass ? `${tx('失败')} (${item.lastErrorClass})` : tx('失败'));
+      speedCell.append(badge);
+    } else {
+      speedCell.append(element('span', 'net-badge net-badge-idle', tx('未测速')));
+    }
+
     row.append(
       checkCell,
       nameCell,
@@ -3310,6 +3344,7 @@ function renderProxies() {
       element('td', '', auth),
       element('td', '', exit),
       element('td', '', latency),
+      speedCell,
       element('td', '', netType),
       usageCell,
       limitCell,
@@ -3458,8 +3493,25 @@ function renderGroupFilterChips() {
 }
 
 function updateProfileSelectionUi() {
-  const currentIds = new Set(ui.profiles.map((profile) => profile.id));
-  for (const id of selectedProfiles) if (!currentIds.has(id)) selectedProfiles.delete(id);
+  const pageIds = visibleProfilePageIds();
+  const filter = $('#profile-search')?.value || '';
+  const isServerPage = Boolean(
+    pagedProfilesData &&
+    pagedProfilesData.query === filter &&
+    pagedProfilesData.activeGroupFilter === activeGroupFilter &&
+    pagedProfilesData.pageSize === profilePageSize &&
+    Array.isArray(pagedProfilesData.rows)
+  );
+
+  const totalProfiles = isServerPage ? pagedProfilesData.total : (ui.profiles?.length || 0);
+  if (totalProfiles === 0) {
+    selectedProfiles.clear();
+  } else if (!isServerPage && ui.profiles?.length > 0) {
+    const currentIds = new Set(ui.profiles.map((profile) => profile.id));
+    for (const id of selectedProfiles) {
+      if (!currentIds.has(id)) selectedProfiles.delete(id);
+    }
+  }
   const count = selectedProfiles.size;
   const bar = $('#profile-selection-bar');
   const label = $('#profile-selection-count');
@@ -3495,13 +3547,12 @@ function updateProfileSelectionUi() {
   $$('#profile-table tr[data-profile-id]').forEach((row) => {
     row.classList.toggle('selected-row', selectedProfiles.has(row.dataset.profileId));
   });
-  const visibleCheckboxes = $$('#profile-table [data-profile-select]');
-  const selectedOnPage = visibleCheckboxes.filter((input) => selectedProfiles.has(input.dataset.profileSelect)).length;
+  const selectedOnPage = pageIds.filter((id) => selectedProfiles.has(id)).length;
   const selectAll = $('#select-all-profiles');
   if (selectAll) {
     selectAll.setAttribute('aria-label', t('profiles.selectPage'));
-    selectAll.checked = visibleCheckboxes.length > 0 && selectedOnPage === visibleCheckboxes.length;
-    selectAll.indeterminate = selectedOnPage > 0 && selectedOnPage < visibleCheckboxes.length;
+    selectAll.checked = pageIds.length > 0 && selectedOnPage === pageIds.length;
+    selectAll.indeterminate = selectedOnPage > 0 && selectedOnPage < pageIds.length;
   }
 }
 
@@ -3561,7 +3612,18 @@ function buildStartProgressCell(profileId, progress) {
 
 
 async function cloneProfile(id) {
-  const target = ui.profiles.find((item) => item.id === id);
+  let target = ui.profiles.find((item) => item.id === id);
+  if ((!target || !target.fingerprint) && !window.__uiAuditCalls && typeof window.ops?.getProfile === 'function') {
+    try {
+      const full = await window.ops.getProfile(id);
+      if (full && full.id) {
+        const idx = ui.profiles.findIndex((p) => p.id === id);
+        if (idx >= 0) ui.profiles[idx] = full;
+        else ui.profiles.push(full);
+        target = full;
+      }
+    } catch (_) {}
+  }
   if (!target) return toast(tx('未找到要克隆的环境'));
   const number = nextProfileNumber();
   const newId = createInternalProfileId(number);
@@ -3659,109 +3721,258 @@ function filteredProfilesForCurrentView() {
   });
 }
 
+function buildProfileRow(profile) {
+  const info = {
+    ...profile,
+    ...profileEngine(profile.id),
+  };
+  const row = document.createElement('tr');
+  row.dataset.profileId = profile.id;
+  const selectCell = document.createElement('td'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedProfiles.has(profile.id); checkbox.dataset.profileSelect = profile.id; selectCell.append(checkbox);
+  checkbox.setAttribute('aria-label', t('profiles.selectOne', { n: displayProfileNumber(profile) }));
+  const idCell = element('td', 'col-num', displayProfileNumber(profile));
+  const nameCell = document.createElement('td');
+  nameCell.append(buildEnvIdentity(profile));
+  const groupCell = document.createElement('td');
+  groupCell.className = 'col-group';
+  const badge = element('span', 'group-badge group-badge-compact', groupNameOf(profile));
+  badge.style.setProperty('--chip-color', groupColorOf(profile));
+  badge.title = groupNameOf(profile);
+  groupCell.append(badge);
+  const browserCell = document.createElement('td');
+  browserCell.className = 'col-browser';
+  browserCell.append(buildEnvBrowserCell(profile));
+  const proxyCell = document.createElement('td');
+  proxyCell.className = 'col-network';
+  proxyCell.append(networkModeBadge(profile.proxy));
+  const networkCell = document.createElement('td');
+  networkCell.className = 'col-exit';
+  const network = info.network || (profile.exitIp ? { ip: profile.exitIp, countryCode: profile.exitCountryCode, checkedAt: profile.exitCheckedAt } : null);
+  const networkInfo = element('div', 'network-info network-info-compact');
+  if (network?.ip) {
+    const code = String(network.countryCode || '').toUpperCase();
+    const line = element('span', 'exit-compact', (code ? countryFlag(code) + ' ' + code : '🌐') + (network.ip ? ' · ' + String(network.ip).replace(/^(\d+\.\d+)\.\d+\.\d+$/, '$1.*.*') : ''));
+    line.title = (network.ip || '') + (code ? ' · ' + countryName(code) : '');
+    networkInfo.append(line);
+  } else {
+    networkInfo.append(element('span', 'network-pending', isDirectProxy(profile.proxy) ? t('net.localHost') : t('net.untested')));
+  }
+  if (!isDirectProxy(profile.proxy)) {
+    const inspect = element('button', 'network-check', t('action.check'));
+    inspect.title = network?.ip ? t('action.recheck') : t('action.checkExit');
+    inspect.dataset.proxyCheck = profile.id;
+    networkInfo.append(inspect);
+  }
+  networkCell.append(networkInfo);
+  const extensionCell = element('td', 'col-ext', String(info.assignedExtensions?.length || 0));
+  const statusCell = document.createElement('td');
+  statusCell.className = 'col-status';
+  const starting = !info.running && startingProfiles.has(profile.id);
+  if (starting) {
+    statusCell.append(buildStartProgressCell(profile.id, startingProfiles.get(profile.id)));
+    row.classList.add('is-starting');
+  } else {
+    const status = element('span', `status status-compact ${info.running ? 'running' : ''}`, info.running ? t('status.run') : t('status.stop'));
+    if (info.running && info.port) status.title = t('status.runningCdp', { port: info.port });
+    statusCell.append(status);
+  }
+  const actionCell = document.createElement('td');
+  actionCell.className = 'col-actions';
+  const actions = element('div', 'actions');
+  if (activeGroupFilter === 'trash') {
+    const restore = iconActionButton('rotate-ccw', t('trash.restore'), 'mini restore');
+    restore.dataset.action = 'restore';
+    restore.dataset.id = profile.id;
+    const purge = iconActionButton('trash-2', t('trash.purge'), 'mini danger purge');
+    purge.dataset.action = 'purge';
+    purge.dataset.id = profile.id;
+    actions.append(restore, purge);
+  } else {
+    const toggle = iconActionButton(info.running ? 'square' : 'play', info.running ? t('action.stop') : (starting ? t('status.starting') : t('action.start')));
+    toggle.dataset.action = info.running ? 'stop' : 'start';
+    toggle.dataset.id = profile.id;
+    if (starting) {
+      toggle.disabled = true;
+      toggle.classList.add('is-starting');
+      toggle.title = startProgressLabel(startingProfiles.get(profile.id));
+      toggle.setAttribute('aria-label', toggle.title);
+      toggle.setAttribute('aria-disabled', 'true');
+    }
+    const sync = iconActionButton('panels-top-left', t('profiles.syncSelect'), 'mini blue'); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting; if (sync.disabled) sync.setAttribute('aria-disabled', 'true');
+    const robot = iconActionButton('bot', t('action.cookieRobot') || '养号预热', 'mini robot'); robot.dataset.action = 'cookie-robot'; robot.dataset.id = profile.id;
+    const edit = iconActionButton('pencil', t('action.edit'), 'mini edit'); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
+    const clone = iconActionButton('copy', t('action.clone') || '克隆', 'mini clone'); clone.dataset.action = 'clone'; clone.dataset.id = profile.id;
+    actions.append(toggle, sync, robot, edit, clone);
+  }
+  actionCell.append(actions);
+  row.append(selectCell, idCell, nameCell, groupCell, browserCell, proxyCell, networkCell, extensionCell, statusCell, actionCell);
+  return row;
+}
+
+let pagedProfilesData = null;
+let pagedQueryInProgress = false;
+let pendingPagedQuery = null;
+
+async function requestProfilesPage(options = {}) {
+  if (window.__uiAuditCalls || typeof window.ops?.queryProfiles !== 'function') return null;
+  const query = $('#profile-search')?.value || '';
+  const req = {
+    page: options.page || profilePage,
+    pageSize: options.pageSize || profilePageSize,
+    filters: {
+      query,
+      activeGroupFilter,
+      ...(options.filters || {}),
+    },
+    sort: options.sort || 'number ASC',
+  };
+
+  if (pagedQueryInProgress) {
+    pendingPagedQuery = req;
+    return null;
+  }
+  pagedQueryInProgress = true;
+  try {
+    const res = await window.ops.queryProfiles(req);
+    if (res && Array.isArray(res.rows)) {
+      pagedProfilesData = {
+        total: res.total,
+        page: res.page,
+        pageSize: res.pageSize,
+        rows: res.rows,
+        query,
+        activeGroupFilter,
+      };
+      profilePage = res.page;
+      renderProfiles();
+      return res;
+    }
+  } catch (err) {
+    console.warn('[ProfilePagination] queryProfiles failed, falling back to local profiles:', err.message);
+    pagedProfilesData = null;
+  } finally {
+    pagedQueryInProgress = false;
+    if (pendingPagedQuery) {
+      const next = pendingPagedQuery;
+      pendingPagedQuery = null;
+      requestProfilesPage(next);
+    }
+  }
+  return null;
+}
+
+let _virtualScrollAttached = false;
+let _virtualScrollRaf = 0;
+function attachTableCardVirtualScroll() {
+  if (_virtualScrollAttached) return;
+  const card = document.querySelector('#view-profiles .table-card');
+  if (!card) return;
+  _virtualScrollAttached = true;
+  let lastScrollTop = card.scrollTop;
+  card.addEventListener('scroll', () => {
+    if (card.scrollTop === lastScrollTop) return;
+    lastScrollTop = card.scrollTop;
+    if (_virtualScrollRaf) return;
+    _virtualScrollRaf = requestAnimationFrame(() => {
+      _virtualScrollRaf = 0;
+      if (document.querySelector('#view-profiles.active')) {
+        renderProfiles();
+      }
+    });
+  }, { passive: true });
+}
+
 function renderProfiles() {
   renderGroupFilterChips();
-  const table = $('#profile-table'); table.replaceChildren();
-  const filtered = filteredProfilesForCurrentView();
-  const pageData = window.OpenBrowserProfileList?.paginate?.(filtered, profilePage, profilePageSize)
-    || { items: filtered, currentPage: 1, totalPages: 1 };
-  profilePage = pageData.currentPage;
-  const totalPages = pageData.totalPages;
-  const visible = pageData.items;
-  for (const profile of visible) {
-    const info = profileEngine(profile.id); const row = document.createElement('tr');
-    row.dataset.profileId = profile.id;
-    const selectCell = document.createElement('td'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedProfiles.has(profile.id); checkbox.dataset.profileSelect = profile.id; selectCell.append(checkbox);
-    checkbox.setAttribute('aria-label', t('profiles.selectOne', { n: displayProfileNumber(profile) }));
-    const idCell = element('td', 'col-num', displayProfileNumber(profile));
-    const nameCell = document.createElement('td');
-    nameCell.append(buildEnvIdentity(profile));
-    const groupCell = document.createElement('td');
-    groupCell.className = 'col-group';
-    const badge = element('span', 'group-badge group-badge-compact', groupNameOf(profile));
-    badge.style.setProperty('--chip-color', groupColorOf(profile));
-    badge.title = groupNameOf(profile);
-    groupCell.append(badge);
-    const browserCell = document.createElement('td');
-    browserCell.className = 'col-browser';
-    browserCell.append(buildEnvBrowserCell(profile));
-    const proxyCell = document.createElement('td');
-    proxyCell.className = 'col-network';
-    proxyCell.append(networkModeBadge(profile.proxy));
-    const networkCell = document.createElement('td');
-    networkCell.className = 'col-exit';
-    const network = info.network || (profile.exitIp ? { ip: profile.exitIp, countryCode: profile.exitCountryCode, checkedAt: profile.exitCheckedAt } : null);
-    const networkInfo = element('div', 'network-info network-info-compact');
-    if (network?.ip) {
-      const code = String(network.countryCode || '').toUpperCase();
-      const line = element('span', 'exit-compact', (code ? countryFlag(code) + ' ' + code : '🌐') + (network.ip ? ' · ' + String(network.ip).replace(/^(\d+\.\d+)\.\d+\.\d+$/, '$1.*.*') : ''));
-      line.title = (network.ip || '') + (code ? ' · ' + countryName(code) : '');
-      networkInfo.append(line);
-    } else {
-      networkInfo.append(element('span', 'network-pending', isDirectProxy(profile.proxy) ? t('net.localHost') : t('net.untested')));
-    }
-    if (!isDirectProxy(profile.proxy)) {
-      const inspect = element('button', 'network-check', t('action.check'));
-      inspect.title = network?.ip ? t('action.recheck') : t('action.checkExit');
-      inspect.dataset.proxyCheck = profile.id;
-      networkInfo.append(inspect);
-    }
-    networkCell.append(networkInfo);
-    const extensionCell = element('td', 'col-ext', String(info.assignedExtensions?.length || 0));
-    const statusCell = document.createElement('td');
-    statusCell.className = 'col-status';
-    const starting = !info.running && startingProfiles.has(profile.id);
-    if (starting) {
-      statusCell.append(buildStartProgressCell(profile.id, startingProfiles.get(profile.id)));
-      row.classList.add('is-starting');
-    } else {
-      const status = element('span', `status status-compact ${info.running ? 'running' : ''}`, info.running ? t('status.run') : t('status.stop'));
-      if (info.running && info.port) status.title = t('status.runningCdp', { port: info.port });
-      statusCell.append(status);
-    }
-    const actionCell = document.createElement('td');
-    actionCell.className = 'col-actions';
-    const actions = element('div', 'actions');
-    if (activeGroupFilter === 'trash') {
-      const restore = iconActionButton('rotate-ccw', t('trash.restore'), 'mini restore');
-      restore.dataset.action = 'restore';
-      restore.dataset.id = profile.id;
-      const purge = iconActionButton('trash-2', t('trash.purge'), 'mini danger purge');
-      purge.dataset.action = 'purge';
-      purge.dataset.id = profile.id;
-      actions.append(restore, purge);
-    } else {
-      const toggle = iconActionButton(info.running ? 'square' : 'play', info.running ? t('action.stop') : (starting ? t('status.starting') : t('action.start')));
-      toggle.dataset.action = info.running ? 'stop' : 'start';
-      toggle.dataset.id = profile.id;
-      if (starting) {
-        toggle.disabled = true;
-        toggle.classList.add('is-starting');
-        toggle.title = startProgressLabel(startingProfiles.get(profile.id));
-        toggle.setAttribute('aria-label', toggle.title);
-        toggle.setAttribute('aria-disabled', 'true');
-      }
-      const sync = iconActionButton('panels-top-left', t('profiles.syncSelect'), 'mini blue'); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting; if (sync.disabled) sync.setAttribute('aria-disabled', 'true');
-      const edit = iconActionButton('pencil', t('action.edit'), 'mini edit'); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
-      const clone = iconActionButton('copy', t('action.clone') || '克隆', 'mini clone'); clone.dataset.action = 'clone'; clone.dataset.id = profile.id;
-      actions.append(toggle, sync, edit, clone);
-    }
-    actionCell.append(actions);
-    row.append(selectCell, idCell, nameCell, groupCell, browserCell, proxyCell, networkCell, extensionCell, statusCell, actionCell); table.append(row);
+  const table = $('#profile-table');
+  if (!table) return;
+  table.replaceChildren();
+
+  const filter = $('#profile-search')?.value || '';
+  const useServerPage = Boolean(
+    pagedProfilesData &&
+    pagedProfilesData.query === filter &&
+    pagedProfilesData.activeGroupFilter === activeGroupFilter &&
+    pagedProfilesData.pageSize === profilePageSize &&
+    Array.isArray(pagedProfilesData.rows)
+  );
+
+  let visible = [];
+  let totalCount = 0;
+  let totalPages = 1;
+
+  if (useServerPage) {
+    totalCount = pagedProfilesData.total;
+    totalPages = Math.max(1, Math.ceil(totalCount / profilePageSize));
+    profilePage = Math.min(Math.max(1, pagedProfilesData.page), totalPages);
+    visible = pagedProfilesData.rows;
+  } else {
+    const filtered = filteredProfilesForCurrentView();
+    const pageData = window.OpenBrowserProfileList?.paginate?.(filtered, profilePage, profilePageSize)
+      || { items: filtered, currentPage: 1, totalPages: 1 };
+    profilePage = pageData.currentPage;
+    totalPages = pageData.totalPages;
+    visible = pageData.items;
+    totalCount = filtered.length;
   }
+
+  const card = table.closest('.table-card');
+  let rowsToRender = visible;
+  if (visible.length > 25 && card && window.OpenBrowserProfileList?.calculateVirtualRange) {
+    const vr = window.OpenBrowserProfileList.calculateVirtualRange({
+      total: visible.length,
+      scrollTop: card.scrollTop,
+      viewportHeight: card.clientHeight || 600,
+      rowHeight: 44,
+      overscan: 5,
+    });
+    if (vr.topPadding > 0) {
+      const topSpacer = document.createElement('tr');
+      topSpacer.className = 'virtual-spacer';
+      topSpacer.style.height = `${vr.topPadding}px`;
+      const td = document.createElement('td');
+      td.colSpan = 10;
+      td.style.height = `${vr.topPadding}px`;
+      td.style.padding = '0';
+      td.style.border = '0';
+      topSpacer.append(td);
+      table.append(topSpacer);
+    }
+    rowsToRender = visible.slice(vr.startIndex, vr.endIndex);
+    for (const profile of rowsToRender) {
+      table.append(buildProfileRow(profile));
+    }
+    if (vr.bottomPadding > 0) {
+      const bottomSpacer = document.createElement('tr');
+      bottomSpacer.className = 'virtual-spacer';
+      bottomSpacer.style.height = `${vr.bottomPadding}px`;
+      const td = document.createElement('td');
+      td.colSpan = 10;
+      td.style.height = `${vr.bottomPadding}px`;
+      td.style.padding = '0';
+      td.style.border = '0';
+      bottomSpacer.append(td);
+      table.append(bottomSpacer);
+    }
+  } else {
+    for (const profile of rowsToRender) {
+      table.append(buildProfileRow(profile));
+    }
+  }
+
   const inTrash = activeGroupFilter === 'trash';
   const emptyBtn = $('#empty-trash-btn');
   if (emptyBtn) emptyBtn.hidden = !inTrash;
-  const toolbarLeftButtons = ['#create-profile', '#batch-add', '#batch-import', '#renumber-profiles'];
+  const toolbarLeftButtons = ['#create-profile', '#batch-add', '#batch-import', '#toolbar-cookie-robot', '#renumber-profiles'];
   for (const sel of toolbarLeftButtons) {
     const el = $(sel);
     if (el) el.hidden = inTrash;
   }
   const empty = $('#profile-empty');
-  const hasProfiles = ui.profiles.length > 0;
-  empty.hidden = filtered.length !== 0;
-  table.closest('table').hidden = filtered.length === 0;
-  if (filtered.length === 0) table.closest('.table-card').scrollLeft = 0;
+  const hasProfiles = totalCount > 0 || ui.profiles.length > 0;
+  empty.hidden = totalCount !== 0;
+  table.closest('table').hidden = totalCount === 0;
+  if (totalCount === 0) table.closest('.table-card').scrollLeft = 0;
   if (inTrash) {
     $('#profile-empty-title').textContent = t('trash.emptyTitle');
     $('#profile-empty-description').textContent = t('trash.emptyHint');
@@ -3773,12 +3984,12 @@ function renderProfiles() {
     $('#profile-clear-filters').hidden = !hasProfiles;
     $('#profile-empty-create').hidden = hasProfiles;
   }
-  $('#profile-total').textContent = String(filtered.length);
+  $('#profile-total').textContent = String(totalCount);
   const totalLabel = document.querySelector('#profile-pagination .profile-total');
   if (totalLabel) {
     // Keep strong#profile-total as number; wrap prefix via data-i18n or rebuild
     const strong = totalLabel.querySelector('#profile-total');
-    const num = String(filtered.length);
+    const num = String(totalCount);
     if (strong) {
       totalLabel.replaceChildren(document.createTextNode(t('profiles.totalLabel')), strong);
       strong.textContent = num;
@@ -3809,10 +4020,15 @@ function renderProfiles() {
   // Translate any remaining Chinese chrome text that was just injected
   afterUiRender(document.getElementById('view-profiles') || document);
   if (typeof refreshIcons === 'function') refreshIcons();
+  attachTableCardVirtualScroll();
   loadedViews.add('profiles');
 }
 
 function visibleProfilePageIds() {
+  const filter = $('#profile-search')?.value || '';
+  if (pagedProfilesData && pagedProfilesData.query === filter && pagedProfilesData.activeGroupFilter === activeGroupFilter && Array.isArray(pagedProfilesData.rows) && pagedProfilesData.rows.length) {
+    return pagedProfilesData.rows.map((profile) => profile.id);
+  }
   const filtered = filteredProfilesForCurrentView();
   const pageData = window.OpenBrowserProfileList?.paginate?.(filtered, profilePage, profilePageSize)
     || { items: filtered };
@@ -3821,7 +4037,9 @@ function visibleProfilePageIds() {
 
 async function refreshStatus() {
   invalidateViewCache(['sync', 'profiles']);
-  engineProfiles = await window.ops.profileStatus(); mergeEngineExitState(engineProfiles); renderProfiles();
+  engineProfiles = await window.ops.profileStatus(); mergeEngineExitState(engineProfiles);
+  renderProfiles();
+  if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage();
 }
 
 // --- Render/IPC coalescing (perf) --------------------------------------------------
@@ -3836,14 +4054,21 @@ function scheduleRenderProfiles() {
   if (__rafPending) return;
   __rafPending = requestAnimationFrame(() => { __rafPending = 0; renderProfiles(); });
 }
+function resetProfileTableScroll() {
+  const card = document.querySelector('#view-profiles .table-card');
+  if (card) card.scrollTop = 0;
+}
+
 let __profileSearchTimer = 0;
 function scheduleProfileSearchRender() {
   clearTimeout(__profileSearchTimer);
   __profileSearchTimer = setTimeout(() => {
     __profileSearchTimer = 0;
     profilePage = 1;
+    resetProfileTableScroll();
     renderProfiles();
-  }, 90);
+    if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage();
+  }, 120);
 }
 let __proxySearchFrame = 0;
 function scheduleProxySearchRender() {
@@ -3880,8 +4105,37 @@ function scheduleSessionRefresh() {
 
 async function startProfile(id) {
   invalidateViewCache(['sync', 'profiles']);
-  const profile = ui.profiles.find((item) => item.id === id); if (!profile) return;
+  let profile = ui.profiles.find((item) => item.id === id);
+  if ((!profile || !profile.fingerprint) && !window.__uiAuditCalls && typeof window.ops?.getProfile === 'function') {
+    try {
+      const full = await window.ops.getProfile(id);
+      if (full && full.id) {
+        const idx = ui.profiles.findIndex((p) => p.id === id);
+        if (idx >= 0) ui.profiles[idx] = full;
+        else ui.profiles.push(full);
+        profile = full;
+      }
+    } catch (_) {}
+  }
+  if (!profile) return;
   if (profileEngine(id).running || startingProfiles.has(id)) return;
+  const linkedProxyId = profileProxyId(profile);
+  const linkedProxy = linkedProxyId ? proxyLibraryItem(linkedProxyId) : null;
+  const allowFailed = Boolean(profile.allowFailedProxy || profile.proxyMeta?.allowFailedProxy || profile.ignoreBrokenProxy || profile.proxyMeta?.ignoreBrokenProxy);
+  if (linkedProxy && !allowFailed) {
+    const isProbeOk = linkedProxy.lastProbeOk !== undefined ? linkedProxy.lastProbeOk : linkedProxy.lastCheckOk;
+    if (isProbeOk === false) {
+      const probeAt = linkedProxy.lastProbeAt || linkedProxy.lastCheck;
+      const elapsed = probeAt ? (Date.now() - new Date(probeAt).getTime()) : Infinity;
+      if (elapsed >= 60000) {
+        const name = linkedProxy.name || `${linkedProxy.host}:${linkedProxy.port}`;
+        const msg = `代理「${name}」最近一次探测失败且已过重试窗口，已阻断启动以防真实 IP 泄漏。可勾选「仍要启动」强制启动。`;
+        log('Error', msg);
+        toast(tx(msg), { tone: 'error' });
+        return;
+      }
+    }
+  }
   const payload = {
     ...profile,
     group_name: groupNameRaw(profile) || '',
@@ -3911,7 +4165,19 @@ async function stopProfile(id) {
 }
 
 async function checkProfileProxy(id) {
-  const profile = ui.profiles.find((item) => item.id === id); if (!profile) return;
+  let profile = ui.profiles.find((item) => item.id === id);
+  if (!profile && !window.__uiAuditCalls && typeof window.ops?.getProfile === 'function') {
+    try {
+      const full = await window.ops.getProfile(id);
+      if (full && full.id) {
+        const idx = ui.profiles.findIndex((p) => p.id === id);
+        if (idx >= 0) ui.profiles[idx] = full;
+        else ui.profiles.push(full);
+        profile = full;
+      }
+    } catch (_) {}
+  }
+  if (!profile) return;
   try {
     toast('正在通过环境 ' + displayProfileNumber(profile) + ' 的代理检测出口 IP...');
     const result = await window.ops.checkProfileProxy(profile);
@@ -4616,6 +4882,7 @@ document.addEventListener('click', async (event) => {
   if (action?.dataset.action === 'restore') restoreProfile(action.dataset.id);
   if (action?.dataset.action === 'purge') purgeProfile(action.dataset.id);
   if (action?.dataset.action === 'select-sync') { selectedSessions.add(action.dataset.id); pushSyncSelection(); switchView('sync'); }
+  if (action?.dataset.action === 'cookie-robot') openCookieRobotModal(action.dataset.id);
 
   const assign = event.target.closest('[data-extension-assign]'); if (assign) openAssign(assign.dataset.extensionAssign);
   const reload = event.target.closest('[data-extension-reload]'); if (reload) { try { const updated = await window.ops.reloadExtension(reload.dataset.extensionReload); toast(tx('扩展已重新加载：') + (updated?.name || '') + ' v' + (updated?.version || '')); invalidateViewCache('extensions'); await refreshExtensions(); } catch (error) { toast(tx('重新加载失败：') + error.message); } }
@@ -4759,22 +5026,28 @@ $('#profile-search').addEventListener('keydown', (event) => {
   clearTimeout(__profileSearchTimer);
   event.target.value = '';
   profilePage = 1;
+  pagedProfilesData = null;
+  resetProfileTableScroll();
   renderProfiles();
+  if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage();
 });
 $('#profile-clear-filters').addEventListener('click', () => {
   clearTimeout(__profileSearchTimer);
   $('#profile-search').value = '';
   activeGroupFilter = 'all';
   profilePage = 1;
+  pagedProfilesData = null;
+  resetProfileTableScroll();
   renderProfiles();
+  if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage();
   $('#profile-search').focus();
 });
 $('#profile-empty-create').addEventListener('click', () => $('#create-profile').click());
 $('#extension-search').addEventListener('input', renderExtensions);
-$('#profile-page-size').addEventListener('change', (event) => { const value = Number(event.target.value); profilePageSize = PROFILE_PAGE_SIZES.includes(value) ? value : 10; profilePage = 1; try { localStorage.setItem(PROFILE_PAGE_SIZE_KEY, String(profilePageSize)); } catch (_) {} renderProfiles(); });
-$('#profile-prev').addEventListener('click', () => { profilePage = Math.max(1, profilePage - 1); renderProfiles(); });
-$('#profile-next').addEventListener('click', () => { profilePage += 1; renderProfiles(); });
-$('#profile-page').addEventListener('change', (event) => { profilePage = Math.max(1, Number.parseInt(event.target.value, 10) || 1); renderProfiles(); });
+$('#profile-page-size').addEventListener('change', (event) => { const value = Number(event.target.value); profilePageSize = PROFILE_PAGE_SIZES.includes(value) ? value : 10; profilePage = 1; resetProfileTableScroll(); try { localStorage.setItem(PROFILE_PAGE_SIZE_KEY, String(profilePageSize)); } catch (_) {} renderProfiles(); if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage(); });
+$('#profile-prev').addEventListener('click', () => { profilePage = Math.max(1, profilePage - 1); resetProfileTableScroll(); renderProfiles(); if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage(); });
+$('#profile-next').addEventListener('click', () => { profilePage += 1; resetProfileTableScroll(); renderProfiles(); if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage(); });
+$('#profile-page').addEventListener('change', (event) => { profilePage = Math.max(1, Number.parseInt(event.target.value, 10) || 1); resetProfileTableScroll(); renderProfiles(); if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage(); });
 function openCreateProfileDialog() {
   fillGroupSelect($('#profile-create-group'), listGroups()[0]?.id || UNGROUPED_ID);
   const directRadio = document.querySelector('input[name="create-network"][value="direct"]');
@@ -4825,9 +5098,12 @@ document.getElementById('profile-group-chips')?.addEventListener('click', (event
   activeGroupFilter = btn.dataset.groupFilter || 'all';
   selectedProfiles.clear();
   profilePage = 1;
+  pagedProfilesData = null;
+  resetProfileTableScroll();
   renderGroupFilterChips();
   updateProfileSelectionUi();
   renderProfiles();
+  if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage();
 });
 
 // groups page actions
@@ -5569,6 +5845,47 @@ async function runProxyBatchCheck(ids) {
 $('#proxy-check-selected')?.addEventListener('click', async () => {
   await runProxyBatchCheck([...selectedProxies]);
 });
+async function runBatchSpeedTest(ids) {
+  if (!ids.length) return toast(tx('请先勾选代理'));
+  toast(tx('正在批量测速 ') + ids.length + tx(' 条代理（并发 ≤ 16）…'));
+  let ok = 0; let fail = 0;
+  if (typeof window.ops?.batchSpeedTest === 'function' || typeof window.ops?.proxyBatchSpeedTest === 'function') {
+    try {
+      const fn = window.ops.batchSpeedTest || window.ops.proxyBatchSpeedTest;
+      const res = await fn({ ids, concurrency: 16 });
+      ok = res.okCount ?? 0;
+      fail = res.failCount ?? 0;
+    } catch (error) {
+      toast(tx('批量测速失败：') + (error.message || error));
+      return;
+    }
+  } else {
+    const concurrency = Math.min(16, ids.length);
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < ids.length) {
+        const id = ids[cursor++];
+        try {
+          await window.ops.proxyCheck({ id });
+          ok++;
+        } catch (_) {
+          fail++;
+        }
+      }
+    };
+    const workers = Array.from({ length: concurrency }, () => worker());
+    await Promise.all(workers);
+  }
+  invalidateViewCache('proxies');
+  await refreshProxies();
+  toast(tx('批量测速完成：成功 ') + ok + tx(' · 失败 ') + fail);
+  log('Proxy', `批量测速完成：${ok} 成功，${fail} 失败`);
+}
+$('#proxy-batch-speed-btn')?.addEventListener('click', async () => {
+  const targets = selectedProxies.size ? [...selectedProxies] : (proxyLibrary || []).map((p) => p.id);
+  if (!targets.length) return toast(tx('代理库为空'));
+  await runBatchSpeedTest(targets);
+});
 $('#proxy-check-all')?.addEventListener('click', async () => {
   const ids = (proxyLibrary || []).map((item) => item.id);
   if (!ids.length) return toast(tx('代理库为空'));
@@ -6207,6 +6524,143 @@ $('#proxy-batch-import-form')?.addEventListener('submit', async (event) => {
   await refreshProxies();
   toast(tx(`批量导入完成：成功 ${successCount} 个` + (failCount ? `，失败 ${failCount} 个` : '')));
   log('Proxy', `批量导入代理完成：${successCount} 成功，${failCount} 失败`);
+});
+
+let providerPreviewProxies = [];
+
+$('#proxy-provider-import-btn')?.addEventListener('click', () => {
+  if ($('#proxy-provider-url')) $('#proxy-provider-url').value = '';
+  if ($('#proxy-provider-preview-box')) $('#proxy-provider-preview-box').style.display = 'none';
+  if ($('#proxy-provider-preview-list')) $('#proxy-provider-preview-list').replaceChildren();
+  if ($('#proxy-provider-submit')) $('#proxy-provider-submit').disabled = true;
+  if ($('#proxy-provider-preview-summary')) $('#proxy-provider-preview-summary').textContent = '';
+  providerPreviewProxies = [];
+  syncThemedSelects($('#proxy-provider-dialog'));
+  $('#proxy-provider-dialog')?.showModal();
+});
+
+$('#proxy-provider-template')?.addEventListener('change', () => {
+  const isJson = $('#proxy-provider-template')?.value === 'json';
+  const jsonOptions = $('#proxy-provider-json-options');
+  if (jsonOptions) jsonOptions.style.display = isJson ? 'flex' : 'none';
+});
+
+$('#proxy-provider-select-all')?.addEventListener('change', (e) => {
+  const checked = Boolean(e.target.checked);
+  const boxes = document.querySelectorAll('#proxy-provider-preview-list input[type="checkbox"]');
+  for (const b of boxes) b.checked = checked;
+  const countEl = $('#proxy-provider-selected-count');
+  if (countEl) countEl.textContent = checked ? `${boxes.length} / ${boxes.length}` : '0 / ' + boxes.length;
+  if ($('#proxy-provider-submit')) $('#proxy-provider-submit').disabled = !checked;
+});
+
+$('#proxy-provider-fetch-btn')?.addEventListener('click', async () => {
+  const url = ($('#proxy-provider-url')?.value || '').trim();
+  if (!url) return toast(tx('请输入提取 URL'));
+  if (!/^https?:\/\//i.test(url)) return toast(tx('提取 URL 必须以 http:// 或 https:// 开头'));
+
+  toast(tx('正在从供应商 API 提取代理…'));
+  const btn = $('#proxy-provider-fetch-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const template = $('#proxy-provider-template')?.value || 'auto';
+    const protocol = $('#proxy-provider-default-protocol')?.value || 'socks5';
+    const fieldMapping = {};
+    const endpointFields = ($('#proxy-provider-fields-endpoint')?.value || '').split(',').map((s) => s.trim());
+    if (endpointFields[0]) fieldMapping.ip = endpointFields[0];
+    if (endpointFields[1]) fieldMapping.port = endpointFields[1];
+    const authFields = ($('#proxy-provider-fields-auth')?.value || '').split(',').map((s) => s.trim());
+    if (authFields[0]) fieldMapping.user = authFields[0];
+    if (authFields[1]) fieldMapping.pass = authFields[1];
+
+    let deduped = [];
+    if (typeof window.ops?.fetchProviderProxies === 'function' || typeof window.ops?.proxyProviderFetch === 'function') {
+      const fn = window.ops.fetchProviderProxies || window.ops.proxyProviderFetch;
+      const result = await fn({
+        url,
+        template,
+        protocol,
+        fieldMapping,
+      });
+      deduped = Array.isArray(result?.proxies) ? result.proxies : [];
+    }
+
+    providerPreviewProxies = deduped;
+    if (!deduped.length) {
+      toast(tx('未解析到有效代理，请检查 URL 或模板设置'));
+      return;
+    }
+
+    const previewList = $('#proxy-provider-preview-list');
+    if (previewList) {
+      previewList.replaceChildren();
+      for (let i = 0; i < deduped.length; i++) {
+        const item = deduped[i];
+        const row = document.createElement('label');
+        row.className = 'check-row';
+        row.style.fontSize = '12px';
+        row.style.margin = '2px 0';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = true;
+        cb.dataset.providerIdx = String(i);
+        cb.addEventListener('change', () => {
+          const checked = document.querySelectorAll('#proxy-provider-preview-list input[type="checkbox"]:checked').length;
+          const countEl = $('#proxy-provider-selected-count');
+          if (countEl) countEl.textContent = `${checked} / ${deduped.length}`;
+          if ($('#proxy-provider-submit')) $('#proxy-provider-submit').disabled = checked === 0;
+        });
+        row.append(cb, document.createTextNode(` ${item.protocol.toUpperCase()} ${item.host}:${item.port}${item.username ? ' (' + item.username + ')' : ''}`));
+        previewList.append(row);
+      }
+    }
+    if ($('#proxy-provider-preview-box')) $('#proxy-provider-preview-box').style.display = 'block';
+    if ($('#proxy-provider-selected-count')) $('#proxy-provider-selected-count').textContent = `${deduped.length} / ${deduped.length}`;
+    if ($('#proxy-provider-preview-summary')) $('#proxy-provider-preview-summary').textContent = tx('提取成功，已解析 ') + deduped.length + tx(' 条代理，请勾选后导入');
+    if ($('#proxy-provider-submit')) $('#proxy-provider-submit').disabled = false;
+    toast(tx('提取成功，已解析 ') + deduped.length + tx(' 条代理'));
+  } catch (err) {
+    toast(tx('提取失败：') + err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+$('#proxy-provider-form')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (event.submitter?.value === 'cancel') return $('#proxy-provider-dialog')?.close('cancel');
+  const checkedBoxes = document.querySelectorAll('#proxy-provider-preview-list input[type="checkbox"]:checked');
+  if (!checkedBoxes.length) return toast(tx('请勾选要导入的代理'));
+
+  let successCount = 0;
+  let failCount = 0;
+  for (const box of checkedBoxes) {
+    const idx = Number(box.dataset.providerIdx);
+    const item = providerPreviewProxies[idx];
+    if (!item) continue;
+    try {
+      const draft = {
+        name: item.name || `${item.protocol.toUpperCase()} ${item.host}:${item.port}`,
+        protocol: item.protocol,
+        ipChannel: 'ip-api',
+        host: item.host,
+        port: Number(item.port),
+        username: item.username || '',
+        password: item.password || '',
+        raw: item.raw,
+        remark: item.remark || tx('从供应商 API 导入'),
+      };
+      await window.ops.proxyCreate(draft);
+      successCount++;
+    } catch (_) {
+      failCount++;
+    }
+  }
+  $('#proxy-provider-dialog')?.close();
+  invalidateViewCache(['proxies', 'profiles']);
+  await refreshProxies();
+  toast(tx('已成功导入 ') + successCount + tx(' 条代理') + (failCount ? ` · 失败 ${failCount}` : ''));
+  log('Proxy', `从供应商 API 导入代理完成：${successCount} 成功，${failCount} 失败`);
 });
 
 document.addEventListener('click', async (event) => {
@@ -6850,5 +7304,209 @@ $('#batch-preferences-form')?.addEventListener('submit', async (event) => {
     toast('批量偏好设置失败：' + error.message);
   } finally {
     if (submit) submit.disabled = false;
+  }
+});
+
+let currentRobotProfileId = null;
+
+function openCookieRobotModal(profileId) {
+  const dialog = $('#cookie-robot-dialog');
+  if (!dialog) return;
+
+  const targetId = profileId || [...selectedProfiles][0] || ui.profiles.find((p) => profileEngine(p.id).running)?.id || ui.profiles[0]?.id;
+  currentRobotProfileId = targetId;
+
+  const profile = ui.profiles.find((p) => p.id === targetId);
+  const isRunning = profile ? Boolean(profileEngine(profile.id).running) : false;
+
+  const titleEl = $('#cookie-robot-title');
+  if (titleEl) {
+    const profNum = profile ? displayProfileNumber(profile) : '';
+    titleEl.textContent = t('cookieRobot.title') + (profNum ? ` (${profNum})` : '');
+  }
+
+  const domainsInput = $('#cookie-robot-domains');
+  if (domainsInput && !domainsInput.value.trim()) {
+    domainsInput.value = 'example.com\nwikipedia.org';
+  }
+
+  const statusText = $('#cookie-robot-status-text');
+  const statsEl = $('#cookie-robot-stats');
+  const progressBar = $('#cookie-robot-progress-bar');
+  const logEl = $('#cookie-robot-log');
+  const startBtn = $('#cookie-robot-start');
+  const stopBtn = $('#cookie-robot-stop');
+
+  if (statusText) statusText.textContent = isRunning ? t('cookieRobot.statusReady') : t('cookieRobot.statusReady') + ' (' + t('status.stopped') + ')';
+  if (statsEl) statsEl.textContent = 'Cookie: 0 | Pages: 0';
+  if (progressBar) progressBar.style.width = '0%';
+  if (logEl) logEl.replaceChildren();
+
+  if (targetId && typeof window.ops?.getCookieRobotStatus === 'function') {
+    window.ops.getCookieRobotStatus(targetId).then((status) => {
+      if (status?.running) {
+        if (startBtn) startBtn.style.display = 'none';
+        if (stopBtn) stopBtn.style.display = 'inline-block';
+        if (statusText) statusText.textContent = t('cookieRobot.running');
+        if (progressBar && status.totalSteps > 0) {
+          const pct = Math.round((status.currentStep / status.totalSteps) * 100);
+          progressBar.style.width = `${pct}%`;
+        }
+      } else {
+        if (startBtn) startBtn.style.display = 'inline-block';
+        if (stopBtn) stopBtn.style.display = 'none';
+      }
+    }).catch(() => {});
+  }
+
+  if (typeof dialog.showModal === 'function') dialog.showModal();
+}
+
+$('#toolbar-cookie-robot')?.addEventListener('click', () => {
+  openCookieRobotModal();
+});
+
+$('#batch-cookie-robot')?.addEventListener('click', () => {
+  openCookieRobotModal();
+});
+
+$('#cookie-robot-close')?.addEventListener('click', () => {
+  $('#cookie-robot-dialog')?.close();
+});
+
+$('#cookie-robot-cancel')?.addEventListener('click', () => {
+  $('#cookie-robot-dialog')?.close();
+});
+
+$('#cookie-robot-start')?.addEventListener('click', async () => {
+  const profileId = currentRobotProfileId;
+  if (!profileId) return toast(tx('请先选择环境'));
+
+  const profile = ui.profiles.find((p) => p.id === profileId);
+  const running = profile ? Boolean(profileEngine(profile.id).running) : false;
+  if (!running) {
+    return toast(t('cookieRobot.failed') + ': ' + tx('环境未启动，请先启动环境'));
+  }
+
+  const rawDomains = $('#cookie-robot-domains')?.value || '';
+  const domains = rawDomains.split(/[\r\n,]+/).map((s) => s.trim()).filter(Boolean);
+  if (!domains.length) return toast(tx('请输入目标域名'));
+
+  const stayMin = Number($('#cookie-robot-duration-min')?.value) || 5;
+  const stayMax = Number($('#cookie-robot-duration-max')?.value) || 15;
+  const depth = Number($('#cookie-robot-depth')?.value) || 2;
+  const scrollProb = Number($('#cookie-robot-scroll-prob')?.value) || 0.8;
+  const clickProb = Number($('#cookie-robot-click-prob')?.value) || 0.7;
+
+  const startBtn = $('#cookie-robot-start');
+  const stopBtn = $('#cookie-robot-stop');
+  const statusText = $('#cookie-robot-status-text');
+
+  if (startBtn) startBtn.style.display = 'none';
+  if (stopBtn) stopBtn.style.display = 'inline-block';
+  if (statusText) statusText.textContent = t('cookieRobot.running') + '...';
+
+  try {
+    await window.ops.startCookieRobot(profileId, {
+      domains,
+      stayDurationMin: stayMin,
+      stayDurationMax: stayMax,
+      walkDepth: depth,
+      scrollProbability: scrollProb,
+      clickProbability: clickProb,
+    });
+    toast(t('cookieRobot.running'));
+  } catch (err) {
+    if (startBtn) startBtn.style.display = 'inline-block';
+    if (stopBtn) stopBtn.style.display = 'none';
+    if (statusText) statusText.textContent = t('cookieRobot.failed');
+    toast(t('cookieRobot.failed') + ': ' + err.message);
+  }
+});
+
+$('#cookie-robot-stop')?.addEventListener('click', async () => {
+  const profileId = currentRobotProfileId;
+  if (!profileId) return;
+
+  const stopBtn = $('#cookie-robot-stop');
+  const statusText = $('#cookie-robot-status-text');
+  if (stopBtn) stopBtn.disabled = true;
+  if (statusText) statusText.textContent = tx('停止中...');
+
+  try {
+    await window.ops.stopCookieRobot(profileId);
+    toast(t('cookieRobot.stopped'));
+  } catch (err) {
+    toast('Stop error: ' + err.message);
+  } finally {
+    if (stopBtn) stopBtn.disabled = false;
+  }
+});
+
+window.ops.onEvent((value) => {
+  if (!value || typeof value !== 'object') return;
+  const isRobotEvent = value.type === 'robot-started' || value.type === 'robot-progress' ||
+    value.type === 'robot-finished' || value.type === 'robot-failed' ||
+    value.type === 'cookie-robot-started' || value.type === 'cookie-robot-progress' ||
+    value.type === 'cookie-robot-finished' || value.type === 'cookie-robot-failed';
+  if (!isRobotEvent) return;
+
+  if (currentRobotProfileId && value.profileId && value.profileId !== currentRobotProfileId) return;
+
+  const statusText = $('#cookie-robot-status-text');
+  const statsEl = $('#cookie-robot-stats');
+  const progressBar = $('#cookie-robot-progress-bar');
+  const logEl = $('#cookie-robot-log');
+  const startBtn = $('#cookie-robot-start');
+  const stopBtn = $('#cookie-robot-stop');
+
+  const addLog = (msg) => {
+    if (!logEl) return;
+    const item = document.createElement('div');
+    item.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    logEl.append(item);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+
+  if (value.type === 'robot-started' || value.type === 'cookie-robot-started') {
+    if (startBtn) startBtn.style.display = 'none';
+    if (stopBtn) stopBtn.style.display = 'inline-block';
+    if (statusText) statusText.textContent = t('cookieRobot.running');
+    addLog(`Task started: ${value.totalSites} sites planned`);
+  } else if (value.type === 'robot-progress' || value.type === 'cookie-robot-progress') {
+    if (value.totalSteps > 0 && progressBar) {
+      const pct = Math.round((value.step / value.totalSteps) * 100);
+      progressBar.style.width = `${pct}%`;
+    }
+    if (statusText) {
+      statusText.textContent = `${t('cookieRobot.running')} (${value.step}/${value.totalSteps}): ${value.domain || ''}`;
+    }
+    if (statsEl) {
+      statsEl.textContent = `Cookie: +${value.cookiesAdded ?? 0} (${value.totalCookies ?? 0}) | Pages: ${value.pagesVisited ?? 0}`;
+    }
+    if (value.phase === 'navigating') {
+      addLog(`Navigating to ${value.domain}...`);
+    } else if (value.phase === 'random-walk') {
+      addLog(`Exploring internal link: ${value.targetLink || ''}`);
+    } else if (value.phase === 'retry') {
+      addLog(`Retry (${value.attempt}) for ${value.domain}: ${value.error || ''}`);
+    } else if (value.phase === 'domain-complete') {
+      addLog(`Done ${value.domain}: +${value.cookiesAdded} cookies, ${value.pagesVisited} pages (${value.status})`);
+    }
+  } else if (value.type === 'robot-finished' || value.type === 'cookie-robot-finished') {
+    if (startBtn) startBtn.style.display = 'inline-block';
+    if (stopBtn) stopBtn.style.display = 'none';
+    if (progressBar) progressBar.style.width = '100%';
+    const doneStatus = value.aborted ? t('cookieRobot.stopped') : t('cookieRobot.completed');
+    if (statusText) statusText.textContent = doneStatus;
+    if (statsEl) statsEl.textContent = `Cookie: +${value.totalCookiesAdded ?? 0} | Pages: ${value.totalPagesVisited ?? 0}`;
+    addLog(`Finished (${value.status}): +${value.totalCookiesAdded ?? 0} cookies, ${value.totalPagesVisited ?? 0} pages`);
+    toast(doneStatus);
+  } else if (value.type === 'robot-failed' || value.type === 'cookie-robot-failed') {
+    if (startBtn) startBtn.style.display = 'inline-block';
+    if (stopBtn) stopBtn.style.display = 'none';
+    if (statusText) statusText.textContent = t('cookieRobot.failed');
+    addLog(`Failed: ${value.error || 'Unknown error'}`);
+    toast(t('cookieRobot.failed') + ': ' + (value.error || ''));
   }
 });

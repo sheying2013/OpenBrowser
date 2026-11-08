@@ -262,7 +262,11 @@ function killProcessTree(pid, options = {}) {
   });
 }
 
-/** Default Local API port stack */
+/**
+ * Known legacy Local API ports / probe mitigation reference list.
+ * Note: Local API runtime now defaults to dynamic high-port allocation
+ * in range [41000, 59999] with discovery via automation-info.json.
+ */
 const LOCAL_API_PORTS = Object.freeze([50325, 50725, 60725]);
 
 function defaultApiPort() {

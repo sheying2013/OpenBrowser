@@ -92,12 +92,12 @@
         <section class="view active" id="view-profiles">
           <div class="group-chip-row" id="profile-group-chips"></div>
           <div class="toolbar profile-primary-toolbar">
-            <div class="toolbar-left"><button class="primary" id="create-profile"><i data-lucide="plus"></i><span data-i18n="profiles.create">新建环境</span></button><button class="outline" id="batch-add"><i data-lucide="copy-plus"></i><span data-i18n="profiles.batchAdd">批量新增</span></button><button class="outline" id="batch-import"><i data-lucide="file-down"></i><span data-i18n="profiles.batchImport">批量导入</span></button><input id="batch-import-file" type="file" accept=".csv,.json" hidden><button class="outline" id="renumber-profiles" type="button" title="将所有环境按列表顺序重新编号为 1..N"><i data-lucide="hash"></i><span data-i18n="profiles.renumber">重排编号</span></button><button class="outline danger" id="empty-trash-btn" type="button" hidden><i data-lucide="trash"></i><span data-i18n="trash.empty">清空回收站</span></button></div>
+            <div class="toolbar-left"><button class="primary" id="create-profile"><i data-lucide="plus"></i><span data-i18n="profiles.create">新建环境</span></button><button class="outline" id="batch-add"><i data-lucide="copy-plus"></i><span data-i18n="profiles.batchAdd">批量新增</span></button><button class="outline" id="batch-import"><i data-lucide="file-down"></i><span data-i18n="profiles.batchImport">批量导入</span></button><input id="batch-import-file" type="file" accept=".csv,.json" hidden><button class="outline" id="toolbar-cookie-robot" type="button" title="养号预热"><i data-lucide="bot"></i><span data-i18n="cookieRobot.button">养号预热</span></button><button class="outline" id="renumber-profiles" type="button" title="将所有环境按列表顺序重新编号为 1..N"><i data-lucide="hash"></i><span data-i18n="profiles.renumber">重排编号</span></button><button class="outline danger" id="empty-trash-btn" type="button" hidden><i data-lucide="trash"></i><span data-i18n="trash.empty">清空回收站</span></button></div>
             <label class="search"><i data-lucide="search"></i><input id="profile-search" placeholder="搜索环境 / 分组 / 标签" data-i18n-placeholder="profiles.search"></label>
           </div>
           <div class="profile-selection-bar" id="profile-selection-bar" hidden>
             <strong id="profile-selection-count">已选择 0 个环境</strong>
-            <div class="selection-actions"><button class="outline" id="start-selected"><i data-lucide="play"></i><span data-i18n="profiles.startSelected">启动选中</span></button><button class="outline" id="stop-selected"><i data-lucide="square"></i><span data-i18n="profiles.stopSelected">停止选中</span></button><button class="outline" id="copy-selected" type="button" title="复制选中环境的配置，不复制 Cookie 和账号密码"><i data-lucide="copy"></i><span>复制环境</span></button><button class="outline" id="batch-edit-preferences" type="button" title="批量修改选中环境的启动页、系统和高级偏好"><i data-lucide="sliders-horizontal"></i><span>批量偏好</span></button><button class="outline" id="batch-update"><i data-lucide="refresh-cw"></i><span data-i18n="profiles.batchNetwork">切换网络/IP</span></button><button class="outline" id="batch-set-direct" type="button" title="将选中环境改为本地直连"><i data-lucide="wifi"></i><span data-i18n="profiles.direct">本地直连</span></button>
+            <div class="selection-actions"><button class="outline" id="start-selected"><i data-lucide="play"></i><span data-i18n="profiles.startSelected">启动选中</span></button><button class="outline" id="stop-selected"><i data-lucide="square"></i><span data-i18n="profiles.stopSelected">停止选中</span></button><button class="outline" id="batch-cookie-robot" type="button" title="养号预热"><i data-lucide="bot"></i><span data-i18n="cookieRobot.button">养号预热</span></button><button class="outline" id="copy-selected" type="button" title="复制选中环境的配置，不复制 Cookie 和账号密码"><i data-lucide="copy"></i><span>复制环境</span></button><button class="outline" id="batch-edit-preferences" type="button" title="批量修改选中环境的启动页、系统和高级偏好"><i data-lucide="sliders-horizontal"></i><span>批量偏好</span></button><button class="outline" id="batch-update"><i data-lucide="refresh-cw"></i><span data-i18n="profiles.batchNetwork">切换网络/IP</span></button><button class="outline" id="batch-set-direct" type="button" title="将选中环境改为本地直连"><i data-lucide="wifi"></i><span data-i18n="profiles.direct">本地直连</span></button>
               <label class="batch-group-assign"><span data-i18n="profiles.moveGroup">移到分组</span>
                 <select id="batch-assign-group"></select>
               </label>
@@ -283,6 +283,7 @@
                       <small id="proxy-fail-closed-note">代理故障不会切换为本地直连。</small>
                     </label>
                   </div>
+                  <label class="check-row"><input id="editor-allow-failed-proxy" type="checkbox"> 代理探测失败仍要启动（显式覆盖安全阻断）</label>
                   <div class="form-two">
                     <label>TLS 配置档
                       <select id="editor-proxy-tls-profile">
@@ -587,8 +588,10 @@
             <div class="toolbar-left">
               <button class="primary" id="proxy-create" type="button"><i data-lucide="plus"></i>新建代理</button>
               <button class="outline" id="proxy-batch-import-btn" type="button"><i data-lucide="folder-input"></i>批量导入</button>
+              <button class="outline" id="proxy-provider-import-btn" type="button"><i data-lucide="cloud-download"></i>从供应商 API 导入</button>
               <button class="outline" id="proxy-refresh" type="button"><i data-lucide="refresh-cw"></i>刷新</button>
               <button class="outline" id="proxy-check-selected" type="button"><i data-lucide="activity"></i>检测选中</button>
+              <button class="outline" id="proxy-batch-speed-btn" type="button"><i data-lucide="zap"></i>批量测速</button>
               <button class="outline" id="proxy-check-all" type="button"><i data-lucide="list-checks"></i>检测全部</button>
               <button class="danger" id="proxy-delete-selected" type="button"><i data-lucide="trash-2"></i>删除选中</button>
               <span class="extension-counts" id="proxy-count"></span>
@@ -610,6 +613,7 @@
                   <th>认证</th>
                   <th>出口 IP</th>
                   <th>延迟</th>
+                  <th>测速结果</th>
                   <th>类型</th>
                   <th>使用情况</th>
                   <th>并发上限</th>
@@ -923,7 +927,7 @@
               <div class="rpa-row">
                 <span class="rpa-label">服务状态</span>
                 <span class="rpa-status-pill" id="api-conn-pill">检测中…</span>
-                <code class="rpa-code-inline" id="api-status-url">http://127.0.0.1:50325</code>
+                <code class="rpa-code-inline" id="api-status-url">http://127.0.0.1:...</code>
                 <button type="button" class="outline" id="api-copy-base"><i data-lucide="copy"></i>复制地址</button>
                 <button type="button" class="outline" id="api-refresh"><i data-lucide="refresh-cw"></i>刷新</button>
                 <button type="button" class="outline" id="api-open-version"><i data-lucide="play"></i>测试一下</button>
@@ -1168,7 +1172,7 @@
   <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center">手动选择回退浏览器（Windows 可选 Chrome 或 Edge）<select id="kernel-system-browser"><option value="">未选择</option></select></label>
   <p class="storage-warning" id="kernel-progress">点击下载会获取 Google Chrome Stable 正式包并校验，不使用 Chrome for Testing 包。默认不会自动回退到本机浏览器。</p>
 </article>
-<article><h3>运行时</h3><dl id="runtime-info"></dl></article><article><h3>能力状态</h3><dl><div><dt>真实浏览器进程</dt><dd class="ok">已启用</dd></div><div><dt>独立用户目录</dt><dd class="ok">已启用</dd></div><div><dt>扩展批量加载</dt><dd class="ok">已启用</dd></div><div><dt>Chrome DevTools Protocol</dt><dd class="ok">已启用</dd></div><div><dt>运行模式</dt><dd class="ok">纯本地</dd></div><div><dt>本机接口</dt><dd class="ok">127.0.0.1:50325</dd></div></dl></article>
+<article><h3>运行时</h3><dl id="runtime-info"></dl></article><article><h3>能力状态</h3><dl><div><dt>真实浏览器进程</dt><dd class="ok">已启用</dd></div><div><dt>独立用户目录</dt><dd class="ok">已启用</dd></div><div><dt>扩展批量加载</dt><dd class="ok">已启用</dd></div><div><dt>Chrome DevTools Protocol</dt><dd class="ok">已启用</dd></div><div><dt>运行模式</dt><dd class="ok">纯本地</dd></div><div><dt>本机接口</dt><dd class="ok" id="local-api-status-endpoint">127.0.0.1 (动态端口)</dd></div></dl></article>
 <article class="storage-settings-card" id="close-action-card"><div class="storage-settings-head"><div><h3 data-i18n="system.close.title">关闭窗口行为</h3><p data-i18n="system.close.desc">控制点击主窗口右上角关闭按钮时，是将程序最小化到系统托盘继续运行后台代理，还是完全退出程序。</p></div><span data-i18n="system.close.label">托盘常驻</span></div><div class="form-row" style="margin-top:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="ask"> <span data-i18n="system.close.ask">每次询问</span></label><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="tray" checked> <span data-i18n="system.close.tray">最小化到系统托盘（保持浏览器与代理运行）</span></label><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="exit"> <span data-i18n="system.close.exit">退出程序（停止所有运行中的环境）</span></label></div><p class="storage-warning" style="margin-top:10px;" data-i18n="system.close.hint">保持后台运行可保证各个浏览器环境的代理链路不中断。如需完全退出，可在系统托盘图标右键选择「彻底退出」。</p></article>
 <article class="storage-settings-card"><div class="storage-settings-head"><div><h3>环境缓存与数据位置</h3><p>各环境的 Chrome 用户目录、Cookie、缓存、本地存储、IndexedDB 和会话数据都会保存在这里。</p></div><span>本地保存</span></div><div class="storage-path-box"><small>当前目录</small><code id="profile-storage-path">正在读取...</code></div><div class="storage-actions"><button class="primary" id="choose-profile-storage" type="button">选择新目录</button><button class="outline" id="open-profile-storage" type="button">打开目录</button><button class="outline" id="reset-profile-storage" type="button">恢复默认位置</button></div><p class="storage-warning">修改前请先停止所有环境。新位置在环境下次启动时生效；旧目录中的数据不会自动移动或删除。</p></article></div></section>
       </main>
@@ -1255,6 +1259,63 @@
       <div class="dialog-actions">
         <button value="cancel" class="outline" type="submit">取消</button>
         <button value="default" class="primary" id="proxy-batch-import-submit" type="submit">确认批量导入</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="proxy-provider-dialog">
+    <form method="dialog" id="proxy-provider-form">
+      <div class="dialog-head">
+        <div>
+          <h2>从供应商 API 导入</h2>
+          <p>输入供应商提取链接与解析模板，拉取后可勾选导入代理库</p>
+        </div>
+        <button value="cancel" type="submit" aria-label="关闭" data-i18n-aria="关闭" data-i18n-aria-label="关闭">×</button>
+      </div>
+      <label>提取 URL
+        <input id="proxy-provider-url" type="url" placeholder="https://api.example.com/get_proxy?num=100&format=json" required>
+      </label>
+      <div class="form-two">
+        <label>解析模板
+          <select id="proxy-provider-template">
+            <option value="auto">自动检测</option>
+            <option value="text_ip_port">每行 ip:port</option>
+            <option value="text_ip_port_user_pass">每行 ip:port:user:pass</option>
+            <option value="json">JSON 数组字段映射</option>
+          </select>
+        </label>
+        <label>默认协议
+          <select id="proxy-provider-default-protocol">
+            <option value="socks5">SOCKS5</option>
+            <option value="http">HTTP</option>
+            <option value="https">HTTPS</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-two" id="proxy-provider-json-options" style="display:none;">
+        <label>IP / 端口字段（如 ip,port）
+          <input id="proxy-provider-fields-endpoint" placeholder="ip,port">
+        </label>
+        <label>账号 / 密码字段（可选，如 user,pass）
+          <input id="proxy-provider-fields-auth" placeholder="user,pass">
+        </label>
+      </div>
+      <div class="toolbar" style="margin-top:6px;margin-bottom:6px;padding:0;">
+        <div class="toolbar-left">
+          <button class="outline mini-btn" id="proxy-provider-fetch-btn" type="button"><i data-lucide="download"></i>拉取预览</button>
+          <span class="extension-counts" id="proxy-provider-preview-summary"></span>
+        </div>
+      </div>
+      <div id="proxy-provider-preview-box" style="display:none;max-height:180px;overflow-y:auto;border:1px solid var(--border-color);border-radius:6px;padding:8px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <label class="check-row" style="margin:0;"><input id="proxy-provider-select-all" type="checkbox" checked> 全选预览代理</label>
+          <span id="proxy-provider-selected-count" class="field-hint">已选 0 条</span>
+        </div>
+        <div id="proxy-provider-preview-list" style="display:flex;flex-direction:column;gap:4px;"></div>
+      </div>
+      <div class="dialog-actions">
+        <button value="cancel" class="outline" type="submit">取消</button>
+        <button value="default" class="primary" id="proxy-provider-submit" type="submit" disabled>勾选导入</button>
       </div>
     </form>
   </dialog>
@@ -1517,6 +1578,62 @@
       <div class="dialog-actions">
         <button value="cancel" type="button" class="outline" id="app-confirm-cancel" data-i18n-src="取消">取消</button>
         <button value="confirm" type="button" class="primary" id="app-confirm-submit" data-i18n-src="确定">确定</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="cookie-robot-dialog">
+    <form method="dialog" id="cookie-robot-form">
+      <div class="dialog-head">
+        <div>
+          <h2 id="cookie-robot-title" data-i18n="cookieRobot.title">CookieRobot 养号预热</h2>
+          <p id="cookie-robot-subtitle" class="field-hint" data-i18n="cookieRobot.subtitle">拟人随机游走访问目标站点，预热沉淀真实 Cookie 与历史记录</p>
+        </div>
+        <button value="cancel" type="button" id="cookie-robot-close" aria-label="关闭" data-i18n-aria-label="关闭">&times;</button>
+      </div>
+      <div class="cookie-robot-body" style="display: flex; flex-direction: column; gap: 10px; margin: 12px 0;">
+        <label>
+          <span data-i18n="cookieRobot.domains">目标域名/网址列表（每行一个）</span>
+          <textarea id="cookie-robot-domains" rows="4" placeholder="example.com&#10;wikipedia.org" style="width: 100%; box-sizing: border-box; font-family: monospace; resize: vertical; margin-top: 4px;"></textarea>
+        </label>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <label>
+            <span data-i18n="cookieRobot.duration">每站停留时长（秒）</span>
+            <div style="display: flex; gap: 6px; align-items: center; margin-top: 4px;">
+              <input id="cookie-robot-duration-min" type="number" min="1" max="300" value="5" style="width: 65px;">
+              <span>-</span>
+              <input id="cookie-robot-duration-max" type="number" min="1" max="300" value="15" style="width: 65px;">
+            </div>
+          </label>
+          <label>
+            <span data-i18n="cookieRobot.depth">游走深度</span>
+            <input id="cookie-robot-depth" type="number" min="1" max="10" value="2" style="width: 70px; margin-top: 4px; display: block;">
+          </label>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <label>
+            <span data-i18n="cookieRobot.scrollProb">滚动概率</span>
+            <input id="cookie-robot-scroll-prob" type="number" min="0" max="1" step="0.1" value="0.8" style="width: 70px; margin-top: 4px; display: block;">
+          </label>
+          <label>
+            <span data-i18n="cookieRobot.clickProb">点击深入概率</span>
+            <input id="cookie-robot-click-prob" type="number" min="0" max="1" step="0.1" value="0.7" style="width: 70px; margin-top: 4px; display: block;">
+          </label>
+        </div>
+        <div id="cookie-robot-status-box" style="margin-top: 4px; padding: 10px; border-radius: 6px; border: 1px solid var(--border, rgba(0,0,0,0.1)); background: rgba(0,0,0,0.03); font-size: 13px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span id="cookie-robot-status-text" data-i18n="cookieRobot.statusReady">就绪</span>
+            <span id="cookie-robot-stats" style="font-family: monospace; font-size: 12px;">Cookie: 0 | Pages: 0</span>
+          </div>
+          <div class="progress-bar-wrap" style="height: 6px; background: rgba(0,0,0,0.1); border-radius: 3px; overflow: hidden;">
+            <div id="cookie-robot-progress-bar" style="width: 0%; height: 100%; background: var(--primary, #245cff); transition: width 0.3s;"></div>
+          </div>
+          <div id="cookie-robot-log" style="margin-top: 8px; max-height: 80px; overflow-y: auto; font-family: monospace; font-size: 11px; opacity: 0.85;"></div>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button value="cancel" type="button" class="outline" id="cookie-robot-cancel">关闭</button>
+        <button type="button" class="danger" id="cookie-robot-stop" style="display: none;" data-i18n="cookieRobot.stop">■ 停止</button>
+        <button type="button" class="primary" id="cookie-robot-start" data-i18n="cookieRobot.start">开始预热</button>
       </div>
     </form>
   </dialog>
