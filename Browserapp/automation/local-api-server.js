@@ -14,9 +14,9 @@ const MAX_BODY_BYTES = 1024 * 1024;
 const DYNAMIC_PORT_MIN = 41000;
 const DYNAMIC_PORT_MAX = 59999;
 const EXCLUDED_PORTS = Object.freeze(new Set([
-  50325, // ThirdPartySuite default Local API & legacy OpenBrowser port
-  50725, // ThirdPartySuite alternate
-  60725, // ThirdPartySuite alternate
+  50325, // known third-party default & legacy OpenBrowser port
+  50725, // known third-party alternate
+  60725, // known third-party alternate
   42222, // Known debugger / telemetry port
   44444, // Known debugging / metasploit port
   55555, // Android ADB Wi-Fi default

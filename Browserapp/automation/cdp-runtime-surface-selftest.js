@@ -7,7 +7,7 @@
  * Verifies that production source files NEVER call or reference `Runtime.enable`.
  * CDP Runtime.enable activates V8 Inspector listeners which expose observable side-channels
  * (e.g. Proxy traps on console.*, microtask scheduling timing differences) allowing anti-bot
- * systems like DataDome, Cloudflare, and Kasada to detect browser automation.
+ * advanced bot-defense systems to detect browser automation.
  *
  * Audited production files:
  * - engine.js

@@ -272,7 +272,7 @@ if (!cdp.__serviceWorkerHardened) {
 /**
  * Chromium 原生线缆层 HTTP 报头标准槽位序列 (Canonical Wire Header Order).
  *
- * 【背景与 JA4H / Akamai 指纹防御】：
+ * 【背景与 JA4H 指纹防御】：
  * JA4H (HTTP Client Fingerprinting) 与 Akamai Bot Manager 会依据线缆层请求头的名字序列（以及特定头的哈希）
  * 建立客户端指纹。原生 Chromium 在网络栈 (net::URLRequestHttpJob, ClientHints, NavigationLoader) 中
  * 按照固定的装配阶段构建报头流。若中间层重写器将 Client Hints (sec-ch-ua*) 或 User-Agent / Accept-Language

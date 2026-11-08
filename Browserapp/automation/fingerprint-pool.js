@@ -3,8 +3,8 @@
 /**
  * OpenBrowser Fingerprint Pool Module (跨环境指纹池)
  *
- * Inspired by an existing engine's pooled fingerprint allocation and reuse architecture
- * (see internal-analysis-notes.md Section 6.2 item 6, Section 7 P1-2).
+ * Pooled fingerprint allocation and reuse architecture (avoid regenerating a
+ * fresh fingerprint on every profile read).
  *
  * Replaces pure single-environment randomization with a pool of coherent, verified
  * device personas that are deterministically assigned and reused when exhausted.

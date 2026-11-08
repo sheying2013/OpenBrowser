@@ -85,7 +85,7 @@ function httpGet(port, pathname, apiKey) {
     check('(a) selectRandomApiPort never generates excluded debug/fingerprint ports', () => {
       for (let i = 0; i < 200; i += 1) {
         const port = selectRandomApiPort();
-        assert.notStrictEqual(port, 50325, 'port must never be ThirdPartySuite/legacy 50325');
+        assert.notStrictEqual(port, 50325, 'port must never fall back to a known legacy default (50325)');
         assert.ok(!EXCLUDED_PORTS.has(port), `port ${port} must not be in excluded list`);
       }
     });
