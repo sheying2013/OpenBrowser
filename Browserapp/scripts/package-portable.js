@@ -95,7 +95,6 @@ function isPackagingExcluded(entryName, fullPath = "") {
     lower === ".ds_store" ||
     lower === "node_modules" ||
     lower === ".git" ||
-    lower === "dist" ||
     lower === ".playwright-cli" ||
     lower === "functional-selftest-data" ||
     lower.startsWith(".tmp") ||
@@ -105,6 +104,20 @@ function isPackagingExcluded(entryName, fullPath = "") {
   }
   if (lower.endsWith(".pyc") || lower.endsWith(".pyo")) {
     return true;
+  }
+
+  // appRoot/dist is the package build output directory and must be excluded,
+  // but a host runtime root whose basename is 'dist' (e.g. node_modules/desktop-shell/dist, electron/dist)
+  // or other nested dist directories must NOT be excluded.
+  if (lower === "dist") {
+    if (fullPath) {
+      try {
+        if (path.resolve(fullPath) === path.resolve(appRoot, "dist")) {
+          return true;
+        }
+      } catch (_) {}
+    }
+    return false;
   }
 
   if (fullPath && typeof fullPath === "string") {

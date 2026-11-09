@@ -82,6 +82,32 @@ test('isPackagingExcluded filters reports and ui-audit-artifacts', () => {
   assert.strictEqual(packager.isPackagingExcluded('functional-selftest-data'), true);
 });
 
+// Test 2b: dist directory handling - allow runtime root dist while excluding appRoot/dist
+test('dist directory handling allows runtime root with basename dist and excludes appRoot/dist', () => {
+  const appRoot = path.resolve(__dirname, '..');
+  const appRootDist = path.join(appRoot, 'dist');
+  const hostDistCandidates = [
+    path.join(appRoot, 'node_modules', 'desktop-shell', 'dist'),
+    path.join(appRoot, 'node_modules', 'electron', 'dist'),
+    '/opt/hostedtoolcache/node_modules/desktop-shell/dist',
+  ];
+
+  // appRoot/dist (the packager build destination) must be excluded
+  assert.strictEqual(packager.isPackagingExcluded('dist', appRootDist), true, 'appRoot/dist must be excluded');
+
+  // Actual host runtime distribution directories (whose basename is dist) must NOT be excluded
+  for (const candidate of hostDistCandidates) {
+    assert.strictEqual(
+      packager.isPackagingExcluded('dist', candidate),
+      false,
+      `Host runtime dist at ${candidate} must NOT be excluded`
+    );
+  }
+
+  // Without fullPath, generic dist should not be excluded so external copy roots succeed
+  assert.strictEqual(packager.isPackagingExcluded('dist'), false, 'generic dist without fullPath must not be excluded');
+});
+
 // Test 3: isPackagingExcluded filters markdown dev docs but preserves licenses/notices
 test('isPackagingExcluded excludes markdown dev docs while preserving licenses', () => {
   // Excluded dev docs
@@ -231,6 +257,46 @@ test('copyRecursive filters prohibited files and preserves deliverables in isola
     assert.strictEqual(fs.existsSync(path.join(dst, 'scripts/__pycache__')), false, '__pycache__ must NOT exist in dst');
     assert.strictEqual(fs.existsSync(path.join(dst, '.tmp-profile-selftest')), false, '.tmp-profile-selftest must NOT exist in dst');
     assert.strictEqual(fs.existsSync(path.join(dst, '.DS_Store')), false, '.DS_Store must NOT exist in dst');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Test 6b: Runtime root copying from a directory named 'dist' (e.g. desktop-shell/dist or electron/dist)
+test('copyRecursive(resolvedHostDist, runtimeRoot) copies complete runtime when source basename is dist', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ob-runtime-copy-'));
+  try {
+    // Simulate desktop-shell/dist or electron/dist layout
+    const mockHostDist = path.join(tmp, 'node_modules', 'desktop-shell', 'dist');
+    const runtimeRoot = path.join(tmp, 'packageRoot', 'runtime');
+
+    fs.mkdirSync(mockHostDist, { recursive: true });
+    fs.mkdirSync(path.join(mockHostDist, 'resources'), { recursive: true });
+    fs.mkdirSync(path.join(mockHostDist, 'locales'), { recursive: true });
+
+    // Linux / Windows executable
+    fs.writeFileSync(path.join(mockHostDist, 'electron'), 'ELF_OR_EXE_BINARY', { mode: 0o755 });
+    fs.writeFileSync(path.join(mockHostDist, 'resources', 'default_app.asar'), 'ASAR');
+    fs.writeFileSync(path.join(mockHostDist, 'LICENSE'), 'MIT');
+    fs.writeFileSync(path.join(mockHostDist, 'version'), '43.1.1');
+
+    assert.strictEqual(path.basename(mockHostDist), 'dist', 'Mock source basename must be dist');
+
+    // Run copyRecursive with the dist directory as source
+    packager.copyRecursive(mockHostDist, runtimeRoot);
+
+    // Verify electron binary and runtime components exist in runtimeRoot
+    assert.ok(fs.existsSync(runtimeRoot), 'runtimeRoot must be created');
+    assert.ok(fs.existsSync(path.join(runtimeRoot, 'electron')), 'runtime/electron must exist');
+    assert.ok(fs.existsSync(path.join(runtimeRoot, 'resources', 'default_app.asar')), 'runtime/resources/default_app.asar must exist');
+    assert.ok(fs.existsSync(path.join(runtimeRoot, 'LICENSE')), 'runtime/LICENSE must exist');
+    assert.ok(fs.existsSync(path.join(runtimeRoot, 'version')), 'runtime/version must exist');
+
+    // Verify rename simulation (what packageLinux does) succeeds without ENOENT
+    const mainBinary = path.join(runtimeRoot, 'OpenBrowser');
+    const copiedHostBinary = path.join(runtimeRoot, 'electron');
+    fs.renameSync(copiedHostBinary, mainBinary);
+    assert.ok(fs.existsSync(mainBinary), 'Renamed OpenBrowser binary must exist');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
