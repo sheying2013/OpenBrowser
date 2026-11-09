@@ -421,7 +421,7 @@ jobs:
     name: macOS arm64 (with kernel)
     needs: ensure-release
     if: ${{ inputs.target_platform == 'all' || inputs.target_platform == 'macos-arm64' }}
-    runs-on: macos-14
+    runs-on: macos-15
     concurrency:
       group: openbrowser-installers-${{ inputs.release_tag }}-macos-arm64
       cancel-in-progress: true
