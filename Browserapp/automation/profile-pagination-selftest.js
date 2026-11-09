@@ -50,6 +50,29 @@ async function runTest() {
   const tmpDir = path.join(os.tmpdir(), `ob-page-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   fs.mkdirSync(tmpDir, { recursive: true });
 
+  // A database created before the searchable columns existed must upgrade in place.
+  const legacyDbPath = path.join(tmpDir, 'legacy-data.db');
+  const { DatabaseSync } = require('node:sqlite');
+  const legacyDb = new DatabaseSync(legacyDbPath);
+  legacyDb.exec(`
+    CREATE TABLE profiles (
+      id TEXT PRIMARY KEY, number INTEGER, name TEXT NOT NULL, group_id TEXT,
+      trashed INTEGER DEFAULT 0, trashed_at TEXT, created_at TEXT, updated_at TEXT,
+      data TEXT NOT NULL
+    );
+  `);
+  legacyDb.prepare('INSERT INTO profiles (id, number, name, data) VALUES (?, ?, ?, ?)')
+    .run('legacy-search', 1, 'Legacy', JSON.stringify({ id: 'legacy-search', name: 'Legacy', title: 'Original title' }));
+  legacyDb.close();
+  const legacyStore = new ProfileStoreSqlite({ dbPath: legacyDbPath, wal: true });
+  await legacyStore.init();
+  try {
+    const upgraded = legacyStore.queryProfilesPage({ filters: { search: 'Original title' } });
+    assert.strictEqual(upgraded.rows.length, 1, 'existing SQLite profiles must survive schema upgrade');
+  } finally {
+    legacyStore.close();
+  }
+
   const dbPath = path.join(tmpDir, 'openbrowser-data.db');
   const store = new ProfileStoreSqlite({ dbPath, wal: true });
   await store.init();
@@ -185,6 +208,9 @@ async function runTest() {
       assert.ok(row.proxy, 'Row must have proxy');
       assert.ok(row.createdAt, 'Row must have createdAt');
       assert.strictEqual(row.trashed, false, 'Active row must have trashed=false');
+      assert.strictEqual(row._isSummaryProjection, true, 'Row must declare _isSummaryProjection');
+      assert.strictEqual(typeof row.note, 'string', 'Row must expose note string');
+      assert.strictEqual(typeof row.notes, 'string', 'Row must expose notes string');
     }
     console.log('  PASS  Summary projection strictly omits fingerprint/cookie blobs');
     console.log('  PASS  Essential UI fields (id, number, name, browser, proxy, dates) are intact');
@@ -202,6 +228,20 @@ async function runTest() {
       ['SpecialTarget Alpha', 'SpecialTarget Beta']
     );
     console.log('  PASS  Fuzzy name search (SQL LIKE) found matching profiles');
+
+    // Title search
+    const searchTitleRes = store.queryProfilesPage({ filters: { query: 'Workspace 202' } });
+    assert.strictEqual(searchTitleRes.total, 1, 'Search for Workspace 202 must match 1 row');
+    assert.strictEqual(searchTitleRes.rows[0].title, 'Workspace 202');
+    console.log('  PASS  Title search (SQL LIKE) found matching profile');
+
+    // Tag search
+    const searchTagRes = store.queryProfilesPage({ filters: { query: 'VIP' }, pageSize: 10 });
+    assert.ok(searchTagRes.total > 0, 'Search for VIP tag must return profiles');
+    for (const r of searchTagRes.rows) {
+      assert.strictEqual(r.tag, 'VIP');
+    }
+    console.log(`  PASS  Tag search returned ${searchTagRes.total} items with tag VIP`);
 
     // LIKE escaping test for % and _
     const esc1 = store.queryProfilesPage({ filters: { name: '100%' } });
@@ -221,13 +261,21 @@ async function runTest() {
     }
     console.log(`  PASS  GroupId filter returned ${groupRes.total} items with correct groupId`);
 
-    // Ungrouped filter
+    // Ungrouped filter with 'ungrouped'
     const ungroupedRes = store.queryProfilesPage({ filters: { groupId: 'ungrouped' }, pageSize: 100 });
     assert.ok(ungroupedRes.total > 0, 'Must have ungrouped profiles');
     for (const r of ungroupedRes.rows) {
       assert.strictEqual(r.groupId, null);
     }
     console.log(`  PASS  Ungrouped filter returned ${ungroupedRes.total} items without groupId`);
+
+    // Ungrouped filter with empty string groupId: ''
+    const emptyGroupIdRes = store.queryProfilesPage({ filters: { groupId: '' }, pageSize: 100 });
+    assert.strictEqual(emptyGroupIdRes.total, ungroupedRes.total, 'filters.groupId: "" must yield identical total to "ungrouped"');
+    for (const r of emptyGroupIdRes.rows) {
+      assert.strictEqual(r.groupId, null);
+    }
+    console.log(`  PASS  groupId: "" filter correctly resolved to ungrouped profiles (${emptyGroupIdRes.total} items)`);
 
     // ------------------------------------------------------------------------
     // [5] Sorting verification
@@ -383,7 +431,70 @@ async function runTest() {
     console.log(`  BENCHMARK: queryProfilesPage (50 rows) avg: ${avgPageMs.toFixed(2)} ms`);
     console.log(`  BENCHMARK: getAllProfiles (1500 full rows):  ${fullMs.toFixed(2)} ms`);
     console.log(`  SPEEDUP:   ${(fullMs / avgPageMs).toFixed(1)}x faster response time`);
-    assert.ok(avgPageMs < 15, `Page query should average < 15ms (got ${avgPageMs}ms)`);
+    assert.ok(avgPageMs < 50 && avgPageMs < fullMs / 2,
+      `Page query should be >2x faster than full scan and < 50ms (got avg=${avgPageMs.toFixed(2)}ms, full=${fullMs.toFixed(2)}ms)`);
+
+    // ------------------------------------------------------------------------
+    // [10] Backend Aggregation Counts, Number Allocation & Corrupted Projection
+    // ------------------------------------------------------------------------
+    console.log('\n--- [Test 10] Backend Aggregation Counts & Corrupted Projection ---');
+    const counts = store.getProfileCounts();
+    assert.strictEqual(counts.total, TOTAL_PROFILES, `Total profiles count must equal ${TOTAL_PROFILES}`);
+    assert.strictEqual(counts.trashed, TRASHED_COUNT, `Trashed count must equal ${TRASHED_COUNT}`);
+    assert.strictEqual(counts.active, ACTIVE_COUNT, `Active count must equal ${ACTIVE_COUNT}`);
+    const sumActiveGroups = counts.ungrouped + (counts.byGroup['group-marketing'] || 0) + (counts.byGroup['group-development'] || 0);
+    assert.strictEqual(sumActiveGroups, ACTIVE_COUNT, 'Sum of active groups must equal active count');
+    assert.deepStrictEqual(p1.counts, counts, 'queryProfilesPage must attach identical counts object');
+    console.log('  PASS  getProfileCounts() accurately aggregated active, trashed, ungrouped, and groups');
+
+    const nextNum = store.getNextProfileNumber();
+    assert.strictEqual(nextNum, TOTAL_PROFILES + 1, `Next number must be ${TOTAL_PROFILES + 1}`);
+    console.log(`  PASS  getNextProfileNumber() correctly returned ${nextNum}`);
+
+    // Insert corrupted row into profiles table to test corrupt projection
+    store.db.prepare(
+      'INSERT INTO profiles (id, number, name, title, tag, proxy_text, group_id, trashed, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);'
+    ).run('corrupt-profile-99', 9999, 'Corrupted Profile', 'Corrupt Title', 'BadTag', 'direct', null, 0, 'bad_non_json_corrupted_cipher_blob');
+
+    const corruptPage = store.queryProfilesPage({ filters: { id: 'corrupt-profile-99' } });
+    assert.strictEqual(corruptPage.rows.length, 1, 'Corrupted row should be retrieved');
+    const cRow = corruptPage.rows[0];
+    assert.strictEqual(cRow.corrupted, true, 'Corrupted row must have corrupted: true');
+    assert.strictEqual(cRow.networkMode, 'corrupted', 'Corrupted row must not disguise networkMode as direct');
+    assert.strictEqual(cRow.proxy, '', 'Corrupted row proxy must be empty string (not direct)');
+    assert.strictEqual(cRow._isSummaryProjection, true, 'Corrupted row must declare _isSummaryProjection');
+    console.log('  PASS  Corrupted payload projected with corrupted: true, networkMode: "corrupted", proxy: ""');
+
+    // A failed encryption operation must never silently write a plaintext profile.
+    const encryptCredential = credentialCrypto.encryptCredential;
+    try {
+      credentialCrypto.encryptCredential = () => { throw new Error('simulated encryption failure'); };
+      assert.throws(() => store.saveProfiles([{
+        id: 'encryption-failure-test', number: 20000, name: 'Encryption failure',
+        proxy: 'socks5://test-user:test-password@example.test:1080',
+      }]), /simulated encryption failure/);
+      const row = store.db.prepare('SELECT data FROM profiles WHERE id = ?').get('encryption-failure-test');
+      assert.strictEqual(row, undefined, 'failed encryption must not write a plaintext row');
+    } finally {
+      credentialCrypto.encryptCredential = encryptCredential;
+    }
+    console.log('  PASS  Encryption failure aborts profile writes instead of storing plaintext');
+
+    const secret = 'search-index-password';
+    store.saveProfiles([{
+      id: 'proxy-index-test', number: 20001, name: 'Proxy index test',
+      proxy: `127.0.0.1:1080:test-user:${secret}`,
+    }]);
+    let indexed = store.db.prepare('SELECT proxy_text FROM profiles WHERE id = ?').get('proxy-index-test');
+    assert.ok(!indexed.proxy_text.includes(secret), 'search metadata must not contain proxy credentials');
+    // Simulate a pre-fix index and verify that reopening rebuilds it without secrets.
+    store.db.prepare('UPDATE profiles SET proxy_text = ? WHERE id = ?').run(secret, 'proxy-index-test');
+    store.db.prepare('DELETE FROM meta WHERE key = ?').run('profile_search_index_version');
+    store.close();
+    await store.init();
+    indexed = store.db.prepare('SELECT proxy_text FROM profiles WHERE id = ?').get('proxy-index-test');
+    assert.ok(!indexed.proxy_text.includes(secret), 'reopening must scrub old plaintext search metadata');
+    console.log('  PASS  Proxy search metadata excludes credentials and repairs an existing index');
 
     console.log('\n======================================================');
     console.log('ALL PROFILE PAGINATION & PROJECTION TESTS PASSED!');

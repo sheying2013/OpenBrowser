@@ -1055,8 +1055,10 @@ class BrowserEngine {
     let recoveredState = false;
 
     if (ProfileStoreSqlite.isSupported()) {
+      const existingDatabase = fs.existsSync(this.dbFile) && fs.statSync(this.dbFile).size > 0;
+      let sqlite;
       try {
-        const sqlite = new ProfileStoreSqlite({
+        sqlite = new ProfileStoreSqlite({
           dbPath: this.dbFile,
           legacyJsonPath: this.stateFile,
           wal: true,
@@ -1069,9 +1071,13 @@ class BrowserEngine {
           this.emit({ type: 'storage-migrated', engine: 'sqlite' });
         }
       } catch (err) {
-        console.warn(`[BrowserEngine] SQLite initialization failed, falling back to legacy JSON: ${err.message}`);
+        try { sqlite?.close(); } catch (_) {}
         this.sqliteStore = null;
         this.usingSqlite = false;
+        if (existingDatabase) {
+          throw new Error(`SQLite 数据库初始化失败，已停止加载以保护现有数据: ${err.message}`, { cause: err });
+        }
+        console.warn(`[BrowserEngine] SQLite initialization failed, falling back to legacy JSON: ${err.message}`);
       }
     }
 
@@ -1093,7 +1099,7 @@ class BrowserEngine {
         this.assignments.set(profileId, ids);
       }
       const loadedProfiles = this.sqliteStore.getAllProfiles();
-      for (const raw of loadedProfiles.slice(0, 1000)) {
+      for (const raw of loadedProfiles) {
         try {
           const profile = this.sanitizeProfile(raw);
           this.profiles.set(profile.id, profile);
@@ -1151,7 +1157,7 @@ class BrowserEngine {
         // Profiles (incl. cookies / proxy auth / platform secrets) live in main-process state,
         // not renderer localStorage, so XSS cannot dump them from the UI store.
         if (Array.isArray(saved.profiles)) {
-          for (const raw of saved.profiles.slice(0, 1000)) {
+          for (const raw of saved.profiles.slice(0, 50000)) {
             try {
               const profile = this.sanitizeProfile(raw);
               this.profiles.set(profile.id, profile);
@@ -1189,6 +1195,12 @@ class BrowserEngine {
       await this.persist();
     }
     if (migrateKernelPolicy || recoveredState) await this.persist();
+    if (!this.usingSqlite) {
+      this._updateJsonRawHashSync();
+    }
+    await this.recoverDeleteStagingLeftovers().catch((err) => {
+      console.warn(`[BrowserEngine] Failed to recover delete staging leftovers during init: ${err?.message || err}`);
+    });
   }
 
   resolveStoredProxyProfile(incoming) {
@@ -1399,112 +1411,1127 @@ class BrowserEngine {
     return sanitizeProfileData(value);
   }
 
-  async syncProfiles(values) {
-    if (!Array.isArray(values) || values.length > 1000) throw new Error('Invalid profile list');
+  _computeGloballyEnabledExtensions() {
     const existingIds = [...this.profiles.keys()];
-    const globallyEnabled = existingIds.length ? [...this.extensions.keys()].filter((extensionId) => existingIds.every((profileId) => (this.assignments.get(profileId) || new Set()).has(extensionId))) : [];
-    let assignmentsChanged = false;
-    const incomingIds = new Set();
-    for (const value of values) {
-      const sanitized = this.sanitizeProfile(value);
-      const previous = this.profiles.get(sanitized.id);
-      let profile = sanitized;
-      if (previous && sanitized.proxyId && previous.proxyId === sanitized.proxyId) {
-        const stored = this.proxyStore?.get?.(sanitized.proxyId);
-        const matchesPrevious = sameProxyIdentity(sanitized.proxy, previous.proxy)
-          || (!proxyHasCredentials(sanitized.proxy) && sameProxyEndpoint(sanitized.proxy, previous.proxy));
-        const matchesStored = Boolean(stored?.raw) && (
-          sameProxyIdentity(sanitized.proxy, stored.raw)
-          || (!proxyHasCredentials(sanitized.proxy) && sameProxyEndpoint(sanitized.proxy, stored.raw))
+    if (!existingIds.length) return [];
+    return [...this.extensions.keys()].filter((extensionId) =>
+      existingIds.every((profileId) => (this.assignments.get(profileId) || new Set()).has(extensionId))
+    );
+  }
+
+  _processProfileIncoming(value, existingGloballyEnabled = null) {
+    const sanitized = this.sanitizeProfile(value);
+    const previous = this.profiles.get(sanitized.id);
+    let profile = sanitized;
+    if (previous && sanitized.proxyId && previous.proxyId === sanitized.proxyId) {
+      const stored = this.proxyStore?.get?.(sanitized.proxyId);
+      const matchesPrevious = sameProxyIdentity(sanitized.proxy, previous.proxy)
+        || (!proxyHasCredentials(sanitized.proxy) && sameProxyEndpoint(sanitized.proxy, previous.proxy));
+      const matchesStored = Boolean(stored?.raw) && (
+        sameProxyIdentity(sanitized.proxy, stored.raw)
+        || (!proxyHasCredentials(sanitized.proxy) && sameProxyEndpoint(sanitized.proxy, stored.raw))
+      );
+      if (!matchesPrevious && !matchesStored) {
+        // A linked profile whose endpoint/auth was manually edited becomes a
+        // manual proxy. This prevents the old library id from overwriting it.
+        profile = this.sanitizeProfile({
+          ...sanitized,
+          proxyId: null,
+          proxyMeta: { ...(sanitized.proxyMeta || {}), proxyId: null },
+        });
+      }
+    }
+    profile = this.resolveStoredProxyProfile(profile);
+    const isNew = !previous;
+    // UI may send redacted proxy (no auth) after localStorage reload. Prefer previous
+    // authenticated form only when host:port match and incoming lacks credentials.
+    let merged = profile;
+    if (previous) {
+      const nextProxy = String(profile.proxy || '');
+      const prevProxy = String(previous.proxy || '');
+      const nextHasAuth = proxyHasCredentials(nextProxy);
+      const prevHasAuth = proxyHasCredentials(prevProxy);
+      const explicitlyCleared = String(value?.proxyAuthAction ?? value?.proxy_auth_action ?? '').toLowerCase() === 'clear';
+      if (!explicitlyCleared && !nextHasAuth && prevHasAuth && sameProxyEndpoint(prevProxy, nextProxy)) {
+        merged = this.sanitizeProfile({ ...profile, proxy: prevProxy });
+      }
+      // Restore cookies/platform secrets only when UI clearly redacted ALL of them
+      // (post-localStorage load) while engine still holds values — not when user
+      // intentionally cleared a single field in the editor.
+      const secretAction = String(value?.secretsAction ?? value?.credentialsAction ?? '').trim().toLowerCase();
+      const explicitSecretUpdate = value?.__secretsExplicit === true
+        || secretAction === 'replace'
+        || secretAction === 'clear';
+      const uiLooksRedacted = !explicitSecretUpdate
+        && !String(profile.cookies || '').trim()
+        && !String(profile.platform?.password || '').trim()
+        && !String(profile.platform?.totpSecret || '').trim()
+        && (
+          String(previous.cookies || '').trim()
+          || String(previous.platform?.password || '').trim()
+          || String(previous.platform?.totpSecret || '').trim()
         );
-        if (!matchesPrevious && !matchesStored) {
-          // A linked profile whose endpoint/auth was manually edited becomes a
-          // manual proxy. This prevents the old library id from overwriting it.
-          profile = this.sanitizeProfile({
-            ...sanitized,
-            proxyId: null,
-            proxyMeta: { ...(sanitized.proxyMeta || {}), proxyId: null },
-          });
-        }
+      if (uiLooksRedacted) {
+        merged = this.sanitizeProfile({
+          ...merged,
+          cookies: previous.cookies || '',
+          platform: {
+            ...(merged.platform || {}),
+            password: previous.platform?.password || '',
+            totpSecret: previous.platform?.totpSecret || '',
+          },
+        });
       }
-      profile = this.resolveStoredProxyProfile(profile);
-      const isNew = !previous;
-      // UI may send redacted proxy (no auth) after localStorage reload. Prefer previous
-      // authenticated form only when host:port match and incoming lacks credentials.
-      let merged = profile;
-      if (previous) {
-        const nextProxy = String(profile.proxy || '');
-        const prevProxy = String(previous.proxy || '');
-        const nextHasAuth = proxyHasCredentials(nextProxy);
-        const prevHasAuth = proxyHasCredentials(prevProxy);
-        const explicitlyCleared = String(value?.proxyAuthAction ?? value?.proxy_auth_action ?? '').toLowerCase() === 'clear';
-        if (!explicitlyCleared && !nextHasAuth && prevHasAuth && sameProxyEndpoint(prevProxy, nextProxy)) {
-          merged = this.sanitizeProfile({ ...profile, proxy: prevProxy });
-        }
-        // Restore cookies/platform secrets only when UI clearly redacted ALL of them
-        // (post-localStorage load) while engine still holds values — not when user
-        // intentionally cleared a single field in the editor.
-        const secretAction = String(value?.secretsAction ?? value?.credentialsAction ?? '').trim().toLowerCase();
-        const explicitSecretUpdate = value?.__secretsExplicit === true
-          || secretAction === 'replace'
-          || secretAction === 'clear';
-        const uiLooksRedacted = !explicitSecretUpdate
-          && !String(profile.cookies || '').trim()
-          && !String(profile.platform?.password || '').trim()
-          && !String(profile.platform?.totpSecret || '').trim()
-          && (
-            String(previous.cookies || '').trim()
-            || String(previous.platform?.password || '').trim()
-            || String(previous.platform?.totpSecret || '').trim()
-          );
-        if (uiLooksRedacted) {
-          merged = this.sanitizeProfile({
-            ...merged,
-            cookies: previous.cookies || '',
-            platform: {
-              ...(merged.platform || {}),
-              password: previous.platform?.password || '',
-              totpSecret: previous.platform?.totpSecret || '',
-            },
-          });
-        }
-        // Renderer storage intentionally omits runtime exit details. Keep the engine's
-        // last successful result unless the proxy itself changed (which invalidates it).
-        if (previous.proxy === merged.proxy && previous.exitIp && !profile.exitIp) {
-          merged = this.sanitizeProfile({
-            ...merged,
-            exitIp: previous.exitIp,
-            exitCountryCode: previous.exitCountryCode,
-            exitTimezone: previous.exitTimezone,
-            exitLatitude: previous.exitLatitude,
-            exitLongitude: previous.exitLongitude,
-            exitCheckedAt: previous.exitCheckedAt,
-            exitLatencyMs: previous.exitLatencyMs,
-            exitNetworkType: previous.exitNetworkType,
-          });
-        }
-      }
-      if (previous && previous.proxy !== merged.proxy) this.networkInfo.delete(profile.id);
-      this.profiles.set(merged.id, merged);
-      incomingIds.add(merged.id);
-      const hasSavedAssignment = this.assignments.has(merged.id);
-      if (isNew || !hasSavedAssignment) {
-        const assigned = this.assignments.get(merged.id) || new Set();
-        for (const extensionId of globallyEnabled) assigned.add(extensionId);
-        // The bundled marker is part of the environment contract.
-        for (const [extensionId, extension] of this.extensions) {
-          if (extension.builtIn) assigned.add(extensionId);
-        }
-        this.assignments.set(merged.id, assigned); assignmentsChanged = true;
+      // Renderer storage intentionally omits runtime exit details. Keep the engine's
+      // last successful result unless the proxy itself changed (which invalidates it).
+      if (previous.proxy === merged.proxy && previous.exitIp && !profile.exitIp) {
+        merged = this.sanitizeProfile({
+          ...merged,
+          exitIp: previous.exitIp,
+          exitCountryCode: previous.exitCountryCode,
+          exitTimezone: previous.exitTimezone,
+          exitLatitude: previous.exitLatitude,
+          exitLongitude: previous.exitLongitude,
+          exitCheckedAt: previous.exitCheckedAt,
+          exitLatencyMs: previous.exitLatencyMs,
+          exitNetworkType: previous.exitNetworkType,
+        });
       }
     }
-    // Do not drop unknown engine profiles here — deleteProfiles is the explicit path.
+    if (previous && previous.proxy !== merged.proxy) this.networkInfo.delete(profile.id);
+    this.profiles.set(merged.id, merged);
+    const hasSavedAssignment = this.assignments.has(merged.id);
+    let assignmentsChanged = false;
+    if (isNew || !hasSavedAssignment) {
+      const assigned = this.assignments.get(merged.id) || new Set();
+      const globallyEnabled = existingGloballyEnabled ?? this._computeGloballyEnabledExtensions();
+      for (const extensionId of globallyEnabled) assigned.add(extensionId);
+      // The bundled marker is part of the environment contract.
+      for (const [extensionId, extension] of this.extensions) {
+        if (extension.builtIn) assigned.add(extensionId);
+      }
+      this.assignments.set(merged.id, assigned);
+      assignmentsChanged = true;
+    }
+    return { merged, isNew, assignmentsChanged };
+  }
+
+  _hasDeleteStagingDirsSync() {
+    try {
+      const rootPath = this.profileDataRootPath;
+      if (!rootPath || !fs.existsSync(rootPath)) return false;
+      return fs.readdirSync(rootPath).some((name) => name.startsWith('.ob-del-'));
+    } catch (_) {
+      return true;
+    }
+  }
+
+  _hasProfileInStoreSync(id) {
+    const key = String(id);
     if (this.usingSqlite && this.sqliteStore) {
-      const incomingList = [...incomingIds].map((id) => this.profiles.get(id)).filter(Boolean);
-      this.sqliteStore.saveProfiles(incomingList);
+      if (this.sqliteStore.db && typeof this.sqliteStore.db.prepare === 'function') {
+        try {
+          if (this.sqliteStore.db.prepare('SELECT 1 FROM profiles WHERE id = ?').get(key)) return true;
+        } catch (_) {
+          return true;
+        }
+      }
+      try {
+        if (this.sqliteStore.getProfile(key)) return true;
+      } catch (_) {
+        return true;
+      }
     }
-    await this.persist();
-    return this.status();
+    return false;
+  }
+
+  _canTakeSyncProfileStateLock() {
+    return (this._profileStateLockDepth || 0) === 0
+      && (this._profileStateLockPending || 0) === 0
+      && (this._activeProfileDeleteCount || 0) === 0
+      && (this._activeDeleteRecoveryCount || 0) === 0
+      && !(this._deletingProfileIds && this._deletingProfileIds.size > 0)
+      && !this._hasDeleteStagingDirsSync();
+  }
+
+  _takeSyncProfileStateLock() {
+    let releaseFn;
+    const current = new Promise((resolve) => {
+      releaseFn = resolve;
+    });
+    this._profileStateLockTail = current;
+    this._profileStateLockDepth = (this._profileStateLockDepth || 0) + 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this._profileStateLockDepth = Math.max(0, (this._profileStateLockDepth || 1) - 1);
+      releaseFn();
+    };
+  }
+
+  async _acquireProfileStateLock() {
+    const prev = this._profileStateLockTail || Promise.resolve();
+    let releaseFn;
+    const current = new Promise((resolve) => {
+      releaseFn = resolve;
+    });
+    this._profileStateLockTail = current;
+    this._profileStateLockPending = (this._profileStateLockPending || 0) + 1;
+    try {
+      await prev;
+    } finally {
+      this._profileStateLockPending = Math.max(0, (this._profileStateLockPending || 1) - 1);
+    }
+    this._profileStateLockDepth = (this._profileStateLockDepth || 0) + 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this._profileStateLockDepth = Math.max(0, (this._profileStateLockDepth || 1) - 1);
+      releaseFn();
+    };
+  }
+
+  _releaseCrossProcessDeleteLockSync(lock) {
+    if (!lock) return;
+    if (lock.mode === 'sqlite-kernel') {
+      try { lock.db?.exec('ROLLBACK;'); } catch (_) {}
+      try { lock.db?.close(); } catch (_) {}
+      return;
+    }
+    if (lock.lockFile && lock.token) {
+      const activeTokens = BrowserEngine._activeCrossProcessLockTokens;
+      try {
+        const lstat = fs.lstatSync(lock.lockFile);
+        if (!lstat.isSymbolicLink() && lstat.isFile()) {
+          const existing = JSON.parse(fs.readFileSync(lock.lockFile, 'utf8'));
+          if (existing && existing.pid === lock.pid && existing.token === lock.token) {
+            fs.rmSync(lock.lockFile, { force: true });
+          }
+        }
+      } catch (_) {
+      } finally {
+        activeTokens?.delete(lock.token);
+      }
+    }
+  }
+
+  _computeJsonFileHashSync(filePath) {
+    const raw = fs.readFileSync(filePath);
+    return crypto.createHash('sha256').update(raw).digest('hex');
+  }
+
+  _updateJsonRawHashSync() {
+    if (this.usingSqlite || !this.stateFile) return;
+    try {
+      const stat = fs.lstatSync(this.stateFile);
+      if (!stat.isSymbolicLink() && stat.isFile()) {
+        this._lastJsonRawHash = this._computeJsonFileHashSync(this.stateFile);
+      }
+    } catch (_) {}
+  }
+
+  _hasJsonStateChangedSync() {
+    if (this.usingSqlite || !this.stateFile) return false;
+    try {
+      const stat = fs.lstatSync(this.stateFile);
+      if (stat.isSymbolicLink() || !stat.isFile()) return true;
+      const hash = this._computeJsonFileHashSync(this.stateFile);
+      return !this._lastJsonRawHash || hash !== this._lastJsonRawHash;
+    } catch (err) {
+      if (err?.code === 'ENOENT') {
+        return Boolean(this._lastJsonRawHash);
+      }
+      return true;
+    }
+  }
+
+  async _reloadJsonStateInLock() {
+    if (this.usingSqlite || !this.stateFile) return false;
+    let stat = null;
+    try {
+      stat = await fsp.lstat(this.stateFile);
+    } catch (err) {
+      if (err?.code === 'ENOENT') {
+        if (this._lastJsonRawHash) {
+          throw new Error('Engine JSON state file disappeared unexpectedly; failing closed');
+        }
+        return false;
+      }
+      throw err;
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error('Engine JSON state file is invalid or a symlink');
+    }
+    const raw = await fsp.readFile(this.stateFile);
+    const rawHash = crypto.createHash('sha256').update(raw).digest('hex');
+    if (this._lastJsonRawHash && rawHash === this._lastJsonRawHash) {
+      return false;
+    }
+    const candidate = await readEngineStateCandidate(this.stateFile);
+    const saved = candidate?.saved;
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+      throw new Error('Invalid engine JSON state payload');
+    }
+    const nextProfiles = new Map();
+    if (Array.isArray(saved.profiles)) {
+      for (const rawProfile of saved.profiles.slice(0, 50000)) {
+        try {
+          const profile = this.sanitizeProfile(rawProfile);
+          nextProfiles.set(profile.id, profile);
+        } catch (_) {}
+      }
+    }
+    const nextAssignments = new Map();
+    if (saved.assignments && typeof saved.assignments === 'object' && !Array.isArray(saved.assignments)) {
+      for (const [profileId, ids] of Object.entries(saved.assignments)) {
+        nextAssignments.set(profileId, new Set(Array.isArray(ids) ? ids : []));
+      }
+    }
+    this.profiles = nextProfiles;
+    this.assignments = nextAssignments;
+    if (this.networkInfo) {
+      for (const pid of [...this.networkInfo.keys()]) {
+        if (!nextProfiles.has(pid)) this.networkInfo.delete(pid);
+      }
+    }
+    this._lastJsonRawHash = rawHash;
+    return true;
+  }
+
+  _getAuthoritativeProfileInLock(id) {
+    const key = String(id);
+    if (this.usingSqlite && this.sqliteStore) {
+      if (!this.sqliteStore.isOpen) {
+        throw new Error('SQLite store is not open');
+      }
+      const existsInSqlite = this._hasProfileInStoreSync(key);
+      if (!existsInSqlite) {
+        this.profiles.delete(key);
+        this.assignments.delete(key);
+        this.networkInfo?.delete(key);
+        return null;
+      }
+      const stored = this.getProfile(key);
+      if (stored) {
+        this.profiles.set(key, stored);
+        return stored;
+      }
+      return null;
+    }
+    const mem = this.profiles.get(key);
+    return mem ? this.sanitizeProfile(mem) : null;
+  }
+
+  _tryAcquireSyncProfileAndCrossLock() {
+    if (!this._canTakeSyncProfileStateLock()) return null;
+    if (this._hasJsonStateChangedSync()) return null;
+    let crossLock = null;
+    const rootPath = this.profileDataRootPath;
+    if (rootPath) {
+      const rootCheck = validateDataRootIsolationSecure(rootPath);
+      if (!rootCheck.ok) return null;
+      const resolvedRoot = path.resolve(rootCheck.root);
+      let rootStat = null;
+      try {
+        rootStat = fs.lstatSync(resolvedRoot);
+      } catch (err) {
+        if (err?.code !== 'ENOENT') return null;
+        try {
+          fs.mkdirSync(resolvedRoot, { recursive: true });
+          rootStat = fs.lstatSync(resolvedRoot);
+        } catch (_) {
+          return null;
+        }
+      }
+      if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) return null;
+      const legacyLock = path.join(resolvedRoot, '.openbrowser-delete.lock');
+      try {
+        fs.lstatSync(legacyLock);
+        return null;
+      } catch (err) {
+        if (err?.code !== 'ENOENT') return null;
+      }
+      const lockDbPath = path.join(resolvedRoot, '.openbrowser-delete.lock.db');
+      for (const side of [lockDbPath, `${lockDbPath}-journal`, `${lockDbPath}-wal`, `${lockDbPath}-shm`]) {
+        try {
+          const st = fs.lstatSync(side);
+          if (st.isSymbolicLink() || (side === lockDbPath && !st.isFile())) return null;
+        } catch (err) {
+          if (err?.code !== 'ENOENT') return null;
+        }
+      }
+      if (!ProfileStoreSqlite.isSupported()) return null;
+      try {
+        const { DatabaseSync } = require('node:sqlite');
+        const db = new DatabaseSync(lockDbPath);
+        try {
+          db.exec('PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;');
+          crossLock = { mode: 'sqlite-kernel', db, lockDbPath };
+        } catch (_) {
+          try { db.close(); } catch (__) {}
+          return null;
+        }
+      } catch (_) {
+        return null;
+      }
+    }
+    const releaseState = this._takeSyncProfileStateLock();
+    return {
+      crossLock,
+      releaseSync: () => {
+        try {
+          this._releaseCrossProcessDeleteLockSync(crossLock);
+        } finally {
+          releaseState();
+        }
+      },
+    };
+  }
+
+  async _acquireCrossProcessDeleteLock(dataRoot, options = {}) {
+    if (!dataRoot) return null;
+    const rootCheck = validateDataRootIsolationSecure(dataRoot);
+    if (!rootCheck.ok) {
+      throw new Error('Isolation error: ' + rootCheck.message);
+    }
+    const resolvedRoot = path.resolve(rootCheck.root);
+    const createDir = Boolean(options.createDir);
+    if (createDir) {
+      await fsp.mkdir(resolvedRoot, { recursive: true });
+    } else {
+      const rootStat = await fsp.lstat(resolvedRoot).catch((err) => (err?.code === 'ENOENT' ? null : err));
+      if (!rootStat) return null;
+      if (rootStat instanceof Error) throw rootStat;
+      if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+        throw new Error('Isolation error: environment data directory is invalid');
+      }
+    }
+
+    const timeoutMs = Math.max(500, Number(options.timeoutMs) || 15000);
+    const deadline = Date.now() + timeoutMs;
+    const legacyLockFile = path.join(resolvedRoot, '.openbrowser-delete.lock');
+    const activeTokens = BrowserEngine._activeCrossProcessLockTokens
+      || (BrowserEngine._activeCrossProcessLockTokens = new Set());
+
+    // Helper: inspect .openbrowser-delete.lock conservatively (NEVER rm dead/corrupt/unknown locks!)
+    const checkLegacyFileLock = async () => {
+      for (;;) {
+        const stat = await fsp.lstat(legacyLockFile).catch((err) => (err?.code === 'ENOENT' ? null : err));
+        if (stat instanceof Error) throw stat;
+        if (!stat) return 'clear';
+        if (stat.isSymbolicLink() || !stat.isFile()) {
+          const err = new Error('Cross-process delete lock is invalid or a symlink; refusing operation');
+          err.code = 'CROSS_PROCESS_LOCK_UNRECOVERABLE';
+          throw err;
+        }
+
+        let rawText = '';
+        let existing = null;
+        let parseFailed = false;
+        try {
+          rawText = await fsp.readFile(legacyLockFile, 'utf8');
+          existing = JSON.parse(rawText);
+        } catch (_) {
+          parseFailed = true;
+        }
+
+        if (parseFailed) {
+          // Only allow a brief grace if file is strictly empty and freshly created (<500ms);
+          // corrupt non-empty or aged unreadable lock files fail closed immediately and are preserved.
+          if (!rawText.trim() && Math.abs(Date.now() - stat.mtimeMs) < 500 && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 40));
+            continue;
+          }
+          const err = new Error('Cross-process delete lock is corrupted or unreadable; preserving file and refusing operation');
+          err.code = 'CROSS_PROCESS_LOCK_UNRECOVERABLE';
+          throw err;
+        }
+
+        const ownerPid = Number(existing?.pid);
+        const ownerToken = typeof existing?.token === 'string' ? existing.token : '';
+        const pidValid = Number.isSafeInteger(ownerPid) && ownerPid > 0;
+        if (!pidValid || !existing || typeof existing !== 'object' || Array.isArray(existing)) {
+          const err = new Error('Cross-process delete lock has unknown schema; preserving file and refusing operation');
+          err.code = 'CROSS_PROCESS_LOCK_UNRECOVERABLE';
+          throw err;
+        }
+
+        if (ownerPid !== process.pid && isPidAlive(ownerPid)) {
+          if (Date.now() >= deadline) {
+            const err = new Error('Timed out waiting for cross-process profile delete/recovery lock');
+            err.code = 'CROSS_PROCESS_LOCK_TIMEOUT';
+            throw err;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          continue;
+        }
+
+        if (ownerPid === process.pid && activeTokens.has(ownerToken)) {
+          if (Date.now() >= deadline) {
+            const err = new Error('Timed out waiting for cross-process profile delete/recovery lock');
+            err.code = 'CROSS_PROCESS_LOCK_TIMEOUT';
+            throw err;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          continue;
+        }
+
+        // Dead external PID or foreign same-PID token: cannot safely unlink without TOCTOU -> fail closed & preserve!
+        const err = new Error(`Stale cross-process delete lock (pid ${ownerPid}) cannot be safely reclaimed; preserving file and refusing operation`);
+        err.code = 'CROSS_PROCESS_LOCK_UNRECOVERABLE';
+        throw err;
+      }
+    };
+
+    await checkLegacyFileLock();
+
+    if (ProfileStoreSqlite.isSupported()) {
+      const { DatabaseSync } = require('node:sqlite');
+      const lockDbPath = path.join(resolvedRoot, '.openbrowser-delete.lock.db');
+
+      for (;;) {
+        await checkLegacyFileLock();
+        for (const side of [lockDbPath, `${lockDbPath}-journal`, `${lockDbPath}-wal`, `${lockDbPath}-shm`]) {
+          const st = await fsp.lstat(side).catch((err) => (err?.code === 'ENOENT' ? null : err));
+          if (st instanceof Error) throw st;
+          if (st && (st.isSymbolicLink() || (side === lockDbPath && !st.isFile()))) {
+            const err = new Error('Isolation error: cross-process lock database path is unsafe');
+            err.code = 'CROSS_PROCESS_LOCK_UNRECOVERABLE';
+            throw err;
+          }
+        }
+
+        let db = null;
+        try {
+          db = new DatabaseSync(lockDbPath);
+          db.exec('PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;');
+          return { mode: 'sqlite-kernel', db, lockDbPath };
+        } catch (err) {
+          if (db) {
+            try { db.close(); } catch (_) {}
+            db = null;
+          }
+          const isBusy = err?.errcode === 5 || /database is locked|SQLITE_BUSY/i.test(String(err?.message || ''));
+          if (!isBusy) {
+            const failErr = new Error(`Cross-process delete lock database error: ${err?.message || err}`);
+            failErr.code = 'CROSS_PROCESS_LOCK_UNRECOVERABLE';
+            failErr.cause = err;
+            throw failErr;
+          }
+          if (Date.now() >= deadline) {
+            const timeoutErr = new Error('Timed out waiting for cross-process profile delete/recovery lock');
+            timeoutErr.code = 'CROSS_PROCESS_LOCK_TIMEOUT';
+            throw timeoutErr;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 35));
+        }
+      }
+    }
+
+    // Fallback when node:sqlite is unavailable: atomic complete lockfile creation via link(), NO TOCTOU rm on dead/corrupt locks
+    const token = crypto.randomBytes(16).toString('hex');
+    const tmpLock = `${legacyLockFile}.tmp-${process.pid}-${token}`;
+    for (;;) {
+      await checkLegacyFileLock();
+      let handle = null;
+      let linked = false;
+      try {
+        handle = await fsp.open(tmpLock, 'wx', 0o600);
+        await handle.writeFile(JSON.stringify({
+          pid: process.pid,
+          token,
+          dataRoot: resolvedRoot,
+          createdAt: new Date().toISOString(),
+        }), 'utf8');
+        await handle.sync();
+        await handle.close();
+        handle = null;
+        try {
+          await fsp.link(tmpLock, legacyLockFile);
+          linked = true;
+        } catch (linkErr) {
+          if (linkErr?.code === 'EEXIST') throw linkErr;
+          if (['EPERM', 'ENOTSUP', 'ENOSYS', 'EXDEV'].includes(linkErr?.code)) {
+            await fsp.rm(tmpLock, { force: true }).catch(() => {});
+            handle = await fsp.open(legacyLockFile, 'wx', 0o600);
+            await handle.writeFile(JSON.stringify({
+              pid: process.pid,
+              token,
+              dataRoot: resolvedRoot,
+              createdAt: new Date().toISOString(),
+            }), 'utf8');
+            await handle.sync();
+            await handle.close();
+            handle = null;
+            linked = true;
+          } else {
+            throw linkErr;
+          }
+        }
+        if (linked) {
+          await fsp.rm(tmpLock, { force: true }).catch(() => {});
+          activeTokens.add(token);
+          return { mode: 'file', lockFile: legacyLockFile, pid: process.pid, token };
+        }
+      } catch (error) {
+        if (handle) await handle.close().catch(() => {});
+        await fsp.rm(tmpLock, { force: true }).catch(() => {});
+        if (error?.code !== 'EEXIST') throw error;
+        if (Date.now() >= deadline) {
+          const timeoutErr = new Error('Timed out waiting for cross-process profile delete/recovery lock');
+          timeoutErr.code = 'CROSS_PROCESS_LOCK_TIMEOUT';
+          throw timeoutErr;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+    }
+  }
+
+  async _releaseCrossProcessDeleteLock(lock) {
+    if (!lock) return;
+    if (lock.mode === 'sqlite-kernel') {
+      try { lock.db?.exec('ROLLBACK;'); } catch (_) {}
+      try { lock.db?.close(); } catch (_) {}
+      return;
+    }
+    if (!lock.lockFile || !lock.token) return;
+    const activeTokens = BrowserEngine._activeCrossProcessLockTokens;
+    try {
+      const lstat = await fsp.lstat(lock.lockFile);
+      if (lstat.isSymbolicLink() || !lstat.isFile()) return;
+      const existing = JSON.parse(await fsp.readFile(lock.lockFile, 'utf8'));
+      if (existing && existing.pid === lock.pid && existing.token === lock.token) {
+        await fsp.rm(lock.lockFile, { force: true }).catch(() => {});
+      }
+    } catch (_) {
+    } finally {
+      activeTokens?.delete(lock.token);
+    }
+  }
+
+  async _readCommittedDeleteBatches() {
+    const batches = {};
+    if (this.usingSqlite && this.sqliteStore && this.sqliteStore.isOpen) {
+      try {
+        const meta = this.sqliteStore.getAllMeta();
+        if (meta?.ob_committed_delete_batches && typeof meta.ob_committed_delete_batches === 'object' && !Array.isArray(meta.ob_committed_delete_batches)) {
+          Object.assign(batches, meta.ob_committed_delete_batches);
+        }
+      } catch (_) {}
+    } else if (!this.usingSqlite && this.stateFile) {
+      const sidecar = `${this.stateFile}.committed-deletes.json`;
+      try {
+        const parsed = JSON.parse(await fsp.readFile(sidecar, 'utf8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          Object.assign(batches, parsed);
+        }
+      } catch (_) {}
+    }
+    return batches;
+  }
+
+  async _markCommittedDeleteBatch(batchName, ids, committedAt) {
+    if (!batchName) return;
+    if (this.usingSqlite && this.sqliteStore && this.sqliteStore.isOpen) {
+      try {
+        const current = await this._readCommittedDeleteBatches();
+        current[batchName] = { ids: Array.isArray(ids) ? ids : [], committedAt };
+        this.sqliteStore.setMeta('ob_committed_delete_batches', current);
+      } catch (_) {}
+    } else if (!this.usingSqlite && this.stateFile) {
+      const sidecar = `${this.stateFile}.committed-deletes.json`;
+      try {
+        const current = await this._readCommittedDeleteBatches();
+        current[batchName] = { ids: Array.isArray(ids) ? ids : [], committedAt };
+        await writeRawAtomically(sidecar, JSON.stringify(current));
+      } catch (_) {}
+    }
+  }
+
+  async _clearCommittedDeleteBatch(batchName) {
+    if (!batchName) return;
+    if (this.usingSqlite && this.sqliteStore && this.sqliteStore.isOpen) {
+      try {
+        const current = await this._readCommittedDeleteBatches();
+        if (Object.prototype.hasOwnProperty.call(current, batchName)) {
+          delete current[batchName];
+          this.sqliteStore.setMeta('ob_committed_delete_batches', current);
+        }
+      } catch (_) {}
+    } else if (!this.usingSqlite && this.stateFile) {
+      const sidecar = `${this.stateFile}.committed-deletes.json`;
+      try {
+        const current = await this._readCommittedDeleteBatches();
+        if (Object.prototype.hasOwnProperty.call(current, batchName)) {
+          delete current[batchName];
+          if (Object.keys(current).length === 0) {
+            await fsp.rm(sidecar, { force: true }).catch(() => {});
+          } else {
+            await writeRawAtomically(sidecar, JSON.stringify(current));
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
+  _assertIncomingIdsSafeWithRecovery(incomingIds, recovery, existedBeforeSet) {
+    const unresolved = recovery?.unresolvedProfileIds;
+    if (!unresolved || unresolved.size === 0) return;
+    for (const id of incomingIds) {
+      if (!unresolved.has(id)) continue;
+      const existedBefore = existedBeforeSet ? existedBeforeSet.has(id) : false;
+      const liveExists = (() => {
+        try {
+          const stat = fs.lstatSync(this.profileRoot(id));
+          return !stat.isSymbolicLink() && stat.isDirectory();
+        } catch (_) {
+          return false;
+        }
+      })();
+      if (!existedBefore || !liveExists) {
+        const err = new Error(`Profile ${id} has unresolved delete staging data and cannot be saved`);
+        err.code = 'PROFILE_STAGING_UNRESOLVED';
+        throw err;
+      }
+    }
+  }
+
+  async syncProfiles(values) {
+    if (!Array.isArray(values) || values.length > 100000) throw new Error('Invalid profile list');
+    const executeSync = async (recovery = null, reloadJson = false) => {
+      if (reloadJson && !this.usingSqlite) {
+        await this._reloadJsonStateInLock();
+      }
+      const profilesBefore = new Map(this.profiles);
+      const assignmentsBefore = new Map([...this.assignments].map(([id, assigned]) => [id, new Set(assigned)]));
+      const networkBefore = new Map(this.networkInfo);
+      try {
+        if (recovery) {
+          const candidateIds = [];
+          const existedBefore = new Set();
+          for (const value of values) {
+            const sanitized = this.sanitizeProfile(value);
+            candidateIds.push(sanitized.id);
+            if (profilesBefore.has(sanitized.id) || this._hasProfileInStoreSync(sanitized.id)) {
+              existedBefore.add(sanitized.id);
+            }
+          }
+          this._assertIncomingIdsSafeWithRecovery(candidateIds, recovery, existedBefore);
+        }
+        const globallyEnabled = this._computeGloballyEnabledExtensions();
+        const incomingIds = new Set();
+        const changedAssignments = new Set();
+        for (const value of values) {
+          const { merged, assignmentsChanged } = this._processProfileIncoming(value, globallyEnabled);
+          incomingIds.add(merged.id);
+          if (assignmentsChanged) changedAssignments.add(merged.id);
+        }
+        // Do not drop unknown engine profiles here — deleteProfiles is the explicit path.
+        if (this.usingSqlite && this.sqliteStore) {
+          const incomingList = [...incomingIds].map((id) => this.profiles.get(id)).filter(Boolean);
+          const assignments = [...changedAssignments].map((id) => [id, this.assignments.get(id) || []]);
+          this.sqliteStore.saveProfiles(incomingList, assignments);
+        } else {
+          await this.persist();
+          this._updateJsonRawHashSync();
+        }
+      } catch (error) {
+        this.profiles = profilesBefore;
+        this.assignments = assignmentsBefore;
+        this.networkInfo = networkBefore;
+        throw error;
+      }
+      return this.status();
+    };
+
+    const syncLock = this._tryAcquireSyncProfileAndCrossLock();
+    if (syncLock) {
+      try {
+        return await executeSync(null, false);
+      } finally {
+        syncLock.releaseSync();
+      }
+    }
+
+    while ((this._activeProfileDeleteCount || 0) > 0) {
+      await (this._deleteProfilesQueue || Promise.resolve());
+    }
+    const release = await this._acquireProfileStateLock();
+    let crossLock = null;
+    try {
+      crossLock = await this._acquireCrossProcessDeleteLock(this.profileDataRootPath, { createDir: true });
+      const recovery = await this._recoverDeleteStagingLeftoversImpl({ crossProcessLockHeld: true });
+      return await executeSync(recovery, true);
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossLock).catch(() => {});
+      release();
+    }
+  }
+
+  async saveProfile(value) {
+    if (!value || typeof value !== 'object') throw new Error('Invalid profile data');
+    const executeSave = async (recovery = null, reloadJson = false) => {
+      if (reloadJson && !this.usingSqlite) {
+        await this._reloadJsonStateInLock();
+      }
+      const profilesBefore = new Map(this.profiles);
+      const assignmentsBefore = new Map([...this.assignments].map(([id, assigned]) => [id, new Set(assigned)]));
+      const networkBefore = new Map(this.networkInfo);
+      let merged;
+      try {
+        if (recovery) {
+          const sanitized = this.sanitizeProfile(value);
+          const existedBefore = new Set();
+          if (profilesBefore.has(sanitized.id) || this._hasProfileInStoreSync(sanitized.id)) {
+            existedBefore.add(sanitized.id);
+          }
+          this._assertIncomingIdsSafeWithRecovery([sanitized.id], recovery, existedBefore);
+        }
+        const result = this._processProfileIncoming(value);
+        merged = result.merged;
+        if (this.usingSqlite && this.sqliteStore) {
+          const assignments = result.assignmentsChanged
+            ? [[merged.id, this.assignments.get(merged.id) || []]]
+            : null;
+          this.sqliteStore.saveProfiles([merged], assignments);
+        } else {
+          await this.persist();
+          this._updateJsonRawHashSync();
+        }
+      } catch (error) {
+        this.profiles = profilesBefore;
+        this.assignments = assignmentsBefore;
+        this.networkInfo = networkBefore;
+        throw error;
+      }
+      this.emit({ type: 'status', id: merged.id, running: this.running.has(merged.id), profile: merged });
+      return { success: true, profile: merged };
+    };
+
+    const syncLock = this._tryAcquireSyncProfileAndCrossLock();
+    if (syncLock) {
+      try {
+        return await executeSave(null, false);
+      } finally {
+        syncLock.releaseSync();
+      }
+    }
+
+    while ((this._activeProfileDeleteCount || 0) > 0) {
+      await (this._deleteProfilesQueue || Promise.resolve());
+    }
+    const release = await this._acquireProfileStateLock();
+    let crossLock = null;
+    try {
+      crossLock = await this._acquireCrossProcessDeleteLock(this.profileDataRootPath, { createDir: true });
+      const recovery = await this._recoverDeleteStagingLeftoversImpl({ crossProcessLockHeld: true });
+      return await executeSave(recovery, true);
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossLock).catch(() => {});
+      release();
+    }
+  }
+
+  async batchPatchProfiles(payload = {}) {
+    const rawIds = payload.ids || payload.profileIds || [];
+    if (!Array.isArray(rawIds) || rawIds.length > 50000) throw new Error('Invalid profile selection');
+    const safeIds = [...new Set(rawIds.map(assertProfileId))];
+    if (!safeIds.length) return { success: true, count: 0, ids: [] };
+
+    while ((this._activeProfileDeleteCount || 0) > 0) {
+      await (this._deleteProfilesQueue || Promise.resolve());
+    }
+    const release = await this._acquireProfileStateLock();
+    let crossLock = null;
+    try {
+      crossLock = await this._acquireCrossProcessDeleteLock(this.profileDataRootPath, { createDir: true });
+      if (this._hasDeleteStagingDirsSync()) {
+        await this._recoverDeleteStagingLeftoversImpl({ crossProcessLockHeld: true });
+      }
+      if (!this.usingSqlite) {
+        await this._reloadJsonStateInLock();
+      }
+      const updatedList = [];
+      const previousById = new Map();
+      const nowIso = new Date().toISOString();
+
+      for (const id of safeIds) {
+        const existing = this._getAuthoritativeProfileInLock(id);
+        if (!existing) continue;
+
+        previousById.set(id, {
+          hadProfile: this.profiles.has(id),
+          prevProfile: this.profiles.get(id),
+          hadNetwork: this.networkInfo.has(id),
+          prevNetwork: this.networkInfo.get(id),
+        });
+
+        let profile = { ...existing };
+
+        if (payload.patch && typeof payload.patch === 'object') {
+          profile = { ...profile, ...payload.patch };
+        }
+
+        if (payload.templateId !== undefined) {
+          profile.templateId = payload.templateId || null;
+        }
+
+        if (payload.startUrl !== undefined) {
+          const urlStr = String(payload.startUrl || '').trim();
+          profile.startUrl = urlStr;
+          profile.platform = { ...(profile.platform || {}), startUrl: urlStr };
+        } else if (payload.clearStartUrl) {
+          profile.startUrl = '';
+          if (profile.platform) {
+            profile.platform = { ...profile.platform, startUrl: '' };
+          }
+        }
+
+        if (payload.os !== undefined && payload.os) {
+          profile.os = payload.os;
+        }
+
+        if (payload.width !== undefined || payload.height !== undefined) {
+          const currentViewport = profile.viewport || {};
+          profile.viewport = {
+            ...currentViewport,
+            width: Number.isInteger(payload.width) ? payload.width : (currentViewport.width || 1280),
+            height: Number.isInteger(payload.height) ? payload.height : (currentViewport.height || 800),
+          };
+        }
+
+        if (payload.preferenceModes && typeof payload.preferenceModes === 'object') {
+          profile.preferenceModes = {
+            ...(profile.preferenceModes || {}),
+            ...payload.preferenceModes,
+          };
+        }
+
+        if (payload.groupId !== undefined) {
+          profile.groupId = payload.groupId || null;
+        }
+
+        const hasProxyProp = payload.proxy !== undefined || payload.networkMode !== undefined || payload.proxyId !== undefined;
+        if (hasProxyProp) {
+          if (payload.networkMode !== undefined) {
+            profile.networkMode = payload.networkMode;
+          }
+          if (payload.proxy !== undefined) {
+            const newProxy = String(payload.proxy || '').trim();
+            if (newProxy !== String(existing.proxy || '').trim()) {
+              this.networkInfo.delete(id);
+              profile.exitIp = null;
+              profile.exitCountryCode = null;
+              profile.exitTimezone = null;
+              profile.exitLatitude = null;
+              profile.exitLongitude = null;
+              profile.exitCheckedAt = null;
+              profile.exitLatencyMs = null;
+              profile.exitNetworkType = null;
+            }
+            profile.proxy = newProxy;
+          }
+          if (payload.proxyId !== undefined) {
+            profile.proxyId = payload.proxyId || null;
+            profile.proxyMeta = { ...(profile.proxyMeta || {}), proxyId: payload.proxyId || null };
+          }
+          profile = this.resolveStoredProxyProfile(profile);
+        }
+
+        profile.updatedAt = nowIso;
+        const sanitized = this.sanitizeProfile(profile);
+        this.profiles.set(id, sanitized);
+        updatedList.push(sanitized);
+      }
+
+      try {
+        if (this.usingSqlite && this.sqliteStore && updatedList.length) {
+          this.sqliteStore.saveProfiles(updatedList);
+        } else if (updatedList.length) {
+          await this.persist();
+          this._updateJsonRawHashSync();
+        }
+      } catch (error) {
+        for (const [id, snap] of previousById.entries()) {
+          if (snap.hadProfile) this.profiles.set(id, snap.prevProfile);
+          else this.profiles.delete(id);
+          if (snap.hadNetwork) this.networkInfo.set(id, snap.prevNetwork);
+          else this.networkInfo.delete(id);
+        }
+        throw error;
+      }
+
+      this.emit({ type: 'profiles', action: 'batch-patch', ids: updatedList.map((p) => p.id) });
+      return { success: true, count: updatedList.length, ids: updatedList.map((p) => p.id) };
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossLock).catch(() => {});
+      release();
+    }
+  }
+
+  async cloneProfiles(payload = {}) {
+    const rawIds = payload.ids || payload.profileIds || [];
+    if (!Array.isArray(rawIds) || rawIds.length > 50000) throw new Error('Invalid profile selection');
+    const safeIds = [...new Set(rawIds.map(assertProfileId))];
+    if (!safeIds.length) return { success: true, count: 0, profiles: [] };
+
+    while ((this._activeProfileDeleteCount || 0) > 0) {
+      await (this._deleteProfilesQueue || Promise.resolve());
+    }
+    const release = await this._acquireProfileStateLock();
+    let crossLock = null;
+    try {
+      crossLock = await this._acquireCrossProcessDeleteLock(this.profileDataRootPath, { createDir: true });
+      if (this._hasDeleteStagingDirsSync()) {
+        await this._recoverDeleteStagingLeftoversImpl({ crossProcessLockHeld: true });
+      }
+      if (!this.usingSqlite) {
+        await this._reloadJsonStateInLock();
+      }
+      let nextNumber = this.getNextProfileNumber();
+      const clonedList = [];
+      const nowIso = new Date().toISOString();
+
+      for (const sourceId of safeIds) {
+        const source = this._getAuthoritativeProfileInLock(sourceId);
+        if (!source) continue;
+
+        const newId = crypto.randomUUID ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2, 9));
+        const profileNumber = nextNumber++;
+
+        const cloned = this.sanitizeProfile({
+          ...source,
+          id: newId,
+          number: profileNumber,
+          name: `${source.name || source.id} (Copy)`,
+          cookies: '',
+          platform: {
+            ...(source.platform || {}),
+            username: '',
+            password: '',
+            totpSecret: '',
+          },
+          exitIp: null,
+          exitCountryCode: null,
+          exitTimezone: null,
+          exitLatitude: null,
+          exitLongitude: null,
+          exitCheckedAt: null,
+          exitLatencyMs: null,
+          exitNetworkType: null,
+          trashed: false,
+          trashedAt: null,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        });
+
+        if (source.fingerprint && !cloned.fingerprint) {
+          cloned.fingerprint = source.fingerprint;
+        }
+
+        this.profiles.set(newId, cloned);
+
+        const sourceAssignments = this.assignments.get(sourceId);
+        if (sourceAssignments) {
+          this.assignments.set(newId, new Set(sourceAssignments));
+        }
+
+        clonedList.push(cloned);
+      }
+
+      try {
+        if (this.usingSqlite && this.sqliteStore && clonedList.length) {
+          const assignments = clonedList.map((p) => [p.id, this.assignments.get(p.id) || []]);
+          this.sqliteStore.saveProfiles(clonedList, assignments);
+        } else if (clonedList.length) {
+          await this.persist();
+          this._updateJsonRawHashSync();
+        }
+      } catch (error) {
+        for (const profile of clonedList) {
+          this.profiles.delete(profile.id);
+          this.assignments.delete(profile.id);
+        }
+        throw error;
+      }
+
+      this.emit({ type: 'profiles', action: 'clone', ids: clonedList.map((p) => p.id) });
+      return { success: true, count: clonedList.length, profiles: clonedList };
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossLock).catch(() => {});
+      release();
+    }
+  }
+
+  async renumberProfiles() {
+    while ((this._activeProfileDeleteCount || 0) > 0) {
+      await (this._deleteProfilesQueue || Promise.resolve());
+    }
+    const release = await this._acquireProfileStateLock();
+    let crossLock = null;
+    try {
+      crossLock = await this._acquireCrossProcessDeleteLock(this.profileDataRootPath, { createDir: true });
+      if (this._hasDeleteStagingDirsSync()) {
+        await this._recoverDeleteStagingLeftoversImpl({ crossProcessLockHeld: true });
+      }
+      if (!this.usingSqlite) {
+        await this._reloadJsonStateInLock();
+      }
+      let allProfiles = [];
+      if (this.usingSqlite && this.sqliteStore) {
+        allProfiles = this.sqliteStore.getAllProfiles();
+      } else {
+        allProfiles = [...this.profiles.values()];
+      }
+
+      allProfiles.sort((a, b) => {
+        const numA = a.number != null ? Number(a.number) : Infinity;
+        const numB = b.number != null ? Number(b.number) : Infinity;
+        if (numA !== numB) return numA - numB;
+        return String(a.id).localeCompare(String(b.id));
+      });
+
+      const previousById = new Map();
+      const nowIso = new Date().toISOString();
+      const updated = [];
+      for (let i = 0; i < allProfiles.length; i += 1) {
+        const p = { ...allProfiles[i] };
+        previousById.set(p.id, {
+          hadProfile: this.profiles.has(p.id),
+          prevProfile: this.profiles.get(p.id),
+        });
+        const newNum = i + 1;
+        p.number = newNum;
+        p.name = String(newNum);
+        p.updatedAt = nowIso;
+        const sanitized = this.sanitizeProfile(p);
+        this.profiles.set(sanitized.id, sanitized);
+        updated.push(sanitized);
+      }
+
+      try {
+        if (this.usingSqlite && this.sqliteStore && updated.length) {
+          this.sqliteStore.saveProfiles(updated);
+        } else if (updated.length) {
+          await this.persist();
+          this._updateJsonRawHashSync();
+        }
+      } catch (error) {
+        for (const [id, snap] of previousById.entries()) {
+          if (snap.hadProfile) this.profiles.set(id, snap.prevProfile);
+          else this.profiles.delete(id);
+        }
+        throw error;
+      }
+
+      this.emit({ type: 'profiles', action: 'renumber', count: updated.length });
+      return { success: true, count: updated.length };
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossLock).catch(() => {});
+      release();
+    }
   }
 
   getProfileDataRoot() { return this.profileDataRootPath; }
@@ -1533,6 +2560,13 @@ class BrowserEngine {
     if (!raw) throw new Error('Environment data directory is required');
     if (this.running.size || this.starting.size || this.stopping.size) {
       throw new Error('Stop all browser environments before changing the data directory');
+    }
+    if ((this._activeProfileDeleteCount || 0) > 0
+      || (this._activeDeleteRecoveryCount || 0) > 0
+      || (this._profileStateLockDepth || 0) > 0
+      || (this._profileStateLockPending || 0) > 0
+      || (this._deletingProfileIds && this._deletingProfileIds.size > 0)) {
+      throw new Error('Wait for profile deletion, recovery, or save operations to finish before changing the data directory');
     }
     const check = validateDataRootIsolationSecure(raw);
     if (!check.ok) throw new Error(check.message);
@@ -2650,10 +3684,58 @@ class BrowserEngine {
     return langMode === 'ip' || tzMode === 'ip' || geoMode === 'ip' || geoMode === 'allow';
   }
 
+  async _persistSingleProfileSafe(profile, options = {}) {
+    if (!profile || !profile.id) return false;
+    const onlyIfExisting = Boolean(options.onlyIfExisting);
+    while ((this._activeProfileDeleteCount || 0) > 0) {
+      await (this._deleteProfilesQueue || Promise.resolve());
+    }
+    const release = await this._acquireProfileStateLock();
+    let crossLock = null;
+    try {
+      if (this.profileDataRootPath) {
+        crossLock = await this._acquireCrossProcessDeleteLock(this.profileDataRootPath, { createDir: true });
+      }
+      if (this.usingSqlite && this.sqliteStore) {
+        if (!this.sqliteStore.isOpen) {
+          throw new Error('SQLite store is not open');
+        }
+        if (onlyIfExisting && !this._hasProfileInStoreSync(profile.id)) {
+          this.profiles.delete(profile.id);
+          this.assignments?.delete(profile.id);
+          this.networkInfo?.delete(profile.id);
+          return false;
+        }
+        this.profiles.set(profile.id, profile);
+        if (typeof this.sqliteStore.saveProfiles === 'function') {
+          this.sqliteStore.saveProfiles([profile]);
+        } else {
+          await this.persist();
+        }
+        return true;
+      }
+      await this._reloadJsonStateInLock();
+      if (onlyIfExisting && !this.profiles.has(profile.id)) {
+        this.networkInfo?.delete(profile.id);
+        return false;
+      }
+      this.profiles.set(profile.id, profile);
+      await this.persist();
+      this._updateJsonRawHashSync();
+      return true;
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossLock).catch(() => {});
+      release();
+    }
+  }
+
   async ensureExitNetworkForLocale(profile) {
     if (!this.needsExitNetworkForLocale(profile)) return null;
     let network = this.networkInfo.get(profile.id);
     if (network?.countryCode || network?.ip) return network;
+    const existedAtEntry = (this.usingSqlite && this.sqliteStore)
+      ? this._hasProfileInStoreSync(profile.id)
+      : Boolean(this.stateFile && fs.existsSync(this.stateFile) && this.profiles.has(profile.id));
     const proxyRaw = String(profile.proxy || '');
     const isDirect = profile.networkMode === 'direct' || !proxyRaw || /^(direct|offline|none)$/i.test(proxyRaw);
     try {
@@ -2674,8 +3756,13 @@ class BrowserEngine {
         profile.exitCheckedAt = network.checkedAt || profile.exitCheckedAt;
         profile.exitLatencyMs = network.latencyMs ?? profile.exitLatencyMs;
         profile.exitNetworkType = network.networkType || profile.exitNetworkType;
-        this.profiles.set(profile.id, this.sanitizeProfile(profile));
-        await this.persist();
+        const sanitized = this.sanitizeProfile(profile);
+        if (typeof this._persistSingleProfileSafe === 'function') {
+          await this._persistSingleProfileSafe(sanitized, { onlyIfExisting: existedAtEntry });
+        } else {
+          this.profiles.set(profile.id, sanitized);
+          await this.persist();
+        }
       }
       return network;
     } catch (error) {
@@ -3822,6 +4909,19 @@ class BrowserEngine {
       raw,
     );
     const id = candidate.id;
+    let waitedForDelete = false;
+    while (this._deletingProfileIds?.has(id)) {
+      waitedForDelete = true;
+      await (this._deleteProfilesQueue || Promise.resolve());
+    }
+    if (waitedForDelete) {
+      const stillExists = this.profiles.has(id) || this._hasProfileInStoreSync(id);
+      if (!stillExists) {
+        const delErr = new Error(`Profile ${id} was deleted`);
+        delErr.code = 'PROFILE_DELETED';
+        throw delErr;
+      }
+    }
     const pendingStart = this.starting.get(id);
     if (pendingStart) return pendingStart;
     if (this.stopAllInProgress) {
@@ -3912,13 +5012,38 @@ class BrowserEngine {
     // start() already applied redaction recovery exactly once. Repeating it here
     // would undo an explicit proxyAuthAction=clear before launch.
     let profile = this.resolveStoredProxyProfile(this.sanitizeProfile(raw));
-    this.profiles.set(profile.id, profile);
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     if (this.running.has(profile.id)) {
+      this.profiles.set(profile.id, profile);
       if (!profile.advanced.multiOpen) return this.publicRunning(profile.id);
       return this.publicRunning(profile.id);
     }
     this.assertProxyConcurrencyAvailable(profile);
+    const existedInStoreAtStart = this._hasProfileInStoreSync(profile.id);
+    const releasePreStartLock = await this._acquireProfileStateLock();
+    try {
+      const startRecovery = await this._recoverDeleteStagingLeftoversImpl().catch((err) => {
+        console.warn(`[BrowserEngine] Failed to recover delete staging leftovers before start: ${err?.message || err}`);
+        return null;
+      });
+      if (startRecovery?.failedRestoreIds?.has(profile.id) || startRecovery?.unresolvedProfileIds?.has(profile.id)) {
+        throw new Error(`Profile ${profile.id} has unrecovered staging data and cannot safely start`);
+      }
+      this.assertStartGenerationActive(profile.id, lifecycleGeneration);
+      if (this._deletingProfileIds?.has(profile.id)) {
+        const delErr = new Error(`Profile ${profile.id} is being deleted`);
+        delErr.code = 'PROFILE_DELETING';
+        throw delErr;
+      }
+      if (existedInStoreAtStart && !this._hasProfileInStoreSync(profile.id)) {
+        const delErr = new Error(`Profile ${profile.id} was deleted`);
+        delErr.code = 'PROFILE_DELETED';
+        throw delErr;
+      }
+      this.profiles.set(profile.id, profile);
+    } finally {
+      releasePreStartLock();
+    }
     // Surface cross-platform risks (Windows MAX_PATH on a deep data root, missing env,
     // Linux sandbox, …) once — turns silent per-platform breakage into an actionable event.
     if (!this._platformPreflightDone) {
@@ -3961,15 +5086,51 @@ class BrowserEngine {
     try {
       profile = await this.prepareProfileProxyForStart(profile);
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
+    if (this._deletingProfileIds?.has(profile.id)) {
+      throw Object.assign(new Error(`Profile ${profile.id} is being deleted`), { code: 'PROFILE_DELETING' });
+    }
     this.profiles.set(profile.id, profile);
     currentStage = 'proxy'; this.emitStartProgress(profile.id, 'proxy', 18, '正在检测代理与出口…');
     await this.ensureExitNetworkForLocale(profile).catch(() => {});
     profile = this.applyResolvedLocale(profile);
-    this.profiles.set(profile.id, profile);
-    // Persist the effective proxy (including credentials returned by a dynamic
-    // proxy API) before launching Chromium. A quit immediately after startup
-    // must not leave the renderer's redacted copy as the durable state.
-    await this.persist();
+    const releasePersistLock = await this._acquireProfileStateLock();
+    let crossPersistLock = null;
+    try {
+      this.assertStartGenerationActive(profile.id, lifecycleGeneration);
+      if (this._deletingProfileIds?.has(profile.id)) {
+        throw Object.assign(new Error(`Profile ${profile.id} is being deleted`), { code: 'PROFILE_DELETING' });
+      }
+      if (this.profileDataRootPath) {
+        crossPersistLock = await this._acquireCrossProcessDeleteLock(this.profileDataRootPath, { createDir: true });
+      }
+      if (this.usingSqlite && this.sqliteStore) {
+        if (!this.sqliteStore.isOpen) {
+          throw new Error('SQLite store is not open');
+        }
+        if (existedInStoreAtStart && !this._hasProfileInStoreSync(profile.id)) {
+          throw Object.assign(new Error(`Profile ${profile.id} was deleted`), { code: 'PROFILE_DELETED' });
+        }
+        this.profiles.set(profile.id, profile);
+        // Persist only this single profile so stale in-memory entries from other profiles
+        // deleted by concurrent processes are never resurrected.
+        if (typeof this.sqliteStore.saveProfiles === 'function') {
+          this.sqliteStore.saveProfiles([profile]);
+        } else {
+          await this.persist();
+        }
+      } else {
+        await this._reloadJsonStateInLock();
+        if (existedInStoreAtStart && !this.profiles.has(profile.id)) {
+          throw Object.assign(new Error(`Profile ${profile.id} was deleted`), { code: 'PROFILE_DELETED' });
+        }
+        this.profiles.set(profile.id, profile);
+        await this.persist();
+        this._updateJsonRawHashSync();
+      }
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossPersistLock).catch(() => {});
+      releasePersistLock();
+    }
     const extensions = this.assignedExtensions(profile.id);
     currentStage = 'kernel'; this.emitStartProgress(profile.id, 'kernel', 30, '正在准备浏览器内核…');
     if (!this.kernelStatus().installed && this.preferIndependentKernel) {
@@ -3978,16 +5139,44 @@ class BrowserEngine {
     }
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     browser = this.chooseBrowser(profile);
-    root = this.profileRoot(profile.id);
-    startupResources.root = root;
-    const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, root, profile.id, { create: true });
-    if (!rootCheck.ok) throw new Error('Isolation error: ' + rootCheck.message);
-    profileLock = await acquireProfileLock(root, {
-      profileId: profile.id,
-      browser: browser.path,
-      lifecycleGeneration,
-    });
-    startupResources.profileLock = profileLock;
+    const releaseRootLock = await this._acquireProfileStateLock();
+    let crossRootLock = null;
+    try {
+      this.assertStartGenerationActive(profile.id, lifecycleGeneration);
+      if (this._deletingProfileIds?.has(profile.id)) {
+        throw Object.assign(new Error(`Profile ${profile.id} is being deleted`), { code: 'PROFILE_DELETING' });
+      }
+      if (existedInStoreAtStart && !this._hasProfileInStoreSync(profile.id)) {
+        throw Object.assign(new Error(`Profile ${profile.id} was deleted`), { code: 'PROFILE_DELETED' });
+      }
+      const dataRootCheck = validateDataRootIsolationSecure(this.profileDataRootPath);
+      if (!dataRootCheck.ok) throw new Error('Isolation error: ' + dataRootCheck.message);
+      crossRootLock = await this._acquireCrossProcessDeleteLock(this.profileDataRootPath, { createDir: true });
+      const rootRecovery = await this._recoverDeleteStagingLeftoversImpl({ crossProcessLockHeld: true }).catch((err) => {
+        console.warn(`[BrowserEngine] Failed to recover delete staging leftovers before creating root: ${err?.message || err}`);
+        return null;
+      });
+      if (rootRecovery?.failedRestoreIds?.has(profile.id) || rootRecovery?.unresolvedProfileIds?.has(profile.id)) {
+        throw new Error(`Profile ${profile.id} has unrecovered staging data and cannot safely start`);
+      }
+      if (existedInStoreAtStart && !this._hasProfileInStoreSync(profile.id)) {
+        throw Object.assign(new Error(`Profile ${profile.id} was deleted`), { code: 'PROFILE_DELETED' });
+      }
+      this.assertStartGenerationActive(profile.id, lifecycleGeneration);
+      root = this.profileRoot(profile.id);
+      startupResources.root = root;
+      const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, root, profile.id, { create: true });
+      if (!rootCheck.ok) throw new Error('Isolation error: ' + rootCheck.message);
+      profileLock = await acquireProfileLock(root, {
+        profileId: profile.id,
+        browser: browser.path,
+        lifecycleGeneration,
+      });
+      startupResources.profileLock = profileLock;
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossRootLock).catch(() => {});
+      releaseRootLock();
+    }
     startupResources.lifecycleGeneration = lifecycleGeneration;
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     restoreSession = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession;
@@ -4778,7 +5967,36 @@ class BrowserEngine {
     this.resetFingerprintVerificationFailures(safe);
     const pendingStop = this.stopping.get(safe);
     if (pendingStop?.lifecycleSettled && this.stopping.get(safe) === pendingStop) this.stopping.delete(safe);
-    if (this.stopping.has(safe)) return this.stopping.get(safe);
+    if (this.stopping.has(safe)) {
+      const existingStop = this.stopping.get(safe);
+      const pendingStart = this.starting.get(safe);
+      const requestedGeneration = pendingStart?.lifecycleGeneration;
+      if (pendingStart) {
+        this.requestLifecycleStop(safe, requestedGeneration);
+      }
+      let stopResult;
+      try {
+        stopResult = await existingStop;
+      } catch (err) {
+        if (pendingStart) {
+          await pendingStart.catch(() => {});
+          this.clearLifecycleStopRequest(safe, requestedGeneration);
+        }
+        throw err;
+      }
+      if (pendingStart) {
+        try {
+          await pendingStart.catch(() => {});
+        } finally {
+          this.clearLifecycleStopRequest(safe, requestedGeneration);
+        }
+      }
+      const nextStopping = this.stopping.get(safe);
+      if (nextStopping && nextStopping !== existingStop) return this.stop(safe);
+      const nextRunning = this.running.get(safe);
+      if (nextRunning) return this.stopRunningItem(safe, nextRunning);
+      return stopResult;
+    }
 
     const pendingStart = this.starting.get(safe);
     const requestedGeneration = pendingStart?.lifecycleGeneration;
@@ -4921,117 +6139,1134 @@ class BrowserEngine {
   }
 
   async trashProfiles(ids) {
-    if (!Array.isArray(ids) || ids.length > 200) throw new Error('Invalid profile selection');
+    if (!Array.isArray(ids) || ids.length > 50000) throw new Error('Invalid profile selection');
     const safeIds = [...new Set(ids.map(assertProfileId))];
-    const trashed = [];
+    if (!safeIds.length) return { success: true, trashed: 0, stopped: 0, ids: [] };
+
+    while ((this._activeProfileDeleteCount || 0) > 0) {
+      await (this._deleteProfilesQueue || Promise.resolve());
+    }
+
     let stopped = 0;
-    const nowIso = new Date().toISOString();
-    for (const id of safeIds) {
-      const profile = this.profiles.get(id);
-      if (!profile) continue;
-      if (this.running.has(id) || this.starting.has(id) || this.stopping.has(id)) {
-        await this.stop(id);
-        stopped += 1;
+    let release = null;
+    let crossLock = null;
+    try {
+      for (let stopPass = 0; stopPass < 3; stopPass += 1) {
+        for (const id of safeIds) {
+          const exists = Boolean(this.getProfile(id) || this.profiles.get(id));
+          if (!exists) continue;
+          if (this.running.has(id) || this.starting.has(id) || this.stopping.has(id)) {
+            await this.stop(id);
+            stopped += 1;
+          }
+        }
+        release = await this._acquireProfileStateLock();
+        const stillActive = safeIds.find((id) => (
+          (this.getProfile(id) || this.profiles.get(id))
+          && (this.running.has(id) || this.starting.has(id) || this.stopping.has(id))
+        ));
+        if (!stillActive) break;
+        release();
+        release = null;
+        if (stopPass === 2) {
+          throw new Error(`Profile ${stillActive} is still active and cannot be trashed`);
+        }
       }
-      profile.trashed = true;
-      profile.trashedAt = nowIso;
-      trashed.push(id);
+
+      crossLock = await this._acquireCrossProcessDeleteLock(this.profileDataRootPath, { createDir: true });
+      if (this._hasDeleteStagingDirsSync()) {
+        await this._recoverDeleteStagingLeftoversImpl({ crossProcessLockHeld: true });
+      }
+      if (!this.usingSqlite) {
+        await this._reloadJsonStateInLock();
+      }
+
+      const trashed = [];
+      const previousById = new Map();
+      const nowIso = new Date().toISOString();
+      for (const id of safeIds) {
+        const profile = this._getAuthoritativeProfileInLock(id);
+        if (!profile) continue;
+        previousById.set(id, {
+          hadProfile: this.profiles.has(id),
+          prevProfile: this.profiles.get(id),
+        });
+        this.profiles.set(id, { ...profile, trashed: true, trashedAt: nowIso });
+        trashed.push(id);
+      }
+      try {
+        if (this.usingSqlite && this.sqliteStore && trashed.length) {
+          this.sqliteStore.trashProfiles(trashed, nowIso);
+        } else if (trashed.length) {
+          await this.persist();
+          this._updateJsonRawHashSync();
+        }
+      } catch (error) {
+        for (const [id, snap] of previousById.entries()) {
+          if (snap.hadProfile) this.profiles.set(id, snap.prevProfile);
+          else this.profiles.delete(id);
+        }
+        throw error;
+      }
+      this.emit({ type: 'profiles', action: 'trash', ids: trashed });
+      return { success: true, trashed: trashed.length, stopped, ids: trashed };
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossLock).catch(() => {});
+      if (release) release();
     }
-    if (this.usingSqlite && this.sqliteStore) {
-      this.sqliteStore.trashProfiles(trashed, nowIso);
-    }
-    await this.persist();
-    this.emit({ type: 'profiles', action: 'trash', ids: trashed });
-    return { success: true, trashed: trashed.length, stopped, ids: trashed };
   }
 
   async restoreProfiles(ids) {
-    if (!Array.isArray(ids) || ids.length > 200) throw new Error('Invalid profile selection');
+    if (!Array.isArray(ids) || ids.length > 50000) throw new Error('Invalid profile selection');
     const safeIds = [...new Set(ids.map(assertProfileId))];
-    const restored = [];
-    for (const id of safeIds) {
-      const profile = this.profiles.get(id);
-      if (!profile) continue;
-      profile.trashed = false;
-      profile.trashedAt = null;
-      restored.push(id);
+    if (!safeIds.length) return { success: true, restored: 0, ids: [] };
+
+    while ((this._activeProfileDeleteCount || 0) > 0) {
+      await (this._deleteProfilesQueue || Promise.resolve());
     }
-    if (this.usingSqlite && this.sqliteStore) {
-      this.sqliteStore.restoreProfiles(restored);
+    const release = await this._acquireProfileStateLock();
+    let crossLock = null;
+    try {
+      crossLock = await this._acquireCrossProcessDeleteLock(this.profileDataRootPath, { createDir: true });
+      if (this._hasDeleteStagingDirsSync()) {
+        await this._recoverDeleteStagingLeftoversImpl({ crossProcessLockHeld: true });
+      }
+      if (!this.usingSqlite) {
+        await this._reloadJsonStateInLock();
+      }
+
+      const restored = [];
+      const previousById = new Map();
+      for (const id of safeIds) {
+        const profile = this._getAuthoritativeProfileInLock(id);
+        if (!profile) continue;
+        previousById.set(id, {
+          hadProfile: this.profiles.has(id),
+          prevProfile: this.profiles.get(id),
+        });
+        this.profiles.set(id, { ...profile, trashed: false, trashedAt: null });
+        restored.push(id);
+      }
+      try {
+        if (this.usingSqlite && this.sqliteStore && restored.length) {
+          this.sqliteStore.restoreProfiles(restored);
+        } else if (restored.length) {
+          await this.persist();
+          this._updateJsonRawHashSync();
+        }
+      } catch (error) {
+        for (const [id, snap] of previousById.entries()) {
+          if (snap.hadProfile) this.profiles.set(id, snap.prevProfile);
+          else this.profiles.delete(id);
+        }
+        throw error;
+      }
+      this.emit({ type: 'profiles', action: 'restore', ids: restored });
+      return { success: true, restored: restored.length, ids: restored };
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossLock).catch(() => {});
+      release();
     }
-    await this.persist();
-    this.emit({ type: 'profiles', action: 'restore', ids: restored });
-    return { success: true, restored: restored.length, ids: restored };
   }
 
-  async purgeProfiles(ids, deleteData = true) {
-    return this.deleteProfiles(ids, deleteData);
+  async purgeProfiles(ids, deleteData = true, options = {}) {
+    return this.deleteProfiles(ids, deleteData, options);
   }
 
   async emptyTrash(deleteData = true) {
-    const trashedIds = [...this.profiles.values()]
-      .filter((p) => Boolean(p.trashed))
-      .map((p) => p.id);
-    return this.purgeProfiles(trashedIds, deleteData);
+    while ((this._activeProfileDeleteCount || 0) > 0) {
+      await (this._deleteProfilesQueue || Promise.resolve());
+    }
+    let combined = [];
+    const release = await this._acquireProfileStateLock();
+    let crossLock = null;
+    try {
+      crossLock = await this._acquireCrossProcessDeleteLock(this.profileDataRootPath, { createDir: true });
+      if (this.usingSqlite && this.sqliteStore) {
+        if (!this.sqliteStore.isOpen) {
+          throw new Error('SQLite store is not open');
+        }
+        const rows = this.sqliteStore._statements?.getTrashedProfileIds?.all?.() || [];
+        combined = [...new Set(rows.map((r) => String(r.id)))];
+      } else {
+        await this._reloadJsonStateInLock();
+        combined = [...new Set(
+          [...this.profiles.values()]
+            .filter((p) => Boolean(p.trashed))
+            .map((p) => p.id)
+        )];
+      }
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossLock).catch(() => {});
+      release();
+    }
+    return this.purgeProfiles(combined, deleteData, { onlyIfTrashed: true });
   }
 
-  async deleteProfiles(ids, deleteData = true) {
-    if (!Array.isArray(ids) || ids.length > 200) throw new Error('Invalid profile selection');
-    const safeIds = [...new Set(ids.map(assertProfileId))];
-    const deleted = []; let stopped = 0;
-    for (const id of safeIds) {
-      if (!this.profiles.has(id)) continue;
-      if (this.running.has(id) || this.starting.has(id) || this.stopping.has(id)) {
-        await this.stop(id);
-        stopped += 1;
+  async recoverDeleteStagingLeftovers(options = {}) {
+    const release = await this._acquireProfileStateLock();
+    try {
+      return await this._recoverDeleteStagingLeftoversImpl(options);
+    } finally {
+      release();
+    }
+  }
+
+  async _recoverDeleteStagingLeftoversImpl(options = {}) {
+    this._activeDeleteRecoveryCount = (this._activeDeleteRecoveryCount || 0) + 1;
+    let crossLock = null;
+    try {
+      const failedRestoreIds = new Set();
+      const unresolvedProfileIds = new Set();
+      const rootPath = this.profileDataRootPath;
+      if (!rootPath) return { failedRestoreIds, unresolvedProfileIds };
+      const rootStat = await fsp.lstat(rootPath).catch((err) => (err?.code === 'ENOENT' ? null : err));
+      if (!rootStat || rootStat instanceof Error || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+        return { failedRestoreIds, unresolvedProfileIds };
       }
-      if (deleteData) {
-        const profileRoot = this.profileRoot(id);
-        const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, profileRoot, id);
-        if (!rootCheck.ok) throw new Error('Isolation error: ' + rootCheck.message);
-        if (fs.existsSync(profileRoot)) {
-          // Windows often holds Chrome locks (EBUSY/EPERM) briefly after Browser.close / taskkill.
-          let lastError = null;
-          for (let attempt = 0; attempt < 8; attempt += 1) {
-            try {
-              await fsp.rm(profileRoot, { recursive: true, force: true });
-              lastError = null;
-              break;
-            } catch (error) {
-              lastError = error;
-              if (!error || !['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(error.code)) throw error;
-              await new Promise((resolve) => setTimeout(resolve, 120 * (attempt + 1)));
-            }
+      const rootCheck = validateDataRootIsolationSecure(rootPath);
+      if (!rootCheck.ok) return { failedRestoreIds, unresolvedProfileIds };
+
+      if (!options?.crossProcessLockHeld) {
+        crossLock = await this._acquireCrossProcessDeleteLock(rootPath, { createDir: false });
+      }
+
+      const activeDirs = BrowserEngine._activeDeleteStagingDirs || (BrowserEngine._activeDeleteStagingDirs = new Set());
+      const committedDirs = BrowserEngine._committedDeleteStagingDirs || (BrowserEngine._committedDeleteStagingDirs = new Set());
+      const TRANSIENT_FS_CODES = new Set(['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY']);
+      const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      const renameWithRetry = async (src, dst) => {
+        let lastError = null;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          try {
+            await fsp.rename(src, dst);
+            return;
+          } catch (error) {
+            lastError = error;
+            if (!error || !TRANSIENT_FS_CODES.has(error.code)) throw error;
+            await sleepMs(120 * (attempt + 1));
           }
-          if (lastError) throw lastError;
+        }
+        throw lastError;
+      };
+
+      const rmWithRetry = async (target) => {
+        let lastError = null;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          try {
+            await fsp.rm(target, { recursive: true, force: true });
+            return;
+          } catch (error) {
+            lastError = error;
+            if (!error || !TRANSIENT_FS_CODES.has(error.code)) throw error;
+            await sleepMs(120 * (attempt + 1));
+          }
+        }
+        throw lastError;
+      };
+
+      const rmdirWithRetry = async (target) => {
+        let lastError = null;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          try {
+            await fsp.rmdir(target);
+            return;
+          } catch (error) {
+            lastError = error;
+            if (!error || !TRANSIENT_FS_CODES.has(error.code)) throw error;
+            await sleepMs(120 * (attempt + 1));
+          }
+        }
+        throw lastError;
+      };
+
+      const parseValidDeleteManifest = async (batchDir) => {
+        const manifestPath = path.join(batchDir, '.manifest.json');
+        const manifestStat = await fsp.lstat(manifestPath).catch(() => null);
+        if (!manifestStat || manifestStat.isSymbolicLink() || !manifestStat.isFile()) {
+          return null;
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(await fsp.readFile(manifestPath, 'utf8'));
+        } catch (_) {
+          return null;
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+        if (parsed.kind !== 'openbrowser-delete-staging') return null;
+        if (parsed.version !== 1) return null;
+        if (parsed.state !== 'staging' && parsed.state !== 'committed') return null;
+        if (!Number.isSafeInteger(parsed.pid) || parsed.pid <= 0) return null;
+        const startedAtMs = Date.parse(String(parsed.startedAt || ''));
+        if (typeof parsed.startedAt !== 'string' || !Number.isFinite(startedAtMs) || startedAtMs <= 0) return null;
+        let committedAtMs = null;
+        if (parsed.state === 'committed') {
+          committedAtMs = Date.parse(String(parsed.committedAt || ''));
+          if (typeof parsed.committedAt !== 'string' || !Number.isFinite(committedAtMs) || committedAtMs <= 0) return null;
+        }
+        if (!Array.isArray(parsed.ids) || parsed.ids.length === 0 || parsed.ids.length > 50000) return null;
+        const allowedIds = new Set();
+        for (const itemId of parsed.ids) {
+          if (typeof itemId !== 'string' || !isolation.isValidProfileId(itemId) || allowedIds.has(itemId)) {
+            return null;
+          }
+          allowedIds.add(itemId);
+        }
+        return { manifest: parsed, allowedIds, startedAtMs, committedAtMs };
+      };
+
+      let cachedStoreStatus = null;
+      const getStoreStatus = async () => {
+        if (cachedStoreStatus) return cachedStoreStatus;
+        if (this.usingSqlite) {
+          if (!this.sqliteStore || !this.sqliteStore.isOpen || typeof this.sqliteStore.getProfile !== 'function') {
+            cachedStoreStatus = { verifiable: false, mode: 'unverifiable' };
+            return cachedStoreStatus;
+          }
+          try {
+            if (this.sqliteStore.db && typeof this.sqliteStore.db.prepare === 'function') {
+              this.sqliteStore.db.prepare('SELECT 1').get();
+            }
+            cachedStoreStatus = { verifiable: true, mode: 'sqlite' };
+            return cachedStoreStatus;
+          } catch (_) {
+            cachedStoreStatus = { verifiable: false, mode: 'unverifiable' };
+            return cachedStoreStatus;
+          }
+        }
+        if (this.dbFile && fs.existsSync(this.dbFile)) {
+          try {
+            const dbStat = await fsp.stat(this.dbFile);
+            if (dbStat.size > 0) {
+              cachedStoreStatus = { verifiable: false, mode: 'unverifiable' };
+              return cachedStoreStatus;
+            }
+          } catch (_) {
+            cachedStoreStatus = { verifiable: false, mode: 'unverifiable' };
+            return cachedStoreStatus;
+          }
+        }
+        if (this.stateFile && fs.existsSync(this.stateFile)) {
+          try {
+            const candidate = await readEngineStateCandidate(this.stateFile);
+            const savedProfiles = Array.isArray(candidate?.saved?.profiles) ? candidate.saved.profiles : null;
+            if (!savedProfiles) {
+              cachedStoreStatus = { verifiable: false, mode: 'unverifiable' };
+              return cachedStoreStatus;
+            }
+            const savedMap = new Map();
+            for (const p of savedProfiles) {
+              if (p && typeof p === 'object' && p.id != null) {
+                savedMap.set(String(p.id), p);
+              }
+            }
+            cachedStoreStatus = { verifiable: true, mode: 'json', savedMap };
+            return cachedStoreStatus;
+          } catch (_) {
+            cachedStoreStatus = { verifiable: false, mode: 'unverifiable' };
+            return cachedStoreStatus;
+          }
+        }
+        cachedStoreStatus = { verifiable: false, mode: 'unverifiable' };
+        return cachedStoreStatus;
+      };
+
+      const lookupProfileState = (profileId, storeStatus) => {
+        if (!storeStatus.verifiable) {
+          return { state: 'unverifiable', profile: null, corrupted: false, inMemory: Boolean(this.profiles?.has(profileId)) };
+        }
+        if (storeStatus.mode === 'sqlite') {
+          try {
+            let rawRow = null;
+            if (this.sqliteStore.db && typeof this.sqliteStore.db.prepare === 'function') {
+              rawRow = this.sqliteStore.db
+                .prepare('SELECT id, created_at, updated_at FROM profiles WHERE id = ?')
+                .get(String(profileId));
+            }
+            const decoded = this.sqliteStore.getProfile(profileId);
+            if (rawRow) {
+              return {
+                state: 'exists',
+                profile: decoded || {
+                  id: String(rawRow.id),
+                  createdAt: rawRow.created_at || null,
+                  updatedAt: rawRow.updated_at || null,
+                },
+                corrupted: !decoded,
+                inMemory: Boolean(this.profiles?.has(profileId)),
+              };
+            }
+            if (decoded) {
+              return { state: 'exists', profile: decoded, corrupted: false, inMemory: Boolean(this.profiles?.has(profileId)) };
+            }
+            return { state: 'absent', profile: null, corrupted: false, inMemory: false };
+          } catch (_) {
+            return { state: 'unverifiable', profile: null, corrupted: false, inMemory: Boolean(this.profiles?.has(profileId)) };
+          }
+        }
+        if (storeStatus.mode === 'json') {
+          const saved = storeStatus.savedMap.get(profileId);
+          if (saved) {
+            return { state: 'exists', profile: saved, corrupted: false, inMemory: Boolean(this.profiles?.has(profileId)) };
+          }
+          return { state: 'absent', profile: null, corrupted: false, inMemory: false };
+        }
+        return { state: 'unverifiable', profile: null, corrupted: false, inMemory: Boolean(this.profiles?.has(profileId)) };
+      };
+
+      const entries = await fsp.readdir(rootPath, { withFileTypes: true }).catch(() => []);
+      const durableCommittedBatches = await this._readCommittedDeleteBatches();
+
+      for (const entry of entries) {
+        if (!entry.name.startsWith('.ob-del-')) continue;
+        const batchDir = path.join(rootPath, entry.name);
+        const resolvedBatchDir = path.resolve(batchDir);
+        if (activeDirs.has(resolvedBatchDir)) continue;
+        const batchStat = await fsp.lstat(batchDir).catch(() => null);
+        if (!batchStat || batchStat.isSymbolicLink() || !batchStat.isDirectory()) continue;
+
+        const parsedInfo = await parseValidDeleteManifest(batchDir);
+        if (!parsedInfo) {
+          // Unknown or missing/invalid manifest: NEVER delete or modify user files.
+          continue;
+        }
+
+        const { manifest, allowedIds, committedAtMs } = parsedInfo;
+        // Conservative fail-closed PID check: wall-clock jumps must never bypass a live PID.
+        if (manifest.pid !== process.pid && isPidAlive(manifest.pid)) {
+          for (const id of allowedIds) unresolvedProfileIds.add(id);
+          continue;
+        }
+
+        const stagedEntries = await fsp.readdir(batchDir, { withFileTypes: true }).catch(() => null);
+        if (!stagedEntries) continue;
+
+        const validTargetEntries = [];
+        const tempManifestFiles = [];
+        let hasUnknownEntries = false;
+
+        for (const stagedEntry of stagedEntries) {
+          if (stagedEntry.name === '.manifest.json') continue;
+          if (stagedEntry.name.startsWith('.manifest.json.tmp-')) {
+            tempManifestFiles.push(path.join(batchDir, stagedEntry.name));
+            continue;
+          }
+          if (!allowedIds.has(stagedEntry.name)) {
+            // Unexpected entry not listed in manifest.ids -> never touch or delete.
+            hasUnknownEntries = true;
+            continue;
+          }
+          const stagedPath = path.join(batchDir, stagedEntry.name);
+          const stagedStat = await fsp.lstat(stagedPath).catch(() => null);
+          if (!stagedStat) continue;
+          if (stagedStat.isSymbolicLink() || !stagedStat.isDirectory()) {
+            hasUnknownEntries = true;
+            continue;
+          }
+          validTargetEntries.push({ id: stagedEntry.name, stagedPath });
+        }
+
+        const isDurablyCommitted = Boolean(
+          durableCommittedBatches && Object.prototype.hasOwnProperty.call(durableCommittedBatches, entry.name)
+        );
+        const effectiveState = (committedDirs.has(resolvedBatchDir) || isDurablyCommitted) ? 'committed' : manifest.state;
+        const effectiveCommittedAtMs = committedAtMs !== null
+          ? committedAtMs
+          : (Date.parse(String(durableCommittedBatches?.[entry.name]?.committedAt || '')) || null);
+        const storeStatus = await getStoreStatus();
+        let allReconciled = true;
+
+        for (const target of validTargetEntries) {
+          const profileId = target.id;
+          const stagedPath = target.stagedPath;
+          const lookup = lookupProfileState(profileId, storeStatus);
+
+          if (effectiveState === 'committed') {
+            if (!storeStatus.verifiable || lookup.state === 'unverifiable') {
+              // Post-commit state cannot be verified -> fail closed and preserve.
+              allReconciled = false;
+              failedRestoreIds.add(profileId);
+              unresolvedProfileIds.add(profileId);
+              continue;
+            }
+            if (lookup.state === 'exists') {
+              if (lookup.corrupted) {
+                // Corrupted DB row cannot confirm post-commit recreation -> fail closed and preserve.
+                allReconciled = false;
+                failedRestoreIds.add(profileId);
+                unresolvedProfileIds.add(profileId);
+                continue;
+              }
+              const liveRoot = path.resolve(this.profileRoot(profileId));
+              let liveStat = null;
+              let liveLstatError = false;
+              try {
+                liveStat = await fsp.lstat(liveRoot);
+              } catch (lstatErr) {
+                if (lstatErr?.code !== 'ENOENT') liveLstatError = true;
+              }
+              if (liveLstatError) {
+                // Non-ENOENT lstat failure (e.g. EACCES/EIO) -> fail closed and preserve.
+                allReconciled = false;
+                failedRestoreIds.add(profileId);
+                unresolvedProfileIds.add(profileId);
+                continue;
+              }
+              const liveValidDir = Boolean(liveStat && !liveStat.isSymbolicLink() && liveStat.isDirectory());
+              const recreatedAfterCommit = (() => {
+                const ts = Date.parse(String(lookup.profile?.createdAt || lookup.profile?.updatedAt || ''));
+                return Number.isFinite(ts) && effectiveCommittedAtMs !== null && ts >= effectiveCommittedAtMs;
+              })();
+              if (!liveValidDir && !recreatedAfterCommit) {
+                // Store still holds pre-commit profile without a valid live directory -> fail closed and preserve.
+                allReconciled = false;
+                failedRestoreIds.add(profileId);
+                unresolvedProfileIds.add(profileId);
+                continue;
+              }
+            }
+            try {
+              await rmWithRetry(stagedPath);
+            } catch (rmErr) {
+              allReconciled = false;
+              failedRestoreIds.add(profileId);
+              unresolvedProfileIds.add(profileId);
+              console.warn(`[BrowserEngine] Failed to clean committed staging entry ${stagedPath}: ${rmErr?.message || rmErr}`);
+            }
+            continue;
+          }
+
+          // effectiveState === 'staging'
+          if (lookup.state === 'exists') {
+            const restoreTarget = path.resolve(this.profileRoot(profileId));
+            const expectedTarget = path.resolve(path.join(rootPath, profileId));
+            const normTarget = process.platform === 'win32' ? restoreTarget.toLowerCase() : restoreTarget;
+            const normExpected = process.platform === 'win32' ? expectedTarget.toLowerCase() : expectedTarget;
+            if (normTarget !== normExpected) {
+              allReconciled = false;
+              failedRestoreIds.add(profileId);
+              unresolvedProfileIds.add(profileId);
+              continue;
+            }
+            const existingAtTarget = await fsp.lstat(restoreTarget).catch((err) => (err?.code === 'ENOENT' ? null : 'ERROR'));
+            if (existingAtTarget !== null) {
+              console.warn(`[BrowserEngine] Recovery conflict for ${profileId}: ${restoreTarget} already exists`);
+              allReconciled = false;
+              failedRestoreIds.add(profileId);
+              unresolvedProfileIds.add(profileId);
+              continue;
+            }
+            try {
+              await renameWithRetry(stagedPath, restoreTarget);
+            } catch (restoreErr) {
+              console.warn(`[BrowserEngine] Failed to restore staged profile ${profileId}: ${restoreErr?.message || restoreErr}`);
+              allReconciled = false;
+              failedRestoreIds.add(profileId);
+              unresolvedProfileIds.add(profileId);
+            }
+          } else if (lookup.state === 'absent') {
+            try {
+              await rmWithRetry(stagedPath);
+            } catch (rmErr) {
+              console.warn(`[BrowserEngine] Failed to clean orphaned staged profile ${profileId}: ${rmErr?.message || rmErr}`);
+              allReconciled = false;
+              failedRestoreIds.add(profileId);
+              unresolvedProfileIds.add(profileId);
+            }
+          } else {
+            // lookup.state === 'unverifiable' -> fail closed, preserve staged data, and block unsafe empty start.
+            allReconciled = false;
+            failedRestoreIds.add(profileId);
+            unresolvedProfileIds.add(profileId);
+          }
+        }
+
+        if (allReconciled && !hasUnknownEntries) {
+          for (const tmpFile of tempManifestFiles) {
+            await fsp.rm(tmpFile, { force: true }).catch(() => {});
+          }
+          await fsp.rm(path.join(batchDir, '.manifest.json'), { force: true }).catch(() => {});
+          try {
+            await rmdirWithRetry(batchDir);
+            committedDirs.delete(resolvedBatchDir);
+            if (isDurablyCommitted) {
+              await this._clearCommittedDeleteBatch(entry.name);
+            }
+          } catch (err) {
+            console.warn(`[BrowserEngine] Failed to remove reconciled staging dir ${batchDir}: ${err?.message || err}`);
+          }
         }
       }
-      // Commit in-memory deletion only after the profile directory is gone.
-      // Persist each successful item so a later batch failure cannot leave the
-      // durable profile list disagreeing with already-deleted directories.
-      const previousProfile = this.profiles.get(id);
-      const previousAssignments = this.assignments.get(id);
-      const previousNetwork = this.networkInfo.get(id);
-      const hadAssignments = this.assignments.has(id);
-      const hadNetwork = this.networkInfo.has(id);
-      this.profiles.delete(id);
-      this.assignments.delete(id);
-      this.networkInfo.delete(id);
-      if (this.usingSqlite && this.sqliteStore) {
-        this.sqliteStore.deleteProfiles([id]);
-      }
-      try {
-        await this.persist();
-      } catch (error) {
-        if (previousProfile) this.profiles.set(id, previousProfile);
-        if (hadAssignments) this.assignments.set(id, previousAssignments);
-        if (hadNetwork) this.networkInfo.set(id, previousNetwork);
-        throw error;
-      }
-      deleted.push(id);
+
+      return { failedRestoreIds, unresolvedProfileIds };
+    } finally {
+      await this._releaseCrossProcessDeleteLock(crossLock).catch(() => {});
+      this._activeDeleteRecoveryCount = Math.max(0, (this._activeDeleteRecoveryCount || 1) - 1);
     }
-    this.emit({ type: 'profiles', action: 'delete', ids: deleted }); this.emit({ type: 'extensions' });
-    return { success: true, deleted: deleted.length, stopped, dataDeleted: Boolean(deleteData), ids: deleted };
+  }
+
+  async deleteProfiles(ids, deleteData = true, options = {}) {
+    if (!Array.isArray(ids) || ids.length > 50000) throw new Error('Invalid profile selection');
+    const safeIds = [...new Set(ids.map(assertProfileId))];
+    const onlyIfTrashed = Boolean(options?.onlyIfTrashed);
+
+    const activeDirs = BrowserEngine._activeDeleteStagingDirs || (BrowserEngine._activeDeleteStagingDirs = new Set());
+    const committedDirs = BrowserEngine._committedDeleteStagingDirs || (BrowserEngine._committedDeleteStagingDirs = new Set());
+    const TRANSIENT_FS_CODES = new Set(['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY']);
+    const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const renameWithRetry = async (src, dst) => {
+      let lastError = null;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        try {
+          await fsp.rename(src, dst);
+          return;
+        } catch (error) {
+          lastError = error;
+          if (!error || !TRANSIENT_FS_CODES.has(error.code)) throw error;
+          await sleepMs(120 * (attempt + 1));
+        }
+      }
+      throw lastError;
+    };
+
+    const rmWithRetry = async (target) => {
+      let lastError = null;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        try {
+          await fsp.rm(target, { recursive: true, force: true });
+          return;
+        } catch (error) {
+          lastError = error;
+          if (!error || !TRANSIENT_FS_CODES.has(error.code)) throw error;
+          await sleepMs(120 * (attempt + 1));
+        }
+      }
+      throw lastError;
+    };
+
+    const rmdirWithRetry = async (target) => {
+      let lastError = null;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        try {
+          await fsp.rmdir(target);
+          return;
+        } catch (error) {
+          lastError = error;
+          if (!error || !TRANSIENT_FS_CODES.has(error.code)) throw error;
+          await sleepMs(120 * (attempt + 1));
+        }
+      }
+      throw lastError;
+    };
+
+    const cleanupEmptyStagingDir = async (dirPath) => {
+      const left = await fsp.readdir(dirPath).catch(() => null);
+      if (!left) return;
+      for (const name of left) {
+        if (name === '.manifest.json' || name.startsWith('.manifest.json.tmp-')) {
+          await fsp.rm(path.join(dirPath, name), { force: true }).catch(() => {});
+        }
+      }
+      await rmdirWithRetry(dirPath);
+    };
+
+    const validateDeleteTargetRoot = async (dataRoot, profileRoot, id) => {
+      const dataCheck = validateDataRootIsolationSecure(dataRoot);
+      if (!dataCheck.ok) return dataCheck;
+      const expected = path.resolve(path.join(dataRoot, id));
+      const resolved = path.resolve(profileRoot);
+      const normExpected = process.platform === 'win32' ? expected.toLowerCase() : expected;
+      const normResolved = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+      if (normResolved !== normExpected) {
+        return { ok: false, message: 'profile root must be {dataRoot}/{profileId}' };
+      }
+      const stat = await fsp.lstat(profileRoot).catch((err) => (err?.code === 'ENOENT' ? null : err));
+      if (stat instanceof Error) throw stat;
+      if (!stat) return { ok: true, exists: false, root: expected };
+      const fullCheck = await validateProfileRootSecure(dataRoot, profileRoot, id);
+      if (!fullCheck.ok) return fullCheck;
+      return { ok: true, exists: true, root: fullCheck.root };
+    };
+
+    const deletingMap = this._deletingProfileIds || (this._deletingProfileIds = new Map());
+    this._activeProfileDeleteCount = (this._activeProfileDeleteCount || 0) + 1;
+    for (const id of safeIds) {
+      deletingMap.set(id, (deletingMap.get(id) || 0) + 1);
+    }
+
+    const runDelete = async () => {
+      let stopped = 0;
+
+      const isProfileTrashedAuthoritative = (id) => {
+        if (this.usingSqlite && this.sqliteStore) {
+          if (!this.sqliteStore.isOpen) return false;
+          if (this.sqliteStore.db && typeof this.sqliteStore.db.prepare === 'function') {
+            try {
+              const row = this.sqliteStore.db.prepare('SELECT trashed FROM profiles WHERE id = ?').get(String(id));
+              return Boolean(row && Number(row.trashed) === 1);
+            } catch (_) {
+              return false;
+            }
+          }
+          try {
+            const stored = this.sqliteStore.getProfile(id);
+            return Boolean(stored?.trashed);
+          } catch (_) {
+            return false;
+          }
+        }
+        return Boolean(this.profiles.get(id)?.trashed);
+      };
+
+      const shouldStopTargetBeforeLock = async (id) => {
+        if (this.usingSqlite && this.sqliteStore) {
+          if (!this._hasProfileInStoreSync(id)) return false;
+          if (onlyIfTrashed && !isProfileTrashedAuthoritative(id)) return false;
+          return true;
+        }
+        if (onlyIfTrashed && this.stateFile && fs.existsSync(this.stateFile)) {
+          try {
+            const candidate = await readEngineStateCandidate(this.stateFile);
+            const saved = Array.isArray(candidate?.saved?.profiles)
+              ? candidate.saved.profiles.find((p) => String(p?.id || '') === String(id))
+              : null;
+            return Boolean(saved?.trashed);
+          } catch (_) {
+            return false;
+          }
+        }
+        if (!this.profiles.has(id)) return false;
+        if (onlyIfTrashed && !this.profiles.get(id)?.trashed) return false;
+        return true;
+      };
+
+      if (deleteData) {
+        const preStopDataRoot = this.profileDataRootPath;
+        for (const id of safeIds) {
+          if (!this.profiles.has(id) && !this._hasProfileInStoreSync(id)) continue;
+          const check = await validateDeleteTargetRoot(preStopDataRoot, path.join(preStopDataRoot, id), id);
+          if (!check.ok) throw new Error('Isolation error: ' + check.message);
+        }
+      }
+
+      let releaseStateLock = null;
+      let crossDeleteLock = null;
+      try {
+        for (let stopPass = 0; stopPass < 3; stopPass += 1) {
+          for (const id of safeIds) {
+            if (!(await shouldStopTargetBeforeLock(id))) continue;
+            if (this.running.has(id) || this.starting.has(id) || this.stopping.has(id)) {
+              await this.stop(id);
+              stopped += 1;
+            }
+          }
+          releaseStateLock = await this._acquireProfileStateLock();
+          const dataRootPreLock = this.profileDataRootPath;
+          crossDeleteLock = await this._acquireCrossProcessDeleteLock(dataRootPreLock, { createDir: true });
+          if (!this.usingSqlite) {
+            await this._reloadJsonStateInLock();
+          }
+          const activeTarget = safeIds.find((id) => {
+            if (this.usingSqlite && this.sqliteStore) {
+              if (!this._hasProfileInStoreSync(id)) return false;
+              if (onlyIfTrashed && !isProfileTrashedAuthoritative(id)) return false;
+            } else {
+              if (!this.profiles.has(id)) return false;
+              if (onlyIfTrashed && !this.profiles.get(id)?.trashed) return false;
+            }
+            return this.running.has(id) || this.starting.has(id) || this.stopping.has(id);
+          });
+          if (!activeTarget) break;
+          await this._releaseCrossProcessDeleteLock(crossDeleteLock).catch(() => {});
+          crossDeleteLock = null;
+          releaseStateLock();
+          releaseStateLock = null;
+          if (stopPass === 2) {
+            throw new Error(`Profile ${activeTarget} is still active and cannot be safely deleted`);
+          }
+        }
+
+        if (typeof this.flushPersistence === 'function') {
+          await this.flushPersistence().catch(() => {});
+        }
+
+        const dataRoot = this.profileDataRootPath;
+        if (!crossDeleteLock) {
+          crossDeleteLock = await this._acquireCrossProcessDeleteLock(dataRoot, { createDir: true });
+        }
+
+        await this._recoverDeleteStagingLeftoversImpl({ crossProcessLockHeld: true });
+
+        if (!this.usingSqlite) {
+          await this._reloadJsonStateInLock();
+        }
+
+        const targets = [];
+        for (const id of safeIds) {
+          if (this.usingSqlite && this.sqliteStore) {
+            if (!this.sqliteStore.isOpen) {
+              throw new Error('SQLite store is not open');
+            }
+            const existsInSqlite = this._hasProfileInStoreSync(id);
+            if (!existsInSqlite) {
+              // Stale in-memory profile (already deleted in another process, possibly with deleteData=false):
+              // evict stale cache only, never delete disk directory!
+              this.profiles.delete(id);
+              this.assignments.delete(id);
+              this.networkInfo.delete(id);
+              continue;
+            }
+            if (onlyIfTrashed && !isProfileTrashedAuthoritative(id)) continue;
+            targets.push({ id, profileRoot: deleteData ? path.join(dataRoot, id) : null });
+          } else {
+            if (!this.profiles.has(id)) continue;
+            if (onlyIfTrashed && !this.profiles.get(id)?.trashed) continue;
+            targets.push({ id, profileRoot: deleteData ? path.join(dataRoot, id) : null });
+          }
+        }
+
+        if (deleteData) {
+          for (const target of targets) {
+            const check = await validateDeleteTargetRoot(dataRoot, target.profileRoot, target.id);
+            if (!check.ok) throw new Error('Isolation error: ' + check.message);
+          }
+        }
+
+        const diskTargets = [];
+        if (deleteData) {
+          for (const target of targets) {
+            const check = await validateDeleteTargetRoot(dataRoot, target.profileRoot, target.id);
+            if (!check.ok) throw new Error('Isolation error: ' + check.message);
+            if (check.exists) {
+              diskTargets.push({ id: target.id, profileRoot: check.root });
+            }
+          }
+        }
+
+        let stagingDir = null;
+        let resolvedStagingDir = null;
+        let manifestPath = null;
+        const startedAt = new Date().toISOString();
+        const stagedItems = [];
+        const acquiredLocks = [];
+        let dbCommitted = false;
+
+        const rollbackStagingDirs = async () => {
+          if (!stagingDir) return [];
+          const rollbackErrors = [];
+          for (let i = stagedItems.length - 1; i >= 0; i -= 1) {
+            const item = stagedItems[i];
+            try {
+              const existingTarget = await fsp.lstat(item.profileRoot).catch((err) => (err?.code === 'ENOENT' ? null : 'ERROR'));
+              if (existingTarget !== null) {
+                rollbackErrors.push(new Error(`Restore target already exists for ${item.id}`));
+                continue;
+              }
+              await renameWithRetry(item.stagedPath, item.profileRoot);
+              const lockEntry = acquiredLocks.find((l) => l.id === item.id);
+              if (lockEntry) lockEntry.rolledBack = true;
+            } catch (restoreErr) {
+              rollbackErrors.push(restoreErr);
+            }
+          }
+          if (rollbackErrors.length === 0) {
+            await cleanupEmptyStagingDir(stagingDir).catch(() => {});
+          } else {
+            console.error(`[BrowserEngine] deleteProfiles rollback left ${rollbackErrors.length} item(s) in ${stagingDir}:`, rollbackErrors[0]?.message || rollbackErrors[0]);
+          }
+          return rollbackErrors;
+        };
+
+        try {
+          if (deleteData && diskTargets.length > 0) {
+            for (const target of diskTargets) {
+              const procScan = await isolation.scanProcessesUsingProfileAsync(target.profileRoot);
+              if (!procScan?.known) {
+                const err = new Error(`Cannot verify whether profile ${target.id} is in use`);
+                err.code = 'PROFILE_PROCESS_SCAN_FAILED';
+                throw err;
+              }
+              const alivePids = (procScan.pids || []).filter(isPidAlive);
+              if (alivePids.length > 0) {
+                const err = new Error(`Profile ${target.id} is still in use by running browser process (pid ${alivePids[0]})`);
+                err.code = 'PROFILE_LOCKED';
+                err.pids = alivePids;
+                throw err;
+              }
+              const profileLock = await acquireProfileLock(target.profileRoot, {
+                profileId: target.id,
+                operation: 'delete',
+              });
+              acquiredLocks.push({
+                id: target.id,
+                profileRoot: target.profileRoot,
+                stagedPath: null,
+                lock: profileLock,
+                moved: false,
+                rolledBack: false,
+                removed: false,
+              });
+            }
+
+            for (let attempt = 0; attempt < 4; attempt += 1) {
+              const batchId = `${process.pid.toString(36)}-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+              const candidateDir = path.join(dataRoot, `.ob-del-${batchId}`);
+              const resolvedCandidate = path.resolve(candidateDir);
+              activeDirs.add(resolvedCandidate);
+              try {
+                await fsp.mkdir(candidateDir, { mode: 0o700 });
+                stagingDir = candidateDir;
+                resolvedStagingDir = resolvedCandidate;
+                break;
+              } catch (mkdirErr) {
+                activeDirs.delete(resolvedCandidate);
+                if (mkdirErr?.code !== 'EEXIST' || attempt === 3) throw mkdirErr;
+              }
+            }
+
+            manifestPath = path.join(stagingDir, '.manifest.json');
+            try {
+              await writeRawAtomically(manifestPath, JSON.stringify({
+                kind: 'openbrowser-delete-staging',
+                version: 1,
+                pid: process.pid,
+                startedAt,
+                state: 'staging',
+                ids: diskTargets.map((item) => item.id),
+              }));
+            } catch (manifestInitErr) {
+              await cleanupEmptyStagingDir(stagingDir).catch(() => {});
+              throw manifestInitErr;
+            }
+
+            for (const target of diskTargets) {
+              const recheck = await validateProfileRootSecure(dataRoot, target.profileRoot, target.id);
+              if (!recheck.ok) {
+                const isoErr = new Error('Isolation error: ' + recheck.message);
+                const rollbackErrors = await rollbackStagingDirs();
+                if (rollbackErrors.length > 0) isoErr.rollbackErrors = rollbackErrors;
+                throw isoErr;
+              }
+              const stagedPath = path.join(stagingDir, target.id);
+              try {
+                await renameWithRetry(target.profileRoot, stagedPath);
+                stagedItems.push({ id: target.id, profileRoot: target.profileRoot, stagedPath });
+                const lockEntry = acquiredLocks.find((l) => l.id === target.id);
+                if (lockEntry) {
+                  lockEntry.stagedPath = stagedPath;
+                  lockEntry.moved = true;
+                }
+              } catch (stageErr) {
+                const rollbackErrors = await rollbackStagingDirs();
+                if (rollbackErrors.length > 0) stageErr.rollbackErrors = rollbackErrors;
+                throw stageErr;
+              }
+            }
+          }
+
+          const targetIds = targets.map((t) => t.id);
+          if (this.usingSqlite && this.sqliteStore && targetIds.length > 0) {
+            try {
+              const dbResult = this.sqliteStore.deleteProfiles(targetIds);
+              if (dbResult && typeof dbResult.then === 'function') {
+                await dbResult;
+              }
+            } catch (dbErr) {
+              const rollbackErrors = await rollbackStagingDirs();
+              if (rollbackErrors.length > 0) dbErr.rollbackErrors = rollbackErrors;
+              throw dbErr;
+            }
+            dbCommitted = true;
+            for (const id of targetIds) {
+              this.profiles.delete(id);
+              this.assignments.delete(id);
+              this.networkInfo.delete(id);
+            }
+          } else if (targetIds.length > 0) {
+            const removedFromMemory = [];
+            for (const id of targetIds) {
+              removedFromMemory.push({
+                id,
+                hadProfile: this.profiles.has(id),
+                previousProfile: this.profiles.get(id),
+                previousAssignments: this.assignments.get(id),
+                previousNetwork: this.networkInfo.get(id),
+                hadAssignments: this.assignments.has(id),
+                hadNetwork: this.networkInfo.has(id),
+              });
+              this.profiles.delete(id);
+              this.assignments.delete(id);
+              this.networkInfo.delete(id);
+            }
+            try {
+              await this.persist();
+              this._updateJsonRawHashSync();
+            } catch (persistErr) {
+              for (const item of removedFromMemory) {
+                if (item.hadProfile) this.profiles.set(item.id, item.previousProfile);
+                if (item.hadAssignments) this.assignments.set(item.id, item.previousAssignments);
+                if (item.hadNetwork) this.networkInfo.set(item.id, item.previousNetwork);
+              }
+              const rollbackErrors = await rollbackStagingDirs();
+              if (rollbackErrors.length > 0) persistErr.rollbackErrors = rollbackErrors;
+              throw persistErr;
+            }
+            dbCommitted = true;
+          }
+
+          let cleanupPending = false;
+          if (stagingDir) {
+            const committedAt = new Date().toISOString();
+            const batchName = path.basename(stagingDir);
+            let manifestWriteFailed = false;
+            if (resolvedStagingDir) committedDirs.add(resolvedStagingDir);
+            try {
+              await writeRawAtomically(manifestPath, JSON.stringify({
+                kind: 'openbrowser-delete-staging',
+                version: 1,
+                pid: process.pid,
+                startedAt,
+                committedAt,
+                state: 'committed',
+                ids: stagedItems.map((item) => item.id),
+              }));
+            } catch (manifestErr) {
+              manifestWriteFailed = true;
+              console.warn(`[BrowserEngine] Failed to mark staging manifest committed at ${manifestPath}: ${manifestErr?.message || manifestErr}`);
+              await this._markCommittedDeleteBatch(batchName, stagedItems.map((item) => item.id), committedAt);
+            }
+            for (const item of stagedItems) {
+              try {
+                await rmWithRetry(item.stagedPath);
+                const lockEntry = acquiredLocks.find((l) => l.id === item.id);
+                if (lockEntry) lockEntry.removed = true;
+              } catch (rmErr) {
+                cleanupPending = true;
+                console.warn(`[BrowserEngine] Deferred cleanup for deleted profile ${item.id} at ${item.stagedPath}: ${rmErr?.message || rmErr}`);
+              }
+            }
+            if (!cleanupPending) {
+              try {
+                await cleanupEmptyStagingDir(stagingDir);
+                if (resolvedStagingDir) committedDirs.delete(resolvedStagingDir);
+                if (manifestWriteFailed) {
+                  await this._clearCommittedDeleteBatch(batchName);
+                }
+              } catch (rmDirErr) {
+                cleanupPending = true;
+                console.warn(`[BrowserEngine] Deferred cleanup for staging dir ${stagingDir}: ${rmDirErr?.message || rmDirErr}`);
+              }
+            } else if (!manifestWriteFailed) {
+              // Manifest already durably records committed state; clear fallback if any
+              await this._clearCommittedDeleteBatch(batchName);
+            }
+          }
+
+          this.emit({ type: 'profiles', action: 'delete', ids: targetIds });
+          this.emit({ type: 'extensions' });
+          const result = {
+            success: true,
+            deleted: targetIds.length,
+            stopped,
+            dataDeleted: Boolean(deleteData),
+            ids: targetIds,
+          };
+          if (cleanupPending) {
+            result.cleanupPending = true;
+          }
+          return result;
+        } finally {
+          const releaseStagedProfileLockSafely = async (targetDir, lock) => {
+            if (!targetDir || !lock?.token) return false;
+            const dirStat = await fsp.lstat(targetDir).catch(() => null);
+            if (!dirStat || dirStat.isSymbolicLink() || !dirStat.isDirectory()) return false;
+            const file = lockPath(targetDir);
+            const fileStat = await fsp.lstat(file).catch(() => null);
+            if (!fileStat || fileStat.isSymbolicLink() || !fileStat.isFile()) return false;
+            let existing;
+            try {
+              existing = JSON.parse(await fsp.readFile(file, 'utf8'));
+            } catch (_) {
+              return false;
+            }
+            const norm = (v) => (process.platform === 'win32'
+              ? path.resolve(String(v || '')).toLowerCase()
+              : path.resolve(String(v || '')));
+            if (!existing || existing.pid !== lock.pid || existing.token !== lock.token) return false;
+            if (existing.profileRoot != null && norm(existing.profileRoot) !== norm(lock.profileRoot)) return false;
+            await fsp.rm(file, { force: true }).catch(() => {});
+            return !fs.existsSync(file);
+          };
+
+          for (const lockEntry of acquiredLocks) {
+            if (lockEntry.removed) continue;
+            if (lockEntry.moved && !lockEntry.rolledBack) {
+              await releaseStagedProfileLockSafely(lockEntry.stagedPath, lockEntry.lock).catch(() => {});
+            } else {
+              await releaseProfileLock(lockEntry.profileRoot, lockEntry.lock).catch(() => {});
+            }
+          }
+          if (resolvedStagingDir) {
+            activeDirs.delete(resolvedStagingDir);
+          }
+        }
+      } finally {
+        await this._releaseCrossProcessDeleteLock(crossDeleteLock).catch(() => {});
+        if (releaseStateLock) releaseStateLock();
+      }
+    };
+
+    const prev = this._deleteProfilesQueue || Promise.resolve();
+    const queued = prev.then(runDelete, runDelete).finally(() => {
+      for (const id of safeIds) {
+        const count = deletingMap.get(id) || 0;
+        if (count <= 1) deletingMap.delete(id);
+        else deletingMap.set(id, count - 1);
+      }
+      this._activeProfileDeleteCount = Math.max(0, (this._activeProfileDeleteCount || 1) - 1);
+    });
+    this._deleteProfilesQueue = queued.catch(() => {});
+    return queued;
+  }
+
+  getProfileCounts() {
+    if (this.usingSqlite && this.sqliteStore) {
+      return this.sqliteStore.getProfileCounts();
+    }
+    let total = 0;
+    let active = 0;
+    let trashed = 0;
+    let ungrouped = 0;
+    const byGroup = {};
+    for (const p of this.profiles.values()) {
+      total += 1;
+      if (p.trashed) {
+        trashed += 1;
+      } else {
+        active += 1;
+        const gid = p.groupId;
+        if (!gid || gid === '') {
+          ungrouped += 1;
+        } else {
+          byGroup[gid] = (byGroup[gid] || 0) + 1;
+        }
+      }
+    }
+    return { total, active, trashed, ungrouped, byGroup };
+  }
+
+  getNextProfileNumber() {
+    if (this.usingSqlite && this.sqliteStore) {
+      return this.sqliteStore.getNextProfileNumber();
+    }
+    let max = 0;
+    for (const p of this.profiles.values()) {
+      const num = Number.isInteger(p.number) ? p.number : Number(p.number);
+      if (Number.isFinite(num) && num > max) max = num;
+    }
+    return max + 1;
   }
 
   status() { return [...this.profiles.values()].map((profile) => ({ ...profile, ...this.publicRunning(profile.id), network: this.networkInfo.get(profile.id) || null, assignedExtensions: [...(this.assignments.get(profile.id) || [])] })); }
@@ -5067,6 +7302,7 @@ class BrowserEngine {
       return {
         ...result,
         rows,
+        counts: result.counts || this.getProfileCounts(),
       };
     }
 
@@ -5076,6 +7312,8 @@ class BrowserEngine {
     const filtered = all.filter((p) => {
       if (typeof filters.trashed === 'boolean') {
         if (Boolean(p.trashed) !== filters.trashed) return false;
+      } else if (typeof filters.trashed === 'number') {
+        if (Boolean(p.trashed) !== Boolean(filters.trashed)) return false;
       } else if (filters.activeGroupFilter === 'trash') {
         if (!p.trashed) return false;
       } else if (filters.trashed !== 'all' && !filters.includeTrashed) {
@@ -5083,16 +7321,26 @@ class BrowserEngine {
       }
 
       const targetGroup = filters.groupId !== undefined ? filters.groupId : filters.activeGroupFilter;
-      if (targetGroup === 'ungrouped') {
-        if (p.groupId) return false;
+      if (targetGroup === 'ungrouped' || targetGroup === '') {
+        if (p.groupId && p.groupId !== '') return false;
       } else if (targetGroup && targetGroup !== 'all' && targetGroup !== 'trash') {
         if (String(p.groupId) !== String(targetGroup)) return false;
       }
 
+      if (filters.id && String(p.id) !== String(filters.id)) {
+        return false;
+      }
+
       const term = String(filters.name || filters.query || filters.search || '').trim().toLowerCase();
       if (term) {
-        const name = String(p.name || p.id).toLowerCase();
-        if (!name.includes(term)) return false;
+        const idStr = String(p.id || '').toLowerCase();
+        const nameStr = String(p.name || '').toLowerCase();
+        const titleStr = String(p.title || '').toLowerCase();
+        const tagStr = String(p.tag || (Array.isArray(p.tags) ? p.tags.join(' ') : '') || '').toLowerCase();
+        const proxyStr = String(p.proxy || '').toLowerCase();
+        if (!idStr.includes(term) && !nameStr.includes(term) && !titleStr.includes(term) && !tagStr.includes(term) && !proxyStr.includes(term)) {
+          return false;
+        }
       }
       return true;
     });
@@ -5116,6 +7364,9 @@ class BrowserEngine {
       if (sortCol === 'createdat' || sortCol === 'created_at') {
         return dirMult * String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
       }
+      if (sortCol === 'updatedat' || sortCol === 'updated_at') {
+        return dirMult * String(a.updatedAt || '').localeCompare(String(b.updatedAt || ''));
+      }
       const numA = a.number != null ? Number(a.number) : 0;
       const numB = b.number != null ? Number(b.number) : 0;
       return dirMult * (numA - numB);
@@ -5126,34 +7377,42 @@ class BrowserEngine {
     const total = filtered.length;
     const offset = (page - 1) * pageSize;
     const sliced = filtered.slice(offset, offset + pageSize);
-    const rows = sliced.map((profile) => ({
-      id: profile.id,
-      number: profile.number,
-      name: profile.name,
-      title: profile.title || '',
-      groupId: profile.groupId || null,
-      browser: profile.browser || 'Google Chrome',
-      proxy: profile.proxy || 'direct',
-      proxyId: profile.proxyId || null,
-      networkMode: profile.networkMode || 'direct',
-      tag: profile.tag || '',
-      tags: Array.isArray(profile.tags) ? profile.tags : (profile.tag ? [profile.tag] : []),
-      notes: profile.notes || '',
-      exitIp: profile.exitIp || null,
-      exitCountryCode: profile.exitCountryCode || null,
-      exitCheckedAt: profile.exitCheckedAt || null,
-      platform: profile.platform ? { type: profile.platform.type, startUrl: profile.platform.startUrl } : undefined,
-      os: profile.os,
-      trashed: Boolean(profile.trashed),
-      trashedAt: profile.trashedAt || null,
-      createdAt: profile.createdAt || null,
-      updatedAt: profile.updatedAt || null,
-      ...this.publicRunning(profile.id),
-      network: this.networkInfo.get(profile.id) || null,
-      assignedExtensions: [...(this.assignments.get(profile.id) || [])],
-    }));
+    const rows = sliced.map((profile) => {
+      const noteVal = profile.note ?? profile.notes ?? '';
+      return {
+        id: profile.id,
+        number: profile.number != null ? Number(profile.number) : null,
+        name: profile.name,
+        title: profile.title || '',
+        groupId: profile.groupId || null,
+        browser: profile.browser || 'Google Chrome',
+        proxy: profile.proxy || 'direct',
+        proxyId: profile.proxyId || null,
+        networkMode: profile.networkMode || 'direct',
+        corrupted: false,
+        tag: profile.tag || '',
+        tags: Array.isArray(profile.tags) ? profile.tags : (profile.tag ? [profile.tag] : []),
+        note: noteVal,
+        notes: profile.notes ?? noteVal,
+        allowFailedProxy: Boolean(profile.allowFailedProxy),
+        exitIp: profile.exitIp || null,
+        exitCountryCode: profile.exitCountryCode || null,
+        exitCheckedAt: profile.exitCheckedAt || null,
+        platform: profile.platform ? { type: profile.platform.type, startUrl: profile.platform.startUrl } : undefined,
+        os: profile.os,
+        running: this.running.has(profile.id),
+        trashed: Boolean(profile.trashed),
+        trashedAt: profile.trashedAt || null,
+        createdAt: profile.createdAt || null,
+        updatedAt: profile.updatedAt || null,
+        _isSummaryProjection: true,
+        ...this.publicRunning(profile.id),
+        network: this.networkInfo.get(profile.id) || null,
+        assignedExtensions: [...(this.assignments.get(profile.id) || [])],
+      };
+    });
 
-    return { total, page, pageSize, rows };
+    return { total, page, pageSize, rows, counts: this.getProfileCounts() };
   }
 
   async resolveProfileProxyConfig(profile, { allowExtract = true } = {}) {
@@ -5306,11 +7565,20 @@ class BrowserEngine {
       this.resolveStoredProxyProfile(this.sanitizeProfile(raw)),
       raw,
     );
+    const existedAtEntry = (this.usingSqlite && this.sqliteStore)
+      ? this._hasProfileInStoreSync(profile.id)
+      : Boolean(this.stateFile && fs.existsSync(this.stateFile) && this.profiles?.has(profile.id));
     const network = await this.testProxy(profile, options);
     const applied = this.applyNetworkToProfile(profile, network, { persist: false });
     // A successful manual check may be followed immediately by app shutdown. Do not
     // acknowledge it until the durable engine state contains the new exit details.
-    if (options.persist) await this.persist();
+    if (options.persist) {
+      if (typeof this._persistSingleProfileSafe === 'function') {
+        await this._persistSingleProfileSafe(applied.profile, { onlyIfExisting: existedAtEntry });
+      } else {
+        await this.persist();
+      }
+    }
     return {
       ...network,
       appliedFingerprint: applied.patch,
@@ -5585,11 +7853,17 @@ class BrowserEngine {
       err.code = 'PROFILE_NOT_RUNNING';
       throw err;
     }
+    if (item.stoppingCookieRobot) {
+      await item.stoppingCookieRobot;
+    }
     if (item.cookieRobot && item.cookieRobot.isRunning()) {
       const err = new Error(`CookieRobot is already running for environment ${safeId}`);
       err.code = 'ROBOT_ALREADY_RUNNING';
       throw err;
     }
+
+    const safeConfig = { ...(config || {}) };
+    delete safeConfig.recordFile;
 
     const robot = new CookieRobot({
       port: item.port,
@@ -5597,12 +7871,9 @@ class BrowserEngine {
       profileId: safeId,
       profile: item.profile,
       root: item.root,
-      config,
+      config: safeConfig,
       emit: (evt) => {
         this.emit(evt);
-        if (evt.type && evt.type.startsWith('robot-')) {
-          this.emit({ ...evt, type: 'cookie-' + evt.type });
-        }
       },
     });
 
@@ -5611,12 +7882,6 @@ class BrowserEngine {
     robot.start().catch((err) => {
       this.emit({
         type: 'robot-failed',
-        id: safeId,
-        profileId: safeId,
-        error: err.message,
-      });
-      this.emit({
-        type: 'cookie-robot-failed',
         id: safeId,
         profileId: safeId,
         error: err.message,
@@ -5636,11 +7901,23 @@ class BrowserEngine {
   async stopCookieRobot(profileId) {
     const safeId = String(profileId || '').trim();
     const item = this.running.get(safeId);
+    if (item?.stoppingCookieRobot) {
+      await item.stoppingCookieRobot;
+      return { success: true, stopped: true, profileId: safeId };
+    }
     if (!item?.cookieRobot) {
       return { success: false, message: 'CookieRobot is not running for this profile' };
     }
-    await item.cookieRobot.stop();
-    item.cookieRobot = null;
+    const stoppingPromise = (async () => {
+      try {
+        await item.cookieRobot.stop();
+      } finally {
+        item.cookieRobot = null;
+        item.stoppingCookieRobot = null;
+      }
+    })();
+    item.stoppingCookieRobot = stoppingPromise;
+    await stoppingPromise;
     return { success: true, stopped: true, profileId: safeId };
   }
   getCookieRobotRecords(profileId) {
@@ -5649,13 +7926,33 @@ class BrowserEngine {
     if (item?.cookieRobot) {
       return item.cookieRobot.getRecords();
     }
-    const profile = this.profiles.get(safeId);
+    const profile = this.getProfile(safeId) || this.profiles.get(safeId);
     const root = item?.root || (profile ? path.join(this.profileDataRootPath, safeId) : null);
     if (root) {
       const recordFile = path.join(root, 'cookie-robot-history.jsonl');
       if (fs.existsSync(recordFile)) {
         try {
-          return fs.readFileSync(recordFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+          const stat = fs.statSync(recordFile);
+          let content = '';
+          const maxBytes = 1024 * 1024; // 1MB
+          if (stat.size > maxBytes) {
+            const fd = fs.openSync(recordFile, 'r');
+            const buffer = Buffer.alloc(maxBytes);
+            fs.readSync(fd, buffer, 0, maxBytes, stat.size - maxBytes);
+            fs.closeSync(fd);
+            content = buffer.toString('utf8');
+            const firstNewline = content.indexOf('\n');
+            if (firstNewline !== -1) {
+              content = content.slice(firstNewline + 1);
+            }
+          } else {
+            content = fs.readFileSync(recordFile, 'utf8');
+          }
+          const lines = content.trim().split('\n').filter(Boolean);
+          const records = lines.slice(-2000).map((l) => {
+            try { return JSON.parse(l); } catch (_) { return null; }
+          }).filter(Boolean);
+          return records;
         } catch (_) {}
       }
     }
@@ -5715,10 +8012,28 @@ class BrowserEngine {
     }
 
     let isPassword = Boolean(options.sensitive);
+    let domCleared = false;
     if (selector) {
       const focusResult = await cdp.call(targetTab.webSocketDebuggerUrl, 'Runtime.evaluate', {
         expression: `(() => {
-          const el = document.querySelector(${JSON.stringify(selector)});
+          function querySelectorDeep(sel, root = document) {
+            try {
+              const el = root.querySelector(sel);
+              if (el) return el;
+            } catch (e) {
+              throw e;
+            }
+            const treeWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
+            while (treeWalker.nextNode()) {
+              const node = treeWalker.currentNode;
+              if (node.shadowRoot) {
+                const found = querySelectorDeep(sel, node.shadowRoot);
+                if (found) return found;
+              }
+            }
+            return null;
+          }
+          const el = querySelectorDeep(${JSON.stringify(selector)});
           if (!el) return { found: false };
           el.focus();
           if (${clear}) {
@@ -5739,10 +8054,15 @@ class BrowserEngine {
             tag: String(el.tagName || '').toLowerCase(),
             type: String(el.getAttribute('type') || '').toLowerCase(),
             isPassword: el.type === 'password',
+            cleared: ${clear},
           };
         })()`,
         returnByValue: true,
       });
+      if (focusResult?.exceptionDetails) {
+        const desc = focusResult.exceptionDetails.exception?.description || focusResult.exceptionDetails.text || 'Invalid selector';
+        throw new Error(`Invalid selector: ${selector} (${desc})`);
+      }
       const elInfo = focusResult?.result?.value;
       if (!elInfo || !elInfo.found) {
         if (!options.optional) {
@@ -5751,8 +8071,7 @@ class BrowserEngine {
         return { success: false, skipped: true, reason: 'selector not found' };
       }
       if (elInfo.isPassword) isPassword = true;
-    } else if (clear) {
-      await cdp.clearFocused(item.port).catch(() => {});
+      if (elInfo.cleared) domCleared = true;
     }
 
     const profile = this.profiles?.get(id) || item.profile;
@@ -5762,7 +8081,8 @@ class BrowserEngine {
       ...options,
       speed,
       sensitive: isPassword,
-      clear,
+      clear: domCleared ? false : clear,
+      signal: options.signal,
     };
 
     const stats = await dispatchHumanTyping(cdp, targetTab.webSocketDebuggerUrl, text, mergedOptions);

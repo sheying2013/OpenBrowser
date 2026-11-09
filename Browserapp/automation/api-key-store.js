@@ -47,9 +47,12 @@ class ApiKeyStore {
     }
 
     // 1. Try reading key file (encrypted or legacy plaintext)
+    let encryptedKeyExists = false;
     try {
       const raw = await fsp.readFile(this.filePath);
       const isEnc = credentialCrypto.isEncrypted(raw);
+      encryptedKeyExists = isEnc;
+      const format = isEnc ? credentialCrypto.getFormat(raw) : 'plaintext';
       let parsed = null;
       if (isEnc) {
         const decrypted = credentialCrypto.decryptCredential(raw);
@@ -61,11 +64,15 @@ class ApiKeyStore {
       if (cleanSaved && !isApiKeyPlaceholder(cleanSaved)) {
         this.apiKey = cleanSaved;
         if (!isEnc && this.shouldEncrypt()) {
-          // One-time migration: backup plaintext file before rewriting encrypted
+          // Replace the plaintext file only after the encrypted payload is ready.
           try {
-            await fsp.writeFile(this.filePath + '.bak', raw);
             await this.save();
             await fsp.rm(this.txtPath, { force: true }).catch(() => {});
+          } catch (_) {}
+        } else if (isEnc && format === credentialCrypto.MAGIC_SAFESTORAGE_V1 && this.shouldEncrypt()) {
+          // Auto-migrate legacy OBS1 (Electron safeStorage) to cross-process OBE1 (AES-GCM)
+          try {
+            await this.save();
           } catch (_) {}
         } else if (!this.shouldEncrypt()) {
           try {
@@ -74,7 +81,12 @@ class ApiKeyStore {
         }
         return this.apiKey;
       }
-    } catch (_) {}
+    } catch (error) {
+      if (encryptedKeyExists) {
+        throw new Error(`无法读取已加密的 API 密钥，已保留原文件: ${error.message}`, { cause: error });
+      }
+    }
+    if (encryptedKeyExists) throw new Error('已加密的 API 密钥无效，已保留原文件');
 
     // 2. Try local-api-key.txt fallback before minting new key
     try {
@@ -113,15 +125,13 @@ class ApiKeyStore {
 
     if (shouldEncrypt) {
       const serialized = JSON.stringify({ version: 2, apiKey: this.apiKey }, null, 2);
-      const payload = credentialCrypto.encryptCredential(serialized);
+      const payload = credentialCrypto.encryptCredential(serialized, { mode: 'aes-gcm', format: credentialCrypto.MAGIC_AES_GCM_V1 || 'OBE1' });
       await fsp.writeFile(temporaryJson, payload, { mode: 0o600 });
-      await fsp.rm(this.filePath, { force: true });
       await fsp.rename(temporaryJson, this.filePath);
       // Clean up plaintext txt file to prevent credential leakage
       await fsp.rm(this.txtPath, { force: true }).catch(() => {});
     } else {
       await fsp.writeFile(temporaryJson, JSON.stringify({ version: 1, apiKey: this.apiKey }, null, 2), { mode: 0o600 });
-      await fsp.rm(this.filePath, { force: true });
       await fsp.rename(temporaryJson, this.filePath);
 
       try {

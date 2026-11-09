@@ -19,18 +19,18 @@ const http = require('http');
 const { resolveApiKey, apiKeyFileCandidates } = require('./api-key');
 const { readDiscoveryPort } = require('./local-api-server');
 
-function resolveMcpPort() {
+function resolveMcpPort(userDataPath = '') {
   const envVal = process.env.OPENBROWSER_API_PORT !== undefined && String(process.env.OPENBROWSER_API_PORT).trim() !== ''
     ? process.env.OPENBROWSER_API_PORT
     : process.env.PORT;
   if (envVal !== undefined && String(envVal).trim() !== '') {
     const parsed = Number(envVal);
-    if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535) {
+    if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) {
       return parsed;
     }
   }
-  const discovered = readDiscoveryPort();
-  if (Number.isInteger(discovered) && discovered > 0 && discovered <= 65535) {
+  const discovered = readDiscoveryPort(userDataPath || process.env.OPENBROWSER_USER_DATA || '');
+  if (Number.isInteger(discovered) && discovered >= 1 && discovered <= 65535) {
     return discovered;
   }
   return null;
@@ -163,7 +163,7 @@ function withInputAliases(schema) {
 function request(method, path, body, options = {}) {
   const payload = body === undefined ? null : JSON.stringify(body);
   const currentKey = getApiKey(Boolean(options._retried), Boolean(options._retried));
-  const currentPort = getApiPort(Boolean(options._retried));
+  const currentPort = getApiPort(Boolean(options._retriedConnect));
   PORT = currentPort;
   const timeoutMs = options.timeout || 60000;
   return new Promise((resolve, reject) => {
@@ -206,7 +206,17 @@ function request(method, path, body, options = {}) {
         resolve(parsed);
       });
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      if ((err?.code === 'ECONNREFUSED' || err?.code === 'ECONNRESET') && !options._retriedConnect) {
+        cachedPort = null;
+        try {
+          const reloadedPort = getApiPort(true);
+          PORT = reloadedPort;
+          return request(method, path, body, { ...options, _retriedConnect: true }).then(resolve, reject);
+        } catch (_) {}
+      }
+      reject(err);
+    });
     req.on('timeout', () => req.destroy(new Error('Local API timeout')));
     if (payload) req.write(payload);
     req.end();

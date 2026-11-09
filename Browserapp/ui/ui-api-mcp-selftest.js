@@ -136,8 +136,8 @@ const REQUESTED_PORT = 48523;
   // ---- default port, no fallback ----
   {
     const { window, elements } = buildSandbox(
-      { host: '127.0.0.1', port: REQUESTED_PORT, requestedPort: REQUESTED_PORT, portFallback: null, url: `http://127.0.0.1:${REQUESTED_PORT}/`, apiKeyRequired: true },
-      { mcpScript: '/app/automation/mcp-server.js', apiKey: 'k-123', apiKeyFile: '/app/local-api-key.txt', port: REQUESTED_PORT },
+      { host: '127.0.0.1', port: REQUESTED_PORT, requestedPort: REQUESTED_PORT, isFixedPort: true, portFallback: null, url: `http://127.0.0.1:${REQUESTED_PORT}/`, apiKeyRequired: true },
+      { mcpScript: '/app/automation/mcp-server.js', apiKey: 'k-123', apiKeyFile: '/app/local-api-key.txt', port: REQUESTED_PORT, isFixedPort: true },
     );
     await window.refreshApiMcpPage();
     case_('config uses the default port when nothing moved', () => {
@@ -152,8 +152,8 @@ const REQUESTED_PORT = 48523;
   // ---- preferred port busy: the API moved ----
   {
     const { window, elements } = buildSandbox(
-      { host: '127.0.0.1', port: LIVE_PORT, requestedPort: REQUESTED_PORT, portFallback: { requested: REQUESTED_PORT, port: LIVE_PORT, reason: 'in-use' }, url: `http://127.0.0.1:${LIVE_PORT}/`, apiKeyRequired: true },
-      { mcpScript: '/app/automation/mcp-server.js', apiKey: 'k-123', apiKeyFile: '/app/local-api-key.txt', port: LIVE_PORT },
+      { host: '127.0.0.1', port: LIVE_PORT, requestedPort: REQUESTED_PORT, isFixedPort: true, portFallback: { requested: REQUESTED_PORT, port: LIVE_PORT, reason: 'in-use' }, url: `http://127.0.0.1:${LIVE_PORT}/`, apiKeyRequired: true },
+      { mcpScript: '/app/automation/mcp-server.js', apiKey: 'k-123', apiKeyFile: '/app/local-api-key.txt', port: LIVE_PORT, isFixedPort: true },
     );
     await window.refreshApiMcpPage();
     case_('panel shows the live port, not the requested one', () => {
@@ -190,13 +190,29 @@ const REQUESTED_PORT = 48523;
   // ---- platform tab regenerates from the stored config ----
   {
     const { window, elements } = buildSandbox(
-      { host: '127.0.0.1', port: LIVE_PORT, requestedPort: REQUESTED_PORT, portFallback: { requested: REQUESTED_PORT, port: LIVE_PORT, reason: 'in-use' }, url: `http://127.0.0.1:${LIVE_PORT}/`, apiKeyRequired: true },
-      { mcpScript: '/app/automation/mcp-server.js', apiKey: 'k-123', apiKeyFile: '/app/local-api-key.txt', port: LIVE_PORT },
+      { host: '127.0.0.1', port: LIVE_PORT, requestedPort: REQUESTED_PORT, isFixedPort: true, portFallback: { requested: REQUESTED_PORT, port: LIVE_PORT, reason: 'in-use' }, url: `http://127.0.0.1:${LIVE_PORT}/`, apiKeyRequired: true },
+      { mcpScript: '/app/automation/mcp-server.js', apiKey: 'k-123', apiKeyFile: '/app/local-api-key.txt', port: LIVE_PORT, isFixedPort: true },
     );
     await window.refreshApiMcpPage();
     case_('both config variants carry the live port', () => {
       assert.strictEqual(window.__mcpConfigCommon.mcpServers['openbrowser-local-api'].env.OPENBROWSER_API_PORT, String(LIVE_PORT));
       assert.strictEqual(window.__mcpConfigPlatform.mcpServers['openbrowser-local-api'].env.OPENBROWSER_API_PORT, String(LIVE_PORT));
+    });
+  }
+
+  // ---- dynamic random port without fixed port ----
+  {
+    const { window, elements } = buildSandbox(
+      { host: '127.0.0.1', port: LIVE_PORT, requestedPort: LIVE_PORT, isFixedPort: false, portFallback: null, url: `http://127.0.0.1:${LIVE_PORT}/`, apiKeyRequired: true },
+      { mcpScript: '/app/automation/mcp-server.js', apiKey: 'k-123', apiKeyFile: '/app/local-api-key.txt', port: LIVE_PORT, isFixedPort: false, userDataPath: '/app/userData' },
+    );
+    await window.refreshApiMcpPage();
+    case_('dynamic port mode omits hardcoded port from MCP config env', () => {
+      const cfg = JSON.parse(elements.get('mcp-config-json').textContent);
+      const env = cfg.mcpServers['openbrowser-local-api'].env;
+      assert.strictEqual(env.OPENBROWSER_API_PORT, undefined);
+      assert.strictEqual(env.PORT, undefined);
+      assert.strictEqual(env.OPENBROWSER_USER_DATA, '/app/userData');
     });
   }
 

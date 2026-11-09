@@ -616,9 +616,13 @@ async function dispatchHumanTyping(cdp, wsUrl, text, options = {}) {
   });
 
   if (options.clear) {
+    const isMac = options.platform === 'darwin'
+      || (options.os && /mac|darwin/i.test(options.os))
+      || (options.platform === undefined && process.platform === 'darwin');
+    const selectAllModifier = isMac ? 4 : 2;
     try {
-      await cdp.call(wsUrl, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', windowsVirtualKeyCode: 65, modifiers: 2 });
-      await cdp.call(wsUrl, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 65, modifiers: 2 });
+      await cdp.call(wsUrl, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', windowsVirtualKeyCode: 65, key: 'a', code: 'KeyA', modifiers: selectAllModifier });
+      await cdp.call(wsUrl, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 65, key: 'a', code: 'KeyA', modifiers: selectAllModifier });
       await driver.pressKey('Backspace', { delay: 35 });
     } catch (_) {
       for (let i = 0; i < 20; i += 1) {

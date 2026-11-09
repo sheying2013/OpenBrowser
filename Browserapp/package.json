@@ -15,6 +15,7 @@
     "selftest:trustedinpute2e": "node automation/trusted-input-e2e-selftest.js",
     "selftest:statestorage": "node automation/state-storage-selftest.js",
     "selftest:sqlitestore": "node automation/sqlite-store-selftest.js",
+    "selftest:largefleet": "node automation/engine-large-fleet-selftest.js",
     "selftest:profilepage": "node automation/profile-pagination-selftest.js",
     "selftest:prefconsistency": "node automation/profile-file-consistency-selftest.js",
     "selftest:profileui": "node automation/profile-ui-layout-selftest.js",

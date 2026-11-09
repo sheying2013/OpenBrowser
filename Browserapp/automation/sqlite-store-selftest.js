@@ -122,6 +122,25 @@ async function main() {
     fs.rmSync(tempDir1, { recursive: true, force: true });
   }
 
+  // An existing database must not be replaced by stale JSON on initialization failure.
+  const damagedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob-damaged-db-test-'));
+  try {
+    const dbPath = path.join(damagedDir, 'openbrowser-data.db');
+    const bytes = Buffer.from('not-a-sqlite-database');
+    fs.writeFileSync(dbPath, bytes);
+    fs.writeFileSync(path.join(damagedDir, 'openbrowser-engine.json'), JSON.stringify({ profiles: [] }));
+    const engine = new BrowserEngine({ getPath: () => damagedDir }, {
+      profileDataRoot: path.join(damagedDir, 'profiles-data'),
+      auditLogs: false,
+    });
+    await assert.rejects(() => engine.init(null), /SQLite 数据库初始化失败/);
+    assert.deepEqual(fs.readFileSync(dbPath), bytes, 'damaged database must remain intact');
+    assert.equal(engine.usingSqlite, false);
+    console.log('  PASS  Existing damaged database stops initialization without falling back to stale JSON');
+  } finally {
+    fs.rmSync(damagedDir, { recursive: true, force: true });
+  }
+
   // ==========================================
   // Test 2: Crash Simulation / Power Loss (kill -9)
   // ==========================================

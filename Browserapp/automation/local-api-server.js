@@ -66,6 +66,7 @@ async function writeAutomationInfo(userDataPath, info = {}) {
     host: info.host || '127.0.0.1',
     url: info.url || `http://${info.host || '127.0.0.1'}:${info.port}/`,
     apiKeyRequired: info.apiKeyRequired !== false,
+    isFixedPort: Boolean(info.isFixedPort),
   };
   await fsp.mkdir(userDataPath, { recursive: true });
   await fsp.writeFile(tempPath, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 });
@@ -87,6 +88,7 @@ function writeAutomationInfoSync(userDataPath, info = {}) {
     host: info.host || '127.0.0.1',
     url: info.url || `http://${info.host || '127.0.0.1'}:${info.port}/`,
     apiKeyRequired: info.apiKeyRequired !== false,
+    isFixedPort: Boolean(info.isFixedPort),
   };
   fs.mkdirSync(userDataPath, { recursive: true });
   fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 });
@@ -98,26 +100,26 @@ function defaultUserDataPaths() {
   const paths = [];
   const home = os.homedir();
   if (process.platform === 'darwin') {
-    paths.push(path.join(home, 'Library', 'Application Support', 'OpenBrowser'));
     paths.push(path.join(home, 'Library', 'Application Support', 'openbrowser'));
+    paths.push(path.join(home, 'Library', 'Application Support', 'OpenBrowser'));
     paths.push(path.join(home, 'Library', 'Application Support', 'Electron'));
   } else if (process.platform === 'win32') {
     if (process.env.APPDATA) {
-      paths.push(path.join(process.env.APPDATA, 'OpenBrowser'));
       paths.push(path.join(process.env.APPDATA, 'openbrowser'));
+      paths.push(path.join(process.env.APPDATA, 'OpenBrowser'));
       paths.push(path.join(process.env.APPDATA, 'Electron'));
     }
-    paths.push(path.join(home, 'AppData', 'Roaming', 'OpenBrowser'));
     paths.push(path.join(home, 'AppData', 'Roaming', 'openbrowser'));
+    paths.push(path.join(home, 'AppData', 'Roaming', 'OpenBrowser'));
     paths.push(path.join(home, 'AppData', 'Roaming', 'Electron'));
   } else {
     if (process.env.XDG_CONFIG_HOME) {
-      paths.push(path.join(process.env.XDG_CONFIG_HOME, 'OpenBrowser'));
       paths.push(path.join(process.env.XDG_CONFIG_HOME, 'openbrowser'));
+      paths.push(path.join(process.env.XDG_CONFIG_HOME, 'OpenBrowser'));
       paths.push(path.join(process.env.XDG_CONFIG_HOME, 'Electron'));
     }
-    paths.push(path.join(home, '.config', 'OpenBrowser'));
     paths.push(path.join(home, '.config', 'openbrowser'));
+    paths.push(path.join(home, '.config', 'OpenBrowser'));
     paths.push(path.join(home, '.config', 'Electron'));
   }
   return paths;
@@ -148,18 +150,29 @@ function isProcessAlive(pid) {
   }
 }
 
+function isValidAutomationInfo(data) {
+  if (!data || typeof data !== 'object') return false;
+  if (!Number.isInteger(data.port) || data.port < 1 || data.port > 65535) return false;
+  if (data.pid !== undefined && data.pid !== null) {
+    if (!Number.isInteger(data.pid) || data.pid <= 0 || !isProcessAlive(Number(data.pid))) {
+      return false;
+    }
+  }
+  if (data.startedAt !== undefined && data.startedAt !== null) {
+    if (typeof data.startedAt !== 'number' || !Number.isFinite(data.startedAt) || data.startedAt <= 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function readAutomationInfoSync(userDataPath = '') {
   for (const filePath of automationInfoFileCandidates({ userDataPath })) {
     try {
       if (fs.existsSync(filePath)) {
         const raw = fs.readFileSync(filePath, 'utf8');
         const data = JSON.parse(raw);
-        if (data && Number.isInteger(data.port) && data.port > 0) {
-          if (data.pid !== undefined && data.pid !== null) {
-            if (!isProcessAlive(Number(data.pid))) {
-              continue;
-            }
-          }
+        if (isValidAutomationInfo(data)) {
           return data;
         }
       }
@@ -173,12 +186,7 @@ async function readAutomationInfo(userDataPath = '') {
     try {
       const raw = await fsp.readFile(filePath, 'utf8');
       const data = JSON.parse(raw);
-      if (data && Number.isInteger(data.port) && data.port > 0) {
-        if (data.pid !== undefined && data.pid !== null) {
-          if (!isProcessAlive(Number(data.pid))) {
-            continue;
-          }
-        }
+      if (isValidAutomationInfo(data)) {
         return data;
       }
     } catch (_) {}
@@ -281,6 +289,7 @@ registerRouteMethods(['POST'], [
   '/api/sync/start', '/api/window-sync/start', '/api/sync/stop', '/api/window-sync/stop',
   '/api/sync/restart', '/api/window-sync/restart', '/api/sync/arrange', '/api/window-sync/arrange',
   '/api/rpa/run', '/api/rpa', '/api/rpav2', '/api/stopRpa', '/api/rpa/stop',
+  '/human-typing', '/api/human-typing', '/api/v1/browser/human-typing',
 ]);
 registerRouteMethods(['GET', 'POST'], ['/api/sync/settings', '/api/rpa/plans', '/api/rpa/templates']);
 registerRouteMethods(['GET', 'DELETE'], ['/api/rpa/tasks']);
@@ -432,6 +441,12 @@ function normalizeProfileInput(input = {}) {
   if (out.user_agent !== undefined) out.userAgent = out.user_agent;
   if (out.network_mode !== undefined) out.networkMode = out.network_mode;
   if (out.language_code !== undefined) out.languageCode = out.language_code;
+  if (out.allow_failed_proxy !== undefined && out.allowFailedProxy === undefined) {
+    out.allowFailedProxy = booleanValue(out.allow_failed_proxy);
+  }
+  if (out.ignore_broken_proxy !== undefined && out.ignoreBrokenProxy === undefined) {
+    out.ignoreBrokenProxy = booleanValue(out.ignore_broken_proxy);
+  }
   if (out.user_proxy_config === undefined && out.userProxyConfig !== undefined) out.user_proxy_config = out.userProxyConfig;
   if (out.privacy_extra === undefined && out.privacyExtra !== undefined) out.privacy_extra = out.privacyExtra;
   if (typeof out.platform === 'string') out.platform = { type: out.platform };
@@ -630,6 +645,7 @@ class LocalApiServer {
   constructor(options = {}) {
     this.host = options.host || '127.0.0.1';
     let targetPort;
+    const configured = resolveConfiguredApiPort();
     if (options.port !== undefined) {
       const explicit = Number(options.port);
       if (Number.isInteger(explicit) && explicit >= 0 && explicit <= 65535) {
@@ -641,6 +657,9 @@ class LocalApiServer {
       targetPort = resolveDefaultApiPort();
     }
     this.requestedPort = targetPort;
+    this.isFixedPort = options.isFixedPort !== undefined
+      ? Boolean(options.isFixedPort)
+      : (configured !== null && configured > 0);
     // A busy port must not take the whole automation stack down with it, so by
     // default we fall back to an OS-assigned one and report the real port back.
     this.allowPortFallback = options.allowPortFallback !== false;
@@ -817,6 +836,8 @@ class LocalApiServer {
       url: `http://${this.host}:${this.port}/`,
       startedAt: this.startedAt,
       apiKeyRequired: Boolean(this.apiKey),
+      isFixedPort: Boolean(this.isFixedPort),
+      configuredPort: this.isFixedPort ? this.requestedPort : null,
     };
   }
 
@@ -864,7 +885,7 @@ class LocalApiServer {
     }
   }
 
-  async route(method, pathname, input) {
+  async route(method, pathname, input, req = null) {
     // health / version
     if (pathname === '/' || pathname === '/status') {
       return ok({
@@ -949,7 +970,7 @@ class LocalApiServer {
         return fail(`invalid profile: ${error.message}`, 400);
       }
       if (typeof this.engine.persist === 'function') await this.engine.persist();
-      created = this.engine.profiles.get(id) || created;
+      created = (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id) || created;
       return ok({ user_id: id, profile_id: id, id, ...proxySummary(created, this.proxyStore), profile: created });
     }
 
@@ -957,7 +978,7 @@ class LocalApiServer {
       if (!this.engine) return fail('profile engine unavailable');
       const id = firstString(input, ['profile_id', 'profileId', 'user_id', 'userId', 'id']);
       if (!id) return fail('profile id required');
-      const current = this.engine.profiles.get(id);
+      const current = (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id);
       if (!current) return fail('profile not found');
       const clearFingerprint = Boolean(input.__clearFingerprint) || input.fingerprint === null || input.privacy?.fingerprint === null;
       let body = normalizeProfileInput(input);
@@ -988,7 +1009,7 @@ class LocalApiServer {
         'geolocation', 'webglVendor', 'webglRenderer', 'hardwareConcurrency', 'deviceMemory', 'doNotTrack',
         'privacy', 'fingerprint', 'user_proxy_config', 'note', 'width', 'height', 'advanced',
         'proxyMeta', 'tag', 'groupId', 'group_name',
-        'proxyId',
+        'proxyId', 'allowFailedProxy', 'ignoreBrokenProxy',
       ]);
       const patch = {};
       for (const [key, value] of Object.entries(body)) {
@@ -998,6 +1019,8 @@ class LocalApiServer {
         else if (key === 'windowSize' && value !== undefined) patch.windowSize = value;
         else if (key === 'networkMode' && value !== undefined) patch.networkMode = value;
         else if (key === 'languageCode' && value !== undefined) patch.languageCode = value;
+        else if (key === 'allowFailedProxy' && value !== undefined) patch.allowFailedProxy = Boolean(value);
+        else if (key === 'ignoreBrokenProxy' && value !== undefined) patch.ignoreBrokenProxy = Boolean(value);
         else if (key === 'privacy' && value !== undefined) {
           const next = { ...(current.privacy || {}), ...(value && typeof value === 'object' ? value : {}) };
           if (clearFingerprint) delete next.fingerprint;
@@ -1043,7 +1066,7 @@ class LocalApiServer {
         : (hasManualProxyPatch ? { present: true, value: '' } : association));
       this.engine.profiles.set(id, next);
       if (typeof this.engine.persist === 'function') await this.engine.persist();
-      const profile = this.engine.profiles.get(id);
+      const profile = (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id);
       return ok({
         profile_id: id,
         ...proxySummary(profile, this.proxyStore, association.present ? association.value : undefined),
@@ -1056,7 +1079,7 @@ class LocalApiServer {
       const duplicateInput = normalizeProfileInput(input);
       const sourceId = firstString(duplicateInput, ['source_profile_id', 'sourceProfileId', 'profile_id', 'profileId', 'user_id', 'userId', 'id']).trim();
       if (!sourceId) return fail('source profile id required', 400);
-      const source = this.engine.profiles.get(sourceId);
+      const source = (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(sourceId) : null) || this.engine.profiles?.get(sourceId);
       if (!source) return fail('source profile not found', 404);
       const numbers = [...this.engine.profiles.values()].map((item) => Number(item.number)).filter((n) => Number.isInteger(n) && n > 0);
       const number = (Math.max(0, ...numbers) || 0) + 1;
@@ -1101,7 +1124,7 @@ class LocalApiServer {
       });
       await this.engine.syncProfiles([next]);
       if (typeof this.engine.persist === 'function') await this.engine.persist();
-      return ok({ profile_id: id, profile: this.engine.profiles.get(id) || next });
+      return ok({ profile_id: id, profile: (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id) || next });
     }
 
     if (pathname === '/api/v1/user/delete' || pathname === '/api/v2/browser-profile/delete' || pathname === '/api/profiles/delete') {
@@ -1126,7 +1149,7 @@ class LocalApiServer {
 
     if (pathname === '/api/v1/browser/start' || pathname === '/api/v2/browser-profile/start' || pathname === '/api/browser/start') {
       const id = firstString(input, ['user_id', 'userId', 'profile_id', 'profileId', 'id']);
-      const profile = this.engine.profiles.get(id);
+      const profile = (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id);
       if (!profile) return fail('profile not found');
       const started = await this.engine.start(profile);
       const port = started?.port || this.engine.running?.get(id)?.port || null;
@@ -1145,7 +1168,8 @@ class LocalApiServer {
       if (!this.engine) return fail('profile engine unavailable');
       const id = firstString(input, ['user_id', 'userId', 'profile_id', 'profileId', 'id']).trim();
       if (!id) return fail('profile id required', 400);
-      if (!this.engine.profiles?.has(id)) return fail('profile not found', 404);
+      const profile = (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id);
+      if (!profile) return fail('profile not found', 404);
       await this.engine.stop(id);
       return ok({ user_id: id, profile_id: id });
     }
@@ -1168,7 +1192,7 @@ class LocalApiServer {
       if (!this.engine) return fail('profile engine unavailable');
       const id = firstString(input, ['profile_id', 'profileId', 'user_id', 'userId', 'id']);
       if (!id) return fail('profile id required');
-      const profile = this.engine.profiles?.get(id);
+      const profile = (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id);
       if (!profile) return fail('profile not found', 404);
       const running = this.engine.running?.get(id);
       return ok({
@@ -1204,7 +1228,7 @@ class LocalApiServer {
           return fail('navigate failed: ' + error.message, 500);
         }
       }
-      const profile = this.engine.profiles?.get(id);
+      const profile = (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id);
       if (!profile) return fail('profile not found', 404);
       const started = await this.engine.start({ ...profile, startUrl: targetUrl });
       const port = started?.port || null;
@@ -1248,17 +1272,45 @@ class LocalApiServer {
       const text = input?.text !== undefined ? String(input.text) : (input?.content !== undefined ? String(input.content) : '');
       if (text.length > 5000) return fail('text exceeds maximum allowed length of 5000 characters', 400);
       const target = input?.target ?? input?.targetDescription ?? input?.selector ?? null;
-      const speed = input?.speed || input?.profileSpeed || input?.typingSpeed || 'medium';
-      const clear = Boolean(input?.clear || input?.isClear);
-      const sensitive = Boolean(input?.sensitive || input?.isPassword || input?.password);
-      const typoRate = input?.typoRate !== undefined ? Number(input.typoRate) : undefined;
-      const delayRange = Array.isArray(input?.delayRange) ? input.delayRange : undefined;
+
       const options = input?.options && typeof input.options === 'object' ? input.options : {};
+      const speed = input?.speed ?? input?.profileSpeed ?? input?.typingSpeed ?? options.speed ?? options.profileSpeed ?? options.typingSpeed ?? 'medium';
+      const clear = (input?.clear !== undefined || input?.isClear !== undefined)
+        ? Boolean(input?.clear || input?.isClear)
+        : Boolean(options.clear || options.isClear);
+      const sensitive = Boolean(input?.sensitive || input?.isPassword || input?.password || options.sensitive || options.isPassword || options.password);
+      const typoRate = input?.typoRate !== undefined
+        ? Number(input.typoRate)
+        : (options.typoRate !== undefined ? Number(options.typoRate) : undefined);
+      const delayRange = Array.isArray(input?.delayRange)
+        ? input.delayRange
+        : (Array.isArray(options.delayRange) ? options.delayRange : undefined);
+
+      const ac = new AbortController();
+      let resEnded = false;
+      const onClose = () => {
+        if (!resEnded) {
+          ac.abort();
+        }
+      };
+      if (req && typeof req.on === 'function') {
+        req.on('close', onClose);
+      }
+      if (input?.signal && typeof input.signal.addEventListener === 'function') {
+        if (input.signal.aborted) ac.abort();
+        else input.signal.addEventListener('abort', () => ac.abort(), { once: true });
+      }
+      if (options?.signal && typeof options.signal.addEventListener === 'function') {
+        if (options.signal.aborted) ac.abort();
+        else options.signal.addEventListener('abort', () => ac.abort(), { once: true });
+      }
+
       const mergedOptions = {
         ...options,
         speed,
         clear,
         sensitive,
+        signal: ac.signal,
         ...(typoRate !== undefined ? { typoRate } : {}),
         ...(delayRange !== undefined ? { delayRange } : {}),
       };
@@ -1278,6 +1330,10 @@ class LocalApiServer {
         const status = /not found/i.test(msg) ? 404 : (/not running|unavailable|required/i.test(msg) ? 400 : 500);
         return fail(msg, status);
       } finally {
+        resEnded = true;
+        if (req && typeof req.removeListener === 'function') {
+          req.removeListener('close', onClose);
+        }
         release();
         if (this.typingQueues.get(id) === lock) {
           this.typingQueues.delete(id);
@@ -1330,7 +1386,7 @@ class LocalApiServer {
       if (!this.engine) return fail('profile engine unavailable');
       const id = firstString(input, ['profile_id', 'profileId', 'user_id', 'userId', 'id']);
       if (!id) return fail('profile id required', 400);
-      const profile = this.engine.profiles.get(id);
+      const profile = (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id);
       if (!profile) return fail('profile not found', 404);
       try {
         const result = await this.engine.checkProxy(profile, { allowExtract: false, persist: true });

@@ -62,7 +62,35 @@ function normalizeTargetUrl(raw) {
 /**
  * Parses and normalizes user configuration into validated types and bounds.
  */
-function normalizeRobotConfig(raw = {}) {
+function normalizeRobotConfig(raw = {}, context = {}) {
+  const rawProfileId = raw.profileId !== undefined ? raw.profileId : context?.profileId;
+  if (rawProfileId !== undefined && rawProfileId !== null && rawProfileId !== '') {
+    const strPid = String(rawProfileId);
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(strPid)) {
+      throw new Error(`Invalid profile id: ${strPid}`);
+    }
+  }
+
+  const profileRoot = raw.profileRoot || context?.profileRoot || context?.root || null;
+  let recordFile = null;
+  if (raw.recordFile) {
+    const rawRecordStr = String(raw.recordFile);
+    if (profileRoot) {
+      const safeRoot = path.resolve(profileRoot);
+      const resolvedRecord = path.resolve(safeRoot, rawRecordStr);
+      const rel = path.relative(safeRoot, resolvedRecord);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        throw new Error('recordFile must be located within profileRoot');
+      }
+      recordFile = resolvedRecord;
+    } else {
+      if (rawRecordStr.includes('..')) {
+        throw new Error('Path traversal detected in recordFile');
+      }
+      recordFile = path.resolve(rawRecordStr);
+    }
+  }
+
   let domains = [];
   if (Array.isArray(raw.domains)) {
     domains = raw.domains;
@@ -101,7 +129,9 @@ function normalizeRobotConfig(raw = {}) {
     clickProbability: clickProb,
     maxRetries,
     navigationTimeoutMs: navTimeout,
-    recordFile: raw.recordFile ? String(raw.recordFile) : null,
+    recordFile,
+    profileId: rawProfileId ? String(rawProfileId) : null,
+    profileRoot: profileRoot ? path.resolve(profileRoot) : null,
   };
 }
 
@@ -225,21 +255,31 @@ class CookieRobot {
   constructor(options = {}) {
     this.port = Number(options.port) || 0;
     this.profileId = String(options.profileId || options.profile?.id || '');
+    if (this.profileId && !/^[A-Za-z0-9_-]{1,64}$/.test(this.profileId)) {
+      throw new Error(`Invalid profile id: ${this.profileId}`);
+    }
     this.profile = options.profile || null;
     this.profileRoot = options.root || options.profileRoot || null;
     this.browserConnection = options.cdpConnection || null;
     this.emitFn = typeof options.emit === 'function' ? options.emit : (() => {});
-    this.config = normalizeRobotConfig(options.config || {});
+    this.config = normalizeRobotConfig(options.config || {}, {
+      profileRoot: this.profileRoot,
+      profileId: this.profileId,
+    });
 
-    // Default record file: in profile root or temp directory
+    // Default record file: strictly inside profileRoot if provided
     this.recordFile = this.config.recordFile || (this.profileRoot
-      ? path.join(this.profileRoot, 'cookie-robot-history.jsonl')
+      ? path.join(path.resolve(this.profileRoot), 'cookie-robot-history.jsonl')
       : path.join(os.tmpdir(), `cookie-robot-${this.profileId || 'session'}.jsonl`));
 
     this.aborted = false;
     this.running = false;
     this.pageConnection = null;
     this.activeTabId = null;
+    this.ownedTabIds = new Set();
+    this._currentNavStopReject = null;
+    this._runPromise = null;
+    this._cleaningUpTabs = null;
     this.pageEventListeners = new Map();
     this.records = [];
     this.currentStep = 0;
@@ -249,6 +289,22 @@ class CookieRobot {
     this.mouseY = 300;
     this.totalCookiesAccumulated = 0;
     this.totalPagesVisited = 0;
+  }
+
+  handlePageDisconnect(err) {
+    if (this.pageConnection) {
+      try { this.pageConnection.close(); } catch (_) {}
+      this.pageConnection = null;
+    }
+    if (this._currentNavStopReject) {
+      try { this._currentNavStopReject(err || new Error('Page connection disconnected')); } catch (_) {}
+      this._currentNavStopReject = null;
+    }
+    this.aborted = true;
+    this.emit('robot-disconnected', {
+      profileId: this.profileId,
+      error: err?.message || 'Page connection disconnected',
+    });
   }
 
   handlePageEvent(event) {
@@ -317,12 +373,19 @@ class CookieRobot {
   }
 
   async stop() {
-    if (!this.running && !this.aborted) return;
     this.aborted = true;
+    if (this._currentNavStopReject) {
+      try { this._currentNavStopReject(new Error('CookieRobot stopped')); } catch (_) {}
+      this._currentNavStopReject = null;
+    }
     if (this.pageConnection) {
       try { this.pageConnection.close(); } catch (_) {}
       this.pageConnection = null;
     }
+    if (this._runPromise) {
+      try { await this._runPromise; } catch (_) {}
+    }
+    await this.cleanupOwnedTabs();
   }
 
   /**
@@ -346,20 +409,29 @@ class CookieRobot {
   }
 
   /**
-   * Acquires or creates a CDP PersistentConnection to the active page tab.
+   * Acquires or creates a CDP PersistentConnection to a dedicated page tab.
+   * Never hijacks user existing tabs.
    */
   async acquirePageSession() {
     if (this.pageConnection && !this.pageConnection.closed) {
       return this.pageConnection;
     }
-    const tab = await cdp.firstTab(this.port);
-    if (!tab || !tab.webSocketDebuggerUrl) {
-      throw new Error(`No available browser page tab found on CDP port ${this.port}`);
+    // Create a dedicated tab for CookieRobot isolation
+    const tab = await cdp.newTab(this.port, 'about:blank');
+    if (!tab || !tab.id || !tab.webSocketDebuggerUrl) {
+      throw new Error(`Failed to create dedicated browser tab on CDP port ${this.port}`);
     }
     this.activeTabId = tab.id;
+    this.ownedTabIds.add(tab.id);
+
+    if (this.aborted) {
+      throw new Error('CookieRobot stopped');
+    }
+
     const connection = await cdp.connect(tab.webSocketDebuggerUrl, {
       timeout: 8000,
       onEvent: (event) => this.handlePageEvent(event),
+      onDisconnect: (err) => this.handlePageDisconnect(err),
     });
     this.pageConnection = connection;
 
@@ -543,28 +615,57 @@ class CookieRobot {
    * switching active navigation to the new tab while closing the old tab.
    */
   async performClickAndFollow(x, y) {
-    if (this.aborted || !this.pageConnection) return false;
+    if (this.aborted || !this.pageConnection || this.pageConnection.closed) return false;
 
     let beforeTabs = [];
     try { beforeTabs = await cdp.tabs(this.port); } catch (_) {}
     const beforeIds = new Set(beforeTabs.map((t) => t.id));
     const oldTabId = this.activeTabId;
+    const oldConnection = this.pageConnection;
 
     await this.performClick(x, y);
 
-    // Bounded check for new tab opened via target="_blank"
+    // The HTTP target list omits openerId; use browser-level CDP metadata to
+    // distinguish our popup from tabs opened concurrently by the user.
     let newTab = null;
-    for (let i = 0; i < 8; i += 1) {
-      if (this.aborted) break;
-      await cancellableSleep(150, () => this.aborted);
-      try {
-        const currentTabs = await cdp.tabs(this.port);
-        newTab = currentTabs.find((t) => !beforeIds.has(t.id));
-        if (newTab) break;
-      } catch (_) {}
+    let metadataConnection = this.browserConnection;
+    let ownsMetadataConnection = false;
+    try {
+      if (!metadataConnection?.command) {
+        const browserWs = await cdp.browserSocket(this.port);
+        if (browserWs) {
+          metadataConnection = await cdp.connect(browserWs, { timeout: 3000 });
+          ownsMetadataConnection = true;
+        }
+      }
+      for (let i = 0; i < 8; i += 1) {
+        if (this.aborted) break;
+        await cancellableSleep(150, () => this.aborted);
+        try {
+          const [currentTabs, metadata] = await Promise.all([
+            cdp.tabs(this.port),
+            metadataConnection?.command('Target.getTargets', {}, { timeout: 1500 }),
+          ]);
+          for (const target of (metadata?.targetInfos || [])) {
+            if (target.openerId === oldTabId && !beforeIds.has(target.targetId)) {
+              this.ownedTabIds.add(target.targetId);
+            }
+          }
+          const ownedIds = new Set((metadata?.targetInfos || [])
+            .filter((target) => target.openerId === oldTabId)
+            .map((target) => target.targetId));
+          newTab = currentTabs.find((tab) => !beforeIds.has(tab.id) && ownedIds.has(tab.id));
+          if (newTab) break;
+        } catch (_) {}
+      }
+    } finally {
+      if (ownsMetadataConnection) {
+        try { metadataConnection.close(); } catch (_) {}
+      }
     }
 
     if (newTab && newTab.webSocketDebuggerUrl) {
+      this.ownedTabIds.add(newTab.id);
       this.emit('robot-progress', {
         profileId: this.profileId,
         domain: this.currentDomain,
@@ -573,26 +674,40 @@ class CookieRobot {
         newTabId: newTab.id,
       });
 
-      try { this.pageConnection.close(); } catch (_) {}
-      this.pageConnection = null;
-
-      this.activeTabId = newTab.id;
-      const conn = await cdp.connect(newTab.webSocketDebuggerUrl, {
-        timeout: 8000,
-        onEvent: (event) => this.handlePageEvent(event),
-      });
-      this.pageConnection = conn;
-
+      let newConn = null;
       try {
-        await conn.command('Page.enable', {}, { timeout: 3000 });
-        await conn.command('Network.enable', {}, { timeout: 3000 });
-        await conn.command('DOM.enable', {}, { timeout: 3000 });
-      } catch (_) {}
-
-      // Close the previous tab to maintain strict single-tab invariant
-      if (oldTabId) {
-        try { await cdp.closeTab(this.port, oldTabId); } catch (_) {}
+        newConn = await cdp.connect(newTab.webSocketDebuggerUrl, {
+          timeout: 8000,
+          onEvent: (event) => this.handlePageEvent(event),
+          onDisconnect: (err) => this.handlePageDisconnect(err),
+        });
+        await newConn.command('Page.enable', {}, { timeout: 3000 });
+        await newConn.command('Network.enable', {}, { timeout: 3000 });
+        await newConn.command('DOM.enable', {}, { timeout: 3000 });
+      } catch (connectErr) {
+        // Connect failed: do not close old tab; recover session if needed
+        if (!this.pageConnection || this.pageConnection.closed) {
+          await this.acquirePageSession();
+        }
+        return false;
       }
+
+      // Successful connection established
+      this.pageConnection = newConn;
+      this.activeTabId = newTab.id;
+
+      if (oldConnection && oldConnection !== newConn) {
+        try { oldConnection.close(); } catch (_) {}
+      }
+
+      // Safely close old tab only if multiple tabs are active and old tab was owned
+      try {
+        const currentTabs = await cdp.tabs(this.port);
+        if (currentTabs.length >= 2 && oldTabId && this.ownedTabIds.has(oldTabId)) {
+          await cdp.closeTab(this.port, oldTabId);
+          this.ownedTabIds.delete(oldTabId);
+        }
+      } catch (_) {}
 
       await this.ensureDomReady(3000);
       return true;
@@ -605,28 +720,116 @@ class CookieRobot {
 
   /**
    * Closes any surplus tabs left open by popups or redirects, keeping only the active tab.
+   * Strictly isolates user tabs: never touches or closes tabs not in ownedTabIds!
    */
   async pruneSurplusTabs() {
     try {
       const allTabs = await cdp.tabs(this.port);
-      if (allTabs.length > 1) {
-        for (const tab of allTabs) {
-          if (tab.id !== this.activeTabId) {
-            try { await cdp.closeTab(this.port, tab.id); } catch (_) {}
-          }
+      for (const tab of allTabs) {
+        if (this.ownedTabIds.has(tab.id) && tab.id !== this.activeTabId) {
+          const currentTabs = await cdp.tabs(this.port);
+          if (currentTabs.length <= 1) break; // Invariant: never close the last browser tab
+          try { await cdp.closeTab(this.port, tab.id); } catch (_) {}
+          this.ownedTabIds.delete(tab.id);
         }
       }
     } catch (_) {}
   }
 
   /**
-   * Appends an audit record to the JSONL log file.
+   * Cleans up all tabs created or owned by CookieRobot on completion or stop.
+   * Invariants:
+   * 1. Strictly protects user tabs: never touches or closes any tab not owned by this robot.
+   * 2. Strictly protects the last tab: never closes a tab if currentTabs.length <= 1.
+   */
+  async cleanupOwnedTabs() {
+    if (this._cleaningUpTabs) {
+      return this._cleaningUpTabs;
+    }
+    const cleanupTask = (async () => {
+      try {
+        if (!this.port) return;
+        if (this.pageConnection) {
+          try { this.pageConnection.close(); } catch (_) {}
+          this.pageConnection = null;
+        }
+
+        const owned = new Set(this.ownedTabIds);
+        if (this.activeTabId) {
+          owned.add(this.activeTabId);
+        }
+        if (owned.size === 0) return;
+
+        // Candidate tabs to close: surplus owned tabs first, activeTabId last.
+        // This ensures if only robot tabs exist in the browser, the active tab is preserved as the last tab.
+        const candidateIds = Array.from(owned).filter((id) => id !== this.activeTabId);
+        if (this.activeTabId && owned.has(this.activeTabId)) {
+          candidateIds.push(this.activeTabId);
+        }
+
+        for (const tabId of candidateIds) {
+          try {
+            // Strictly protect user tabs: only tabs owned by this robot can ever be closed
+            if (!this.ownedTabIds.has(tabId) && tabId !== this.activeTabId) {
+              continue;
+            }
+
+            const currentTabs = await cdp.tabs(this.port);
+            // Invariant: MUST protect the last tab in the browser (never close the last tab)
+            if (!Array.isArray(currentTabs) || currentTabs.length <= 1) {
+              break;
+            }
+
+            // Ensure tab still exists before attempting to close
+            if (!currentTabs.some((t) => t.id === tabId)) {
+              this.ownedTabIds.delete(tabId);
+              if (this.activeTabId === tabId) {
+                this.activeTabId = null;
+              }
+              continue;
+            }
+
+            await cdp.closeTab(this.port, tabId);
+            this.ownedTabIds.delete(tabId);
+            if (this.activeTabId === tabId) {
+              this.activeTabId = null;
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    })();
+
+    this._cleaningUpTabs = cleanupTask;
+    try {
+      await cleanupTask;
+    } finally {
+      this._cleaningUpTabs = null;
+    }
+  }
+
+  /**
+   * Appends an audit record to the JSONL log file with size-based rotation.
    */
   appendRecord(record) {
     this.records.push(record);
     try {
       const dir = path.dirname(this.recordFile);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+      // Rotate/truncate if file exceeds 2MB (keep recent half)
+      const MAX_LOG_SIZE = 2 * 1024 * 1024;
+      if (fs.existsSync(this.recordFile)) {
+        try {
+          const stat = fs.statSync(this.recordFile);
+          if (stat.size >= MAX_LOG_SIZE) {
+            const content = fs.readFileSync(this.recordFile, 'utf8');
+            const lines = content.split('\n').filter(Boolean);
+            const keepLines = lines.slice(Math.floor(lines.length / 2));
+            fs.writeFileSync(this.recordFile, keepLines.join('\n') + '\n', 'utf8');
+          }
+        } catch (_) {}
+      }
+
       fs.appendFileSync(this.recordFile, JSON.stringify(record) + '\n', 'utf8');
     } catch (err) {
       this.emit('robot-warning', { message: `Failed to write JSONL record: ${err.message}` });
@@ -635,9 +838,15 @@ class CookieRobot {
 
   /**
    * Navigates to a URL, waiting for Page.loadEventFired (with a 5s cap) and DOM readiness.
+   * Immediately unblocks if stop() is invoked mid-flight.
    */
   async navigateTo(url, timeoutMs = 20000) {
-    if (this.aborted || !this.pageConnection) return false;
+    if (this.aborted) {
+      throw new Error('CookieRobot is stopped');
+    }
+    if (!this.pageConnection || this.pageConnection.closed) {
+      throw new Error('No active page connection to navigate');
+    }
 
     let loadResolver = null;
     const loadPromise = new Promise((resolve) => {
@@ -651,23 +860,33 @@ class CookieRobot {
       if (loadResolver) loadResolver('frameStoppedLoading');
     });
 
+    let timer = null;
+    const timeoutPromise = new Promise((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), Math.min(5000, timeoutMs));
+    });
+
+    let stopReject = null;
+    const stopPromise = new Promise((_, reject) => {
+      stopReject = reject;
+    });
+    this._currentNavStopReject = stopReject;
+
     try {
       const nav = await this.pageConnection.command('Page.navigate', { url }, { timeout: timeoutMs });
       if (nav?.errorText) {
         throw new Error(nav.errorText);
       }
 
-      // Wait for Page.loadEventFired bounded to 5s
-      let timer = null;
-      const timeoutPromise = new Promise((resolve) => {
-        timer = setTimeout(() => resolve('timeout'), 5000);
-      });
-
-      await Promise.race([loadPromise, timeoutPromise]);
-      if (timer) clearTimeout(timer);
+      await Promise.race([loadPromise, timeoutPromise, stopPromise]);
     } finally {
+      if (timer) clearTimeout(timer);
+      this._currentNavStopReject = null;
       unlistenLoad();
       unlistenStop();
+    }
+
+    if (this.aborted || !this.pageConnection || this.pageConnection.closed) {
+      throw new Error('Page connection closed during navigation');
     }
 
     // Ensure DOM readyState is interactive or complete
@@ -683,34 +902,33 @@ class CookieRobot {
     this.running = true;
     this.aborted = false;
 
-    const plan = generateWalkPlan(this.config);
-    this.totalSteps = plan.totalSites;
-    this.currentStep = 0;
-    this.records = [];
+    const runPromise = (async () => {
+      const plan = generateWalkPlan(this.config);
+      this.totalSteps = plan.totalSites;
+      this.currentStep = 0;
+      this.records = [];
 
-    this.emit('robot-started', {
-      profileId: this.profileId,
-      totalSites: this.totalSteps,
-      config: plan.config,
-      plan: plan.sites,
-    });
-
-    let initialCookies = 0;
-    try {
-      await this.acquirePageSession();
-      initialCookies = await this.readCookiesCount();
-    } catch (err) {
-      this.running = false;
-      this.emit('robot-failed', {
+      this.emit('robot-started', {
         profileId: this.profileId,
-        error: err.message,
+        totalSites: this.totalSteps,
+        config: plan.config,
+        plan: plan.sites,
       });
-      throw err;
-    }
 
-    let priorCookies = initialCookies;
+      let initialCookies = 0;
+      try {
+        await this.acquirePageSession();
+        initialCookies = await this.readCookiesCount();
+      } catch (err) {
+        this.emit('robot-failed', {
+          profileId: this.profileId,
+          error: err.message,
+        });
+        throw err;
+      }
 
-    try {
+      let priorCookies = initialCookies;
+
       for (let i = 0; i < plan.sites.length; i += 1) {
         if (this.aborted) break;
 
@@ -757,35 +975,41 @@ class CookieRobot {
               await cancellableSleep(300 + Math.floor(Math.random() * 400), () => this.aborted);
             }
 
-            // Random walk deeper if depth > 1
-            if (site.walkDepth > 1 && !this.aborted && Math.random() < site.clickProbability) {
+            // Multi-hop random walk deeper if depth > 1 (landing is depth 1, subpages depth 2..walkDepth)
+            for (let depth = 2; depth <= site.walkDepth; depth += 1) {
+              if (this.aborted) break;
+              if (Math.random() >= site.clickProbability) break;
+
               const links = await this.findInternalLinks();
-              if (links.length) {
-                const picked = links[Math.floor(Math.random() * links.length)];
-                this.emit('robot-progress', {
-                  profileId: this.profileId,
-                  domain: site.domain,
-                  step: this.currentStep,
-                  totalSteps: this.totalSteps,
-                  phase: 'random-walk',
-                  targetLink: picked.href,
-                });
+              if (!links.length) break;
 
-                const coords = await this.scrollLinkIntoViewAndGetCoords(picked.href);
-                const clickX = coords ? coords.x : 200;
-                const clickY = coords ? coords.y : 200;
+              const picked = links[Math.floor(Math.random() * links.length)];
+              this.emit('robot-progress', {
+                profileId: this.profileId,
+                domain: site.domain,
+                step: this.currentStep,
+                totalSteps: this.totalSteps,
+                phase: 'random-walk',
+                depth,
+                targetLink: picked.href,
+              });
 
-                await this.performClickAndFollow(clickX, clickY);
-                await cancellableSleep(1200 + Math.floor(Math.random() * 1000), () => this.aborted);
-                sitePagesVisited += 1;
-                this.totalPagesVisited += 1;
+              const coords = await this.scrollLinkIntoViewAndGetCoords(picked.href);
+              const clickX = coords ? coords.x : 200;
+              const clickY = coords ? coords.y : 200;
 
-                // Brief dwell on subpage
-                if (Math.random() < site.scrollProbability) {
-                  await this.performHumanScroll();
-                }
-                await cancellableSleep(1000 + Math.floor(Math.random() * 1500), () => this.aborted);
+              const followed = await this.performClickAndFollow(clickX, clickY);
+              if (!followed || this.aborted) break;
+
+              await cancellableSleep(800 + Math.floor(Math.random() * 800), () => this.aborted);
+              sitePagesVisited += 1;
+              this.totalPagesVisited += 1;
+
+              // Brief dwell on subpage
+              if (Math.random() < site.scrollProbability) {
+                await this.performHumanScroll();
               }
+              await cancellableSleep(800 + Math.floor(Math.random() * 1000), () => this.aborted);
             }
 
             siteCompleted = true;
@@ -868,12 +1092,20 @@ class CookieRobot {
         totalPagesVisited: this.totalPagesVisited,
         totalCookiesAdded: this.totalCookiesAccumulated,
       };
+    })();
+
+    this._runPromise = runPromise;
+
+    try {
+      return await runPromise;
     } finally {
       this.running = false;
+      this._runPromise = null;
       if (this.pageConnection) {
         try { this.pageConnection.close(); } catch (_) {}
         this.pageConnection = null;
       }
+      await this.cleanupOwnedTabs();
     }
   }
 }

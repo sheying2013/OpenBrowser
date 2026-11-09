@@ -1440,35 +1440,180 @@ function networkTypeFromLookup(result = {}) {
   return 'broadband';
 }
 
+function cleanHostname(hostname) {
+  let host = String(hostname || '').trim().toLowerCase();
+  while (true) {
+    if (host.startsWith('[') && host.endsWith(']')) {
+      host = host.slice(1, -1).trim();
+      continue;
+    }
+    if (host.endsWith('.')) {
+      host = host.slice(0, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return host;
+}
+
+function parseIPv6Words(ip) {
+  let str = cleanHostname(ip);
+  const m = str.match(/^([\da-f:]+):(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (m) {
+    const v4Parts = m[2].split('.').map(Number);
+    if (v4Parts.some((p) => Number.isNaN(p) || p < 0 || p > 255)) return null;
+    const hex1 = ((v4Parts[0] << 8) | v4Parts[1]).toString(16);
+    const hex2 = ((v4Parts[2] << 8) | v4Parts[3]).toString(16);
+    str = `${m[1]}:${hex1}:${hex2}`;
+  }
+  let parts = str.split('::');
+  if (parts.length > 2) return null;
+  let left = parts[0] ? parts[0].split(':').filter(Boolean) : [];
+  let right = parts[1] ? parts[1].split(':').filter(Boolean) : [];
+  if (parts.length === 2) {
+    const missing = 8 - (left.length + right.length);
+    if (missing < 0) return null;
+    const mid = new Array(missing).fill('0');
+    parts = [...left, ...mid, ...right];
+  } else {
+    parts = left;
+  }
+  if (parts.length !== 8) return null;
+  const words = parts.map((p) => Number.parseInt(p, 16));
+  if (words.some((w) => Number.isNaN(w) || w < 0 || w > 0xffff)) return null;
+  return words;
+}
+
+function tryExtractIpv4FromWords(words) {
+  if (!words) return null;
+  // IPv4-mapped (::ffff:0:0/96) or IPv4-compatible (::/96)
+  const isMapped = words.slice(0, 5).every((w) => w === 0) && words[5] === 0xffff;
+  const isCompat = words.slice(0, 6).every((w) => w === 0) && (words[6] !== 0 || words[7] > 1);
+  if (isMapped || isCompat) {
+    const a = (words[6] >> 8) & 0xff;
+    const b = words[6] & 0xff;
+    const c = (words[7] >> 8) & 0xff;
+    const d = words[7] & 0xff;
+    return `${a}.${b}.${c}.${d}`;
+  }
+  // NAT64 well-known prefix (64:ff9b::/96, RFC 6052)
+  if (words[0] === 0x0064 && words[1] === 0xff9b && words[2] === 0 && words.slice(3, 6).every((w) => w === 0)) {
+    const a = (words[6] >> 8) & 0xff;
+    const b = words[6] & 0xff;
+    const c = (words[7] >> 8) & 0xff;
+    const d = words[7] & 0xff;
+    return `${a}.${b}.${c}.${d}`;
+  }
+  // NAT64 local-use prefix (64:ff9b:1::/48, RFC 8215 / RFC 6052 /48 layout)
+  if (words[0] === 0x0064 && words[1] === 0xff9b && words[2] === 0x0001) {
+    const a = (words[3] >> 8) & 0xff;
+    const b = words[3] & 0xff;
+    const c = words[4] & 0xff;
+    const d = (words[5] >> 8) & 0xff;
+    if (words[3] !== 0 || words[4] !== 0 || (words[5] & 0xff00) !== 0) {
+      return `${a}.${b}.${c}.${d}`;
+    }
+    // Fallback: end-32 layout if words 3..5 are zero
+    if (words.slice(3, 6).every((w) => w === 0)) {
+      const a = (words[6] >> 8) & 0xff;
+      const b = words[6] & 0xff;
+      const c = (words[7] >> 8) & 0xff;
+      const d = words[7] & 0xff;
+      return `${a}.${b}.${c}.${d}`;
+    }
+    return '0.0.0.0';
+  }
+  // 6to4 prefix (2002::/16, RFC 3056)
+  if (words[0] === 0x2002) {
+    const a = (words[1] >> 8) & 0xff;
+    const b = words[1] & 0xff;
+    const c = (words[2] >> 8) & 0xff;
+    const d = words[2] & 0xff;
+    return `${a}.${b}.${c}.${d}`;
+  }
+  return null;
+}
+
+function isPrivateIpv4(parts) {
+  if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+  const [a, b, c, d] = parts;
+  if (a === 0) return true; // 0.0.0.0/8
+  if (a === 10) return true; // 10.0.0.0/8
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 (CGNAT, including 100.100.100.200)
+  if (a === 127) return true; // 127.0.0.0/8
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a === 192 && b === 0 && (c === 0 || c === 2)) return true; // 192.0.0.0/24 & TEST-NET-1
+  if (a === 192 && b === 168) return true; // 192.168.0.0/16
+  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15
+  if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2
+  if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3
+  if (a >= 224) return true; // Multicast (224-239) & Reserved (240-255)
+  return false;
+}
+
 function isCloudMetadataHostname(hostname) {
-  const host = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  const host = cleanHostname(hostname);
   if (!host) return true;
-  if (host === 'metadata' || host === 'metadata.google.internal') return true;
-  if (host.endsWith('.metadata.google.internal')) return true;
-  // AWS/GCP/Azure instance metadata
-  if (host === '169.254.169.254' || host === '169.254.170.2') return true;
+  if (host === 'metadata' || host === 'metadata.google.internal' || host.endsWith('.metadata.google.internal')) {
+    return true;
+  }
+  if (host === '169.254.169.254' || host === '169.254.170.2' || host === '100.100.100.200' || host === '169.254.169.253') {
+    return true;
+  }
+
+  const words = parseIPv6Words(host);
+  if (words) {
+    const v4 = tryExtractIpv4FromWords(words);
+    if (v4) {
+      if (v4 === '169.254.169.254' || v4 === '169.254.170.2' || v4 === '100.100.100.200' || v4 === '169.254.169.253') {
+        return true;
+      }
+    }
+    // IPv6 IMDS endpoint fd00:ec2::254
+    if (words[0] === 0xfd00 && words[1] === 0x0ec2 &&
+        words[2] === 0 && words[3] === 0 && words[4] === 0 && words[5] === 0 && words[6] === 0 &&
+        words[7] === 0x0254) {
+      return true;
+    }
+  }
   return false;
 }
 
 function isPrivateOrLocalHostname(hostname) {
-  const host = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  const host = cleanHostname(hostname);
   if (!host) return true;
-  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
-  if (host === '0.0.0.0' || host === '::' || host === '::1') return true;
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) {
+    return true;
+  }
+  if (isCloudMetadataHostname(host)) return true;
+
   const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (m) {
-    const parts = m.slice(1).map((n) => Number(n));
-    if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-    const [a, b] = parts;
-    if (a === 10 || a === 127 || a === 0) return true;
-    if (a === 169 && b === 254) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true;
-    if (a === 198 && (b === 18 || b === 19)) return true;
+    return isPrivateIpv4(m.slice(1).map(Number));
   }
-  if (host.includes(':')) {
-    if (host === '::1' || host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) return true;
+
+  const words = parseIPv6Words(host);
+  if (words) {
+    // Local-use translation prefix (64:ff9b:1::/48, RFC 8215)
+    if (words[0] === 0x0064 && words[1] === 0xff9b && words[2] === 0x0001) {
+      return true;
+    }
+    const v4 = tryExtractIpv4FromWords(words);
+    if (v4) {
+      return isPrivateIpv4(v4.split('.').map(Number));
+    }
+    // :: / ::1
+    if (words.every((w) => w === 0)) return true;
+    if (words.slice(0, 7).every((w) => w === 0) && words[7] === 1) return true;
+    const first = words[0];
+    // ULA fc00::/7 (fc00 - fdff)
+    if ((first & 0xfe00) === 0xfc00) return true;
+    // Link-local fe80::/10 (fe80 - febf)
+    if ((first & 0xffc0) === 0xfe80) return true;
+    // Multicast ff00::/8
+    if ((first & 0xff00) === 0xff00) return true;
+    return false;
   }
   return false;
 }
@@ -1505,60 +1650,288 @@ function assertSafeOutboundUrl(url, options = {}) {
   return parsed;
 }
 
-async function fetchUrlText(url, { timeout = 15000, method = 'GET', allowPrivate, maxRedirects = 3 } = {}) {
+let defaultFetchDnsResolver = null;
+
+function setDefaultFetchDnsResolver(resolver) {
+  defaultFetchDnsResolver = resolver;
+}
+
+function createPinnedLookup(safeRecords, host) {
+  return function pinnedLookup(hostname, opts, cb) {
+    if (typeof opts === 'function') {
+      cb = opts;
+      opts = {};
+    } else if (typeof opts === 'number') {
+      opts = { family: opts };
+    } else if (!opts || typeof opts !== 'object') {
+      opts = {};
+    }
+
+    const requestedFamily = Number(opts.family) || 0;
+    let candidates = safeRecords;
+    if (requestedFamily === 4 || requestedFamily === 6) {
+      candidates = candidates.filter((r) => r.family === requestedFamily);
+    }
+
+    if (!candidates.length) {
+      const err = new Error(`getaddrinfo ENOTFOUND ${hostname || host}`);
+      err.code = 'ENOTFOUND';
+      cb(err);
+      return;
+    }
+
+    if (opts.all) {
+      cb(null, candidates.map((r) => ({ address: r.address, family: r.family })));
+    } else {
+      cb(null, candidates[0].address, candidates[0].family);
+    }
+  };
+}
+
+async function fetchUrlText(url, {
+  timeout = 15000,
+  method = 'GET',
+  allowPrivate,
+  maxRedirects = 3,
+  _deadline,
+  dnsLookup,
+} = {}) {
   const options = { allowPrivate };
   const parsed = assertSafeOutboundUrl(url, options);
   const target = parsed.toString();
+  const cleanHost = cleanHostname(parsed.hostname);
+
+  const overallTimeout = Number.isFinite(timeout) && timeout > 0 ? timeout : 15000;
+  const deadline = _deadline || (Date.now() + overallTimeout);
+
+  const initialRemaining = deadline - Date.now();
+  if (initialRemaining <= 0) {
+    const err = new Error('请求超时');
+    err.code = 'ETIMEDOUT';
+    throw err;
+  }
+
+  const isRawIp = Boolean(net.isIP(cleanHost));
+  let safeRecords = [];
+
+  if (isRawIp) {
+    if (isCloudMetadataHostname(cleanHost)) {
+      throw new Error('出站 URL 禁止访问云 metadata 地址（防 SSRF）');
+    }
+    if (!resolveAllowPrivateOutbound(options) && isPrivateOrLocalHostname(cleanHost)) {
+      throw new Error('出站 URL 禁止访问本机/内网地址（OPENBROWSER_ALLOW_PRIVATE_OUTBOUND=0）');
+    }
+    safeRecords = [{ address: cleanHost, family: net.isIP(cleanHost) }];
+  } else {
+    if (isCloudMetadataHostname(cleanHost)) {
+      throw new Error('出站 URL 禁止访问云 metadata 地址（防 SSRF）');
+    }
+    if (!resolveAllowPrivateOutbound(options) && isPrivateOrLocalHostname(cleanHost)) {
+      throw new Error('出站 URL 禁止访问本机/内网地址（OPENBROWSER_ALLOW_PRIVATE_OUTBOUND=0）');
+    }
+
+    const remainingForDns = deadline - Date.now();
+    if (remainingForDns <= 0) {
+      const err = new Error('请求超时');
+      err.code = 'ETIMEDOUT';
+      throw err;
+    }
+
+    const lookupFn = typeof dnsLookup === 'function'
+      ? dnsLookup
+      : (typeof defaultFetchDnsResolver === 'function'
+        ? defaultFetchDnsResolver
+        : (async (h, opts) => dns.promises.lookup(h, opts)));
+
+    let records;
+    let dnsTimer = null;
+    try {
+      const dnsTimeoutPromise = new Promise((_, rej) => {
+        dnsTimer = setTimeout(() => {
+          const err = new Error('请求超时');
+          err.code = 'ETIMEDOUT';
+          rej(err);
+        }, remainingForDns);
+      });
+
+      records = await Promise.race([
+        lookupFn(cleanHost, { all: true }),
+        dnsTimeoutPromise,
+      ]);
+    } catch (err) {
+      if (err.message === '请求超时' || err.code === 'ETIMEDOUT') {
+        const timeoutErr = new Error('请求超时');
+        timeoutErr.code = 'ETIMEDOUT';
+        throw timeoutErr;
+      }
+      throw new Error(`DNS 解析失败: ${err.message}`);
+    } finally {
+      if (dnsTimer) clearTimeout(dnsTimer);
+    }
+
+    if (!records || !records.length) {
+      throw new Error(`无法解析域名: ${cleanHost}`);
+    }
+
+    for (const record of records) {
+      const addr = String(record && record.address || '').trim();
+      if (isCloudMetadataHostname(addr)) {
+        throw new Error('出站 URL 禁止访问云 metadata 地址（防 SSRF）');
+      }
+      if (!resolveAllowPrivateOutbound(options) && isPrivateOrLocalHostname(addr)) {
+        throw new Error('出站 URL 禁止访问本机/内网地址（OPENBROWSER_ALLOW_PRIVATE_OUTBOUND=0）');
+      }
+    }
+
+    safeRecords = records.map((r) => ({
+      address: r.address,
+      family: Number(r.family) || (net.isIP(r.address) || 4),
+    }));
+  }
+
+  const remainingForHttp = deadline - Date.now();
+  if (remainingForHttp <= 0) {
+    const err = new Error('请求超时');
+    err.code = 'ETIMEDOUT';
+    throw err;
+  }
+
+  const pinnedLookup = createPinnedLookup(safeRecords, cleanHost);
   const https = require('https');
   const http = require('http');
   const lib = parsed.protocol === 'https:' ? https : http;
+
   return new Promise((resolve, reject) => {
-    const req = lib.request(target, {
+    let settled = false;
+    let req = null;
+    let timer = null;
+
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (req) {
+        try { req.destroy(err); } catch (_) {}
+      }
+      reject(err);
+    };
+
+    const succeed = (val) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(val);
+    };
+
+    timer = setTimeout(() => {
+      const timeoutErr = new Error('请求超时');
+      timeoutErr.code = 'ETIMEDOUT';
+      fail(timeoutErr);
+    }, remainingForHttp);
+
+    const reqOptions = {
       method,
-      timeout,
+      timeout: remainingForHttp,
       headers: {
         Accept: 'text/plain, application/json, */*',
         'User-Agent': 'OpenBrowser/2.0',
       },
-    }, (res) => {
-      const status = res.statusCode || 0;
-      if (status >= 300 && status < 400 && res.headers.location) {
-        res.resume();
-        if (maxRedirects <= 0) {
-          reject(new Error('重定向次数过多'));
+      lookup: pinnedLookup,
+    };
+
+    try {
+      req = lib.request(target, reqOptions, (res) => {
+        const status = res.statusCode || 0;
+        if (status >= 300 && status < 400 && res.headers.location) {
+          res.resume();
+          if (maxRedirects <= 0) {
+            fail(new Error('重定向次数过多'));
+            return;
+          }
+
+          let nextUrl;
+          try {
+            nextUrl = new URL(String(res.headers.location), target);
+          } catch (e) {
+            fail(new Error(`无效的重定向 URL: ${e.message}`));
+            return;
+          }
+
+          if (parsed.protocol === 'https:' && nextUrl.protocol === 'http:') {
+            fail(new Error('禁止 HTTPS 降级到 HTTP 重定向'));
+            return;
+          }
+
+          try {
+            assertSafeOutboundUrl(nextUrl.toString(), options);
+          } catch (err) {
+            fail(err);
+            return;
+          }
+
+          const remainingForNext = deadline - Date.now();
+          if (remainingForNext <= 0) {
+            const err = new Error('请求超时');
+            err.code = 'ETIMEDOUT';
+            fail(err);
+            return;
+          }
+
+          cleanup();
+          settled = true;
+
+          fetchUrlText(nextUrl.toString(), {
+            timeout: remainingForNext,
+            method: (status === 303 ? 'GET' : method),
+            allowPrivate,
+            maxRedirects: maxRedirects - 1,
+            _deadline: deadline,
+            dnsLookup,
+          }).then(resolve, reject);
           return;
         }
-        try {
-          const next = new URL(String(res.headers.location), target).toString();
-          assertSafeOutboundUrl(next, options);
-          fetchUrlText(next, { timeout, method, allowPrivate, maxRedirects: maxRedirects - 1 }).then(resolve, reject);
-        } catch (error) {
-          reject(error);
-        }
-        return;
-      }
-      const chunks = [];
-      let size = 0;
-      res.on('data', (c) => {
-        size += c.length;
-        if (size > 2 * 1024 * 1024) {
-          req.destroy(new Error('响应体过大'));
-          return;
-        }
-        chunks.push(c);
+
+        const chunks = [];
+        let size = 0;
+        res.on('data', (c) => {
+          size += c.length;
+          if (size > 2 * 1024 * 1024) {
+            fail(new Error('响应体过大'));
+            return;
+          }
+          chunks.push(c);
+        });
+
+        res.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf8');
+          if (status >= 400) {
+            fail(new Error('HTTP ' + status + ': ' + body.slice(0, 160)));
+            return;
+          }
+          succeed({ status, body, headers: res.headers || {} });
+        });
+
+        res.on('error', fail);
       });
-      res.on('end', () => {
-        const body = Buffer.concat(chunks).toString('utf8');
-        if (status >= 400) {
-          reject(new Error('HTTP ' + status + ': ' + body.slice(0, 160)));
-          return;
-        }
-        resolve({ status, body, headers: res.headers || {} });
+
+      req.on('error', fail);
+      req.on('timeout', () => {
+        const timeoutErr = new Error('请求超时');
+        timeoutErr.code = 'ETIMEDOUT';
+        fail(timeoutErr);
       });
-    });
-    req.on('error', reject);
-    req.on('timeout', () => req.destroy(new Error('请求超时')));
-    req.end();
+
+      req.end();
+    } catch (err) {
+      fail(err);
+    }
   });
 }
 
@@ -2375,4 +2748,6 @@ module.exports = {
   recordProviderRateLimit,
   isProviderCoolingDown,
   clearProviderCooldowns,
+  createPinnedLookup,
+  setDefaultFetchDnsResolver,
 };

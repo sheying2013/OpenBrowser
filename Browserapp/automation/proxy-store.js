@@ -184,6 +184,42 @@ function normalizeProxyRecord(input = {}, existing = null) {
   if (!parsed) throw new Error('当前记录是直连，请填写代理地址');
   if (parsed.raw.length > MAX_PROXY_URL_LENGTH) throw new Error('代理 URL 过长');
 
+  const existingProtocol = String(existing?.protocol || existingParsed?.protocol || '').toLowerCase();
+  const existingHost = String(existing?.host || existingParsed?.host || '').trim();
+  const existingPort = Number(existing?.port || existingParsed?.port || 0);
+  const existingUser = String(existingUsername || '');
+  const existingPass = String(existingPassword || '');
+
+  const newProtocol = String(parsed.protocol || '').toLowerCase();
+  const newHost = String(parsed.host || '').trim();
+  const newPort = Number(parsed.port || 0);
+  const newUser = String(parsed.username || '');
+  const newPass = String(parsed.password || '');
+
+  const endpointOrCredentialChanged = Boolean(
+    existing && !isMigration && (
+      clearExplicitAuth ||
+      newProtocol !== existingProtocol ||
+      newHost !== existingHost ||
+      newPort !== existingPort ||
+      newUser !== existingUser ||
+      newPass !== existingPass
+    )
+  );
+
+  const lastCheck = endpointOrCredentialChanged ? null : (existing?.lastCheck || input.lastCheck || input.lastProbeAt || null);
+  const lastCheckAt = endpointOrCredentialChanged ? null : (existing?.lastCheckAt || input.lastCheckAt || lastCheck);
+  const lastIp = endpointOrCredentialChanged ? '' : (existing?.lastIp || input.lastIp || '');
+  const lastCountry = endpointOrCredentialChanged ? '' : (existing?.lastCountry || input.lastCountry || '');
+  const lastCountryCode = endpointOrCredentialChanged ? '' : (existing?.lastCountryCode || input.lastCountryCode || '');
+  const lastLatencyMs = endpointOrCredentialChanged ? null : (existing?.lastLatencyMs ?? input.lastLatencyMs ?? null);
+  const lastNetworkType = endpointOrCredentialChanged ? '' : (existing?.lastNetworkType || input.lastNetworkType || '');
+  const lastErrorClass = endpointOrCredentialChanged ? '' : (existing?.lastErrorClass || input.lastErrorClass || '');
+  const lastError = endpointOrCredentialChanged ? null : (existing?.lastError ?? input.lastError ?? null);
+  const lastCheckOk = endpointOrCredentialChanged ? null : (existing?.lastCheckOk !== undefined ? existing.lastCheckOk : (input.lastCheckOk !== undefined ? input.lastCheckOk : (input.lastProbeOk !== undefined ? Boolean(input.lastProbeOk) : null)));
+  const lastProbeAt = endpointOrCredentialChanged ? null : (existing?.lastProbeAt || input.lastProbeAt || existing?.lastCheck || input.lastCheck || null);
+  const lastProbeOk = endpointOrCredentialChanged ? null : (existing?.lastProbeOk !== undefined ? existing.lastProbeOk : (input.lastProbeOk !== undefined ? Boolean(input.lastProbeOk) : (existing?.lastCheckOk !== undefined ? existing.lastCheckOk : (input.lastCheckOk !== undefined ? input.lastCheckOk : null))));
+
   const now = new Date().toISOString();
   return {
     id: existing?.id || String(input.id || uid()),
@@ -200,15 +236,18 @@ function normalizeProxyRecord(input = {}, existing = null) {
     ipChannel,
     maxConcurrency,
     remark,
-    lastCheck: existing?.lastCheck || input.lastCheck || input.lastProbeAt || null,
-    lastIp: existing?.lastIp || input.lastIp || '',
-    lastCountryCode: existing?.lastCountryCode || input.lastCountryCode || '',
-    lastLatencyMs: existing?.lastLatencyMs ?? input.lastLatencyMs ?? null,
-    lastNetworkType: existing?.lastNetworkType || input.lastNetworkType || '',
-    lastErrorClass: existing?.lastErrorClass || input.lastErrorClass || '',
-    lastCheckOk: existing?.lastCheckOk !== undefined ? existing.lastCheckOk : (input.lastCheckOk !== undefined ? input.lastCheckOk : (input.lastProbeOk !== undefined ? Boolean(input.lastProbeOk) : null)),
-    lastProbeAt: existing?.lastProbeAt || input.lastProbeAt || existing?.lastCheck || input.lastCheck || null,
-    lastProbeOk: existing?.lastProbeOk !== undefined ? existing.lastProbeOk : (input.lastProbeOk !== undefined ? Boolean(input.lastProbeOk) : (existing?.lastCheckOk !== undefined ? existing.lastCheckOk : (input.lastCheckOk !== undefined ? input.lastCheckOk : null))),
+    lastCheck,
+    lastCheckAt,
+    lastCheckOk,
+    lastProbeAt,
+    lastProbeOk,
+    lastErrorClass,
+    lastError,
+    lastLatencyMs,
+    lastIp,
+    lastCountry,
+    lastCountryCode,
+    lastNetworkType,
     create_time: existing?.create_time || now,
     update_time: isMigration ? (existing?.update_time || now) : now,
   };
@@ -584,13 +623,57 @@ class ProxyStore {
       const item = draft.items.find((entry) => entry.id === id);
       if (!item) throw new Error('代理不存在: ' + id);
       item.lastCheck = new Date().toISOString();
+      item.lastCheckAt = item.lastCheck;
       item.lastLatencyMs = Number.isFinite(Number(error.latencyMs)) ? Number(error.latencyMs) : null;
       item.lastErrorClass = String(error.errorClass || error.code || 'unknown');
+      item.lastError = error.error ? String(error.error) : (error.message ? String(error.message) : null);
       item.lastCheckOk = false;
       item.lastProbeAt = item.lastCheck;
       item.lastProbeOk = false;
       item.update_time = item.lastCheck;
       return item;
+    });
+  }
+
+  async batchMarkCheck(results = []) {
+    const list = Array.isArray(results) ? results.filter(Boolean) : [];
+    if (!list.length) return [];
+    return this._commitMutation((draft) => {
+      const now = new Date().toISOString();
+      const updated = [];
+      const itemMap = new Map();
+      for (const item of draft.items) {
+        if (item && item.id) {
+          itemMap.set(item.id, item);
+        }
+      }
+      for (const res of list) {
+        const id = res.id || res.proxyId || res.proxy?.id;
+        if (!id) continue;
+        const item = itemMap.get(id);
+        if (!item) continue;
+        const isOk = Boolean(res.ok);
+        item.lastCheck = now;
+        item.lastCheckAt = now;
+        item.lastProbeAt = now;
+        item.lastCheckOk = isOk;
+        item.lastProbeOk = isOk;
+        item.lastLatencyMs = Number.isFinite(Number(res.latencyMs)) ? Number(res.latencyMs) : null;
+        if (isOk) {
+          item.lastIp = String(res.ip || '');
+          item.lastCountryCode = String(res.countryCode || res.country_code || '');
+          item.lastCountry = String(res.country || '');
+          item.lastNetworkType = String(res.networkType || '');
+          item.lastErrorClass = '';
+          item.lastError = null;
+        } else {
+          item.lastErrorClass = String(res.errorClass || res.code || 'unknown');
+          item.lastError = res.error ? String(res.error) : null;
+        }
+        item.update_time = now;
+        updated.push(item);
+      }
+      return updated;
     });
   }
 
@@ -863,6 +946,9 @@ function checkProxyLaunchHealth(proxy, options = {}) {
   }
   const lastProbeOk = proxy.lastProbeOk !== undefined ? proxy.lastProbeOk : proxy.lastCheckOk;
   if (lastProbeOk === false) {
+    if (proxy.lastErrorClass === 'probe-unavailable') {
+      return { ok: true, reason: null, probeUnavailable: true };
+    }
     const probeAt = proxy.lastProbeAt || proxy.lastCheck;
     const retryWindowMs = Number.isFinite(options.retryWindowMs)
       ? options.retryWindowMs

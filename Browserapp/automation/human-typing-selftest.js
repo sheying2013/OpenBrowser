@@ -156,6 +156,34 @@ function postJson(url, data, headers = {}) {
   });
 }
 
+function requestHttp(url, method = 'GET', headers = {}) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = http.request({
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: parsed.pathname + parsed.search,
+      method,
+      headers,
+      timeout: 15000,
+    }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => {
+        try {
+          resolve({ status: res.statusCode, body: JSON.parse(body) });
+        } catch (_) {
+          resolve({ status: res.statusCode, body });
+        }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('HTTP request timed out')));
+    req.end();
+  });
+}
+
 async function stopChild(child, dir) {
   try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
   try { execSync('pkill -f "user-data-dir=' + dir + '" 2>/dev/null || true'); } catch (_) {}
@@ -259,6 +287,72 @@ async function stopChild(child, dir) {
     }
     assert.ok(rejected, 'Typing must reject with AbortError when signal is aborted');
     assert.ok(driver.text.length < 'SuperLongTextThatWillBeAbortedBeforeFinish'.length, 'Typing stopped mid-way');
+  });
+
+  await checkAsync('sensitive input masks event characters to * to protect passwords', async () => {
+    const humanInput = require('./human-input');
+    const events = [];
+    const mockCall = {
+      call: async (_ws, method, params) => ({ method, params }),
+    };
+    const driver = humanInput.createCdpTypingDriver(mockCall, 'ws://127.0.0.1:9222/devtools/page/1', {
+      sensitive: true,
+      onEvent: (e) => events.push(e),
+      sleep: async () => {},
+    });
+    await driver.typeChar('p');
+    await driver.typeChar('a');
+    await driver.typeChar('s');
+    await driver.typeChar('s');
+
+    const charEvents = events.filter((e) => e.type === 'char');
+    assert.strictEqual(charEvents.length, 4);
+    for (const evt of charEvents) {
+      assert.strictEqual(evt.text, '*', 'Sensitive characters must be masked to * in onEvent broadcasts');
+      assert.notStrictEqual(evt.text, 'p');
+      assert.notStrictEqual(evt.text, 'a');
+      assert.notStrictEqual(evt.text, 's');
+    }
+  });
+
+  await checkAsync('dispatchHumanTyping clear modifier selects Cmd+A on darwin and Ctrl+A on win32', async () => {
+    const sentModifiers = [];
+    const mockCdp = {
+      call: async (_ws, method, params) => {
+        if (method === 'Input.dispatchKeyEvent' && params.windowsVirtualKeyCode === 65) {
+          sentModifiers.push(params.modifiers);
+        }
+        return {};
+      },
+    };
+    // Test on darwin platform
+    await dispatchHumanTyping(mockCdp, 'ws://127.0.0.1:9222', 'darwin-test', {
+      clear: true,
+      platform: 'darwin',
+      chunkSize: 100,
+    });
+    assert.strictEqual(sentModifiers[0], 4, 'darwin platform must use modifier 4 (Cmd+A)');
+
+    // Test on win32 platform
+    sentModifiers.length = 0;
+    await dispatchHumanTyping(mockCdp, 'ws://127.0.0.1:9222', 'win32-test', {
+      clear: true,
+      platform: 'win32',
+      chunkSize: 100,
+    });
+    assert.strictEqual(sentModifiers[0], 2, 'win32 platform must use modifier 2 (Ctrl+A)');
+  });
+
+  check('rpa-engine EXECUTABLE_STEP_TYPES includes humantyping and simulatetype aliases', () => {
+    const { findUnsupportedSteps } = require('./rpa-engine');
+    const steps = [
+      { type: 'humantyping', selector: '#input', text: 'hello' },
+      { type: 'simulatetype', selector: '#input', text: 'world' },
+      { type: 'simulatetyping', selector: '#input', text: 'foo' },
+      { type: '仿真输入', selector: '#input', text: 'bar' },
+    ];
+    const unsupported = findUnsupportedSteps(steps);
+    assert.strictEqual(unsupported.length, 0, 'humantyping/simulatetype steps must be recognized as executable');
   });
 
   // ==========================================
@@ -387,6 +481,13 @@ async function stopChild(child, dir) {
       console.log(`    -> Recorded ${events.length} events, avg interval: ${avgInterval.toFixed(1)}ms, variance: ${variance.toFixed(1)}`);
       assert.ok(avgInterval >= 40 && avgInterval <= 250, `Average keystroke interval ${avgInterval}ms in human range`);
       assert.ok(variance > 25, `Keystroke interval variance ${variance} indicates natural human cadence`);
+    });
+
+    // E2E Test 1b: Method Not Allowed for GET /human-typing
+    await checkAsync('Local API rejects GET /human-typing with 405 Method Not Allowed', async () => {
+      const getRes = await requestHttp(`${apiUrl}/human-typing`, 'GET', { 'x-api-key': apiKey });
+      assert.strictEqual(getRes.status, 405, 'GET on POST-only route must return HTTP 405');
+      assert.strictEqual(getRes.body.code, 405);
     });
 
     // E2E Test 2: Typo slip & correction path

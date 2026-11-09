@@ -9,12 +9,12 @@ async function run() {
   await fsp.rm(root, { recursive: true, force: true });
   const engine = new BrowserEngine({ getPath: () => root });
   const existing = [1, 2, 3, 4].map((number) => ({ id: 'env-' + String(number).padStart(3, '0'), name: 'Existing ' + number }));
-  engine.syncProfiles(existing);
+  await engine.syncProfiles(existing);
   engine.extensions.set('ext-global', { id: 'ext-global', name: 'Global Test', version: '1.0.0', path: root, builtIn: false });
   await engine.assignExtension('ext-global', existing.map((item) => item.id), true);
 
   const added = [5, 6, 7].map((number) => ({ id: 'env-' + String(number).padStart(3, '0'), name: 'Batch ' + number }));
-  engine.syncProfiles([...existing, ...added]);
+  await engine.syncProfiles([...existing, ...added]);
   for (const profile of added) assert(engine.assignments.get(profile.id).has('ext-global'), profile.id + ' did not inherit the global extension');
 
   for (const id of ['env-005', 'env-006', 'env-007']) {
@@ -46,19 +46,19 @@ async function run() {
   engine.networkInfo.set(failedId, { ip: '203.0.113.8' });
   await fsp.mkdir(engine.profileRoot(failedId), { recursive: true });
   await fsp.writeFile(path.join(engine.profileRoot(failedId), 'marker.txt'), failedId);
-  const originalRm = fsp.rm;
-  fsp.rm = async (target, options) => {
-    if (path.resolve(target) === path.resolve(engine.profileRoot(failedId))) {
+  const originalRename = fsp.rename;
+  fsp.rename = async (source, target) => {
+    if (path.resolve(source) === path.resolve(engine.profileRoot(failedId))) {
       const error = new Error('synthetic profile delete failure');
       error.code = 'EIO';
       throw error;
     }
-    return originalRm(target, options);
+    return originalRename(source, target);
   };
   try {
     await assert.rejects(engine.deleteProfiles([failedId], true), /synthetic profile delete failure/);
   } finally {
-    fsp.rm = originalRm;
+    fsp.rename = originalRename;
   }
   assert.strictEqual(engine.profiles.get(failedId), failedProfile, 'disk failure must retain profile in memory');
   assert(engine.assignments.get(failedId).has('ext-global'), 'disk failure must retain extension assignments');

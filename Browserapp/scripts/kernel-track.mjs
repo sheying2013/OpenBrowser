@@ -128,6 +128,17 @@ export function resolveBaselinePath(customPath = null) {
 }
 
 /**
+ * Load baseline JSON data, explicitly verifying it is not an unresolved Git LFS pointer.
+ */
+export async function loadBaseline(baselinePath) {
+  const raw = await fsp.readFile(baselinePath, 'utf8');
+  if (raw.trimStart().startsWith('version https://git-lfs')) {
+    throw new Error(`Git LFS pointer detected in baseline file at ${baselinePath}. Baseline content must be valid JSON, not an LFS pointer stub.`);
+  }
+  return JSON.parse(raw);
+}
+
+/**
  * Construct baseline data snapshot from current tracking status.
  */
 export function createBaselinePayload(report) {
@@ -494,8 +505,7 @@ export async function trackKernelVersions(options = {}) {
     baselinePath = resolveBaselinePath(baseline);
     try {
       if (fs.existsSync(baselinePath) && !updateBaseline) {
-        const raw = await fsp.readFile(baselinePath, 'utf8');
-        baselineData = JSON.parse(raw);
+        baselineData = await loadBaseline(baselinePath);
         baselineDrift = compareWithBaseline(report, baselineData);
       } else {
         // Generate or update baseline snapshot
@@ -512,10 +522,18 @@ export async function trackKernelVersions(options = {}) {
         };
       }
     } catch (err) {
+      const isLfs = err.message.includes('Git LFS pointer detected');
       baselineDrift = {
-        hasDrift: false,
-        changes: [],
+        hasDrift: true,
+        changes: [{
+          type: isLfs ? 'BASELINE_LFS_POINTER_ERROR' : 'BASELINE_ERROR',
+          target: 'Baseline File',
+          baseline: null,
+          current: null,
+          description: err.message,
+        }],
         error: err.message,
+        isLfsPointer: isLfs,
         summary: `Baseline processing error: ${err.message}`,
       };
     }

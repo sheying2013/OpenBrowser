@@ -151,6 +151,60 @@ check('custom userAgent validates Chrome major version against kernelMajor and e
   assert.strictEqual(events.length, 0, 'no mismatch event when UA version matches kernel');
 });
 
+check('virtual scroll measures container before clearing table and supports >25 rows cleanly', () => {
+  const renderer = read('renderer.js');
+  const renderIdx = renderer.indexOf('function renderProfiles()');
+  const tail = renderer.slice(renderIdx, renderIdx + 2500);
+  const measureIdx = tail.indexOf('const rawClientHeight = card?.clientHeight || 0');
+  const scrollSaveIdx = tail.indexOf('const savedScrollTop = card ? card.scrollTop : 0');
+  const clearIdx = tail.indexOf('table.replaceChildren()');
+  assert.ok(measureIdx > 0 && scrollSaveIdx > 0 && clearIdx > measureIdx, 'renderProfiles must measure card.clientHeight and scrollTop before table.replaceChildren()');
+  assert.match(renderer, /let measuredProfileRowHeight = 56;/, 'default virtual row height must be 56px');
+
+  const profileList = require('../ui/ui-profile-list');
+  const r0 = profileList.calculateVirtualRange({ total: 50, scrollTop: 0, viewportHeight: 600, rowHeight: 56, overscan: 5 });
+  assert.strictEqual(r0.startIndex, 0);
+  assert.ok(r0.endIndex >= 16, 'must render visible rows + overscan on initial load');
+  const rBottom = profileList.calculateVirtualRange({ total: 50, scrollTop: 2200, viewportHeight: 600, rowHeight: 56, overscan: 5 });
+  assert.strictEqual(rBottom.endIndex, 50, 'scrolling to bottom must reach row 50 without gap');
+});
+
+check('localStorage quota guard and SQLite authoritative merge preserve forceDeviceScaleFactor', () => {
+  const renderer = read('renderer.js');
+  assert.match(renderer, /profiles:\s*hasRealBackend\s*\?\s*\[\]\s*:/, 'save() must omit ui.profiles when real backend is active');
+  assert.match(renderer, /\.\.\.remote,\s*\n\s*proxyId:/, 'initialize() must use remote as authoritative base');
+  assert.match(renderer, /forceDeviceScaleFactor:/, 'normalizeProfileSettings & editorDraft must preserve privacy.forceDeviceScaleFactor');
+  assert.match(renderer, /invalidateAndRefreshProfiles\(/, 'renderer must expose invalidateAndRefreshProfiles helper');
+});
+
+check('ACTION_ICON_SVGS defines bot icon and CookieRobot uses canonical events + Number.isFinite', () => {
+  const renderer = read('renderer.js');
+  const html = read('index.html');
+  assert.match(renderer, /bot:\s*'<path d="M12 8V4H8"/, 'ACTION_ICON_SVGS must define bot icon');
+  assert.doesNotMatch(renderer, /['"]cookie-robot-(started|progress|finished|failed)['"]/, 'CookieRobot must only subscribe to canonical robot-* events');
+  assert.match(renderer, /robot-disconnected/, 'CookieRobot must handle robot-disconnected');
+  assert.match(renderer, /Number\.isFinite\(n\)/, 'CookieRobot numeric parsing must use Number.isFinite so 0 is preserved');
+  assert.match(renderer, /ua-kernel-version-mismatch/, 'renderer must listen for ua-kernel-version-mismatch');
+  assert.match(renderer, /local-api-status-endpoint/, 'renderer must update #local-api-status-endpoint');
+  assert.doesNotMatch(html, /id="editor-ua-chrome-major"[^>]*value="131"/, '#editor-ua-chrome-major must not hardcode value="131"');
+  assert.doesNotMatch(html, /id="cookie-robot-status-box"[^>]*rgba\(0,0,0,0\.03\)/, 'cookie-robot-status-box must not hardcode black background');
+});
+
+check('all 12 i18n languages define every data-i18n key in index.html', () => {
+  global.localStorage = { getItem: () => null, setItem: () => {} };
+  const I = require('../i18n.js');
+  const html = read('index.html');
+  const keys = [...html.matchAll(/(?:data-i18n|data-i18n-placeholder|data-i18n-title|data-i18n-aria)="([^"]+)"/g)].map((m) => m[1]);
+  const langs = ['en', 'zh-CN', 'ja', 'vi', 'fr', 'de', 'th', 'id', 'ko', 'ru', 'es', 'pt'];
+  for (const lang of langs) {
+    I.setPreference(lang, { persist: false, silent: true });
+    for (const k of keys) {
+      const val = I.t(k);
+      assert.notStrictEqual(val, k, `Missing i18n key "${k}" in language "${lang}"`);
+    }
+  }
+});
+
 const failed = results.filter((item) => !item.ok);
 for (const item of results) {
   if (item.ok) console.log('  PASS  ' + item.name);

@@ -1,3 +1,25 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:64768c9c000c37a1473e6022daf54a7c118bdf12caf7f09e5dbaf1d8e63945ac
-size 693
+{
+  "version": "1.0.0",
+  "generatedAt": "2026-11-08T18:00:53.227Z",
+  "description": "OpenBrowser Kernel Tracking Baseline. Used by CI to detect upstream version drift.",
+  "benchmark": {
+    "officialStable": "157.0.8103.38",
+    "officialMilestone": 157,
+    "cftStable": "157.0.8103.38",
+    "wayfernStable": "156.0.8078.81",
+    "chromiumDash": {
+      "Windows": "158.0.8127.18",
+      "Mac": "158.0.8127.18",
+      "Linux": "157.0.8103.38"
+    }
+  },
+  "local": {
+    "codeConstant": "148.0.7778.165",
+    "kernelsMetaWayfern": "149.0.7827.116",
+    "seeds": {
+      "macos-x64": "148.0.7778.165",
+      "windows-x64": "149.0.7827.114",
+      "macos-arm64": "149.0.7827.114"
+    }
+  }
+}

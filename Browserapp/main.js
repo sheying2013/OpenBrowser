@@ -906,8 +906,10 @@ function pickWorkArea() {
 // toolbar, icons, text) at 100% on a 125%/150%/200% Windows display so everything looked
 // too small. Return the display's actual scale factor so the kernel matches the OS; return
 // null when it cannot be determined (or off Windows) so callers fall back to the old default.
+let cachedDisplayScaleFactor = null;
 function pickDisplayScaleFactor() {
   if (process.platform !== 'win32') return null;
+  if (cachedDisplayScaleFactor !== null) return cachedDisplayScaleFactor;
   try {
     let display = null;
     const point = screen.getCursorScreenPoint?.();
@@ -915,7 +917,8 @@ function pickDisplayScaleFactor() {
     if (!display) display = screen.getPrimaryDisplay();
     const factor = Number(display?.scaleFactor);
     if (!Number.isFinite(factor) || factor <= 0) return null;
-    return Math.round(factor * 100) / 100;
+    cachedDisplayScaleFactor = Math.round(factor * 100) / 100;
+    return cachedDisplayScaleFactor;
   } catch (_) {
     return null;
   }
@@ -1731,7 +1734,14 @@ app.whenReady().then(async () => {
     getHostScaleFactor: pickDisplayScaleFactor,
   });
   liveSync = new LiveSyncController(engine, handleLiveSyncEvent);
-  await engine.init(path.join(__dirname, 'bundled-extension'));
+  try {
+    await engine.init(path.join(__dirname, 'bundled-extension'));
+  } catch (error) {
+    console.error('OpenBrowser engine initialization failed:', error);
+    dialog.showErrorBox('OpenBrowser 启动失败', `无法加载环境数据，已停止启动以保护现有数据。\n\n${error.message}`);
+    app.quit();
+    return;
+  }
   try {
     const startPage = await engine.ensureStartPage();
     startPage.setEngine?.(engine);
@@ -1978,6 +1988,12 @@ app.whenReady().then(async () => {
   registerTrustedIpc('profiles:status', () => engine.status());
   registerTrustedIpc('profiles:query', (_event, options) => engine.queryProfilesPage(options));
   registerTrustedIpc('profiles:get', (_event, id) => engine.getProfile(id));
+  registerTrustedIpc('profiles:save', (_event, profile) => engine.saveProfile(profile));
+  registerTrustedIpc('profiles:batch-patch', (_event, payload) => engine.batchPatchProfiles(payload));
+  registerTrustedIpc('profiles:clone', (_event, payload) => engine.cloneProfiles(payload));
+  registerTrustedIpc('profiles:renumber', () => engine.renumberProfiles());
+  registerTrustedIpc('profiles:counts', () => engine.getProfileCounts());
+  registerTrustedIpc('profiles:next-number', () => engine.getNextProfileNumber());
   registerTrustedIpc('profiles:test-proxy', (_event, profile) => engine.testProxy(profile));
   registerTrustedIpc('profiles:check-proxy', (_event, profile) => engine.checkProxy(profile, { persist: true }));
 
@@ -1986,10 +2002,11 @@ app.whenReady().then(async () => {
     const result = await dialog.showOpenDialog({ title: '选择已解压的 Chrome 扩展目录', properties: ['openDirectory'] });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
     const extension = await engine.addExtension(result.filePaths[0]);
-    const ids = [...engine.profiles.keys()]; const running = ids.filter((id) => engine.running.has(id));
+    const ids = engine.usingSqlite && engine.sqliteStore ? engine.sqliteStore.getAllProfiles().map((p) => p.id) : [...engine.profiles.keys()];
+    const running = ids.filter((id) => engine.running.has(id));
     if (ids.length) await engine.assignExtension(extension.id, ids, true);
     for (const id of running) await engine.stop(id);
-    for (const id of running) { const profile = engine.profiles.get(id); if (profile) await engine.start(profile); }
+    for (const id of running) { const profile = engine.getProfile(id) || engine.profiles.get(id); if (profile) await engine.start(profile); }
     return { canceled: false, extension, assigned: ids.length, restarted: running.length };
   });
   registerTrustedIpc('extensions:add-store', async (_event, payload) => {
@@ -2004,17 +2021,18 @@ app.whenReady().then(async () => {
     if (ids.length) await engine.assignExtension(extension.id, ids, true);
     if (payload.restart) {
       for (const id of running) await engine.stop(id);
-      for (const id of running) { const profile = engine.profiles.get(id); if (profile) await engine.start(profile); }
+      for (const id of running) { const profile = engine.getProfile(id) || engine.profiles.get(id); if (profile) await engine.start(profile); }
     }
     return { extension, assigned: ids.length, restarted: payload.restart ? running.size : 0 };
   });
   registerTrustedIpc('extensions:assign', (_event, payload) => engine.assignExtension(String(payload.extensionId), sanitizeIds(payload.profileIds), Boolean(payload.enabled)));
   registerTrustedIpc('extensions:toggle-all', async (_event, payload) => {
     const extensionId = String(payload.extensionId || ''); const enabled = Boolean(payload.enabled);
-    const ids = [...engine.profiles.keys()]; const running = ids.filter((id) => engine.running.has(id));
+    const ids = engine.usingSqlite && engine.sqliteStore ? engine.sqliteStore.getAllProfiles().map((p) => p.id) : [...engine.profiles.keys()];
+    const running = ids.filter((id) => engine.running.has(id));
     await engine.assignExtension(extensionId, ids, enabled);
     for (const id of running) await engine.stop(id);
-    for (const id of running) { const profile = engine.profiles.get(id); if (profile) await engine.start(profile); }
+    for (const id of running) { const profile = engine.getProfile(id) || engine.profiles.get(id); if (profile) await engine.start(profile); }
     return { success: true, enabled, affected: ids.length, restarted: running.length };
   });
   registerTrustedIpc('extensions:reload', async (_event, id) => {
@@ -2147,7 +2165,7 @@ app.whenReady().then(async () => {
     const store = proxyStore();
     const id = String(payload?.id || payload?.proxy_id || '');
     const item = id ? store.get(id) : null;
-    const raw = item?.raw || payload?.proxy || payload?.raw;
+    const raw = payload?.proxy || payload?.raw || item?.raw;
     if (!raw) throw new Error('proxy required');
     try {
       const result = await engine.testProxy({
@@ -2219,21 +2237,38 @@ app.whenReady().then(async () => {
       limit: payload?.limit,
       timeoutMs: payload?.timeoutMs,
       remark: payload?.remark,
+      allowPrivate: false,
     });
   });
   registerTrustedIpc('proxy:batch-speed-test', async (_event, payload) => {
     const store = proxyStore();
     const ids = Array.isArray(payload?.ids) ? payload.ids.map(String) : [];
     const allProxies = store.list();
-    const targetProxies = ids.length
+    let targetProxies = ids.length
       ? ids.map((id) => store.get(id)).filter(Boolean)
       : allProxies;
+    let truncated = false;
+    const totalCount = targetProxies.length;
+    if (!ids.length && targetProxies.length > 500) {
+      targetProxies = targetProxies.slice(0, 500);
+      truncated = true;
+    }
     if (!targetProxies.length) throw new Error('没有可测速的代理');
-    return await batchSpeedTest(targetProxies, {
+    const result = await batchSpeedTest(targetProxies, {
       store,
       concurrency: payload?.concurrency || 16,
       timeoutMs: payload?.timeoutMs || 6000,
     });
+    if (truncated) {
+      return {
+        ...result,
+        truncated: true,
+        testedCount: targetProxies.length,
+        totalCount,
+        message: '代理总数超限，本次已截断并仅测速前 500 条代理',
+      };
+    }
+    return result;
   });
   registerTrustedIpc('profiles:refresh-proxy', (_event, profile) => engine.refreshProfileProxy(profile));
   registerTrustedIpc('profiles:apply-proxy-fingerprint', async (_event, profile) => {
@@ -2393,28 +2428,35 @@ app.whenReady().then(async () => {
     }
     return { deleted, skipped };
   });
-  registerTrustedIpc('automation:mcp-paths', () => ({
-    mcpScript: path.join(__dirname, 'automation', 'mcp-server.js'),
-    appRoot: __dirname,
-    port: automation?.info?.port
-      || (process.env.OPENBROWSER_API_PORT !== undefined && Number.isFinite(Number(process.env.OPENBROWSER_API_PORT)) ? Number(process.env.OPENBROWSER_API_PORT) : null)
-      || require('./automation/local-api-server').readDiscoveryPort(app.getPath('userData')),
-    apiKey: automation?.apiKey || process.env.OPENBROWSER_API_KEY || '',
-    apiKeyFile: automation?.apiKeyFile || path.join(app.getPath('userData'), 'local-api-key.txt'),
-    localApi: automation?.info || null,
-  }));
+  registerTrustedIpc('automation:mcp-paths', () => {
+    const rawPort = process.env.OPENBROWSER_API_PORT !== undefined ? Number.parseInt(process.env.OPENBROWSER_API_PORT, 10) : null;
+    const validPort = Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65535 ? rawPort : null;
+    return {
+      mcpScript: path.join(__dirname, 'automation', 'mcp-server.js'),
+      appRoot: __dirname,
+      port: automation?.info?.port
+        || validPort
+        || require('./automation/local-api-server').readDiscoveryPort(app.getPath('userData')),
+      apiKey: automation?.apiKey || process.env.OPENBROWSER_API_KEY || '',
+      apiKeyFile: automation?.apiKeyFile || path.join(app.getPath('userData'), 'local-api-key.txt'),
+      localApi: automation?.info || null,
+    };
+  });
 
   registerTrustedIpc('cookie-robot:start', async (_event, profileId, config) => {
-    return engine.startCookieRobot(String(profileId || ''), config || {});
+    const safeId = assertProfileId(profileId);
+    const safeConfig = { ...(config || {}) };
+    delete safeConfig.recordFile;
+    return engine.startCookieRobot(safeId, safeConfig);
   });
   registerTrustedIpc('cookie-robot:stop', async (_event, profileId) => {
-    return engine.stopCookieRobot(String(profileId || ''));
+    return engine.stopCookieRobot(assertProfileId(profileId));
   });
   registerTrustedIpc('cookie-robot:get-records', async (_event, profileId) => {
-    return engine.getCookieRobotRecords(String(profileId || ''));
+    return engine.getCookieRobotRecords(assertProfileId(profileId));
   });
   registerTrustedIpc('cookie-robot:status', async (_event, profileId) => {
-    return engine.getCookieRobotStatus(String(profileId || ''));
+    return engine.getCookieRobotStatus(assertProfileId(profileId));
   });
 
   await createWindow();

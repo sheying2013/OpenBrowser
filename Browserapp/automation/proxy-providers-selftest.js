@@ -2,24 +2,36 @@
 
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const https = require('node:https');
 const net = require('node:net');
 const path = require('node:path');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
+const { EventEmitter } = require('node:events');
+
+const {
+  fetchUrlText,
+  isCloudMetadataHostname,
+  isPrivateOrLocalHostname,
+  createPinnedLookup,
+} = require('../proxy-forwarder');
 
 const {
   fetchProviderProxies,
   parseProviderResponse,
+  buildCanonicalProxyItem,
   batchSpeedTest,
   clearProviderCooldowns,
   getProviderCooldownRemaining,
   MAX_PROVIDER_BATCH_SIZE,
+  MAX_BATCH_SPEED_TEST,
   PROVIDER_COOLDOWN_MS,
   MAX_PROBE_CONCURRENCY,
 } = require('./proxy-providers');
 
 const {
   ProxyStore,
+  normalizeProxyRecord,
   checkProxyLaunchHealth,
   assertProxyLaunchAvailable,
 } = require('./proxy-store');
@@ -105,6 +117,34 @@ async function check(name, action) {
       return;
     }
 
+    if (url.pathname === '/redirect-to-metadata') {
+      res.writeHead(302, { Location: 'http://169.254.169.254/latest/meta-data' });
+      res.end();
+      return;
+    }
+
+    if (url.pathname === '/slow-chain-1') {
+      setTimeout(() => {
+        res.writeHead(302, { Location: '/slow-chain-2' });
+        res.end();
+      }, 40);
+      return;
+    }
+
+    if (url.pathname === '/slow-chain-2') {
+      setTimeout(() => {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('chain-ok');
+      }, 40);
+      return;
+    }
+
+    if (url.pathname === '/redirect-to-domain') {
+      res.writeHead(302, { Location: 'http://redirect-metadata.test/meta' });
+      res.end();
+      return;
+    }
+
     res.writeHead(404);
     res.end('Not found');
   });
@@ -120,6 +160,7 @@ async function check(name, action) {
       const res = await fetchProviderProxies(`${baseUrl}/format-ip-port`, {
         protocol: 'socks5',
         template: 'text_ip_port',
+        allowPrivate: true,
       });
       assert.strictEqual(res.ok, true);
       assert.strictEqual(res.proxies.length, 2, 'Duplicates should be removed');
@@ -137,6 +178,7 @@ async function check(name, action) {
       const res = await fetchProviderProxies(`${baseUrl}/format-ip-port-user-pass`, {
         protocol: 'socks5',
         template: 'text_ip_port_user_pass',
+        allowPrivate: true,
       });
       assert.strictEqual(res.ok, true);
       assert.strictEqual(res.proxies.length, 3);
@@ -159,6 +201,7 @@ async function check(name, action) {
       clearProviderCooldowns();
       const res = await fetchProviderProxies(`${baseUrl}/format-json-nested`, {
         template: 'json',
+        allowPrivate: true,
       });
       assert.strictEqual(res.ok, true);
       assert.strictEqual(res.proxies.length, 2, 'Duplicate entry should be filtered');
@@ -177,6 +220,7 @@ async function check(name, action) {
       clearProviderCooldowns();
       const res = await fetchProviderProxies(`${baseUrl}/format-json-custom-mapping`, {
         template: 'json',
+        allowPrivate: true,
         fieldMapping: {
           ip: 'proxy_ip',
           port: 'proxy_port',
@@ -199,6 +243,7 @@ async function check(name, action) {
       clearProviderCooldowns();
       const res = await fetchProviderProxies(`${baseUrl}/format-overflow`, {
         template: 'text_ip_port',
+        allowPrivate: true,
       });
       assert.strictEqual(res.ok, true);
       assert.strictEqual(res.proxies.length, 500, `Expected exactly 500 items, got ${res.proxies.length}`);
@@ -211,13 +256,13 @@ async function check(name, action) {
       const testUrl = `${baseUrl}/format-ip-port`;
 
       // First fetch must succeed
-      const first = await fetchProviderProxies(testUrl, { template: 'text_ip_port' });
+      const first = await fetchProviderProxies(testUrl, { template: 'text_ip_port', allowPrivate: true });
       assert.strictEqual(first.ok, true);
 
       // Immediate second fetch must throw ERR_COOLDOWN
       let thrown = null;
       try {
-        await fetchProviderProxies(testUrl, { template: 'text_ip_port' });
+        await fetchProviderProxies(testUrl, { template: 'text_ip_port', allowPrivate: true });
       } catch (err) {
         thrown = err;
       }
@@ -230,6 +275,7 @@ async function check(name, action) {
       const bypass = await fetchProviderProxies(testUrl, {
         template: 'text_ip_port',
         bypassCooldown: true,
+        allowPrivate: true,
       });
       assert.strictEqual(bypass.ok, true);
     });
@@ -460,16 +506,574 @@ async function check(name, action) {
       assert.strictEqual(prepared.networkMode, 'proxy');
     });
 
-    // --- Test 9: SSRF Guard on metadata endpoints ---
+    // --- Test 9: SSRF Guard on metadata endpoints and loopback defaults ---
     await check('fetchProviderProxies blocks cloud metadata addresses (anti-SSRF)', async () => {
-      let thrown = null;
+      // 1. Default allowPrivate: false blocks loopback
+      let defaultLoopbackBlocked = null;
+      try {
+        await fetchProviderProxies(`${baseUrl}/format-ip-port`, { bypassCooldown: true });
+      } catch (err) {
+        defaultLoopbackBlocked = err;
+      }
+      assert.ok(defaultLoopbackBlocked, 'Default allowPrivate must block loopback without explicit allowPrivate: true');
+      assert.match(defaultLoopbackBlocked.message, /防 SSRF|本机|内网/i);
+
+      // 2. Standard IPv4 metadata
+      let thrownMeta = null;
       try {
         await fetchProviderProxies('http://169.254.169.254/latest/meta-data', { bypassCooldown: true });
       } catch (err) {
-        thrown = err;
+        thrownMeta = err;
       }
-      assert.ok(thrown, 'Should have blocked SSRF target');
-      assert.match(thrown.message, /防 SSRF|metadata/i);
+      assert.ok(thrownMeta, 'Should have blocked 169.254.169.254');
+      assert.match(thrownMeta.message, /防 SSRF|metadata/i);
+
+      // 3. IPv4-mapped IPv6 metadata (::ffff:169.254.169.254)
+      let thrownMapped = null;
+      try {
+        await fetchProviderProxies('http://[::ffff:169.254.169.254]/latest/meta-data', { bypassCooldown: true });
+      } catch (err) {
+        thrownMapped = err;
+      }
+      assert.ok(thrownMapped, 'Should have blocked ::ffff:169.254.169.254');
+      assert.match(thrownMapped.message, /防 SSRF|metadata/i);
+
+      // 4. CGNAT metadata endpoint (100.100.100.200)
+      let thrownAli = null;
+      try {
+        await fetchProviderProxies('http://100.100.100.200/latest/meta-data', { bypassCooldown: true });
+      } catch (err) {
+        thrownAli = err;
+      }
+      assert.ok(thrownAli, 'Should have blocked 100.100.100.200');
+      assert.match(thrownAli.message, /防 SSRF|metadata/i);
+
+      // 5. IPv6 IMDS endpoint (fd00:ec2::254)
+      let thrownAwsV6 = null;
+      try {
+        await fetchProviderProxies('http://[fd00:ec2::254]/latest/meta-data', { bypassCooldown: true });
+      } catch (err) {
+        thrownAwsV6 = err;
+      }
+      assert.ok(thrownAwsV6, 'Should have blocked fd00:ec2::254');
+      assert.match(thrownAwsV6.message, /防 SSRF|metadata/i);
+
+      // 6. Internal metadata hostname with trailing dot (metadata.google.internal.)
+      let thrownDot = null;
+      try {
+        await fetchProviderProxies('http://metadata.google.internal./computeMetadata/v1/', { bypassCooldown: true });
+      } catch (err) {
+        thrownDot = err;
+      }
+      assert.ok(thrownDot, 'Should have blocked metadata.google.internal.');
+      assert.match(thrownDot.message, /防 SSRF|metadata/i);
+
+      // 7. Loopback 302 redirecting to metadata must be blocked even when allowPrivate: true
+      let thrownRedirect = null;
+      try {
+        await fetchProviderProxies(`${baseUrl}/redirect-to-metadata`, {
+          bypassCooldown: true,
+          allowPrivate: true,
+        });
+      } catch (err) {
+        thrownRedirect = err;
+      }
+      assert.ok(thrownRedirect, 'Loopback redirect to metadata must be blocked');
+      assert.match(thrownRedirect.message, /防 SSRF|metadata/i);
+    });
+
+    // --- Test 10: IPv6 address formatting in buildCanonicalProxyItem ---
+    await check('buildCanonicalProxyItem formats IPv6 host with brackets', async () => {
+      const item = buildCanonicalProxyItem({ host: '2001:db8::1', port: 8080 });
+      assert.ok(item);
+      assert.strictEqual(item.raw, 'socks5://[2001:db8::1]:8080');
+      assert.strictEqual(item.name, '[2001:db8::1]:8080');
+
+      const itemWithBrackets = buildCanonicalProxyItem({ host: '[2001:db8::2]', port: 9090 });
+      assert.ok(itemWithBrackets);
+      assert.strictEqual(itemWithBrackets.raw, 'socks5://[2001:db8::2]:9090');
+      assert.strictEqual(itemWithBrackets.name, '[2001:db8::2]:9090');
+    });
+
+    // --- Test 11: normalizeProxyRecord clears failure status when node parameters change ---
+    await check('normalizeProxyRecord clears failure status when node configuration changes', async () => {
+      const existing = normalizeProxyRecord({
+        id: 'p1',
+        host: '198.51.100.1',
+        port: 1080,
+        protocol: 'socks5',
+        username: 'u1',
+        password: 'p1',
+        lastCheck: '2026-01-01T00:00:00.000Z',
+        lastCheckOk: false,
+        lastProbeOk: false,
+        lastErrorClass: 'unreachable',
+        lastError: 'ECONNREFUSED',
+        lastIp: '1.2.3.4',
+        lastCountry: 'US',
+        lastCountryCode: 'US',
+        lastLatencyMs: 999,
+      });
+
+      // 1. Changing host must reset failure state
+      const updatedHost = normalizeProxyRecord({
+        id: 'p1',
+        host: '198.51.100.2',
+      }, existing);
+      assert.strictEqual(updatedHost.lastCheck, null);
+      assert.strictEqual(updatedHost.lastCheckOk, null);
+      assert.strictEqual(updatedHost.lastProbeOk, null);
+      assert.strictEqual(updatedHost.lastErrorClass, '');
+      assert.strictEqual(updatedHost.lastIp, '');
+      assert.strictEqual(updatedHost.lastCountry, '');
+
+      // 2. Changing port must reset failure state
+      const updatedPort = normalizeProxyRecord({
+        id: 'p1',
+        port: 1081,
+      }, existing);
+      assert.strictEqual(updatedPort.lastCheckOk, null);
+      assert.strictEqual(updatedPort.lastErrorClass, '');
+
+      // 3. Changing password must reset failure state
+      const updatedPass = normalizeProxyRecord({
+        id: 'p1',
+        password: 'new-password',
+      }, existing);
+      assert.strictEqual(updatedPass.lastCheckOk, null);
+      assert.strictEqual(updatedPass.lastErrorClass, '');
+
+      // 4. proxyAuthAction: clear must reset failure state
+      const clearedAuth = normalizeProxyRecord({
+        id: 'p1',
+        proxyAuthAction: 'clear',
+      }, existing);
+      assert.strictEqual(clearedAuth.lastCheckOk, null);
+      assert.strictEqual(clearedAuth.lastErrorClass, '');
+
+      // 5. Unchanged node details preserve check state
+      const unchanged = normalizeProxyRecord({
+        id: 'p1',
+        remark: 'new remark only',
+      }, existing);
+      assert.strictEqual(unchanged.lastCheckOk, false);
+      assert.strictEqual(unchanged.lastErrorClass, 'unreachable');
+    });
+
+    // --- Test 12: probe-unavailable does NOT block opening windows in checkProxyLaunchHealth ---
+    await check('checkProxyLaunchHealth passes when lastErrorClass is probe-unavailable', async () => {
+      const probeUnavailProxy = {
+        id: 'p-probe-unavail',
+        name: '限频节点',
+        host: '198.51.100.5',
+        port: 1080,
+        protocol: 'socks5',
+        raw: 'socks5://198.51.100.5:1080',
+        lastProbeOk: false,
+        lastErrorClass: 'probe-unavailable',
+        lastProbeAt: new Date(Date.now() - 90 * 1000).toISOString(),
+      };
+      const health = checkProxyLaunchHealth(probeUnavailProxy);
+      assert.strictEqual(health.ok, true, 'probe-unavailable must allow launch for dynamic re-probing');
+      assert.strictEqual(health.probeUnavailable, true);
+    });
+
+    // --- Test 13: sanitizeProfile allowFailedProxy toggle uncheck ---
+    await check('sanitizeProfile allows unchecking allowFailedProxy without stale override', async () => {
+      const profileWithStaleTopLevel = {
+        id: 'prof-test-toggle',
+        name: 'Toggle Test Profile',
+        networkMode: 'proxy',
+        allowFailedProxy: true,
+        proxyMeta: {
+          allowFailedProxy: false,
+        },
+      };
+      const sanitized = sanitizeProfile(profileWithStaleTopLevel);
+      assert.strictEqual(sanitized.allowFailedProxy, false, 'Explicit false in proxyMeta must take precedence over stale top-level true');
+      assert.strictEqual(sanitized.proxyMeta.allowFailedProxy, false);
+    });
+
+    // --- Test 14: ProxyStore batchMarkCheck updates multiple entries in a single commit ---
+    await check('ProxyStore batchMarkCheck updates multiple entries in a single commit', async () => {
+      const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'proxy-batch-test-'));
+      const storePath = path.join(tempDir, 'proxy-store.json');
+      const store = new ProxyStore(storePath, { encrypted: false });
+      await store.load();
+
+      const p1 = await store.create({ host: '198.51.100.10', port: 1080, protocol: 'socks5' });
+      const p2 = await store.create({ host: '198.51.100.11', port: 1080, protocol: 'socks5' });
+
+      const updated = await store.batchMarkCheck([
+        { id: p1.id, ok: true, ip: '1.2.3.4', countryCode: 'US', country: 'United States', latencyMs: 50 },
+        { id: p2.id, ok: false, errorClass: 'unreachable', error: 'ECONNREFUSED', latencyMs: 20 },
+      ]);
+
+      assert.strictEqual(updated.length, 2);
+      const reloaded1 = store.get(p1.id);
+      assert.strictEqual(reloaded1.lastCheckOk, true);
+      assert.strictEqual(reloaded1.lastIp, '1.2.3.4');
+      assert.strictEqual(reloaded1.lastCountry, 'United States');
+
+      const reloaded2 = store.get(p2.id);
+      assert.strictEqual(reloaded2.lastCheckOk, false);
+      assert.strictEqual(reloaded2.lastErrorClass, 'unreachable');
+
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    });
+
+    // --- Test 15: NAT64 and 6to4 embedded metadata and private address classification ---
+    await check('NAT64 64:ff9b::/96 and 6to4 2002::/16 embedded metadata and private IP handling', async () => {
+      // 1. NAT64 metadata (dotted-quad and hex)
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b::169.254.169.254'), true);
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b::a9fe:a9fe'), true);
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b::100.100.100.200'), true);
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b::6464:64c8'), true);
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b::169.254.170.2'), true);
+
+      // RFC 6052 /48 layout for 64:ff9b:1::/48
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b:1:a9fe:a9:fe00::'), true);
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b:1:a9fe:a9:fe00::1'), true);
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b:1:6464:64:c800::'), true);
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b:1:a9fe:aa:200::'), true);
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b:1:c0a8:1:100::'), false);
+      assert.strictEqual(isPrivateOrLocalHostname('64:ff9b:1:c0a8:1:100::'), true);
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b:1::a9fe:a9fe'), true);
+
+      // 2. 6to4 metadata
+      assert.strictEqual(isCloudMetadataHostname('2002:a9fe:a9fe::1'), true);
+      assert.strictEqual(isCloudMetadataHostname('2002:a9fe:a9fe::'), true);
+      assert.strictEqual(isCloudMetadataHostname('2002:6464:64c8::1'), true);
+      assert.strictEqual(isCloudMetadataHostname('2002:a9fe:aa02::1'), true);
+
+      // 3. NAT64 and 6to4 private IPs (not metadata, but isPrivate)
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b::192.168.1.1'), false);
+      assert.strictEqual(isPrivateOrLocalHostname('64:ff9b::192.168.1.1'), true);
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b::127.0.0.1'), false);
+      assert.strictEqual(isPrivateOrLocalHostname('64:ff9b::127.0.0.1'), true);
+
+      assert.strictEqual(isCloudMetadataHostname('2002:c0a8:0101::1'), false);
+      assert.strictEqual(isPrivateOrLocalHostname('2002:c0a8:0101::1'), true);
+      assert.strictEqual(isCloudMetadataHostname('2002:7f00:0001::'), false);
+      assert.strictEqual(isPrivateOrLocalHostname('2002:7f00:0001::'), true);
+      assert.strictEqual(isCloudMetadataHostname('2002:0a00:0001::'), false);
+      assert.strictEqual(isPrivateOrLocalHostname('2002:0a00:0001::'), true);
+
+      // 4. NAT64 and 6to4 public IPs (neither metadata nor private)
+      assert.strictEqual(isCloudMetadataHostname('64:ff9b::8.8.8.8'), false);
+      assert.strictEqual(isPrivateOrLocalHostname('64:ff9b::8.8.8.8'), false);
+      assert.strictEqual(isCloudMetadataHostname('2002:0808:0808::1'), false);
+      assert.strictEqual(isPrivateOrLocalHostname('2002:0808:0808::1'), false);
+
+      // 5. fetchProviderProxies blocks NAT64 and 6to4 metadata even with allowPrivate: true
+      let errNat64 = null;
+      try {
+        await fetchProviderProxies('http://[64:ff9b::169.254.169.254]/meta', {
+          bypassCooldown: true,
+          allowPrivate: true,
+        });
+      } catch (err) {
+        errNat64 = err;
+      }
+      assert.ok(errNat64, 'NAT64 metadata must be blocked even when allowPrivate: true');
+      assert.match(errNat64.message, /防 SSRF|metadata/i);
+
+      let errNat6448 = null;
+      try {
+        await fetchProviderProxies('http://[64:ff9b:1:a9fe:a9:fe00::]/meta', {
+          bypassCooldown: true,
+          allowPrivate: true,
+        });
+      } catch (err) {
+        errNat6448 = err;
+      }
+      assert.ok(errNat6448, 'NAT64 /48 layout metadata must be blocked even when allowPrivate: true');
+      assert.match(errNat6448.message, /防 SSRF|metadata/i);
+
+      let err6to4 = null;
+      try {
+        await fetchProviderProxies('http://[2002:a9fe:a9fe::1]/meta', {
+          bypassCooldown: true,
+          allowPrivate: true,
+        });
+      } catch (err) {
+        err6to4 = err;
+      }
+      assert.ok(err6to4, '6to4 metadata must be blocked even when allowPrivate: true');
+      assert.match(err6to4.message, /防 SSRF|metadata/i);
+    });
+
+    // --- Test 16: fetchUrlText DNS check and pinning rejects cloud metadata even when allowPrivate is true ---
+    await check('fetchUrlText performs DNS check and pinning to reject metadata even when allowPrivate is true', async () => {
+      // 1. Hostname resolving to IPv4 metadata (169.254.169.254) with allowPrivate: true
+      let errV4Meta = null;
+      try {
+        await fetchUrlText('http://fake-meta-host.local/info', {
+          allowPrivate: true,
+          dnsLookup: async () => [{ address: '169.254.169.254', family: 4 }],
+        });
+      } catch (err) {
+        errV4Meta = err;
+      }
+      assert.ok(errV4Meta, 'Hostname resolving to 169.254.169.254 must be blocked even with allowPrivate: true');
+      assert.match(errV4Meta.message, /防 SSRF|metadata/i);
+
+      // 2. Hostname resolving to 100.100.100.200 with allowPrivate: true
+      let errAliMeta = null;
+      try {
+        await fetchUrlText('http://fake-ali-meta.local/info', {
+          allowPrivate: true,
+          dnsLookup: async () => [{ address: '100.100.100.200', family: 4 }],
+        });
+      } catch (err) {
+        errAliMeta = err;
+      }
+      assert.ok(errAliMeta, 'Hostname resolving to 100.100.100.200 must be blocked');
+      assert.match(errAliMeta.message, /防 SSRF|metadata/i);
+
+      // 3. Hostname resolving to fd00:ec2::254
+      let errAwsV6 = null;
+      try {
+        await fetchUrlText('http://fake-awsv6-meta.local/info', {
+          allowPrivate: true,
+          dnsLookup: async () => [{ address: 'fd00:ec2::254', family: 6 }],
+        });
+      } catch (err) {
+        errAwsV6 = err;
+      }
+      assert.ok(errAwsV6, 'Hostname resolving to fd00:ec2::254 must be blocked');
+      assert.match(errAwsV6.message, /防 SSRF|metadata/i);
+
+      // 4. Hostname resolving to NAT64 metadata (64:ff9b::a9fe:a9fe)
+      let errNat64Dns = null;
+      try {
+        await fetchUrlText('http://fake-nat64-meta.local/info', {
+          allowPrivate: true,
+          dnsLookup: async () => [{ address: '64:ff9b::a9fe:a9fe', family: 6 }],
+        });
+      } catch (err) {
+        errNat64Dns = err;
+      }
+      assert.ok(errNat64Dns, 'Hostname resolving to NAT64 metadata must be blocked');
+      assert.match(errNat64Dns.message, /防 SSRF|metadata/i);
+
+      // 5. Hostname resolving to 6to4 metadata (2002:a9fe:a9fe::1)
+      let err6to4Dns = null;
+      try {
+        await fetchUrlText('http://fake-6to4-meta.local/info', {
+          allowPrivate: true,
+          dnsLookup: async () => [{ address: '2002:a9fe:a9fe::1', family: 6 }],
+        });
+      } catch (err) {
+        err6to4Dns = err;
+      }
+      assert.ok(err6to4Dns, 'Hostname resolving to 6to4 metadata must be blocked');
+      assert.match(err6to4Dns.message, /防 SSRF|metadata/i);
+
+      // 6. Dual resolution containing both safe loopback and metadata address -> MUST throw
+      let errDual = null;
+      try {
+        await fetchUrlText('http://fake-dual-rebind.local/info', {
+          allowPrivate: true,
+          dnsLookup: async () => [
+            { address: '127.0.0.1', family: 4 },
+            { address: '169.254.169.254', family: 4 },
+          ],
+        });
+      } catch (err) {
+        errDual = err;
+      }
+      assert.ok(errDual, 'Dual-record resolution with metadata must be blocked');
+      assert.match(errDual.message, /防 SSRF|metadata/i);
+
+      // 7. Non-metadata loopback resolution succeeds when allowPrivate: true (compatibility preserved)
+      const loopbackResult = await fetchUrlText(`http://local-test-domain.test:${serverPort}/format-ip-port`, {
+        allowPrivate: true,
+        dnsLookup: async () => [{ address: '127.0.0.1', family: 4 }],
+      });
+      assert.strictEqual(loopbackResult.status, 200);
+      assert.match(loopbackResult.body, /127\.0\.0\.1:8081/);
+
+      // 8. Non-metadata loopback resolution rejected when allowPrivate: false
+      let errPrivateBlocked = null;
+      try {
+        await fetchUrlText(`http://local-test-domain.test:${serverPort}/format-ip-port`, {
+          allowPrivate: false,
+          dnsLookup: async () => [{ address: '127.0.0.1', family: 4 }],
+        });
+      } catch (err) {
+        errPrivateBlocked = err;
+      }
+      assert.ok(errPrivateBlocked, 'Loopback resolution must be blocked when allowPrivate: false');
+      assert.match(errPrivateBlocked.message, /本机|内网/i);
+    });
+
+    // --- Test 17: createPinnedLookup supports multi-record returns with opts.all and family filtering ---
+    await check('createPinnedLookup supports multi-record returns and family filtering', async () => {
+      const records = [
+        { address: '192.0.2.1', family: 4 },
+        { address: '192.0.2.2', family: 4 },
+        { address: '2001:db8::1', family: 6 },
+      ];
+      const lookup = createPinnedLookup(records, 'test.example.com');
+
+      // 1. opts.all: true returns all matched records
+      await new Promise((resolve, reject) => {
+        lookup('test.example.com', { all: true }, (err, results) => {
+          if (err) return reject(err);
+          assert.strictEqual(Array.isArray(results), true);
+          assert.strictEqual(results.length, 3);
+          assert.strictEqual(results[0].address, '192.0.2.1');
+          assert.strictEqual(results[0].family, 4);
+          assert.strictEqual(results[2].address, '2001:db8::1');
+          assert.strictEqual(results[2].family, 6);
+          resolve();
+        });
+      });
+
+      // 2. opts.all: true with family: 4 filters to IPv4 only
+      await new Promise((resolve, reject) => {
+        lookup('test.example.com', { family: 4, all: true }, (err, results) => {
+          if (err) return reject(err);
+          assert.strictEqual(results.length, 2);
+          assert.strictEqual(results.every((r) => r.family === 4), true);
+          resolve();
+        });
+      });
+
+      // 3. opts.all: true with family: 6 filters to IPv6 only
+      await new Promise((resolve, reject) => {
+        lookup('test.example.com', { family: 6, all: true }, (err, results) => {
+          if (err) return reject(err);
+          assert.strictEqual(results.length, 1);
+          assert.strictEqual(results[0].address, '2001:db8::1');
+          assert.strictEqual(results[0].family, 6);
+          resolve();
+        });
+      });
+
+      // 4. opts.family: 4 (single address)
+      await new Promise((resolve, reject) => {
+        lookup('test.example.com', { family: 4 }, (err, address, family) => {
+          if (err) return reject(err);
+          assert.strictEqual(address, '192.0.2.1');
+          assert.strictEqual(family, 4);
+          resolve();
+        });
+      });
+
+      // 5. opts.family: 6 (single address)
+      await new Promise((resolve, reject) => {
+        lookup('test.example.com', { family: 6 }, (err, address, family) => {
+          if (err) return reject(err);
+          assert.strictEqual(address, '2001:db8::1');
+          assert.strictEqual(family, 6);
+          resolve();
+        });
+      });
+
+      // 6. Family filtering error when no matching records
+      const ipv4Only = [{ address: '192.0.2.1', family: 4 }];
+      const lookupV4Only = createPinnedLookup(ipv4Only, 'v4.example.com');
+      await new Promise((resolve, reject) => {
+        lookupV4Only('v4.example.com', { family: 6 }, (err) => {
+          assert.ok(err, 'Family 6 request on IPv4-only records must fail');
+          assert.strictEqual(err.code, 'ENOTFOUND');
+          resolve();
+        });
+      });
+    });
+
+    // --- Test 18: Redirect re-validation and HTTPS downgrade prohibition ---
+    await check('fetchUrlText re-validates redirects and prohibits HTTPS downgrade to HTTP', async () => {
+      // 1. HTTPS downgrade to HTTP prohibition
+      const origHttpsRequest = https.request;
+      try {
+        https.request = (url, opts, cb) => {
+          const fakeRes = new EventEmitter();
+          fakeRes.statusCode = 302;
+          fakeRes.headers = { location: `http://127.0.0.1:${serverPort}/format-ip-port` };
+          fakeRes.resume = () => {};
+          const fakeReq = new EventEmitter();
+          fakeReq.end = () => process.nextTick(() => cb(fakeRes));
+          fakeReq.destroy = () => {};
+          return fakeReq;
+        };
+
+        let errDowngrade = null;
+        try {
+          await fetchUrlText(`https://127.0.0.1:${serverPort}/secure`, { allowPrivate: true });
+        } catch (err) {
+          errDowngrade = err;
+        }
+        assert.ok(errDowngrade, 'HTTPS to HTTP downgrade must be rejected');
+        assert.match(errDowngrade.message, /禁止 HTTPS 降级到 HTTP/);
+      } finally {
+        https.request = origHttpsRequest;
+      }
+
+      // 2. Redirect destination DNS re-validation against metadata
+      let errRedirectMeta = null;
+      try {
+        await fetchUrlText(`${baseUrl}/redirect-to-domain`, {
+          allowPrivate: true,
+          dnsLookup: async (h) => {
+            if (h === 'redirect-metadata.test') {
+              return [{ address: '169.254.169.254', family: 4 }];
+            }
+            return [{ address: '127.0.0.1', family: 4 }];
+          },
+        });
+      } catch (err) {
+        errRedirectMeta = err;
+      }
+      assert.ok(errRedirectMeta, 'Redirect to domain resolving to metadata must be blocked');
+      assert.match(errRedirectMeta.message, /防 SSRF|metadata/i);
+    });
+
+    // --- Test 19: Unified absolute deadline across DNS, redirects, and responses ---
+    await check('fetchUrlText enforces unified absolute deadline across DNS, redirects, and responses', async () => {
+      // 1. Slow redirect chain exceeding overall timeout must fail with 请求超时
+      // Chain takes 40ms + 40ms = 80ms. With timeout: 50, it must timeout.
+      const t0 = Date.now();
+      let errChainTimeout = null;
+      try {
+        await fetchUrlText(`${baseUrl}/slow-chain-1`, {
+          timeout: 50,
+          allowPrivate: true,
+        });
+      } catch (err) {
+        errChainTimeout = err;
+      }
+      const elapsedChain = Date.now() - t0;
+      assert.ok(errChainTimeout, 'Chain exceeding cumulative timeout must fail');
+      assert.strictEqual(errChainTimeout.message, '请求超时');
+      assert.ok(elapsedChain < 200, `Timed out in reasonable time: ${elapsedChain}ms`);
+
+      // 2. Same chain within sufficient timeout must succeed
+      const okChain = await fetchUrlText(`${baseUrl}/slow-chain-1`, {
+        timeout: 300,
+        allowPrivate: true,
+      });
+      assert.strictEqual(okChain.status, 200);
+      assert.strictEqual(okChain.body, 'chain-ok');
+
+      // 3. Slow DNS lookup exceeding unified timeout must fail with 请求超时
+      const t1 = Date.now();
+      let errDnsTimeout = null;
+      try {
+        await fetchUrlText(`http://fake-slow-dns.test:${serverPort}/format-ip-port`, {
+          timeout: 50,
+          allowPrivate: true,
+          dnsLookup: () => new Promise((resolve) => setTimeout(() => resolve([{ address: '127.0.0.1', family: 4 }]), 150)),
+        });
+      } catch (err) {
+        errDnsTimeout = err;
+      }
+      const elapsedDns = Date.now() - t1;
+      assert.ok(errDnsTimeout, 'Slow DNS lookup exceeding unified timeout must fail');
+      assert.strictEqual(errDnsTimeout.message, '请求超时');
+      assert.ok(elapsedDns < 150, `DNS timed out in reasonable time: ${elapsedDns}ms`);
     });
 
   } finally {

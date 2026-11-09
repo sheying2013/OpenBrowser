@@ -224,8 +224,24 @@ function applyRestoredProfiles(result) {
     ui.groups = result.groups;
   }
   save();
-  window.ops.syncProfiles(ui.profiles).catch(() => {});
-  app.renderProfiles?.();
+  const refresh = () => {
+    if (typeof window.invalidateAndRefreshProfiles === 'function') {
+      window.invalidateAndRefreshProfiles({ resetScroll: true });
+    } else if (typeof app?.invalidateAndRefreshProfiles === 'function') {
+      app.invalidateAndRefreshProfiles({ resetScroll: true });
+    } else {
+      app.renderProfiles?.();
+      if (typeof window.requestProfilesPage === 'function') {
+        window.requestProfilesPage();
+      }
+    }
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('openbrowser:refresh-profiles', { detail: { resetScroll: true } }));
+    }
+  };
+  Promise.resolve(window.ops?.syncProfiles?.(ui.profiles))
+    .catch(() => {})
+    .finally(refresh);
   refreshProxies?.().catch?.(() => {});
 }
 

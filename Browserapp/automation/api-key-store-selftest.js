@@ -51,6 +51,26 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  PASS  ' + nam
   const key3 = await new ApiKeyStore(userData).resolve('');
   ok('corrupt file regenerates key', /^[A-Za-z0-9_-]{43}$/.test(key3) && key3 !== key2);
 
+  // ---- encrypted migration preserves existing backups and replaces plaintext ----
+  const migrationDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ob-apikey-migrate-'));
+  const migrationPath = path.join(migrationDir, KEY_FILE);
+  const legacyKey = 'legacy-key-1234567890';
+  await fsp.writeFile(migrationPath, JSON.stringify({ apiKey: legacyKey }));
+  await fsp.writeFile(migrationPath + '.bak', 'existing backup');
+  const migrated = new ApiKeyStore(migrationDir, { encrypted: true });
+  ok('migration retains the original API key', (await migrated.resolve('')) === legacyKey);
+  const migratedRaw = await fsp.readFile(migrationPath);
+  ok('migration writes encrypted data', require('../credential-crypto').isEncrypted(migratedRaw));
+  ok('migration does not overwrite existing backup', (await fsp.readFile(migrationPath + '.bak', 'utf8')) === 'existing backup');
+  const damagedEncrypted = Buffer.from('OBE1broken');
+  await fsp.writeFile(migrationPath, damagedEncrypted);
+  await assert.rejects(new ApiKeyStore(migrationDir, { encrypted: true }).resolve(''), /已保留原文件/);
+  ok('unreadable encrypted key remains untouched', (await fsp.readFile(migrationPath)).equals(damagedEncrypted));
+  await fsp.writeFile(migrationPath, migratedRaw);
+  if (process.platform !== 'win32') {
+    ok('encrypted key file is 0600', (fs.statSync(migrationPath).mode & 0o777) === 0o600);
+  }
+
   // ---- unwritable location: degrade to session-only key, do not throw ----
   const blocked = await fsp.mkdtemp(path.join(os.tmpdir(), 'ob-apikey-blocked-'));
   await fsp.mkdir(path.join(blocked, KEY_FILE)); // file path occupied by a directory

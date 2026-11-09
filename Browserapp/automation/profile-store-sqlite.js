@@ -10,12 +10,23 @@ const {
 // profiles.data 含代理凭据/Cookies，落库前整体加密（与 state-storage 同一套 credential-crypto），读路径兼容明文
 const credentialCrypto = require('../credential-crypto');
 
-function encodeProfileData(profile) {
+function sanitizeProxyText(proxy) {
+  if (!proxy) return '';
+  if (typeof proxy === 'string' && /^(direct|offline|none)$/i.test(proxy.trim())) return 'direct';
   try {
-    return credentialCrypto.encryptCredential(JSON.stringify(profile));
+    const { parseProxy } = require('../proxy-forwarder');
+    const parsed = parseProxy(proxy);
+    if (!parsed?.host || !parsed.port) return '';
+    const host = parsed.host.includes(':') ? `[${parsed.host.replace(/^\[|\]$/g, '')}]` : parsed.host;
+    return `${parsed.protocol}://${host}:${parsed.port}`;
   } catch (_) {
-    return JSON.stringify(profile);
+    // Never index an unrecognized proxy string: it may contain credentials.
+    return '';
   }
+}
+
+function encodeProfileData(profile) {
+  return credentialCrypto.encryptCredential(JSON.stringify(profile));
 }
 
 function decodeProfileData(text) {
@@ -44,6 +55,7 @@ class ProfileStoreSqlite {
       throw new Error('dbPath is required for ProfileStoreSqlite');
     }
     this.dbPath = path.resolve(options.dbPath);
+    this.profileDataRoot = options.profileDataRoot ? path.resolve(options.profileDataRoot) : null;
     this.legacyJsonPath = options.legacyJsonPath ? path.resolve(options.legacyJsonPath) : null;
     this.enableWal = options.wal !== false;
     this.backupOldJson = options.backupOldJson !== false;
@@ -142,6 +154,9 @@ class ProfileStoreSqlite {
         id TEXT PRIMARY KEY,
         number INTEGER,
         name TEXT NOT NULL,
+        title TEXT,
+        tag TEXT,
+        proxy_text TEXT,
         group_id TEXT,
         trashed INTEGER DEFAULT 0,
         trashed_at TEXT,
@@ -175,17 +190,72 @@ class ProfileStoreSqlite {
       CREATE INDEX IF NOT EXISTS idx_ext_assign_profile ON extension_assignments(profile_id);
       CREATE INDEX IF NOT EXISTS idx_ext_assign_ext ON extension_assignments(extension_id);
     `);
+
+    // Add columns before indexing them so existing databases can be upgraded.
+    const tableInfo = this.db.prepare('PRAGMA table_info(profiles);').all();
+    const colNames = new Set(tableInfo.map((c) => c.name));
+    if (!colNames.has('title')) {
+      this.db.exec('ALTER TABLE profiles ADD COLUMN title TEXT;');
+    }
+    if (!colNames.has('tag')) {
+      this.db.exec('ALTER TABLE profiles ADD COLUMN tag TEXT;');
+    }
+    if (!colNames.has('proxy_text')) {
+      this.db.exec('ALTER TABLE profiles ADD COLUMN proxy_text TEXT;');
+    }
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_profiles_title ON profiles(title);
+      CREATE INDEX IF NOT EXISTS idx_profiles_tag ON profiles(tag);
+      CREATE INDEX IF NOT EXISTS idx_profiles_proxy_text ON profiles(proxy_text);
+    `);
+
+    // Rebuild legacy search metadata once, including potentially unsafe older values.
+    try {
+      const needsBackfill = !this.db.prepare(
+        "SELECT value FROM meta WHERE key = 'profile_search_index_version';"
+      ).get();
+      if (needsBackfill) {
+        const missingRows = this.db.prepare(
+          'SELECT id, data FROM profiles WHERE data IS NOT NULL;'
+        ).all();
+        const updateStmt = this.db.prepare(
+          'UPDATE profiles SET title = ?, tag = ?, proxy_text = ? WHERE id = ?;'
+        );
+        this.db.exec('BEGIN TRANSACTION;');
+        try {
+          for (const row of missingRows) {
+            const decoded = decodeProfileData(row.data);
+            const title = decoded ? String(decoded.title || '') : '';
+            const tag = decoded ? String(decoded.tag || (Array.isArray(decoded.tags) && decoded.tags[0]) || '') : '';
+            const proxyText = decoded ? sanitizeProxyText(decoded.proxy) : '';
+            updateStmt.run(title, tag, proxyText, String(row.id));
+          }
+          this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)')
+            .run('profile_search_index_version', '2');
+          this.db.exec('COMMIT;');
+        } catch (error) {
+          try { this.db.exec('ROLLBACK;'); } catch (_) {}
+          throw error;
+        }
+      }
+    } catch (error) {
+      throw new Error(`Failed to backfill profile search columns: ${error.message}`, { cause: error });
+    }
   }
 
   _prepareStatements() {
     this._statements = {
       // Profile statements
       upsertProfile: this.db.prepare(`
-        INSERT INTO profiles (id, number, name, group_id, trashed, trashed_at, created_at, updated_at, data)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO profiles (id, number, name, title, tag, proxy_text, group_id, trashed, trashed_at, created_at, updated_at, data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           number = excluded.number,
           name = excluded.name,
+          title = excluded.title,
+          tag = excluded.tag,
+          proxy_text = excluded.proxy_text,
           group_id = excluded.group_id,
           trashed = excluded.trashed,
           trashed_at = excluded.trashed_at,
@@ -295,6 +365,9 @@ class ProfileStoreSqlite {
         if (!profile || typeof profile !== 'object' || !profile.id) continue;
         const number = Number.isInteger(profile.number) ? profile.number : (Number(profile.number) || null);
         const name = String(profile.name || profile.id);
+        const title = String(profile.title || '');
+        const tag = String(profile.tag || (Array.isArray(profile.tags) && profile.tags[0]) || '');
+        const proxyText = sanitizeProxyText(profile.proxy);
         const groupId = profile.groupId != null ? String(profile.groupId) : null;
         const trashed = profile.trashed ? 1 : 0;
         const trashedAt = profile.trashedAt ? String(profile.trashedAt) : null;
@@ -306,6 +379,9 @@ class ProfileStoreSqlite {
           String(profile.id),
           number,
           name,
+          title,
+          tag,
+          proxyText,
           groupId,
           trashed,
           trashedAt,
@@ -425,6 +501,9 @@ class ProfileStoreSqlite {
     const id = String(profile.id);
     const number = Number.isInteger(profile.number) ? profile.number : (Number(profile.number) || null);
     const name = String(profile.name || id);
+    const title = String(profile.title || '');
+    const tag = String(profile.tag || (Array.isArray(profile.tags) && profile.tags[0]) || '');
+    const proxyText = sanitizeProxyText(profile.proxy);
     const groupId = profile.groupId != null ? String(profile.groupId) : null;
     const trashed = profile.trashed ? 1 : 0;
     const trashedAt = profile.trashedAt ? String(profile.trashedAt) : null;
@@ -436,6 +515,9 @@ class ProfileStoreSqlite {
       id,
       number,
       name,
+      title,
+      tag,
+      proxyText,
       groupId,
       trashed,
       trashedAt,
@@ -445,13 +527,21 @@ class ProfileStoreSqlite {
     );
   }
 
-  saveProfiles(profiles) {
+  saveProfiles(profiles, assignments = null) {
     if (!Array.isArray(profiles)) return;
     this.db.exec('BEGIN TRANSACTION;');
     try {
       for (const profile of profiles) {
         if (!profile || typeof profile !== 'object' || !profile.id) continue;
         this.saveProfile(profile);
+      }
+      if (assignments) {
+        for (const [profileId, extensionIds] of assignments) {
+          this._statements.clearAssignmentsForProfile.run(String(profileId));
+          for (const extensionId of extensionIds) {
+            this._statements.addAssignment.run(String(profileId), String(extensionId));
+          }
+        }
       }
       this.db.exec('COMMIT;');
     } catch (err) {
@@ -485,7 +575,7 @@ class ProfileStoreSqlite {
    * @param {number} [options.pageSize=50]
    * @param {Object} [options.filters]
    * @param {string|Object} [options.sort='number ASC']
-   * @returns {{ total: number, page: number, pageSize: number, rows: Array<Object> }}
+   * @returns {{ total: number, page: number, pageSize: number, rows: Array<Object>, counts: Object }}
    */
   queryProfilesPage(options = {}) {
     if (!this.db || !this.isOpen) {
@@ -515,21 +605,21 @@ class ProfileStoreSqlite {
       whereClauses.push('trashed = 0');
     }
 
-    // 2. Group filter
+    // 2. Group filter (handles 'ungrouped' or empty string as ungrouped)
     const targetGroup = filters.groupId !== undefined ? filters.groupId : filters.activeGroupFilter;
-    if (targetGroup === 'ungrouped') {
-      whereClauses.push('(group_id IS NULL OR group_id = \'\')');
+    if (targetGroup === 'ungrouped' || targetGroup === '') {
+      whereClauses.push("(group_id IS NULL OR group_id = '')");
     } else if (targetGroup && targetGroup !== 'all' && targetGroup !== 'trash') {
       whereClauses.push('group_id = ?');
       params.push(String(targetGroup));
     }
 
-    // 3. Name filter (SQL LIKE with % and _ escaped)
-    const nameTerm = String(filters.name || filters.query || filters.search || '').trim();
-    if (nameTerm) {
-      const escaped = nameTerm.replace(/([\\%_])/g, '\\$1');
-      whereClauses.push("name LIKE ? ESCAPE '\\'");
-      params.push(`%${escaped}%`);
+    // 3. Search filter (matching id, name, title, tag, proxy_text)
+    const searchTerm = String(filters.name || filters.query || filters.search || '').trim();
+    if (searchTerm) {
+      const escaped = searchTerm.replace(/([\\%_])/g, '\\$1');
+      whereClauses.push("(id LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR tag LIKE ? ESCAPE '\\' OR proxy_text LIKE ? ESCAPE '\\')");
+      params.push(`%${escaped}%`, `%${escaped}%`, `%${escaped}%`, `%${escaped}%`, `%${escaped}%`);
     }
 
     // 4. Exact ID filter
@@ -546,7 +636,7 @@ class ProfileStoreSqlite {
     const total = Number(countRow?.total || 0);
 
     if (total === 0 || offset >= total) {
-      return { total, page, pageSize, rows: [] };
+      return { total, page, pageSize, rows: [], counts: this.getProfileCounts() };
     }
 
     // 6. Sort clause
@@ -572,26 +662,56 @@ class ProfileStoreSqlite {
     }
 
     // 7. Page data query (limit/offset)
-    const pageSql = `SELECT id, number, name, group_id, trashed, trashed_at, created_at, updated_at, data FROM profiles ${whereSql} ${orderSql} LIMIT ? OFFSET ?;`;
+    const pageSql = `SELECT id, number, name, title, tag, proxy_text, group_id, trashed, trashed_at, created_at, updated_at, data FROM profiles ${whereSql} ${orderSql} LIMIT ? OFFSET ?;`;
     const queryParams = [...params, pageSize, offset];
     const rawRows = this.db.prepare(pageSql).all(...queryParams);
 
     // 8. Decrypt and project lightweight summary rows (only for current page)
     const rows = rawRows.map((row) => {
-      const decoded = decodeProfileData(row.data) || {};
+      const decoded = decodeProfileData(row.data);
+      if (!decoded) {
+        return {
+          id: String(row.id),
+          number: row.number != null ? Number(row.number) : null,
+          name: String(row.name || row.id),
+          title: row.title || '',
+          groupId: row.group_id != null ? String(row.group_id) : null,
+          browser: 'Unknown',
+          proxy: '',
+          proxyId: null,
+          networkMode: 'corrupted',
+          corrupted: true,
+          tag: row.tag || '',
+          tags: row.tag ? [row.tag] : [],
+          note: '',
+          notes: '',
+          allowFailedProxy: false,
+          running: false,
+          trashed: Boolean(row.trashed),
+          trashedAt: row.trashed_at || null,
+          createdAt: row.created_at || null,
+          updatedAt: row.updated_at || null,
+          _isSummaryProjection: true,
+        };
+      }
+
+      const noteVal = decoded.note ?? decoded.notes ?? '';
       return {
         id: String(row.id),
         number: row.number != null ? Number(row.number) : (decoded.number != null ? Number(decoded.number) : null),
         name: String(row.name || decoded.name || row.id),
-        title: decoded.title || '',
+        title: row.title || decoded.title || '',
         groupId: row.group_id != null ? String(row.group_id) : (decoded.groupId != null ? String(decoded.groupId) : null),
         browser: decoded.browser || 'Google Chrome',
         proxy: decoded.proxy || 'direct',
         proxyId: decoded.proxyId || null,
         networkMode: decoded.networkMode || 'direct',
-        tag: decoded.tag || '',
-        tags: Array.isArray(decoded.tags) ? decoded.tags : (decoded.tag ? [decoded.tag] : []),
-        notes: decoded.notes || '',
+        corrupted: false,
+        tag: row.tag || decoded.tag || '',
+        tags: Array.isArray(decoded.tags) ? decoded.tags : ((row.tag || decoded.tag) ? [row.tag || decoded.tag] : []),
+        note: noteVal,
+        notes: decoded.notes ?? noteVal,
+        allowFailedProxy: Boolean(decoded.allowFailedProxy),
         exitIp: decoded.exitIp || null,
         exitCountryCode: decoded.exitCountryCode || null,
         exitCheckedAt: decoded.exitCheckedAt || null,
@@ -602,25 +722,81 @@ class ProfileStoreSqlite {
         trashedAt: row.trashed_at || (decoded.trashedAt ? String(decoded.trashedAt) : null),
         createdAt: row.created_at || (decoded.createdAt ? String(decoded.createdAt) : null),
         updatedAt: row.updated_at || (decoded.updatedAt ? String(decoded.updatedAt) : null),
+        _isSummaryProjection: true,
       };
     });
 
-    return { total, page, pageSize, rows };
+    return { total, page, pageSize, rows, counts: this.getProfileCounts() };
+  }
+
+  /**
+   * Retrieves aggregated profile counts by group and trashed status.
+   * Single-query aggregation without scanning full JSON blobs.
+   * @returns {{ total: number, active: number, trashed: number, ungrouped: number, byGroup: Object.<string, number> }}
+   */
+  getProfileCounts() {
+    if (!this.db || !this.isOpen) {
+      throw new Error('Database is not open');
+    }
+    const rows = this.db.prepare(
+      'SELECT group_id, trashed, COUNT(*) AS cnt FROM profiles GROUP BY group_id, trashed;'
+    ).all();
+    let total = 0;
+    let active = 0;
+    let trashed = 0;
+    let ungrouped = 0;
+    const byGroup = {};
+    for (const r of rows) {
+      const count = Number(r.cnt) || 0;
+      const isTrashed = Number(r.trashed) === 1;
+      const gid = r.group_id;
+      total += count;
+      if (isTrashed) {
+        trashed += count;
+      } else {
+        active += count;
+        if (!gid || gid === '') {
+          ungrouped += count;
+        } else {
+          byGroup[gid] = (byGroup[gid] || 0) + count;
+        }
+      }
+    }
+    return { total, active, trashed, ungrouped, byGroup };
+  }
+
+  /**
+   * Safely allocates the next available sequence number for profile creation.
+   * @returns {number}
+   */
+  getNextProfileNumber() {
+    if (!this.db || !this.isOpen) {
+      throw new Error('Database is not open');
+    }
+    const row = this.db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS next FROM profiles;').get();
+    return Number(row?.next || 1);
   }
 
   /**
    * Soft-delete profiles into the Recycle Bin (Issue #37)
    * @param {string[]} ids
    * @param {string} [nowIso]
-   * @returns {string[]} trashed ids
+   * @returns {string[] & { ids: string[], dataDirs: string[] }}
    */
   trashProfiles(ids, nowIso = new Date().toISOString()) {
-    if (!Array.isArray(ids) || !ids.length) return [];
+    if (!Array.isArray(ids) || !ids.length) {
+      const empty = [];
+      empty.ids = [];
+      empty.dataDirs = [];
+      return empty;
+    }
     const trashedIds = [];
+    const dataDirs = [];
     this.db.exec('BEGIN TRANSACTION;');
     try {
       for (const id of ids) {
-        const row = this._statements.getProfile.get(String(id));
+        const safeId = String(id);
+        const row = this._statements.getProfile.get(safeId);
         if (!row || !row.data) continue;
         const profile = decodeProfileData(row.data);
         if (!profile) continue;
@@ -629,30 +805,45 @@ class ProfileStoreSqlite {
         profile.updatedAt = nowIso;
         const data = encodeProfileData(profile);
 
-        this._statements.updateProfileTrash.run(1, nowIso, nowIso, data, String(id));
-        trashedIds.push(String(id));
+        this._statements.updateProfileTrash.run(1, nowIso, nowIso, data, safeId);
+        trashedIds.push(safeId);
+        if (profile.dataDir || profile.profileRoot) {
+          dataDirs.push(profile.dataDir || profile.profileRoot);
+        } else if (this.profileDataRoot) {
+          dataDirs.push(path.join(this.profileDataRoot, safeId));
+        }
       }
       this.db.exec('COMMIT;');
     } catch (err) {
       try { this.db.exec('ROLLBACK;'); } catch (_) {}
       throw err;
     }
-    return trashedIds;
+    const res = trashedIds;
+    res.ids = trashedIds;
+    res.dataDirs = dataDirs;
+    return res;
   }
 
   /**
    * Restore profiles from the Recycle Bin (Issue #37)
    * @param {string[]} ids
-   * @returns {string[]} restored ids
+   * @returns {string[] & { ids: string[], dataDirs: string[] }}
    */
   restoreProfiles(ids) {
-    if (!Array.isArray(ids) || !ids.length) return [];
+    if (!Array.isArray(ids) || !ids.length) {
+      const empty = [];
+      empty.ids = [];
+      empty.dataDirs = [];
+      return empty;
+    }
     const restoredIds = [];
+    const dataDirs = [];
     const nowIso = new Date().toISOString();
     this.db.exec('BEGIN TRANSACTION;');
     try {
       for (const id of ids) {
-        const row = this._statements.getProfile.get(String(id));
+        const safeId = String(id);
+        const row = this._statements.getProfile.get(safeId);
         if (!row || !row.data) continue;
         const profile = decodeProfileData(row.data);
         if (!profile) continue;
@@ -661,29 +852,54 @@ class ProfileStoreSqlite {
         profile.updatedAt = nowIso;
         const data = encodeProfileData(profile);
 
-        this._statements.updateProfileTrash.run(0, null, nowIso, data, String(id));
-        restoredIds.push(String(id));
+        this._statements.updateProfileTrash.run(0, null, nowIso, data, safeId);
+        restoredIds.push(safeId);
+        if (profile.dataDir || profile.profileRoot) {
+          dataDirs.push(profile.dataDir || profile.profileRoot);
+        } else if (this.profileDataRoot) {
+          dataDirs.push(path.join(this.profileDataRoot, safeId));
+        }
       }
       this.db.exec('COMMIT;');
     } catch (err) {
       try { this.db.exec('ROLLBACK;'); } catch (_) {}
       throw err;
     }
-    return restoredIds;
+    const res = restoredIds;
+    res.ids = restoredIds;
+    res.dataDirs = dataDirs;
+    return res;
   }
 
   /**
    * Permanently delete profiles and their extension assignments (Issue #37 purge)
    * @param {string[]} ids
-   * @returns {string[]} deleted ids
+   * @returns {string[] & { ids: string[], dataDirs: string[] }}
    */
   deleteProfiles(ids) {
-    if (!Array.isArray(ids) || !ids.length) return [];
+    if (!Array.isArray(ids) || !ids.length) {
+      const empty = [];
+      empty.ids = [];
+      empty.dataDirs = [];
+      return empty;
+    }
     const deletedIds = [];
+    const dataDirs = [];
     this.db.exec('BEGIN TRANSACTION;');
     try {
       for (const id of ids) {
         const safeId = String(id);
+        const row = this._statements.getProfile.get(safeId);
+        if (row?.data) {
+          const decoded = decodeProfileData(row.data);
+          if (decoded?.dataDir || decoded?.profileRoot) {
+            dataDirs.push(decoded.dataDir || decoded.profileRoot);
+          } else if (this.profileDataRoot) {
+            dataDirs.push(path.join(this.profileDataRoot, safeId));
+          }
+        } else if (this.profileDataRoot) {
+          dataDirs.push(path.join(this.profileDataRoot, safeId));
+        }
         this._statements.clearAssignmentsForProfile.run(safeId);
         const res = this._statements.deleteProfile.run(safeId);
         if (res.changes > 0) deletedIds.push(safeId);
@@ -693,17 +909,25 @@ class ProfileStoreSqlite {
       try { this.db.exec('ROLLBACK;'); } catch (_) {}
       throw err;
     }
-    return deletedIds;
+    const res = deletedIds;
+    res.ids = deletedIds;
+    res.dataDirs = dataDirs;
+    return res;
   }
 
   /**
    * Empty all profiles from the Recycle Bin
-   * @returns {string[]} deleted ids
+   * @returns {string[] & { ids: string[], dataDirs: string[] }}
    */
   emptyTrash() {
     const rows = this._statements.getTrashedProfileIds.all();
     const trashedIds = rows.map((r) => String(r.id));
-    if (!trashedIds.length) return [];
+    if (!trashedIds.length) {
+      const empty = [];
+      empty.ids = [];
+      empty.dataDirs = [];
+      return empty;
+    }
     return this.deleteProfiles(trashedIds);
   }
 

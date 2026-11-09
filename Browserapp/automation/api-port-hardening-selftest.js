@@ -350,10 +350,21 @@ function httpGet(port, pathname, apiKey) {
 
         const mcpJson = JSON.parse(elements.get('mcp-config-json').textContent);
         const serverEnv = mcpJson.mcpServers['openbrowser-local-api'].env;
-        assert.strictEqual(serverEnv.OPENBROWSER_API_PORT, String(livePort), 'MCP config must use discovered port');
-        assert.strictEqual(serverEnv.PORT, String(livePort));
+        assert.strictEqual(serverEnv.OPENBROWSER_API_PORT, undefined, 'Dynamic port mode must not hardcode port in MCP config');
+        assert.strictEqual(serverEnv.PORT, undefined);
         assert.ok(elements.get('api-status-url').textContent.includes(String(livePort)));
         assert.ok(!elements.get('api-status-url').textContent.includes('50325'), 'must not contain 50325');
+
+        // When fixed port is configured, MCP config carries OPENBROWSER_API_PORT
+        window.ops.mcpPaths = async () => ({
+          mcpScript: '/app/automation/mcp-server.js',
+          port: livePort,
+          isFixedPort: true,
+          apiKey: 'test-key-ui',
+        });
+        await window.refreshApiMcpPage();
+        const fixedMcpJson = JSON.parse(elements.get('mcp-config-json').textContent);
+        assert.strictEqual(fixedMcpJson.mcpServers['openbrowser-local-api'].env.OPENBROWSER_API_PORT, String(livePort));
       } finally {
         await fsp.rm(tempUserData, { recursive: true, force: true }).catch(() => {});
       }
@@ -374,7 +385,12 @@ function httpGet(port, pathname, apiKey) {
         assert.strictEqual(resolveMcpPort(), livePort, 'mcp-server must discover port from automation-info.json');
         assert.strictEqual(getApiPort(true), livePort);
 
-        // When env is explicitly set, env wins over discovery
+        // Port 0 in env must be ignored and fall back to discovery
+        process.env.OPENBROWSER_API_PORT = '0';
+        assert.strictEqual(resolveMcpPort(), livePort, 'port 0 in env must fall back to discovery');
+        delete process.env.OPENBROWSER_API_PORT;
+
+        // When env is explicitly set to valid port, env wins over discovery
         process.env.OPENBROWSER_API_PORT = '49991';
         assert.strictEqual(resolveMcpPort(), 49991, 'env must take precedence over discovery');
         assert.strictEqual(getApiPort(true), 49991);
@@ -386,6 +402,97 @@ function httpGet(port, pathname, apiKey) {
         assert.throws(() => getApiPort(true), /Local API port not found/);
       } finally {
         delete process.env.OPENBROWSER_USER_DATA;
+        await fsp.rm(tempUserData, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
+    // =========================================================================
+    // (e) 独立 MCP 进程解密读取 OBE1 加密 API Key 并通过认证 (P0 缺陷修复验证)
+    // =========================================================================
+    await checkAsync('(e) standalone resolveApiKey decrypts OBE1 mcp-key.json and authenticates', async () => {
+      const { ApiKeyStore } = require('./api-key-store');
+      const { resolveApiKey } = require('./api-key');
+      const tempUserData = await fsp.mkdtemp(path.join(os.tmpdir(), 'ob-mcp-obe1-test-'));
+      const origKeyEnv = process.env.OPENBROWSER_API_KEY;
+      const origKeyFile = process.env.OPENBROWSER_API_KEY_FILE;
+      delete process.env.OPENBROWSER_API_KEY;
+
+      try {
+        const store = new ApiKeyStore(tempUserData, { encrypted: true });
+        const secretKey = await store.resolve('');
+        const keyFilePath = path.join(tempUserData, 'mcp-key.json');
+        assert.ok(fs.existsSync(keyFilePath), 'mcp-key.json must be written');
+
+        // Verify the file on disk is encrypted with OBE1
+        const fileBytes = await fsp.readFile(keyFilePath);
+        assert.strictEqual(fileBytes.subarray(0, 4).toString('ascii'), 'OBE1', 'Key file must be encrypted in cross-process OBE1 format');
+
+        // Standalone process simulation: only OPENBROWSER_API_KEY_FILE is set
+        process.env.OPENBROWSER_API_KEY_FILE = keyFilePath;
+        const resolved = resolveApiKey({ env: process.env, userDataPath: tempUserData });
+        assert.strictEqual(resolved.key, secretKey, 'Decrypted key must match stored key exactly');
+        assert.strictEqual(resolved.source, 'file');
+
+        const credentialCrypto = require('../credential-crypto');
+        const obe2Key = 'obe2-test-key-1234567890';
+        await fsp.writeFile(keyFilePath, credentialCrypto.encryptCredential(JSON.stringify({ apiKey: obe2Key }), { mode: 'aes-gcm' }));
+        assert.strictEqual((await fsp.readFile(keyFilePath)).subarray(0, 4).toString('ascii'), 'OBE2');
+        assert.strictEqual(resolveApiKey({ env: process.env, userDataPath: tempUserData }).key, obe2Key,
+          'OBE2 key files must be decrypted without changing their format header');
+
+        // Start LocalApiServer and test authentication with decrypted key
+        const server = new LocalApiServer({ apiKey: secretKey, userDataPath: tempUserData });
+        const info = await server.start();
+        const res = await httpGet(info.port, '/status', resolved.key);
+        assert.strictEqual(res.status, 200, 'Request using decrypted key must return HTTP 200');
+        const unauthRes = await httpGet(info.port, '/status', 'wrong-key');
+        assert.strictEqual(unauthRes.status, 401, 'Request with wrong key must return 401');
+
+        await server.stop();
+      } finally {
+        if (origKeyEnv !== undefined) process.env.OPENBROWSER_API_KEY = origKeyEnv;
+        else delete process.env.OPENBROWSER_API_KEY;
+        if (origKeyFile !== undefined) process.env.OPENBROWSER_API_KEY_FILE = origKeyFile;
+        else delete process.env.OPENBROWSER_API_KEY_FILE;
+        await fsp.rm(tempUserData, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
+    // =========================================================================
+    // (f) mcp-server 请求遇到 ECONNREFUSED 时重读 discovery 并重试成功
+    // =========================================================================
+    await checkAsync('(f) mcp-server request auto-reconnects on ECONNREFUSED by re-reading discovery', async () => {
+      const tempUserData = await fsp.mkdtemp(path.join(os.tmpdir(), 'ob-mcp-econnrefused-'));
+      const origUserData = process.env.OPENBROWSER_USER_DATA;
+      process.env.OPENBROWSER_USER_DATA = tempUserData;
+      delete process.env.OPENBROWSER_API_PORT;
+      delete process.env.PORT;
+
+      try {
+        // Start server 1 on port A, write discovery
+        const server = new LocalApiServer({ userDataPath: tempUserData });
+        const info = await server.start();
+
+        const { request } = require('./mcp-server');
+
+        // First request to live server succeeds
+        const statusRes = await request('GET', '/status');
+        assert.strictEqual(statusRes.code, 0);
+
+        // Move server to another port (simulate restart)
+        await server.stop();
+        const server2 = new LocalApiServer({ userDataPath: tempUserData });
+        const info2 = await server2.start();
+        assert.notStrictEqual(info.port, info2.port, 'New server should have a different port');
+
+        // Request should automatically recover from ECONNREFUSED by discovering info2.port
+        const recoveredRes = await request('GET', '/status');
+        assert.strictEqual(recoveredRes.code, 0, 'Must auto-reconnect and succeed after server port moved');
+
+        await server2.stop();
+      } finally {
+        if (origUserData !== undefined) process.env.OPENBROWSER_USER_DATA = origUserData;
+        else delete process.env.OPENBROWSER_USER_DATA;
         await fsp.rm(tempUserData, { recursive: true, force: true }).catch(() => {});
       }
     });

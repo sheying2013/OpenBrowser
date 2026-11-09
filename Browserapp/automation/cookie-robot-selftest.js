@@ -130,6 +130,43 @@ check('normalizeRobotConfig applies defaults and clamps bounds correctly', () =>
   assert.strictEqual(custom.maxRetries, 5); // max 5
 });
 
+check('normalizeRobotConfig strictly validates profileId and guards against path traversal', () => {
+  // Disallowed profileId characters
+  assert.throws(() => normalizeRobotConfig({ profileId: '../evil' }), /Invalid profile id/);
+  assert.throws(() => normalizeRobotConfig({ profileId: 'id with spaces' }), /Invalid profile id/);
+  assert.throws(() => normalizeRobotConfig({ profileId: 'bad/slash' }), /Invalid profile id/);
+  assert.throws(() => normalizeRobotConfig({ profileId: 'bad\\backslash' }), /Invalid profile id/);
+
+  // Path traversal in recordFile when profileRoot is defined
+  const profileRoot = path.join(os.tmpdir(), 'valid-profile-root');
+  assert.throws(
+    () => normalizeRobotConfig({ recordFile: '../../etc/passwd', profileRoot }),
+    /recordFile must be located within profileRoot/
+  );
+  assert.throws(
+    () => normalizeRobotConfig({ recordFile: '/etc/shadow', profileRoot }),
+    /recordFile must be located within profileRoot/
+  );
+
+  // Path traversal when profileRoot is not defined
+  assert.throws(
+    () => normalizeRobotConfig({ recordFile: '../traversal.jsonl' }),
+    /Path traversal detected in recordFile/
+  );
+
+  // Valid configurations
+  const valid = normalizeRobotConfig({
+    profileId: 'valid-profile_123',
+    profileRoot,
+    recordFile: 'custom-history.jsonl',
+  });
+  assert.strictEqual(valid.profileId, 'valid-profile_123');
+  assert.strictEqual(valid.recordFile, path.join(profileRoot, 'custom-history.jsonl'));
+
+  // CookieRobot constructor profileId assertion
+  assert.throws(() => new CookieRobot({ profileId: '../invalid' }), /Invalid profile id/);
+});
+
 check('generateWalkPlan creates deterministic walk sequence with custom PRNG', () => {
   let mockRandIndex = 0;
   const mockRandomValues = [0.0, 0.5, 1.0];
@@ -171,13 +208,84 @@ check('generateMouseTrajectory calculates smooth Bezier curve points', () => {
   assert.strictEqual(shortDist[0].y, 101);
 });
 
+asyncCheck('cleanupOwnedTabs strictly protects user tabs and the last browser tab (unit)', async () => {
+  const origTabs = cdp.tabs;
+  const origCloseTab = cdp.closeTab;
+
+  try {
+    // Subtest A: Strictly protects user tabs - only owned tabs are closed
+    let mockBrowserTabs = [
+      { id: 'user-tab-1', url: 'https://user-work.com' },
+      { id: 'robot-tab-1', url: 'https://example.com' },
+      { id: 'user-tab-2', url: 'https://user-mail.com' },
+    ];
+    const closed = [];
+
+    cdp.tabs = async () => [...mockBrowserTabs];
+    cdp.closeTab = async (port, id) => {
+      closed.push(id);
+      mockBrowserTabs = mockBrowserTabs.filter((t) => t.id !== id);
+    };
+
+    const robotA = new CookieRobot({ port: 9999, profileId: 'test-profile' });
+    robotA.activeTabId = 'robot-tab-1';
+    robotA.ownedTabIds.add('robot-tab-1');
+
+    await robotA.cleanupOwnedTabs();
+
+    assert.deepStrictEqual(closed, ['robot-tab-1'], 'Only robot tab was closed');
+    assert.strictEqual(mockBrowserTabs.length, 2, 'Two user tabs remain');
+    assert.strictEqual(mockBrowserTabs.some((t) => t.id === 'user-tab-1'), true, 'user-tab-1 preserved');
+    assert.strictEqual(mockBrowserTabs.some((t) => t.id === 'user-tab-2'), true, 'user-tab-2 preserved');
+    assert.strictEqual(robotA.activeTabId, null, 'activeTabId cleared');
+    assert.strictEqual(robotA.ownedTabIds.has('robot-tab-1'), false, 'ownedTabIds cleared');
+
+    // Subtest B: Strictly protects the last tab - never closes when currentTabs <= 1
+    mockBrowserTabs = [
+      { id: 'robot-only-tab', url: 'https://target.com' },
+    ];
+    closed.length = 0;
+
+    const robotB = new CookieRobot({ port: 9999, profileId: 'test-profile' });
+    robotB.activeTabId = 'robot-only-tab';
+    robotB.ownedTabIds.add('robot-only-tab');
+
+    await robotB.cleanupOwnedTabs();
+
+    assert.strictEqual(closed.length, 0, 'Last tab was NOT closed');
+    assert.strictEqual(mockBrowserTabs.length, 1, 'Single tab remains intact');
+    assert.strictEqual(mockBrowserTabs[0].id, 'robot-only-tab');
+
+    // Subtest C: When multiple robot tabs exist and no user tabs, prunes down to the last tab
+    mockBrowserTabs = [
+      { id: 'robot-surplus', url: 'https://popup.com' },
+      { id: 'robot-active', url: 'https://active.com' },
+    ];
+    closed.length = 0;
+
+    const robotC = new CookieRobot({ port: 9999, profileId: 'test-profile' });
+    robotC.activeTabId = 'robot-active';
+    robotC.ownedTabIds.add('robot-surplus');
+    robotC.ownedTabIds.add('robot-active');
+
+    await robotC.cleanupOwnedTabs();
+
+    assert.deepStrictEqual(closed, ['robot-surplus'], 'Surplus robot tab closed, active tab kept as last tab');
+    assert.strictEqual(mockBrowserTabs.length, 1, 'Exactly 1 tab preserved');
+    assert.strictEqual(mockBrowserTabs[0].id, 'robot-active', 'Active tab preserved as last tab');
+  } finally {
+    cdp.tabs = origTabs;
+    cdp.closeTab = origCloseTab;
+  }
+});
+
 // =========================================================================
 // SECTION 2: LIVE KERNEL + LOOPBACK HTTP SERVER E2E INTEGRATION
 // =========================================================================
 
 async function runLiveKernelSuite() {
   // 1. Setup local loopback HTTP server
-  let serverHits = { site1: 0, subpage1: 0, site2: 0 };
+  let serverHits = { site1: 0, subpage1: 0, subpage2: 0, site2: 0 };
   const server = http.createServer((req, res) => {
     const url = req.url;
     if (url === '/site1' || url === '/site1/') {
@@ -204,6 +312,20 @@ async function runLiveKernelSuite() {
         <body style="height: 1500px; padding: 20px;">
           <h1>Subpage Content</h1>
           <p>This is internal link content.</p>
+          <div style="margin: 30px 0;">
+            <a id="link-subpage2" href="/site1/subpage2" style="display: inline-block; padding: 10px 20px; background: green; color: white;">Explore Subpage 2</a>
+          </div>
+        </body></html>`);
+    } else if (url === '/site1/subpage2') {
+      serverHits.subpage2 += 1;
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Set-Cookie': `cookie_subpage2=sub2_${Date.now()}; Path=/`,
+      });
+      res.end(`<!DOCTYPE html><html><head><title>Site 1 Subpage 2</title></head>
+        <body style="height: 1200px; padding: 20px;">
+          <h1>Subpage 2 Content</h1>
+          <p>Deep walk target reached.</p>
         </body></html>`);
     } else if (url === '/site2' || url === '/site2/') {
       serverHits.site2 += 1;
@@ -275,6 +397,9 @@ async function runLiveKernelSuite() {
 
     // 3. Test multi-site warm-up task execution
     await asyncCheck('CookieRobot executes full multi-site random walk and sets cookies', async () => {
+      const initialTabs = await cdp.tabs(browserPort);
+      const initialUserTabId = initialTabs[0]?.id;
+
       const events = [];
       const robot = new CookieRobot({
         port: browserPort,
@@ -298,6 +423,16 @@ async function runLiveKernelSuite() {
         emit: (evt) => events.push(evt),
       });
 
+      // A tab created independently during a click must not be claimed or closed.
+      let concurrentUserTabId;
+      const performClick = robot.performClick.bind(robot);
+      robot.performClick = async (...args) => {
+        if (!concurrentUserTabId) {
+          const tab = await cdp.newTab(browserPort, 'about:blank');
+          concurrentUserTabId = tab.id;
+        }
+        return performClick(...args);
+      };
       const result = await robot.start();
       assert.strictEqual(result.status, 'completed');
       assert.strictEqual(result.profileId, profile.id);
@@ -309,11 +444,15 @@ async function runLiveKernelSuite() {
       assert.ok(serverHits.subpage1 >= 1, 'Site 1 subpage was visited via target=_blank link');
       assert.ok(serverHits.site2 >= 1, 'Site 2 was visited');
 
-      // Verify target=_blank handling: switched tab, closed old tab, tab count stays strictly 1
+      // Verify target=_blank handling: switched tab, closed old tab, tab count stays strictly 2 (user tab + robot tab)
       const switchedTab = events.some((e) => e.phase === 'switch-tab');
       assert.strictEqual(switchedTab, true, 'switch-tab event emitted when following target=_blank link');
       const finalTabs = await cdp.tabs(browserPort);
-      assert.strictEqual(finalTabs.length, 1, `Surplus tabs pruned; exactly 1 active tab remains (actual: ${finalTabs.length})`);
+      assert.strictEqual(finalTabs.some((t) => t.id === initialUserTabId), true, 'User original tab was untouched');
+      assert.ok(concurrentUserTabId, 'Concurrent user tab was created during the click');
+      assert.strictEqual(finalTabs.some((t) => t.id === concurrentUserTabId), true, 'Concurrent user tab was untouched');
+      assert.strictEqual(finalTabs.length, 2, `Robot tab was cleaned up on completion, leaving only the two user tabs (actual: ${finalTabs.length})`);
+      assert.strictEqual(finalTabs.some((t) => robot.ownedTabIds.has(t.id)), false, 'No robot-owned tabs remain after completion');
 
       // Verify event sequence
       assert.ok(events.length >= 4, `Event count: ${events.length}`);
@@ -347,6 +486,35 @@ async function runLiveKernelSuite() {
       assert.ok(rec2.cookiesAdded >= 1);
     });
 
+    // 3.5 Test deep walk with walkDepth = 3
+    await asyncCheck('CookieRobot with walkDepth=3 executes multi-hop traversal to deeper internal links', async () => {
+      const depthRecordFile = path.join(profileDir, 'cookie-robot-depth-test.jsonl');
+      const robot = new CookieRobot({
+        port: browserPort,
+        cdpConnection: browserConn,
+        profileId: profile.id,
+        profile,
+        root: profileDir,
+        config: {
+          domains: [`127.0.0.1:${serverPort}/site1`],
+          stayDurationMin: 0.2,
+          stayDurationMax: 0.3,
+          walkDepth: 3,
+          scrollProbability: 1.0,
+          clickProbability: 1.0,
+          maxRetries: 0,
+          recordFile: depthRecordFile,
+        },
+      });
+
+      const result = await robot.start();
+      assert.strictEqual(result.status, 'completed');
+      assert.ok(result.totalPagesVisited >= 3, `Expected at least 3 pages visited with walkDepth=3, got ${result.totalPagesVisited}`);
+      assert.ok(serverHits.subpage2 >= 1, 'Subpage 2 was visited in 3-hop walk');
+      const tabsAfterDepth = await cdp.tabs(browserPort);
+      assert.strictEqual(tabsAfterDepth.some((t) => robot.ownedTabIds.has(t.id)), false, 'Robot tab was cleaned up after deep walk');
+    });
+
     // 4. Test interruption / cancellation (clean stop)
     await asyncCheck('CookieRobot stops cleanly when stop() is called mid-flight', async () => {
       const stopEvents = [];
@@ -370,6 +538,10 @@ async function runLiveKernelSuite() {
         emit: (evt) => stopEvents.push(evt),
       });
 
+      const tabsBeforeStart = await cdp.tabs(browserPort);
+      const userTabId = tabsBeforeStart[0]?.id;
+      assert.ok(userTabId, 'Has existing user tab before stop test');
+
       const startPromise = robot.start();
       assert.strictEqual(robot.isRunning(), true);
 
@@ -385,6 +557,10 @@ async function runLiveKernelSuite() {
       assert.ok(finishEvent, 'robot-finished event emitted on stop');
       assert.strictEqual(finishEvent.status, 'stopped');
       assert.strictEqual(finishEvent.aborted, true);
+
+      const tabsAfterStop = await cdp.tabs(browserPort);
+      assert.strictEqual(tabsAfterStop.some((t) => robot.ownedTabIds.has(t.id)), false, 'Robot tab was cleaned up on stop');
+      assert.strictEqual(tabsAfterStop.some((t) => t.id === userTabId), true, 'User tab was preserved on stop');
     });
 
     // 5. Test site-level failure retry and skip
@@ -415,6 +591,104 @@ async function runLiveKernelSuite() {
       assert.strictEqual(result.records.length, 2);
       assert.strictEqual(result.records[0].status, 'skipped');
       assert.strictEqual(result.records[1].status, 'completed');
+    });
+
+    // 5.5 Test prompt termination on manual tab closure / page disconnection
+    await asyncCheck('CookieRobot terminates cleanly when page connection closes or tab is disconnected', async () => {
+      const discRecordFile = path.join(profileDir, 'cookie-robot-disconnect-test.jsonl');
+      const robot = new CookieRobot({
+        port: browserPort,
+        cdpConnection: browserConn,
+        profileId: profile.id,
+        profile,
+        root: profileDir,
+        config: {
+          domains: [`127.0.0.1:${serverPort}/site1`],
+          stayDurationMin: 15.0, // Long dwell to verify fast disconnect exit
+          stayDurationMax: 20.0,
+          walkDepth: 1,
+          recordFile: discRecordFile,
+        },
+      });
+
+      const startTime = Date.now();
+      const startPromise = robot.start();
+      await sleep(300);
+      assert.strictEqual(robot.isRunning(), true);
+
+      // Close the robot dedicated tab externally
+      const activeTab = robot.activeTabId;
+      assert.ok(activeTab, 'Robot has active tab');
+      await cdp.closeTab(browserPort, activeTab);
+
+      const result = await startPromise;
+      const elapsed = Date.now() - startTime;
+
+      assert.strictEqual(result.status, 'stopped');
+      assert.strictEqual(robot.isRunning(), false);
+      assert.ok(elapsed < 5000, `Must terminate promptly on disconnect without waiting 15s (elapsed: ${elapsed}ms)`);
+    });
+
+    // 5.6 Test user tab and last tab protection in live browser session
+    await asyncCheck('CookieRobot cleanup strictly protects user tabs and the last browser tab in live browser', async () => {
+      // Create a user tab
+      const userTab = await cdp.newTab(browserPort, 'about:blank');
+      const userTabId = userTab.id;
+
+      const robot = new CookieRobot({
+        port: browserPort,
+        cdpConnection: browserConn,
+        profileId: profile.id,
+        profile,
+        root: profileDir,
+        config: {
+          domains: [`127.0.0.1:${serverPort}/site2`],
+          stayDurationMin: 0.2,
+          stayDurationMax: 0.3,
+          walkDepth: 1,
+        },
+      });
+
+      // Run robot to completion
+      const res = await robot.start();
+      assert.strictEqual(res.status, 'completed');
+
+      // Verify userTabId is still present and untouched
+      const afterTabs = await cdp.tabs(browserPort);
+      assert.strictEqual(afterTabs.some((t) => t.id === userTabId), true, 'User tab was preserved');
+      assert.strictEqual(afterTabs.some((t) => robot.ownedTabIds.has(t.id)), false, 'Robot owned tabs were cleaned up');
+
+      // Now verify last tab protection:
+      // Prune down to exactly 1 tab (which we set as the robot's owned tab)
+      for (const t of afterTabs) {
+        if (t.id !== userTabId) {
+          try { await cdp.closeTab(browserPort, t.id); } catch (_) {}
+        }
+      }
+      for (let i = 0; i < 20; i += 1) {
+        const tabs = await cdp.tabs(browserPort);
+        if (tabs.length === 1) break;
+        await sleep(50);
+      }
+
+      // Create a robot instance that owns this single tab
+      const lastTabRobot = new CookieRobot({
+        port: browserPort,
+        cdpConnection: browserConn,
+        profileId: profile.id,
+      });
+      lastTabRobot.activeTabId = userTabId;
+      lastTabRobot.ownedTabIds.add(userTabId);
+
+      const beforeCleanup = await cdp.tabs(browserPort);
+      assert.strictEqual(beforeCleanup.length, 1, 'Only 1 tab in browser before cleanup');
+
+      // cleanupOwnedTabs MUST NOT close this tab because currentTabs.length <= 1
+      await lastTabRobot.cleanupOwnedTabs();
+
+      const postCleanup = await cdp.tabs(browserPort);
+      assert.strictEqual(postCleanup.length, 1, 'Last tab in browser was strictly preserved');
+      assert.strictEqual(postCleanup[0].id, userTabId);
     });
 
     try { browserConn.close(); } catch (_) {}

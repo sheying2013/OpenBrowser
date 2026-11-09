@@ -64,18 +64,35 @@ async function refreshApiMcpPage() {
           ? 'MCP 配置会从本机 key 文件读取鉴权；如迁移到另一台电脑，请同时迁移该文件或改填 API Key。'
           : '未取到 API Key：请先从上方 API Key 框复制，再手动填入下方配置；否则 MCP 会返回 401。');
     }
-    // A busy default port makes the API move; say so instead of letting the
-    // user wonder why the generated config no longer mentions the default.
-    if (keyNote && info?.portFallback) {
+    const isFixedPort = Boolean(
+      info?.isFixedPort ||
+      paths?.isFixedPort ||
+      (typeof info?.configuredPort === 'number' && info.configuredPort > 0) ||
+      (typeof paths?.configuredPort === 'number' && paths.configuredPort > 0) ||
+      (typeof window !== 'undefined' && window.process?.env?.OPENBROWSER_API_PORT && Number(window.process.env.OPENBROWSER_API_PORT) > 0)
+    );
+    // A busy fixed port makes the API move; say so instead of letting the
+    // user wonder why the generated config no longer mentions the configured port.
+    if (keyNote && info?.portFallback && isFixedPort) {
       keyNote.textContent += ' ' + tx('默认端口已被占用，本地 API 已自动改用实际端口；下方配置与命令均按实际端口生成。');
     }
+    const portEnvCommon = isFixedPort && port
+      ? { PORT: String(port), OPENBROWSER_API_PORT: String(port) }
+      : {};
+    const portEnvPlatform = isFixedPort && port
+      ? { OPENBROWSER_API_PORT: String(port) }
+      : {};
+    const discoveryEnv = (!isFixedPort && paths?.userDataPath)
+      ? { OPENBROWSER_USER_DATA: paths.userDataPath }
+      : {};
     const common = {
       mcpServers: {
         'openbrowser-local-api': {
           command: 'node',
           args: [mcpScript],
           env: {
-            ...(port ? { PORT: String(port), OPENBROWSER_API_PORT: String(port) } : {}),
+            ...portEnvCommon,
+            ...discoveryEnv,
             ...authEnv,
           },
         },
@@ -88,7 +105,8 @@ async function refreshApiMcpPage() {
           command: 'node',
           args: [mcpScript],
           env: {
-            ...(port ? { OPENBROWSER_API_PORT: String(port) } : {}),
+            ...portEnvPlatform,
+            ...discoveryEnv,
             ...authEnv,
           },
         },
@@ -97,7 +115,7 @@ async function refreshApiMcpPage() {
     const tab = document.querySelector('#mcp-config-tabs button.active')?.dataset.mcpTab || 'common';
     if (mcpTa) mcpTa.textContent = JSON.stringify(tab === 'platform' ? window.__mcpConfigPlatform : window.__mcpConfigCommon, null, 2);
     if (mcpHint) {
-      const portEnv = port ? 'OPENBROWSER_API_PORT=' + shellQuote(port) : '';
+      const portEnv = isFixedPort && port ? 'OPENBROWSER_API_PORT=' + shellQuote(port) : '';
       const keyEnv = apiKey
         ? ' OPENBROWSER_API_KEY=' + shellQuote(apiKey)
         : (apiKeyFile ? ' OPENBROWSER_API_KEY_FILE=' + shellQuote(apiKeyFile) : ' OPENBROWSER_API_KEY=' + shellQuote(keyPlaceholder));

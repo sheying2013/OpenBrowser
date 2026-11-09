@@ -11,6 +11,7 @@ import fsp from 'node:fs/promises';
 import {
   trackKernelVersions,
   resolveBaselinePath,
+  loadBaseline,
   formatMarkdownSummary,
   formatIssueBody,
 } from './kernel-track.mjs';
@@ -111,6 +112,31 @@ const ok = (name, cond) => {
     ok('created baseline file has valid structure', parsedInit && parsedInit.benchmark && typeof parsedInit.benchmark.officialStable === 'string');
   } finally {
     await fsp.unlink(tmpNewBaseFile).catch(() => {});
+  }
+
+  // Test 10: LFS pointer text must throw error and not produce false negative
+  const tmpLfsFile = path.join(os.tmpdir(), `test-lfs-baseline-${Date.now()}.json`);
+  await fsp.writeFile(
+    tmpLfsFile,
+    'version https://git-lfs.github.com/spec/v1\noid sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nsize 693\n',
+    'utf8'
+  );
+  try {
+    let loadThrew = false;
+    try {
+      await loadBaseline(tmpLfsFile);
+    } catch (err) {
+      loadThrew = true;
+      ok('loadBaseline throws error on Git LFS pointer', err.message.includes('Git LFS pointer'));
+    }
+    ok('loadBaseline actually threw on LFS pointer', loadThrew);
+
+    const lfsReport = await trackKernelVersions({ baseline: tmpLfsFile });
+    ok('LFS pointer does not produce false negative (hasDrift must not be false)', lfsReport.baselineDrift && lfsReport.baselineDrift.hasDrift !== false);
+    ok('LFS pointer sets error property on baselineDrift', Boolean(lfsReport.baselineDrift?.error));
+    ok('LFS pointer error is flagged as isLfsPointer', lfsReport.baselineDrift?.isLfsPointer === true);
+  } finally {
+    await fsp.unlink(tmpLfsFile).catch(() => {});
   }
 
   console.log(`\n======================================================`);

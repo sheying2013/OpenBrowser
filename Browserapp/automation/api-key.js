@@ -4,6 +4,15 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+let credentialCrypto = null;
+try {
+  credentialCrypto = require('./credential-crypto');
+} catch (_) {
+  try {
+    credentialCrypto = require('../credential-crypto');
+  } catch (_) {}
+}
+
 function cleanApiKey(value) {
   let key = String(value ?? '').trim();
   if (key.toLowerCase().startsWith('bearer ')) {
@@ -33,29 +42,54 @@ function defaultUserDataPaths() {
   const paths = [];
   const home = os.homedir();
   if (process.platform === 'darwin') {
-    paths.push(path.join(home, 'Library', 'Application Support', 'OpenBrowser'));
     paths.push(path.join(home, 'Library', 'Application Support', 'openbrowser'));
+    paths.push(path.join(home, 'Library', 'Application Support', 'OpenBrowser'));
     paths.push(path.join(home, 'Library', 'Application Support', 'Electron'));
   } else if (process.platform === 'win32') {
     if (process.env.APPDATA) {
-      paths.push(path.join(process.env.APPDATA, 'OpenBrowser'));
       paths.push(path.join(process.env.APPDATA, 'openbrowser'));
+      paths.push(path.join(process.env.APPDATA, 'OpenBrowser'));
       paths.push(path.join(process.env.APPDATA, 'Electron'));
     }
-    paths.push(path.join(home, 'AppData', 'Roaming', 'OpenBrowser'));
     paths.push(path.join(home, 'AppData', 'Roaming', 'openbrowser'));
+    paths.push(path.join(home, 'AppData', 'Roaming', 'OpenBrowser'));
     paths.push(path.join(home, 'AppData', 'Roaming', 'Electron'));
   } else {
     if (process.env.XDG_CONFIG_HOME) {
-      paths.push(path.join(process.env.XDG_CONFIG_HOME, 'OpenBrowser'));
       paths.push(path.join(process.env.XDG_CONFIG_HOME, 'openbrowser'));
+      paths.push(path.join(process.env.XDG_CONFIG_HOME, 'OpenBrowser'));
       paths.push(path.join(process.env.XDG_CONFIG_HOME, 'Electron'));
     }
-    paths.push(path.join(home, '.config', 'OpenBrowser'));
     paths.push(path.join(home, '.config', 'openbrowser'));
+    paths.push(path.join(home, '.config', 'OpenBrowser'));
     paths.push(path.join(home, '.config', 'Electron'));
   }
   return paths;
+}
+
+function decryptKeyPayload(raw, filePath) {
+  if (!Buffer.isBuffer(raw)) {
+    raw = Buffer.from(String(raw || ''), 'binary');
+  }
+  if (!credentialCrypto) {
+    return raw.toString('utf8');
+  }
+  const isEnc = credentialCrypto.isEncrypted(raw);
+  const header = raw.length >= 4 ? raw.subarray(0, 4).toString('ascii') : '';
+  if (!isEnc && header !== 'OBE2') {
+    return raw.toString('utf8');
+  }
+  try {
+    return credentialCrypto.decryptCredential(raw);
+  } catch (err) {
+    const format = credentialCrypto.getFormat(raw);
+    if (format === 'OBS1' || header === 'OBS1') {
+      console.error(`[OpenBrowser api-key] 无法解密 ${filePath}: 该文件由 Electron safeStorage 加密 (OBS1)，独立 Node.js 进程无法访问系统钥匙串。请先启动一次 OpenBrowser 桌面客户端以自动升级重签为跨进程可解密的 OBE1 格式，或配置 OPENBROWSER_API_KEY 环境变量。`);
+    } else {
+      console.error(`[OpenBrowser api-key] 解密 ${filePath} 失败: ${err.message}`);
+    }
+    return null;
+  }
 }
 
 function apiKeyFileCandidates({ env = process.env, userDataPath = '' } = {}) {
@@ -89,11 +123,14 @@ function resolveApiKey({ configured = '', env = process.env, userDataPath = '', 
 
   for (const filePath of apiKeyFileCandidates({ env, userDataPath })) {
     try {
-      const raw = fs.readFileSync(filePath, 'utf8');
-      let key = cleanApiKey(raw);
+      if (!fs.existsSync(filePath)) continue;
+      const raw = fs.readFileSync(filePath);
+      const text = decryptKeyPayload(raw, filePath);
+      if (text === null) continue;
+      let key = cleanApiKey(text);
       if (key.startsWith('{')) {
         try {
-          const parsed = JSON.parse(raw);
+          const parsed = JSON.parse(text);
           if (parsed && typeof parsed.apiKey === 'string') {
             key = cleanApiKey(parsed.apiKey);
           }

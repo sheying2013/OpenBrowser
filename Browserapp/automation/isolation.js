@@ -95,7 +95,7 @@ function scanProcessesUsingProfile(profileRoot) {
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); try { [Console]::Out.Write((Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { try { [Console]::Out.Write((Get-WmiObject Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { [Console]::Out.Write(\'[]\') } }',
+        '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); try { [Console]::Out.Write((Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { try { [Console]::Out.Write((Get-WmiObject Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { exit 1 } }',
       ], {
         encoding: null,
         windowsHide: true,
@@ -147,7 +147,7 @@ async function scanProcessesUsingProfileAsync(profileRoot) {
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); try { [Console]::Out.Write((Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { try { [Console]::Out.Write((Get-WmiObject Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { [Console]::Out.Write(\'[]\') } }',
+        '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); try { [Console]::Out.Write((Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { try { [Console]::Out.Write((Get-WmiObject Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress)) } catch { exit 1 } }',
       ], {
         encoding: 'buffer',
         windowsHide: true,

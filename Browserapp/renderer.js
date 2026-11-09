@@ -298,8 +298,10 @@ function normalizeProfileSettings(profile) {
     ? null
     : (profileAssociation ? value[profileAssociation] : (metaAssociation ? proxyMeta[metaAssociation] : undefined));
   const proxyId = proxyIdValue == null || String(proxyIdValue).trim() === '' ? null : String(proxyIdValue).trim();
+  const allowFailedProxy = Boolean(proxyMeta.allowFailedProxy ?? proxyMeta.ignoreBrokenProxy ?? value.allowFailedProxy ?? value.ignoreBrokenProxy);
+  const { ignoreBrokenProxy: _ignoredTop, ...cleanValue } = value;
   return {
-    ...value,
+    ...cleanValue,
     number,
     name: number ? String(number) : String(value.name || ''),
     title: String(value.title || value.displayName || ''),
@@ -309,6 +311,7 @@ function normalizeProfileSettings(profile) {
     networkMode,
     proxy: networkMode === 'direct' ? 'Direct' : rawProxy,
     proxyId,
+    allowFailedProxy,
     userAgent: String(value.userAgent || ''),
     cookies: String(value.cookies || ''),
     note: String(value.note || ''),
@@ -340,7 +343,7 @@ function normalizeProfileSettings(profile) {
       requireReady: proxyMeta.requireReady !== false,
       notReadyPolicy: 'block',
       allowDirectFallback: false,
-      allowFailedProxy: Boolean(proxyMeta.allowFailedProxy ?? proxyMeta.ignoreBrokenProxy),
+      allowFailedProxy,
       tlsProfile: ['auto', 'chrome', 'chrome_legacy', 'node', 'off'].includes(String(proxyMeta.tlsProfile || ''))
         ? String(proxyMeta.tlsProfile)
         : 'auto',
@@ -417,6 +420,12 @@ function normalizeProfileSettings(profile) {
         const n = Number(raw);
         return Number.isFinite(n) ? n : '';
       })(),
+      forceDeviceScaleFactor: (() => {
+        const raw = privacy.forceDeviceScaleFactor ?? privacy.fingerprint?.forceDeviceScaleFactor;
+        if (raw === '' || raw === null || raw === undefined) return null;
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : raw;
+      })(),
       fingerprint: privacy.fingerprint && typeof privacy.fingerprint === 'object' ? {
         ...privacy.fingerprint,
         cores: (() => {
@@ -431,6 +440,12 @@ function normalizeProfileSettings(profile) {
           const n = Number(raw);
           return Number.isFinite(n) ? n : (privacy.fingerprint.memory ?? null);
         })(),
+        ...((() => {
+          const raw = privacy.forceDeviceScaleFactor ?? privacy.fingerprint?.forceDeviceScaleFactor;
+          if (raw === '' || raw === null || raw === undefined) return {};
+          const n = Number(raw);
+          return { forceDeviceScaleFactor: Number.isFinite(n) ? n : raw };
+        })()),
       } : {},
     },
     advanced: {
@@ -672,6 +687,12 @@ function groupColorOf(profile) {
 }
 
 function countProfilesInGroup(groupId) {
+  if (serverProfileCounts && typeof serverProfileCounts === 'object') {
+    if (groupId === 'ungrouped' || groupId === UNGROUPED_ID) {
+      return serverProfileCounts.ungrouped ?? 0;
+    }
+    return serverProfileCounts.byGroup?.[groupId] ?? 0;
+  }
   if (groupId === 'ungrouped' || groupId === UNGROUPED_ID) {
     return ui.profiles.filter((p) => !p.trashed && !p.groupId).length;
   }
@@ -1076,8 +1097,10 @@ const ACTION_ICON_SVGS = {
   play: '<polygon points="6 3 20 12 6 21 6 3"></polygon>',
   square: '<rect width="18" height="18" x="3" y="3" rx="2"></rect>',
   'panels-top-left': '<rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 9h18"></path><path d="M9 21V9"></path>',
+  bot: '<path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path>',
   pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>',
+  'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path>',
   activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.48 12H2"></path>',
   'users-round': '<path d="M18 21a8 8 0 0 0-16 0"></path><circle cx="10" cy="8" r="5"></circle><path d="M22 20c0-.37-.06-.73-.17-1.07a5 5 0 0 0-4.4-3.93"></path><path d="M16 3.13a5 5 0 0 1 0 9.75"></path>',
   'link-2': '<path d="M9 17H7A5 5 0 0 1 7 7h2"></path><path d="M15 7h2a5 5 0 1 1 0 10h-2"></path><line x1="8" x2="16" y1="12" y2="12"></line>',
@@ -1206,9 +1229,10 @@ function trimProfileForUiStorage(profile) {
 
 const save = () => {
   if (!Array.isArray(ui.groups)) ui.groups = defaultGroups();
+  const hasRealBackend = typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls;
   const safe = {
     ...ui,
-    profiles: (ui.profiles || []).map((item) => redactProfileForStorage(item)),
+    profiles: hasRealBackend ? [] : (ui.profiles || []).map((item) => redactProfileForStorage(item)),
   };
   try {
     // Never persist cookies / platform secrets / proxy passwords in renderer localStorage.
@@ -1221,7 +1245,7 @@ const save = () => {
       const trimmed = {
         ...ui,
         logs: [],
-        profiles: (ui.profiles || []).map((item) => trimProfileForUiStorage(item)),
+        profiles: hasRealBackend ? [] : (ui.profiles || []).map((item) => trimProfileForUiStorage(item)),
       };
       localStorage.setItem(UI_KEY, JSON.stringify(trimmed));
     } catch (fallbackErr) {
@@ -2202,8 +2226,10 @@ function editorDraft(strict = true) {
       const n = Number(v);
       return Number.isFinite(n) ? n : '';
     })(),
+    forceDeviceScaleFactor: current.privacy?.forceDeviceScaleFactor ?? current.privacy?.fingerprint?.forceDeviceScaleFactor ?? null,
     fingerprint: {
       ...(current.privacy?.fingerprint || {}),
+      ...(current.privacy?.forceDeviceScaleFactor != null ? { forceDeviceScaleFactor: current.privacy.forceDeviceScaleFactor } : {}),
       cores: (() => {
         const v = $('#editor-cores')?.value;
         if (v === '' || v == null) return undefined;
@@ -2321,6 +2347,7 @@ function editorDraft(strict = true) {
     networkMode: selectedNetwork === 'direct' ? 'direct' : 'proxy',
     proxy,
     proxyId: selectedProxyId,
+    allowFailedProxy: Boolean($('#editor-allow-failed-proxy')?.checked),
     ...(proxyAuthAction ? { proxyAuthAction } : {}),
     width: resolution.width,
     height: resolution.height,
@@ -2563,7 +2590,7 @@ function applyProfileToEditor(profile) {
   editorCheck('#editor-proxy-refresh-start', profile.proxyMeta.refreshOnStart);
   editorCheck('#editor-proxy-fill-fingerprint', profile.proxyMeta.fillFingerprint !== false);
   editorCheck('#editor-proxy-require-ready', profile.proxyMeta.requireReady !== false);
-  editorCheck('#editor-allow-failed-proxy', Boolean(profile.proxyMeta.allowFailedProxy ?? profile.proxyMeta.ignoreBrokenProxy));
+  editorCheck('#editor-allow-failed-proxy', Boolean(profile.allowFailedProxy ?? profile.proxyMeta?.allowFailedProxy ?? profile.ignoreBrokenProxy ?? profile.proxyMeta?.ignoreBrokenProxy));
   editorSet('#editor-proxy-not-ready-policy', profile.proxyMeta.notReadyPolicy || (profile.proxyMeta.requireReady === false ? 'continue' : 'block'));
   editorSet('#editor-proxy-tls-profile', profile.proxyMeta.tlsProfile || 'auto');
   editorSet('#editor-proxy-tls-chrome-major', profile.proxyMeta.tlsChromeMajor == null ? '' : profile.proxyMeta.tlsChromeMajor);
@@ -2887,7 +2914,7 @@ document.getElementById('editor-ua-generate')?.addEventListener('click', async (
   try {
     await applyBuiltUa({
       os: editorOsToUaKey($('#editor-os')?.value),
-      chromeMajor: Number($('#editor-ua-chrome-major')?.value) || 131,
+      chromeMajor: Number($('#editor-ua-chrome-major')?.value) || undefined,
     });
     toast(tx('已按系统生成 UA + Client Hints'));
   } catch (e) { toast(e.message); }
@@ -3192,14 +3219,26 @@ async function deleteGroup(id) {
     confirmLabel: tx('删除分组'),
     tone: 'danger',
   })) return;
+  const hasRealBackend = typeof window.ops?.batchPatchProfiles === 'function' && typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls;
+  if (hasRealBackend) {
+    try {
+      const res = await window.ops.queryProfiles({ page: 1, pageSize: 5000, filters: { activeGroupFilter: id } });
+      const groupIds = (res?.rows || []).map((r) => r.id);
+      if (groupIds.length) {
+        await window.ops.batchPatchProfiles({ ids: groupIds, groupId: null });
+      }
+    } catch (_) {}
+  }
   ui.profiles = ui.profiles.map((p) => (p.groupId === id ? { ...p, groupId: UNGROUPED_ID } : p));
   ui.groups = ui.groups.filter((item) => item.id !== id);
   if (activeGroupFilter === id) activeGroupFilter = 'all';
   save();
   invalidateViewCache(['groups', 'profiles']);
-  window.ops.syncProfiles(ui.profiles).catch(() => {});
+  if (!hasRealBackend && typeof window.ops?.syncProfiles === 'function') {
+    window.ops.syncProfiles(ui.profiles).catch(() => {});
+  }
   renderGroupsPage();
-  renderProfiles();
+  invalidateAndRefreshProfiles({ resetScroll: true });
   toast(tx('已删除分组'));
   log('Group', '删除分组 ' + g.name);
 }
@@ -3209,10 +3248,17 @@ async function assignSelectedToGroup(groupId) {
   if (!ids.length) throw new Error(tx('请先勾选环境'));
   const gid = groupId === 'ungrouped' ? UNGROUPED_ID : groupId;
   if (gid && !findGroup(gid)) throw new Error(tx('分组不存在'));
-  ui.profiles = ui.profiles.map((p) => (ids.includes(p.id) ? { ...p, groupId: gid } : p));
-  save();
-  engineProfiles = await window.ops.syncProfiles(ui.profiles);
-  renderProfiles();
+  if (typeof window.ops?.batchPatchProfiles === 'function' && !window.__uiAuditCalls) {
+    await window.ops.batchPatchProfiles({ ids, groupId: gid || null });
+  } else {
+    ui.profiles = ui.profiles.map((p) => (ids.includes(p.id) ? { ...p, groupId: gid } : p));
+    save();
+    if (typeof window.ops?.syncProfiles === 'function') {
+      engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    }
+  }
+  invalidateViewCache(['groups', 'profiles']);
+  invalidateAndRefreshProfiles();
   toast(tx(`已将 ${ids.length} 个环境移到「${gid ? groupNameOf({ groupId: gid }) : '未分组'}」`));
   log('Group', `批量移动 ${ids.length} 个环境 → ${gid || '未分组'}`);
 }
@@ -3480,12 +3526,15 @@ function renderGroupFilterChips() {
     btn.append(dot, text, badge);
     return btn;
   };
-  const activeProfiles = ui.profiles.filter((p) => !p.trashed);
-  const trashedCount = ui.profiles.filter((p) => Boolean(p.trashed)).length;
-  host.append(mk('all', t('groups.all'), activeProfiles.length));
-  host.append(mk('ungrouped', t('groups.ungrouped'), countProfilesInGroup('ungrouped')));
+  const hasServerCounts = Boolean(serverProfileCounts && typeof serverProfileCounts === 'object');
+  const allCount = hasServerCounts ? (serverProfileCounts.active ?? serverProfileCounts.total ?? 0) : ui.profiles.filter((p) => !p.trashed).length;
+  const ungroupedCount = hasServerCounts ? (serverProfileCounts.ungrouped ?? 0) : countProfilesInGroup('ungrouped');
+  const trashedCount = hasServerCounts ? (serverProfileCounts.trashed ?? 0) : ui.profiles.filter((p) => Boolean(p.trashed)).length;
+  host.append(mk('all', t('groups.all'), allCount));
+  host.append(mk('ungrouped', t('groups.ungrouped'), ungroupedCount));
   for (const g of listGroups()) {
-    host.append(mk(g.id, localizeSystemLabel(g.name), countProfilesInGroup(g.id)));
+    const count = hasServerCounts ? (serverProfileCounts.byGroup?.[g.id] ?? 0) : countProfilesInGroup(g.id);
+    host.append(mk(g.id, localizeSystemLabel(g.name), count));
   }
   const trashBtn = mk('trash', t('groups.trash'), trashedCount);
   trashBtn.classList.add('trash-chip');
@@ -3612,6 +3661,20 @@ function buildStartProgressCell(profileId, progress) {
 
 
 async function cloneProfile(id) {
+  if (typeof window.ops?.cloneProfiles === 'function' && !window.__uiAuditCalls) {
+    try {
+      const res = await window.ops.cloneProfiles({ ids: [id] });
+      invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
+      invalidateAndRefreshProfiles();
+      const created = res?.profiles?.[0];
+      toast(tx(created ? `已克隆环境到 #${displayProfileNumber(created)}` : '已克隆环境'));
+      log('Profile', `克隆环境 ${id}`);
+      return;
+    } catch (error) {
+      toast(tx('克隆失败：' + error.message));
+      return;
+    }
+  }
   let target = ui.profiles.find((item) => item.id === id);
   if ((!target || !target.fingerprint) && !window.__uiAuditCalls && typeof window.ops?.getProfile === 'function') {
     try {
@@ -3649,7 +3712,7 @@ async function cloneProfile(id) {
   invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
   try {
     engineProfiles = await window.ops.syncProfiles(ui.profiles);
-    renderProfiles();
+    invalidateAndRefreshProfiles();
     toast(tx(`已克隆环境 #${displayProfileNumber(target)} 到 #${number}`));
     log('Profile', `克隆环境 #${displayProfileNumber(target)} 到 #${number}`);
   } catch (error) {
@@ -3669,10 +3732,12 @@ async function restoreProfile(id) {
     }
     save();
     invalidateViewCache(['profiles', 'groups', 'sync']);
-    engineProfiles = await window.ops.syncProfiles(ui.profiles);
-    renderGroupFilterChips();
+    const hasRealBackend = typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls;
+    if (!hasRealBackend && typeof window.ops?.syncProfiles === 'function') {
+      engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    }
     updateProfileSelectionUi();
-    renderProfiles();
+    invalidateAndRefreshProfiles();
     toast(t('trash.restored'));
   } catch (error) {
     toast(t('trash.restoreFailed') + ': ' + error.message);
@@ -3680,9 +3745,12 @@ async function restoreProfile(id) {
 }
 
 async function purgeProfile(id) {
-  const target = ui.profiles.find((item) => item.id === id);
-  const name = target ? (target.title || target.name || id) : id;
-  if (!confirm(t('trash.confirmPurgeSingle'))) return;
+  if (!await confirmAction({
+    title: t('trash.purge'),
+    message: t('trash.confirmPurgeSingle'),
+    confirmText: t('trash.purge'),
+    tone: 'danger',
+  })) return;
   try {
     await window.ops.purgeProfiles([id], true);
     ui.profiles = ui.profiles.filter((item) => item.id !== id);
@@ -3690,10 +3758,12 @@ async function purgeProfile(id) {
     selectedSessions.delete(id);
     save();
     invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
-    engineProfiles = await window.ops.syncProfiles(ui.profiles);
-    renderGroupFilterChips();
+    const hasRealBackend = typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls;
+    if (!hasRealBackend && typeof window.ops?.syncProfiles === 'function') {
+      engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    }
     updateProfileSelectionUi();
-    renderProfiles();
+    invalidateAndRefreshProfiles();
     toast(t('trash.purged'));
   } catch (error) {
     toast(t('trash.purgeFailed') + ': ' + error.message);
@@ -3726,8 +3796,10 @@ function buildProfileRow(profile) {
     ...profile,
     ...profileEngine(profile.id),
   };
+  const isCorrupted = Boolean(profile.corrupted || profile.networkMode === 'corrupted');
   const row = document.createElement('tr');
   row.dataset.profileId = profile.id;
+  if (isCorrupted) row.classList.add('is-corrupted');
   const selectCell = document.createElement('td'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedProfiles.has(profile.id); checkbox.dataset.profileSelect = profile.id; selectCell.append(checkbox);
   checkbox.setAttribute('aria-label', t('profiles.selectOne', { n: displayProfileNumber(profile) }));
   const idCell = element('td', 'col-num', displayProfileNumber(profile));
@@ -3744,12 +3816,24 @@ function buildProfileRow(profile) {
   browserCell.append(buildEnvBrowserCell(profile));
   const proxyCell = document.createElement('td');
   proxyCell.className = 'col-network';
-  proxyCell.append(networkModeBadge(profile.proxy));
+  if (isCorrupted) {
+    const wrap = document.createElement('div');
+    wrap.className = 'network-mode-cell network-mode-cell-compact';
+    const cBadge = element('span', 'net-badge net-badge-corrupted', t('profiles.corrupted') || '损坏');
+    cBadge.title = t('profiles.corruptedHint') || '环境数据损坏，无法读取';
+    wrap.append(cBadge);
+    proxyCell.append(wrap);
+  } else {
+    proxyCell.append(networkModeBadge(profile.proxy));
+  }
   const networkCell = document.createElement('td');
   networkCell.className = 'col-exit';
   const network = info.network || (profile.exitIp ? { ip: profile.exitIp, countryCode: profile.exitCountryCode, checkedAt: profile.exitCheckedAt } : null);
   const networkInfo = element('div', 'network-info network-info-compact');
-  if (network?.ip) {
+  if (isCorrupted) {
+    const warnEl = element('span', 'network-pending text-danger', t('profiles.corruptedHint') || '环境数据损坏');
+    networkInfo.append(warnEl);
+  } else if (network?.ip) {
     const code = String(network.countryCode || '').toUpperCase();
     const line = element('span', 'exit-compact', (code ? countryFlag(code) + ' ' + code : '🌐') + (network.ip ? ' · ' + String(network.ip).replace(/^(\d+\.\d+)\.\d+\.\d+$/, '$1.*.*') : ''));
     line.title = (network.ip || '') + (code ? ' · ' + countryName(code) : '');
@@ -3757,7 +3841,7 @@ function buildProfileRow(profile) {
   } else {
     networkInfo.append(element('span', 'network-pending', isDirectProxy(profile.proxy) ? t('net.localHost') : t('net.untested')));
   }
-  if (!isDirectProxy(profile.proxy)) {
+  if (!isCorrupted && !isDirectProxy(profile.proxy)) {
     const inspect = element('button', 'network-check', t('action.check'));
     inspect.title = network?.ip ? t('action.recheck') : t('action.checkExit');
     inspect.dataset.proxyCheck = profile.id;
@@ -3768,7 +3852,11 @@ function buildProfileRow(profile) {
   const statusCell = document.createElement('td');
   statusCell.className = 'col-status';
   const starting = !info.running && startingProfiles.has(profile.id);
-  if (starting) {
+  if (isCorrupted) {
+    const status = element('span', 'status status-compact status-corrupted', t('status.corrupted') || '异常');
+    status.title = t('profiles.corruptedHint') || '环境数据损坏，无法读取';
+    statusCell.append(status);
+  } else if (starting) {
     statusCell.append(buildStartProgressCell(profile.id, startingProfiles.get(profile.id)));
     row.classList.add('is-starting');
   } else {
@@ -3810,8 +3898,10 @@ function buildProfileRow(profile) {
 }
 
 let pagedProfilesData = null;
+let serverProfileCounts = null;
 let pagedQueryInProgress = false;
 let pendingPagedQuery = null;
+let measuredProfileRowHeight = 56;
 
 async function requestProfilesPage(options = {}) {
   if (window.__uiAuditCalls || typeof window.ops?.queryProfiles !== 'function') return null;
@@ -3835,6 +3925,15 @@ async function requestProfilesPage(options = {}) {
   try {
     const res = await window.ops.queryProfiles(req);
     if (res && Array.isArray(res.rows)) {
+      if (res.counts) {
+        serverProfileCounts = res.counts;
+      }
+      if (res.rows.length === 0 && res.total > 0 && req.page > 1) {
+        const fixedPage = Math.max(1, Math.ceil(res.total / (res.pageSize || profilePageSize)));
+        profilePage = fixedPage;
+        pagedQueryInProgress = false;
+        return requestProfilesPage({ ...options, page: fixedPage });
+      }
       pagedProfilesData = {
         total: res.total,
         page: res.page,
@@ -3861,8 +3960,33 @@ async function requestProfilesPage(options = {}) {
   return null;
 }
 
+function invalidateAndRefreshProfiles({ resetScroll = false } = {}) {
+  pagedProfilesData = null;
+  if (resetScroll) {
+    resetProfileTableScroll();
+  }
+  renderProfiles();
+  if (typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls) {
+    requestProfilesPage();
+  }
+  if (typeof window.ops?.profileCounts === 'function' && !window.__uiAuditCalls) {
+    window.ops.profileCounts().then((counts) => {
+      if (counts) {
+        serverProfileCounts = counts;
+        renderGroupFilterChips();
+      }
+    }).catch(() => {});
+  }
+}
+window.invalidateAndRefreshProfiles = invalidateAndRefreshProfiles;
+window.requestProfilesPage = requestProfilesPage;
+window.addEventListener('openbrowser:refresh-profiles', (e) => {
+  invalidateAndRefreshProfiles({ resetScroll: Boolean(e?.detail?.resetScroll) });
+});
+
 let _virtualScrollAttached = false;
 let _virtualScrollRaf = 0;
+let _suppressVirtualScroll = false;
 function attachTableCardVirtualScroll() {
   if (_virtualScrollAttached) return;
   const card = document.querySelector('#view-profiles .table-card');
@@ -3870,12 +3994,17 @@ function attachTableCardVirtualScroll() {
   _virtualScrollAttached = true;
   let lastScrollTop = card.scrollTop;
   card.addEventListener('scroll', () => {
+    if (_suppressVirtualScroll) {
+      lastScrollTop = card.scrollTop;
+      return;
+    }
     if (card.scrollTop === lastScrollTop) return;
     lastScrollTop = card.scrollTop;
     if (_virtualScrollRaf) return;
     _virtualScrollRaf = requestAnimationFrame(() => {
       _virtualScrollRaf = 0;
-      if (document.querySelector('#view-profiles.active')) {
+      const vp = document.getElementById('view-profiles');
+      if (vp && (!vp.classList.contains('view') || vp.classList.contains('active'))) {
         renderProfiles();
       }
     });
@@ -3886,6 +4015,19 @@ function renderProfiles() {
   renderGroupFilterChips();
   const table = $('#profile-table');
   if (!table) return;
+
+  const card = table.closest('.table-card');
+  const savedScrollTop = card ? card.scrollTop : 0;
+  const rawClientHeight = card?.clientHeight || 0;
+  const maxCardHeight = card ? Number.parseFloat(getComputedStyle(card).maxHeight) : 0;
+  const measuredViewportHeight = rawClientHeight >= 320
+    ? rawClientHeight
+    : (Number.isFinite(maxCardHeight) && maxCardHeight > 0 ? maxCardHeight : 600);
+  const existingSampleRow = table.querySelector('tr:not(.virtual-spacer)');
+  if (existingSampleRow && existingSampleRow.offsetHeight > 20) {
+    measuredProfileRowHeight = existingSampleRow.offsetHeight;
+  }
+
   table.replaceChildren();
 
   const filter = $('#profile-search')?.value || '';
@@ -3916,16 +4058,16 @@ function renderProfiles() {
     totalCount = filtered.length;
   }
 
-  const card = table.closest('.table-card');
   let rowsToRender = visible;
   if (visible.length > 25 && card && window.OpenBrowserProfileList?.calculateVirtualRange) {
     const vr = window.OpenBrowserProfileList.calculateVirtualRange({
       total: visible.length,
-      scrollTop: card.scrollTop,
-      viewportHeight: card.clientHeight || 600,
-      rowHeight: 44,
+      scrollTop: savedScrollTop,
+      viewportHeight: measuredViewportHeight,
+      rowHeight: measuredProfileRowHeight,
       overscan: 5,
     });
+    const frag = document.createDocumentFragment();
     if (vr.topPadding > 0) {
       const topSpacer = document.createElement('tr');
       topSpacer.className = 'virtual-spacer';
@@ -3936,11 +4078,11 @@ function renderProfiles() {
       td.style.padding = '0';
       td.style.border = '0';
       topSpacer.append(td);
-      table.append(topSpacer);
+      frag.append(topSpacer);
     }
     rowsToRender = visible.slice(vr.startIndex, vr.endIndex);
     for (const profile of rowsToRender) {
-      table.append(buildProfileRow(profile));
+      frag.append(buildProfileRow(profile));
     }
     if (vr.bottomPadding > 0) {
       const bottomSpacer = document.createElement('tr');
@@ -3952,12 +4094,39 @@ function renderProfiles() {
       td.style.padding = '0';
       td.style.border = '0';
       bottomSpacer.append(td);
-      table.append(bottomSpacer);
+      frag.append(bottomSpacer);
+    }
+    table.append(frag);
+    if (savedScrollTop > 0 && Math.abs(card.scrollTop - savedScrollTop) > 1) {
+      _suppressVirtualScroll = true;
+      card.scrollTop = savedScrollTop;
+      requestAnimationFrame(() => { _suppressVirtualScroll = false; });
+    }
+    const firstRenderedRow = table.querySelector('tr:not(.virtual-spacer)');
+    if (firstRenderedRow && firstRenderedRow.offsetHeight > 20) {
+      const actualH = firstRenderedRow.offsetHeight;
+      if (Math.abs(actualH - measuredProfileRowHeight) > 2) {
+        measuredProfileRowHeight = actualH;
+        const topSp = table.querySelector('tr.virtual-spacer:first-child');
+        if (topSp && vr.startIndex > 0) {
+          const newTopH = vr.startIndex * actualH;
+          topSp.style.height = `${newTopH}px`;
+          if (topSp.firstElementChild) topSp.firstElementChild.style.height = `${newTopH}px`;
+        }
+        const bottomSp = table.querySelector('tr.virtual-spacer:last-child');
+        if (bottomSp && vr.endIndex < visible.length) {
+          const newBottomH = Math.max(0, (visible.length - vr.endIndex) * actualH);
+          bottomSp.style.height = `${newBottomH}px`;
+          if (bottomSp.firstElementChild) bottomSp.firstElementChild.style.height = `${newBottomH}px`;
+        }
+      }
     }
   } else {
+    const frag = document.createDocumentFragment();
     for (const profile of rowsToRender) {
-      table.append(buildProfileRow(profile));
+      frag.append(buildProfileRow(profile));
     }
+    table.append(frag);
   }
 
   const inTrash = activeGroupFilter === 'trash';
@@ -3969,7 +4138,8 @@ function renderProfiles() {
     if (el) el.hidden = inTrash;
   }
   const empty = $('#profile-empty');
-  const hasProfiles = totalCount > 0 || ui.profiles.length > 0;
+  const hasServerProfiles = Boolean(serverProfileCounts && (serverProfileCounts.total > 0 || serverProfileCounts.active > 0));
+  const hasProfiles = totalCount > 0 || hasServerProfiles || ui.profiles.length > 0;
   empty.hidden = totalCount !== 0;
   table.closest('table').hidden = totalCount === 0;
   if (totalCount === 0) table.closest('.table-card').scrollLeft = 0;
@@ -4026,20 +4196,26 @@ function renderProfiles() {
 
 function visibleProfilePageIds() {
   const filter = $('#profile-search')?.value || '';
-  if (pagedProfilesData && pagedProfilesData.query === filter && pagedProfilesData.activeGroupFilter === activeGroupFilter && Array.isArray(pagedProfilesData.rows) && pagedProfilesData.rows.length) {
+  if (
+    pagedProfilesData &&
+    pagedProfilesData.query === filter &&
+    pagedProfilesData.activeGroupFilter === activeGroupFilter &&
+    pagedProfilesData.pageSize === profilePageSize &&
+    Array.isArray(pagedProfilesData.rows)
+  ) {
     return pagedProfilesData.rows.map((profile) => profile.id);
   }
   const filtered = filteredProfilesForCurrentView();
   const pageData = window.OpenBrowserProfileList?.paginate?.(filtered, profilePage, profilePageSize)
     || { items: filtered };
-  return pageData.items.map((profile) => profile.id);
+  return (pageData.items || []).map((profile) => profile.id);
 }
 
 async function refreshStatus() {
   invalidateViewCache(['sync', 'profiles']);
   engineProfiles = await window.ops.profileStatus(); mergeEngineExitState(engineProfiles);
   renderProfiles();
-  if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage();
+  if (typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls) requestProfilesPage();
 }
 
 // --- Render/IPC coalescing (perf) --------------------------------------------------
@@ -5048,7 +5224,17 @@ $('#profile-page-size').addEventListener('change', (event) => { const value = Nu
 $('#profile-prev').addEventListener('click', () => { profilePage = Math.max(1, profilePage - 1); resetProfileTableScroll(); renderProfiles(); if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage(); });
 $('#profile-next').addEventListener('click', () => { profilePage += 1; resetProfileTableScroll(); renderProfiles(); if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage(); });
 $('#profile-page').addEventListener('change', (event) => { profilePage = Math.max(1, Number.parseInt(event.target.value, 10) || 1); resetProfileTableScroll(); renderProfiles(); if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage(); });
-function openCreateProfileDialog() {
+async function resolveNextProfileNumber() {
+  if (typeof window.ops?.nextProfileNumber === 'function' && !window.__uiAuditCalls) {
+    try {
+      const num = await window.ops.nextProfileNumber();
+      if (Number.isFinite(num) && num > 0) return num;
+    } catch (_) {}
+  }
+  return nextProfileNumber();
+}
+
+async function openCreateProfileDialog() {
   fillGroupSelect($('#profile-create-group'), listGroups()[0]?.id || UNGROUPED_ID);
   const directRadio = document.querySelector('input[name="create-network"][value="direct"]');
   if (directRadio) directRadio.checked = true;
@@ -5058,7 +5244,7 @@ function openCreateProfileDialog() {
   renderProxyLibrarySelect($('#batch-add-proxy-library'), '');
   const fields = $('#create-proxy-fields');
   if (fields) fields.hidden = true;
-  const number = nextProfileNumber();
+  const number = await resolveNextProfileNumber();
   const form = $('#profile-form');
   if (form?.elements?.name) {
     form.elements.name.value = String(number);
@@ -5072,7 +5258,8 @@ function openCreateProfileDialog() {
     defaultOpt.value = '';
     defaultOpt.textContent = tx('使用新环境默认偏好');
     templateSelect.appendChild(defaultOpt);
-    for (const p of ui.profiles) {
+    const tplSources = ui.profiles.length ? ui.profiles : (pagedProfilesData?.rows || []);
+    for (const p of tplSources) {
       const opt = document.createElement('option');
       opt.value = p.id;
       opt.textContent = `${displayProfileNumber(p)} - ${p.name || '环境'}${p.startUrl ? ' (' + p.startUrl + ')' : ''}`;
@@ -5098,12 +5285,8 @@ document.getElementById('profile-group-chips')?.addEventListener('click', (event
   activeGroupFilter = btn.dataset.groupFilter || 'all';
   selectedProfiles.clear();
   profilePage = 1;
-  pagedProfilesData = null;
-  resetProfileTableScroll();
-  renderGroupFilterChips();
   updateProfileSelectionUi();
-  renderProfiles();
-  if (typeof window.ops?.queryProfiles === 'function') requestProfilesPage();
+  invalidateAndRefreshProfiles({ resetScroll: true });
 });
 
 // groups page actions
@@ -5117,8 +5300,9 @@ document.getElementById('group-table')?.addEventListener('click', (event) => {
   if (delId) deleteGroup(delId);
   if (viewId) {
     activeGroupFilter = viewId;
+    profilePage = 1;
     switchView('profiles');
-    renderProfiles();
+    invalidateAndRefreshProfiles({ resetScroll: true });
   }
 });
 document.getElementById('group-color-chips')?.addEventListener('click', (event) => {
@@ -5153,7 +5337,9 @@ document.getElementById('batch-assign-group-btn')?.addEventListener('click', asy
 });
 $('#profile-form').addEventListener('submit', async (event) => {
   event.preventDefault(); if (event.submitter?.value === 'cancel') return $('#profile-dialog').close();
-  const form = event.currentTarget; const data = new FormData(form); const number = nextProfileNumber(); const previousNext = ui.nextProfileNumber;
+  const form = event.currentTarget; const data = new FormData(form);
+  const number = await resolveNextProfileNumber();
+  const previousNext = ui.nextProfileNumber;
   const groupId = String(data.get('groupId') || $('#profile-create-group')?.value || UNGROUPED_ID);
   let startUrl = '';
   try { startUrl = normalizeOptionalWebUrl(data.get('startUrl')); }
@@ -5173,7 +5359,10 @@ $('#profile-form').addEventListener('submit', async (event) => {
     }
   }
   const templateId = String($('#profile-create-template')?.value || '').trim();
-  const template = templateId ? ui.profiles.find((item) => item.id === templateId) : null;
+  let template = templateId ? ui.profiles.find((item) => item.id === templateId) : null;
+  if (templateId && !template && typeof window.ops?.getProfile === 'function' && !window.__uiAuditCalls) {
+    try { template = await window.ops.getProfile(templateId); } catch (_) {}
+  }
   const profile = {
     id: createInternalProfileId(number),
     number,
@@ -5203,10 +5392,20 @@ $('#profile-form').addEventListener('submit', async (event) => {
     proxyMeta: { proxyId: isDirectProxy(proxy) ? null : (proxyLibraryId || null) },
   };
   const shouldSaveToLib = Boolean($('#create-proxy-save-to-library')?.checked);
-  ui.profiles.push(profile); ui.nextProfileNumber = number + 1; save();
+  const useIncrementalSave = typeof window.ops?.saveProfile === 'function' && !window.__uiAuditCalls;
+  if (!useIncrementalSave) {
+    ui.profiles.push(profile);
+  }
+  ui.nextProfileNumber = number + 1;
+  save();
   invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
   try {
-    await window.ops.syncProfiles(ui.profiles); $('#profile-dialog').close(); form.reset();
+    if (useIncrementalSave) {
+      await window.ops.saveProfile(profile);
+    } else {
+      await window.ops.syncProfiles(ui.profiles);
+    }
+    $('#profile-dialog').close(); form.reset();
     if (shouldSaveToLib && !isDirectProxy(proxy)) {
       try {
         const parsed = parseProxyInputForUi(proxy, $('#create-proxy-type')?.value || 'socks5');
@@ -5224,6 +5423,7 @@ $('#profile-form').addEventListener('submit', async (event) => {
           if (createdLib?.id) {
             profile.proxyId = createdLib.id;
             profile.proxyMeta = { ...(profile.proxyMeta || {}), proxyId: createdLib.id };
+            if (useIncrementalSave) await window.ops.saveProfile(profile);
             save();
           }
           await refreshProxies();
@@ -5235,7 +5435,9 @@ $('#profile-form').addEventListener('submit', async (event) => {
     const directRadio = document.querySelector('input[name="create-network"][value="direct"]');
     if (directRadio) directRadio.checked = true;
     const fields = $('#create-proxy-fields'); if (fields) fields.hidden = true;
-    await refreshStatus(); log('Profile', '创建环境 ' + number + ' · ' + (isDirectProxy(proxy) ? '本地直连' : '代理'));
+    await refreshStatus();
+    invalidateAndRefreshProfiles();
+    log('Profile', '创建环境 ' + number + ' · ' + (isDirectProxy(proxy) ? '本地直连' : '代理'));
     toast(isDirectProxy(proxy) && networkMode === 'proxy' ? '未填写代理，已自动切换为本地直连' : (isDirectProxy(proxy) ? '已创建（本地直连）' : '已创建（代理模式）'));
   } catch (error) {
     ui.profiles = ui.profiles.filter((item) => item.id !== profile.id); ui.nextProfileNumber = previousNext; save(); toast('创建失败：' + error.message);
@@ -5420,11 +5622,17 @@ $('#profile-editor-form').addEventListener('submit', async (event) => {
     ui.profiles[index] = draft;
     save();
     invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
-    const syncPayload = ui.profiles.slice();
-    // This strict editor submission is an explicit replacement, including empty
-    // Cookie/password/TOTP fields. Keep the action marker out of UI persistence.
-    syncPayload[index] = { ...draft, credentialsAction: 'replace' };
-    engineProfiles = await window.ops.syncProfiles(syncPayload); renderProfiles();
+    const savePayload = { ...draft, credentialsAction: 'replace' };
+    const useIncrementalSave = typeof window.ops?.saveProfile === 'function' && !window.__uiAuditCalls;
+    if (useIncrementalSave) {
+      await window.ops.saveProfile(savePayload);
+      invalidateAndRefreshProfiles();
+    } else {
+      const syncPayload = ui.profiles.slice();
+      syncPayload[index] = savePayload;
+      engineProfiles = await window.ops.syncProfiles(syncPayload);
+      renderProfiles();
+    }
     if (shouldSaveEditorProxyToLib && !isDirectProxy(draft.proxy)) {
       try {
         const parsed = parseProxyInputForUi(draft.proxy, $('#editor-proxy-type')?.value || 'socks5');
@@ -5444,7 +5652,11 @@ $('#profile-editor-form').addEventListener('submit', async (event) => {
             draft.proxyMeta = { ...(draft.proxyMeta || {}), proxyId: createdLib.id };
             ui.profiles[index] = draft;
             save();
-            await window.ops.syncProfiles(ui.profiles);
+            if (useIncrementalSave) {
+              await window.ops.saveProfile(draft);
+            } else {
+              await window.ops.syncProfiles(ui.profiles);
+            }
           }
           await refreshProxies();
         }
@@ -5456,8 +5668,8 @@ $('#profile-editor-form').addEventListener('submit', async (event) => {
   } catch (error) { toast('保存失败：' + error.message); }
 });
 
-$('#batch-add').addEventListener('click', () => {
-  $('#batch-add-start').value = String(nextProfileNumber());
+$('#batch-add').addEventListener('click', async () => {
+  $('#batch-add-start').value = String(await resolveNextProfileNumber());
   fillGroupSelect($('#batch-add-group'), listGroups()[0]?.id || UNGROUPED_ID);
   fillGroupSelect($('#batch-assign-group'), UNGROUPED_ID, { includeUngrouped: true });
   const directRadio = document.querySelector('input[name="batch-add-network"][value="direct"]');
@@ -5477,18 +5689,22 @@ $('#batch-add').addEventListener('click', () => {
   const template = $('#batch-add-template');
   if (template) {
     template.replaceChildren(new Option(tx('使用新环境默认偏好'), ''));
-    for (const profile of ui.profiles) template.append(new Option(`环境 ${displayProfileNumber(profile)}${profile.title ? ' · ' + profile.title : ''}`, profile.id));
+    const tplSources = ui.profiles.length ? ui.profiles : (pagedProfilesData?.rows || []);
+    for (const profile of tplSources) template.append(new Option(`环境 ${displayProfileNumber(profile)}${profile.title ? ' · ' + profile.title : ''}`, profile.id));
   }
   $('#batch-add-dialog').showModal();
 });
 $('#batch-add-form').addEventListener('submit', async (event) => {
   event.preventDefault(); if (event.submitter?.value === 'cancel') return $('#batch-add-dialog').close();
-  const count = Number.parseInt($('#batch-add-count').value, 10); const start = nextProfileNumber(); const previousNext = ui.nextProfileNumber;
+  const count = Number.parseInt($('#batch-add-count').value, 10); const start = await resolveNextProfileNumber(); const previousNext = ui.nextProfileNumber;
   if (!Number.isInteger(count) || count < 1 || count > 200) return toast(tx('新增数量必须为 1-200'));
   const language = $('#batch-add-language').value; const tag = $('#batch-add-tag').value.trim() || '批量创建';
   const groupId = $('#batch-add-group')?.value || UNGROUPED_ID;
   const templateId = $('#batch-add-template')?.value || '';
-  const templateProfile = templateId ? (profileEngine(templateId)?.id ? profileEngine(templateId) : ui.profiles.find((item) => item.id === templateId)) : null;
+  let templateProfile = templateId ? (profileEngine(templateId)?.id ? profileEngine(templateId) : ui.profiles.find((item) => item.id === templateId)) : null;
+  if (templateId && !templateProfile && typeof window.ops?.getProfile === 'function' && !window.__uiAuditCalls) {
+    try { templateProfile = await window.ops.getProfile(templateId); } catch (_) {}
+  }
   const templatePreferences = templateProfile ? cloneProfilePreferences(templateProfile) : null;
   let batchStartUrl = '';
   const inputBatchStartUrl = $('#batch-add-start-url')?.value?.trim();
@@ -5566,9 +5782,16 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
       const result = verified[index]; if (!result) return;
       profile.exitIp = result.ip; profile.exitCountryCode = result.countryCode; profile.exitTimezone = result.timezone || ''; profile.exitLatitude = result.latitude; profile.exitLongitude = result.longitude; profile.exitCheckedAt = result.checkedAt;
     });
-    ui.profiles.push(...created); ui.nextProfileNumber = start + created.length; save(); invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']); engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    const useIncrementalSave = typeof window.ops?.saveProfile === 'function' && !window.__uiAuditCalls;
+    if (useIncrementalSave) {
+      for (const p of created) await window.ops.saveProfile(p);
+    } else {
+      ui.profiles.push(...created);
+      engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    }
+    ui.nextProfileNumber = start + created.length; save(); invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
     selectedProfiles = new Set(created.map((item) => item.id)); $('#select-all-profiles').checked = false; $('#batch-add-dialog').close(); $('#batch-add-proxies').value = '';
-    await refreshStatus(); await refreshExtensions(); renderProfiles();
+    await refreshStatus(); await refreshExtensions(); invalidateAndRefreshProfiles();
     log('Batch', '批量新增 ' + created.length + ' 个环境 · ' + (networkMode === 'direct' ? '本地直连' : '代理'));
     toast('已批量创建 ' + created.length + ' 个环境（' + (networkMode === 'direct' ? '本地直连' : '代理模式') + '）');
   } catch (error) {
@@ -5576,7 +5799,7 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
   }
 });
 $('#delete-selected').addEventListener('click', async () => {
-  pendingDeleteProfiles = ui.profiles.filter((item) => selectedProfiles.has(item.id)).map((item) => item.id);
+  pendingDeleteProfiles = [...selectedProfiles];
   if (!pendingDeleteProfiles.length) return toast(tx('请先勾选要删除的环境'));
   const inTrash = activeGroupFilter === 'trash';
   try {
@@ -5626,16 +5849,18 @@ $('#batch-delete-form').addEventListener('submit', async (event) => {
     pendingDeleteProfiles = []; save(); $('#select-all-profiles').checked = false; $('#batch-delete-dialog').close();
     invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
     await refreshStatus(); await refreshSessions(); await refreshExtensions();
-    engineProfiles = await window.ops.syncProfiles(ui.profiles);
-    renderGroupFilterChips();
+    const hasRealBackend = typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls;
+    if (!hasRealBackend && typeof window.ops?.syncProfiles === 'function') {
+      engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    }
     updateProfileSelectionUi();
-    renderProfiles();
+    invalidateAndRefreshProfiles();
     if (inTrash || deleteData) {
-      log('Batch', '彻底删除 ' + result.deleted + ' 个环境');
+      log('Batch', '彻底删除 ' + (result?.deleted ?? ids.length) + ' 个环境');
       toast(t('trash.purged'));
     } else {
-      log('Batch', '移入回收站 ' + result.deleted + ' 个环境');
-      toast(t('trash.movedToTrash', { n: result.deleted }));
+      log('Batch', '移入回收站 ' + (result?.deleted ?? ids.length) + ' 个环境');
+      toast(t('trash.movedToTrash', { n: result?.deleted ?? ids.length }));
     }
   } catch (error) { toast(error.message); } finally { if (submitter) submitter.disabled = false; }
 });
@@ -5655,10 +5880,12 @@ $('#restore-selected')?.addEventListener('click', async () => {
     }
     save();
     invalidateViewCache(['profiles', 'groups', 'sync']);
-    engineProfiles = await window.ops.syncProfiles(ui.profiles);
-    renderGroupFilterChips();
+    const hasRealBackend = typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls;
+    if (!hasRealBackend && typeof window.ops?.syncProfiles === 'function') {
+      engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    }
     updateProfileSelectionUi();
-    renderProfiles();
+    invalidateAndRefreshProfiles();
     toast(t('trash.restored'));
   } catch (err) {
     toast(t('trash.restoreFailed') + ': ' + err.message);
@@ -5666,21 +5893,27 @@ $('#restore-selected')?.addEventListener('click', async () => {
 });
 
 $('#empty-trash-btn')?.addEventListener('click', async () => {
-  const trashedCount = ui.profiles.filter((p) => p.trashed).length;
+  const hasServerCounts = Boolean(serverProfileCounts && typeof serverProfileCounts === 'object');
+  const trashedCount = hasServerCounts ? (serverProfileCounts.trashed ?? 0) : ui.profiles.filter((p) => p.trashed).length;
   if (!trashedCount) return toast(t('trash.emptyTitle'));
-  if (!confirm(t('trash.confirmEmpty'))) return;
+  if (!await confirmAction({
+    title: t('trash.empty'),
+    message: t('trash.confirmEmpty'),
+    confirmText: t('trash.purge'),
+    tone: 'danger',
+  })) return;
   try {
     await window.ops.emptyTrash(true);
     ui.profiles = ui.profiles.filter((p) => !p.trashed);
-    for (const id of [...selectedProfiles]) {
-      if (!ui.profiles.some((p) => p.id === id)) selectedProfiles.delete(id);
-    }
+    selectedProfiles.clear();
     save();
     invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
-    engineProfiles = await window.ops.syncProfiles(ui.profiles);
-    renderGroupFilterChips();
+    const hasRealBackend = typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls;
+    if (!hasRealBackend && typeof window.ops?.syncProfiles === 'function') {
+      engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    }
     updateProfileSelectionUi();
-    renderProfiles();
+    invalidateAndRefreshProfiles({ resetScroll: true });
     toast(t('trash.emptied'));
   } catch (err) {
     toast(t('trash.emptyFailed') + ': ' + err.message);
@@ -5689,6 +5922,26 @@ $('#empty-trash-btn')?.addEventListener('click', async () => {
 $('#start-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast(tx('请先选择环境')); for (const id of selectedProfiles) await startProfile(id); });
 $('#stop-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast(tx('请先选择环境')); for (const id of selectedProfiles) await stopProfile(id); });
 $('#copy-selected')?.addEventListener('click', async () => {
+  const ids = [...selectedProfiles];
+  if (!ids.length) return toast(tx('请先选择环境'));
+  if (typeof window.ops?.cloneProfiles === 'function' && !window.__uiAuditCalls) {
+    try {
+      const res = await window.ops.cloneProfiles({ ids });
+      const createdList = res?.profiles || [];
+      selectedProfiles = new Set(createdList.map((item) => item.id));
+      invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
+      await refreshExtensions();
+      await refreshStatus();
+      invalidateAndRefreshProfiles();
+      const count = createdList.length || ids.length;
+      log('Batch', `复制 ${count} 个环境配置`);
+      toast(`已复制 ${count} 个环境配置（未复制 Cookie 和账号密码）`);
+      return;
+    } catch (error) {
+      toast('复制环境失败：' + error.message);
+      return;
+    }
+  }
   const sources = ui.profiles.filter((profile) => selectedProfiles.has(profile.id));
   if (!sources.length) return toast(tx('请先选择环境'));
   const previousNext = ui.nextProfileNumber;
@@ -5722,7 +5975,7 @@ $('#copy-selected')?.addEventListener('click', async () => {
     await refreshExtensions();
     await refreshStatus();
     selectedProfiles = new Set(created.map((item) => item.id));
-    renderProfiles();
+    invalidateAndRefreshProfiles();
     log('Batch', `复制 ${created.length} 个环境配置`);
     toast(`已复制 ${created.length} 个环境配置（未复制 Cookie 和账号密码）`);
   } catch (error) {
@@ -5732,7 +5985,9 @@ $('#copy-selected')?.addEventListener('click', async () => {
   }
 });
 $('#renumber-profiles')?.addEventListener('click', async () => {
-  if (!ui.profiles || !ui.profiles.length) return toast(tx('当前暂无环境'));
+  const hasServerCounts = Boolean(serverProfileCounts && typeof serverProfileCounts === 'object');
+  const totalCount = hasServerCounts ? (serverProfileCounts.total ?? 0) : (ui.profiles?.length || 0);
+  if (!totalCount) return toast(tx('当前暂无环境'));
   if (!await confirmAction({
     title: tx('重排环境编号'),
     message: tx('是否将所有环境按列表顺序重新编号为 1 到 N？'),
@@ -5740,18 +5995,27 @@ $('#renumber-profiles')?.addEventListener('click', async () => {
     tone: 'danger',
   })) return;
   try {
-    ui.profiles.forEach((profile, index) => {
-      const num = index + 1;
-      profile.number = num;
-      profile.name = String(num);
-    });
-    ui.nextProfileNumber = ui.profiles.length + 1;
-    save();
-    invalidateViewCache('profiles');
-    engineProfiles = await window.ops.syncProfiles(ui.profiles);
-    renderProfiles();
-    log('Profile', `已将 ${ui.profiles.length} 个环境重新编号为 1..${ui.profiles.length}`);
-    toast(tx(`已将 ${ui.profiles.length} 个环境重排为 1..${ui.profiles.length}`));
+    if (typeof window.ops?.renumberProfiles === 'function' && !window.__uiAuditCalls) {
+      const res = await window.ops.renumberProfiles();
+      const count = res?.count ?? totalCount;
+      invalidateViewCache('profiles');
+      invalidateAndRefreshProfiles();
+      log('Profile', `已将 ${count} 个环境重新编号为 1..${count}`);
+      toast(tx(`已将 ${count} 个环境重排为 1..${count}`));
+    } else {
+      ui.profiles.forEach((profile, index) => {
+        const num = index + 1;
+        profile.number = num;
+        profile.name = String(num);
+      });
+      ui.nextProfileNumber = ui.profiles.length + 1;
+      save();
+      invalidateViewCache('profiles');
+      engineProfiles = await window.ops.syncProfiles(ui.profiles);
+      invalidateAndRefreshProfiles();
+      log('Profile', `已将 ${ui.profiles.length} 个环境重新编号为 1..${ui.profiles.length}`);
+      toast(tx(`已将 ${ui.profiles.length} 个环境重排为 1..${ui.profiles.length}`));
+    }
   } catch (error) {
     toast(tx('重排编号失败：') + error.message);
   }
@@ -5963,7 +6227,7 @@ document.addEventListener('click', async (event) => {
     toast(tx('已切换为代理模式并关联代理库节点'));
   }
 });
-function openProxyApplyDialog(item) {
+async function openProxyApplyDialog(item) {
   const dialog = $('#proxy-apply-dialog');
   if (!dialog) return;
   $('#proxy-apply-id').value = item.id;
@@ -5985,7 +6249,15 @@ function openProxyApplyDialog(item) {
     }
   };
 
-  for (const p of ui.profiles) {
+  let targetProfiles = ui.profiles;
+  if (typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls) {
+    try {
+      const res = await window.ops.queryProfiles({ page: 1, pageSize: 1000, filters: { activeGroupFilter: 'all' } });
+      if (Array.isArray(res?.rows)) targetProfiles = res.rows;
+    } catch (_) {}
+  }
+
+  for (const p of targetProfiles) {
     const isBound = p.proxyId === item.id;
     const label = document.createElement('label');
     label.className = 'assign-item';
@@ -6031,25 +6303,34 @@ $('#proxy-apply-form')?.addEventListener('submit', async (event) => {
     return $('#proxy-apply-dialog').close();
   }
   const proxyVal = item.raw || `${item.protocol || 'socks5'}://${item.username ? encodeURIComponent(item.username) + ':' + encodeURIComponent(item.password || '') + '@' : ''}${item.host}:${item.port}`;
-  let modified = 0;
-  for (const pid of checkedIds) {
-    const idx = ui.profiles.findIndex((p) => p.id === pid);
-    if (idx >= 0) {
-      ui.profiles[idx].networkMode = 'proxy';
-      ui.profiles[idx].proxy = proxyVal;
-      ui.profiles[idx].proxyId = item.id;
-      ui.profiles[idx].proxyMeta = { ...(ui.profiles[idx].proxyMeta || {}), proxyId: item.id };
-      modified++;
-    }
-  }
-  save();
-  invalidateViewCache(['proxies', 'profiles']);
   try {
-    engineProfiles = await window.ops.syncProfiles(ui.profiles);
-    renderProfiles();
+    if (typeof window.ops?.batchPatchProfiles === 'function' && !window.__uiAuditCalls) {
+      await window.ops.batchPatchProfiles({
+        ids: checkedIds,
+        networkMode: 'proxy',
+        proxy: proxyVal,
+        proxyId: item.id,
+      });
+      invalidateViewCache(['proxies', 'profiles']);
+      invalidateAndRefreshProfiles();
+    } else {
+      for (const pid of checkedIds) {
+        const idx = ui.profiles.findIndex((p) => p.id === pid);
+        if (idx >= 0) {
+          ui.profiles[idx].networkMode = 'proxy';
+          ui.profiles[idx].proxy = proxyVal;
+          ui.profiles[idx].proxyId = item.id;
+          ui.profiles[idx].proxyMeta = { ...(ui.profiles[idx].proxyMeta || {}), proxyId: item.id };
+        }
+      }
+      save();
+      invalidateViewCache(['proxies', 'profiles']);
+      engineProfiles = await window.ops.syncProfiles(ui.profiles);
+      renderProfiles();
+    }
     $('#proxy-apply-dialog').close();
-    toast(`已成功应用代理到 ${modified} 个环境`);
-    log('Proxy', `应用代理 ${item.name || item.host} 到 ${modified} 个环境`);
+    toast(`已成功应用代理到 ${checkedIds.length} 个环境`);
+    log('Proxy', `应用代理 ${item.name || item.host} 到 ${checkedIds.length} 个环境`);
   } catch (err) {
     toast('应用失败：' + err.message);
   }
@@ -6067,7 +6348,9 @@ $('#proxy-dialog-test')?.addEventListener('click', async () => {
       proxyValue = `${draft.protocol || 'socks5'}://${auth}${draft.host}:${draft.port}`;
     }
     if (!proxyValue) throw new Error(tx('请先填写主机和端口'));
-    const result = await window.ops.proxyCheck(draft.id ? { id: draft.id } : { proxy: proxyValue, ...draft });
+    const checkPayload = { proxy: proxyValue, ...draft };
+    if (draft.id) checkPayload.id = draft.id;
+    const result = await window.ops.proxyCheck(checkPayload);
     output.className = 'proxy-test-result success';
     output.textContent = tx('连接成功 · ') + result.ip + (result.countryCode ? ' · ' + result.countryCode : '');
     if (draft.id) await refreshProxies();
@@ -6843,7 +7126,19 @@ window.ops.onEvent(async (value) => {
   if (value.type === 'sync-disconnected') { toast(value.message); log('Sync', value.message); }
 });
 
+const _uaMismatchToastAt = new Map();
 window.ops.onEvent((value) => {
+  if (value?.type === 'ua-kernel-version-mismatch') {
+    const profileId = value.id || value.profileId || 'default';
+    const now = Date.now();
+    const last = _uaMismatchToastAt.get(profileId) || 0;
+    const msg = tx(`环境 ${profileId} 的 UA Chrome 主版本 (${value.uaMajor}) 与内核主版本 (${value.kernelMajor}) 不一致`);
+    log('SecurityWarn', msg);
+    if (now - last > 5000) {
+      _uaMismatchToastAt.set(profileId, now);
+      toast(msg);
+    }
+  }
   if (value.type === 'proxy-error' || value.type === 'proxy-warn') {
     const profile = ui.profiles.find((item) => item.id === value.id);
     const msg = String(value.message || '');
@@ -6863,6 +7158,19 @@ function updateProfileStorageDisplay(profileRoot) {
   const runtimeValue = document.querySelector('[data-runtime-key="Profile root"]'); if (runtimeValue) runtimeValue.textContent = value;
 }
 
+function updateLocalApiEndpointDisplay(info) {
+  const endpointEl = document.getElementById('local-api-status-endpoint');
+  if (!endpointEl) return;
+  const port = info?.apiPort || info?.localApiPort || info?.port;
+  if (port) {
+    endpointEl.textContent = `127.0.0.1:${port}`;
+  } else if (!window.__uiAuditCalls && typeof window.ops?.localApiInfo === 'function') {
+    window.ops.localApiInfo().then((apiInfo) => {
+      if (apiInfo?.port) endpointEl.textContent = `127.0.0.1:${apiInfo.port}`;
+    }).catch(() => {});
+  }
+}
+
 function renderRuntimeInfo(info) {
   const runtime = $('#runtime-info'); runtime.replaceChildren();
   const rows = [
@@ -6875,6 +7183,7 @@ function renderRuntimeInfo(info) {
     row.append(element('dt', '', key), output); runtime.append(row);
   }
   updateProfileStorageDisplay(info.profileRoot);
+  updateLocalApiEndpointDisplay(info);
 }
 
 async function chooseProfileStorage() {
@@ -6939,17 +7248,19 @@ async function initialize() {
   await applySyncSettings(syncSettings); fillSyncSettingsForm();
   ui.profiles = ui.profiles.map((item) => ({ ...item, browser: 'Google Chrome' }));
   await refreshProxies().catch(() => {});
+  const hasRealBackend = typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls;
+  let engineStatus = [];
   // Merge secrets already loaded in main process (not stored in localStorage).
   try {
-    const engineStatus = await window.ops.profileStatus();
+    engineStatus = await window.ops.profileStatus();
     if (Array.isArray(engineStatus) && engineStatus.length) {
       const byId = new Map(engineStatus.map((item) => [item.id, item]));
-      // Discard stale localStorage entries deleted in engine (e.g. via Local API)
+      // Authoritative base is remote from main-process SQLite; never overwrite privacy/advanced/userAgent/os/width/height/title/platform with trimmed local!
       ui.profiles = ui.profiles.filter((local) => byId.has(local.id)).map((local) => {
         const remote = byId.get(local.id);
         if (!remote) return local;
         let mergedProxy = mergeRemoteProxy(local.proxy, remote.proxy);
-        const resolvedProxyId = local.proxyId || remote.proxyId;
+        const resolvedProxyId = remote.proxyId || local.proxyId;
         if (resolvedProxyId && !proxyHasCredentials(mergedProxy)) {
           const libItem = proxyLibraryItem(resolvedProxyId);
           if (libItem) {
@@ -6958,24 +7269,14 @@ async function initialize() {
           }
         }
         return normalizeProfileSettings({
-          ...local,
+          ...remote,
           proxyId: resolvedProxyId || null,
-          ...(remote.exitIp ? {
-            exitIp: remote.exitIp,
-            exitCountryCode: remote.exitCountryCode,
-            exitTimezone: remote.exitTimezone,
-            exitLatitude: remote.exitLatitude,
-            exitLongitude: remote.exitLongitude,
-            exitCheckedAt: remote.exitCheckedAt,
-            exitLatencyMs: remote.exitLatencyMs,
-            exitNetworkType: remote.exitNetworkType,
-          } : {}),
-          cookies: local.cookies || remote.cookies || '',
+          cookies: remote.cookies || local.cookies || '',
           proxy: mergedProxy,
           platform: {
-            ...(local.platform || {}),
-            password: local.platform?.password || remote.platform?.password || '',
-            totpSecret: local.platform?.totpSecret || remote.platform?.totpSecret || '',
+            ...(remote.platform || {}),
+            password: remote.platform?.password || local.platform?.password || '',
+            totpSecret: remote.platform?.totpSecret || local.platform?.totpSecret || '',
           },
         });
       });
@@ -6988,7 +7289,14 @@ async function initialize() {
     }
   } catch (_) {}
   save();
-  engineProfiles = await window.ops.syncProfiles(ui.profiles); await refreshExtensions(); await refreshSessions(); renderProfiles(); renderLogs();
+  if (hasRealBackend) {
+    engineProfiles = Array.isArray(engineStatus) ? engineStatus : [];
+  } else {
+    engineProfiles = await window.ops.syncProfiles(ui.profiles);
+  }
+  await refreshExtensions(); await refreshSessions();
+  invalidateAndRefreshProfiles({ resetScroll: true });
+  renderLogs();
   log('System', readyBrowserLog(info));
   switchView(document.querySelector('.view.active')?.id?.replace(/^view-/, '') || 'profiles');
 }
@@ -7022,30 +7330,59 @@ $('#batch-import-file').addEventListener('change', async (event) => {
   const previousLength = ui.profiles.length; const previousNext = ui.nextProfileNumber;
   try {
     const extension = file.name.toLowerCase().endsWith('.json') ? 'json' : 'csv'; const imported = parseImportedProfiles(await file.text(), extension);
-    const start = nextProfileNumber(); const used = new Set(ui.profiles.map((item) => item.id));
+    const start = await resolveNextProfileNumber(); const used = new Set(ui.profiles.map((item) => item.id));
     const normalized = imported.map((item, index) => { const number = start + index; const id = createInternalProfileId(number, used); used.add(id); return { id, number, name: String(number), browser: 'Google Chrome', language: String(item.language || 'en-US'), proxy: String(item.proxy || item.ip || 'Direct'), proxyType: String(item.proxyType || item.proxytype || ''), exitIp: String(item.exitIp || item.ip || ''), exitCountryCode: String(item.exitCountryCode || item.countrycode || ''), tag: String(item.tag || item.group || 'Imported'), os: 'Windows', location: String(item.location || 'Local') }; });
-    ui.profiles.push(...normalized); ui.nextProfileNumber = start + normalized.length; save(); invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']); engineProfiles = await window.ops.syncProfiles(ui.profiles); renderProfiles(); log('Import', '\u6279\u91cf\u5bfc\u5165 ' + normalized.length + ' \u4e2a\u73af\u5883'); toast('\u5df2\u5bfc\u5165 ' + normalized.length + ' \u4e2a\u73af\u5883');
+    const useIncrementalSave = typeof window.ops?.saveProfile === 'function' && !window.__uiAuditCalls;
+    if (useIncrementalSave) {
+      for (const p of normalized) await window.ops.saveProfile(p);
+    } else {
+      ui.profiles.push(...normalized);
+      engineProfiles = await window.ops.syncProfiles(ui.profiles);
+    }
+    ui.nextProfileNumber = start + normalized.length; save(); invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']); invalidateAndRefreshProfiles(); log('Import', '\u6279\u91cf\u5bfc\u5165 ' + normalized.length + ' \u4e2a\u73af\u5883'); toast('\u5df2\u5bfc\u5165 ' + normalized.length + ' \u4e2a\u73af\u5883');
   } catch (error) { ui.profiles = ui.profiles.slice(0, previousLength); ui.nextProfileNumber = previousNext; save(); toast('\u5bfc\u5165\u5931\u8d25\uff1a' + error.message); }
   event.target.value = '';
 });
 
 async function applySelectedNetworkMode(mode, { proxies = null, restart = true } = {}) {
-  const ids = ui.profiles.filter((profile) => selectedProfiles.has(profile.id)).map((profile) => profile.id);
+  const ids = [...selectedProfiles];
   if (!ids.length) throw new Error(tx('请先选择环境'));
-  const profiles = ids.map((id) => ui.profiles.find((profile) => profile.id === id));
   const direct = mode === 'direct';
+  if (!direct && (!proxies || proxies.length !== ids.length)) throw new Error(tx('代理数量必须与所选环境数量一致'));
+
+  const status = await window.ops.profileStatus();
+  const runningBefore = new Set(status.filter((item) => item.running && ids.includes(item.id)).map((item) => item.id));
+  if (restart) for (const id of runningBefore) await window.ops.stopProfile(id);
+
+  if (typeof window.ops?.batchPatchProfiles === 'function' && !window.__uiAuditCalls) {
+    if (direct) {
+      await window.ops.batchPatchProfiles({ ids, networkMode: 'direct', proxy: 'Direct', proxyId: null });
+    } else {
+      for (let i = 0; i < ids.length; i += 1) {
+        await window.ops.batchPatchProfiles({ ids: [ids[i]], networkMode: 'proxy', proxy: proxies[i] });
+      }
+    }
+    invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
+    if (restart) for (const id of runningBefore) {
+      let profile = ui.profiles.find((item) => item.id === id);
+      if (!profile && typeof window.ops?.getProfile === 'function') {
+        try { profile = await window.ops.getProfile(id); } catch (_) {}
+      }
+      if (profile) await window.ops.startProfile(profile);
+    }
+    await refreshStatus(); await refreshSessions(); invalidateAndRefreshProfiles();
+    return { count: ids.length, direct };
+  }
+
+  const profiles = ids.map((id) => ui.profiles.find((profile) => profile.id === id)).filter(Boolean);
   let list; let verified;
   if (direct) {
     list = profiles.map(() => 'Direct');
     verified = profiles.map(() => null);
   } else {
     list = proxies;
-    if (!list || list.length !== profiles.length) throw new Error(tx('代理数量必须与所选环境数量一致'));
     verified = await verifyProxyAssignments(profiles, list);
   }
-  const status = await window.ops.profileStatus();
-  const runningBefore = new Set(status.filter((item) => item.running && ids.includes(item.id)).map((item) => item.id));
-  if (restart) for (const id of runningBefore) await window.ops.stopProfile(id);
   profiles.forEach((profile, index) => {
     profile.proxy = list[index];
     const result = verified[index];
@@ -7064,7 +7401,7 @@ async function applySelectedNetworkMode(mode, { proxies = null, restart = true }
     const profile = ui.profiles.find((item) => item.id === id);
     if (profile) await window.ops.startProfile(profile);
   }
-  await refreshStatus(); await refreshSessions(); renderProfiles();
+  await refreshStatus(); await refreshSessions(); invalidateAndRefreshProfiles();
   return { count: ids.length, direct };
 }
 
@@ -7137,6 +7474,7 @@ window.OpenBrowserApp = {
   editorDraft,
   openProfileEditor,
   renderProfiles,
+  invalidateAndRefreshProfiles,
 };
 window.ui = ui;
 window.save = save;
@@ -7176,6 +7514,7 @@ switchView = function(view) {
     try { refreshKernelPanel?.(); } catch (_) {}
     try { refreshApiMcpPage?.().catch(() => setLocalApiStatus?.(false)); } catch (_) {}
     try { refreshCloudPanel?.().catch(() => {}); } catch (_) {}
+    updateLocalApiEndpointDisplay();
   }
   if (view === 'api-mcp') {
     if (!loadedViews.has('api-mcp')) {
@@ -7203,18 +7542,20 @@ window.ops.onEvent((value) => {
     refreshKernelPanel().catch(() => {});
   }
   if (value?.type === 'kernel-ready') refreshKernelPanel().catch(() => {});
+  if (value?.type === 'local-api-status' && value.port) updateLocalApiEndpointDisplay({ port: value.port });
   if (value?.type === 'cloud-sync') {
     refreshCloudPanel().catch(() => {});
   }
 });
 
 $('#batch-edit-preferences')?.addEventListener('click', () => {
-  const sources = ui.profiles.filter((profile) => selectedProfiles.has(profile.id));
-  if (!sources.length) return toast(tx('请先选择环境'));
+  const selectedCount = selectedProfiles.size;
+  if (!selectedCount) return toast(tx('请先选择环境'));
   const templateSelect = $('#batch-pref-template');
   if (templateSelect) {
     templateSelect.replaceChildren(new Option('手动指定下方偏好设置', ''));
-    ui.profiles.forEach((profile) => templateSelect.append(new Option(
+    const tplSources = ui.profiles.length ? ui.profiles : (pagedProfilesData?.rows || []);
+    tplSources.forEach((profile) => templateSelect.append(new Option(
       `环境 ${displayProfileNumber(profile)}${profile.title ? ' · ' + profile.title : ''}`,
       profile.id,
     )));
@@ -7226,18 +7567,21 @@ $('#batch-edit-preferences')?.addEventListener('click', () => {
   ['batch-pref-block-images', 'batch-pref-block-sound', 'batch-pref-clear-cache', 'batch-pref-multi-open']
     .forEach((id) => { const el = $('#' + id); if (el) el.value = 'keep'; });
   const summary = $('#batch-pref-summary');
-  if (summary) summary.textContent = `将偏好设置统一应用到已勾选的 ${sources.length} 个环境`;
+  if (summary) summary.textContent = `将偏好设置统一应用到已勾选的 ${selectedCount} 个环境`;
   $('#batch-preferences-dialog')?.showModal();
 });
 
 $('#batch-preferences-form')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (event.submitter?.value === 'cancel') return $('#batch-preferences-dialog')?.close();
-  const sources = ui.profiles.filter((profile) => selectedProfiles.has(profile.id));
-  if (!sources.length) return toast(tx('请先选择环境'));
+  const ids = [...selectedProfiles];
+  if (!ids.length) return toast(tx('请先选择环境'));
 
   const templateId = $('#batch-pref-template')?.value;
-  const templateProfile = templateId ? ui.profiles.find((item) => item.id === templateId) : null;
+  let templateProfile = templateId ? ui.profiles.find((item) => item.id === templateId) : null;
+  if (templateId && !templateProfile && typeof window.ops?.getProfile === 'function' && !window.__uiAuditCalls) {
+    try { templateProfile = await window.ops.getProfile(templateId); } catch (_) {}
+  }
   let startUrl = '';
   try { startUrl = normalizeOptionalWebUrl($('#batch-pref-start-url')?.value || ''); } catch (e) { return toast(e.message); }
   const clearStartUrl = Boolean($('#batch-pref-clear-start-url')?.checked);
@@ -7256,9 +7600,46 @@ $('#batch-preferences-form')?.addEventListener('submit', async (event) => {
     if (w && h) { width = w; height = h; }
   }
 
-  const before = new Map(sources.map((item) => [item.id, structuredClone(item)]));
   const submit = event.submitter;
   if (submit) submit.disabled = true;
+
+  if (typeof window.ops?.batchPatchProfiles === 'function' && !window.__uiAuditCalls) {
+    try {
+      const payload = { ids };
+      if (templateId) payload.templateId = templateId;
+      if (clearStartUrl) payload.clearStartUrl = true;
+      else if (startUrl) payload.startUrl = startUrl;
+      if (os) payload.os = os;
+      if (width && height) {
+        payload.width = width;
+        payload.height = height;
+      }
+      payload.preferenceModes = preferenceModes;
+      if (templateProfile) {
+        const prefs = cloneProfilePreferences(templateProfile);
+        delete prefs.platform;
+        payload.patch = prefs;
+      }
+      await window.ops.batchPatchProfiles(payload);
+      invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
+      $('#batch-preferences-dialog')?.close();
+      invalidateAndRefreshProfiles();
+      log('Batch', `已批量更新 ${ids.length} 个环境的偏好设置`);
+      toast(`已批量更新 ${ids.length} 个环境的偏好设置`);
+    } catch (error) {
+      toast('批量偏好设置失败：' + error.message);
+    } finally {
+      if (submit) submit.disabled = false;
+    }
+    return;
+  }
+
+  const sources = ui.profiles.filter((profile) => selectedProfiles.has(profile.id));
+  if (!sources.length) {
+    if (submit) submit.disabled = false;
+    return toast(tx('请先选择环境'));
+  }
+  const before = new Map(sources.map((item) => [item.id, structuredClone(item)]));
   try {
     for (const item of sources) {
       if (templateProfile) {
@@ -7290,7 +7671,7 @@ $('#batch-preferences-form')?.addEventListener('submit', async (event) => {
     invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
     engineProfiles = await window.ops.syncProfiles(ui.profiles);
     $('#batch-preferences-dialog')?.close();
-    renderProfiles();
+    invalidateAndRefreshProfiles();
     log('Batch', `已批量更新 ${sources.length} 个环境的偏好设置`);
     toast(`已批量更新 ${sources.length} 个环境的偏好设置`);
   } catch (error) {
@@ -7309,20 +7690,40 @@ $('#batch-preferences-form')?.addEventListener('submit', async (event) => {
 
 let currentRobotProfileId = null;
 
+function findRobotTargetProfile(id) {
+  if (!id) return null;
+  return ui.profiles.find((p) => p.id === id)
+    || pagedProfilesData?.rows?.find((p) => p.id === id)
+    || engineProfiles.find((p) => p.id === id)
+    || null;
+}
+
 function openCookieRobotModal(profileId) {
   const dialog = $('#cookie-robot-dialog');
   if (!dialog) return;
 
-  const targetId = profileId || [...selectedProfiles][0] || ui.profiles.find((p) => profileEngine(p.id).running)?.id || ui.profiles[0]?.id;
+  const runningEngine = engineProfiles.find((p) => p.running);
+  const targetId = profileId
+    || [...selectedProfiles][0]
+    || runningEngine?.id
+    || pagedProfilesData?.rows?.[0]?.id
+    || ui.profiles[0]?.id;
   currentRobotProfileId = targetId;
 
-  const profile = ui.profiles.find((p) => p.id === targetId);
-  const isRunning = profile ? Boolean(profileEngine(profile.id).running) : false;
+  const profile = findRobotTargetProfile(targetId);
+  const isRunning = Boolean(profileEngine(targetId).running || profile?.running);
 
   const titleEl = $('#cookie-robot-title');
   if (titleEl) {
-    const profNum = profile ? displayProfileNumber(profile) : '';
+    const profNum = profile ? displayProfileNumber(profile) : (targetId || '');
     titleEl.textContent = t('cookieRobot.title') + (profNum ? ` (${profNum})` : '');
+  }
+  if (!profile && targetId && typeof window.ops?.getProfile === 'function' && !window.__uiAuditCalls) {
+    window.ops.getProfile(targetId).then((full) => {
+      if (full && full.id && currentRobotProfileId === targetId && titleEl) {
+        titleEl.textContent = t('cookieRobot.title') + ` (${displayProfileNumber(full)})`;
+      }
+    }).catch(() => {});
   }
 
   const domainsInput = $('#cookie-robot-domains');
@@ -7382,8 +7783,11 @@ $('#cookie-robot-start')?.addEventListener('click', async () => {
   const profileId = currentRobotProfileId;
   if (!profileId) return toast(tx('请先选择环境'));
 
-  const profile = ui.profiles.find((p) => p.id === profileId);
-  const running = profile ? Boolean(profileEngine(profile.id).running) : false;
+  let profile = findRobotTargetProfile(profileId);
+  if (!profile && typeof window.ops?.getProfile === 'function' && !window.__uiAuditCalls) {
+    try { profile = await window.ops.getProfile(profileId); } catch (_) {}
+  }
+  const running = Boolean(profileEngine(profileId).running || profile?.running);
   if (!running) {
     return toast(t('cookieRobot.failed') + ': ' + tx('环境未启动，请先启动环境'));
   }
@@ -7392,11 +7796,17 @@ $('#cookie-robot-start')?.addEventListener('click', async () => {
   const domains = rawDomains.split(/[\r\n,]+/).map((s) => s.trim()).filter(Boolean);
   if (!domains.length) return toast(tx('请输入目标域名'));
 
-  const stayMin = Number($('#cookie-robot-duration-min')?.value) || 5;
-  const stayMax = Number($('#cookie-robot-duration-max')?.value) || 15;
-  const depth = Number($('#cookie-robot-depth')?.value) || 2;
-  const scrollProb = Number($('#cookie-robot-scroll-prob')?.value) || 0.8;
-  const clickProb = Number($('#cookie-robot-click-prob')?.value) || 0.7;
+  const parseFiniteNum = (val, fallback) => {
+    const str = String(val ?? '').trim();
+    if (!str) return fallback;
+    const n = Number(str);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const stayMin = parseFiniteNum($('#cookie-robot-duration-min')?.value, 5);
+  const stayMax = parseFiniteNum($('#cookie-robot-duration-max')?.value, 15);
+  const depth = parseFiniteNum($('#cookie-robot-depth')?.value, 2);
+  const scrollProb = parseFiniteNum($('#cookie-robot-scroll-prob')?.value, 0.8);
+  const clickProb = parseFiniteNum($('#cookie-robot-click-prob')?.value, 0.7);
 
   const startBtn = $('#cookie-robot-start');
   const stopBtn = $('#cookie-robot-stop');
@@ -7447,8 +7857,7 @@ window.ops.onEvent((value) => {
   if (!value || typeof value !== 'object') return;
   const isRobotEvent = value.type === 'robot-started' || value.type === 'robot-progress' ||
     value.type === 'robot-finished' || value.type === 'robot-failed' ||
-    value.type === 'cookie-robot-started' || value.type === 'cookie-robot-progress' ||
-    value.type === 'cookie-robot-finished' || value.type === 'cookie-robot-failed';
+    value.type === 'robot-disconnected';
   if (!isRobotEvent) return;
 
   if (currentRobotProfileId && value.profileId && value.profileId !== currentRobotProfileId) return;
@@ -7468,12 +7877,12 @@ window.ops.onEvent((value) => {
     logEl.scrollTop = logEl.scrollHeight;
   };
 
-  if (value.type === 'robot-started' || value.type === 'cookie-robot-started') {
+  if (value.type === 'robot-started') {
     if (startBtn) startBtn.style.display = 'none';
     if (stopBtn) stopBtn.style.display = 'inline-block';
     if (statusText) statusText.textContent = t('cookieRobot.running');
     addLog(`Task started: ${value.totalSites} sites planned`);
-  } else if (value.type === 'robot-progress' || value.type === 'cookie-robot-progress') {
+  } else if (value.type === 'robot-progress') {
     if (value.totalSteps > 0 && progressBar) {
       const pct = Math.round((value.step / value.totalSteps) * 100);
       progressBar.style.width = `${pct}%`;
@@ -7493,7 +7902,7 @@ window.ops.onEvent((value) => {
     } else if (value.phase === 'domain-complete') {
       addLog(`Done ${value.domain}: +${value.cookiesAdded} cookies, ${value.pagesVisited} pages (${value.status})`);
     }
-  } else if (value.type === 'robot-finished' || value.type === 'cookie-robot-finished') {
+  } else if (value.type === 'robot-finished') {
     if (startBtn) startBtn.style.display = 'inline-block';
     if (stopBtn) stopBtn.style.display = 'none';
     if (progressBar) progressBar.style.width = '100%';
@@ -7502,11 +7911,17 @@ window.ops.onEvent((value) => {
     if (statsEl) statsEl.textContent = `Cookie: +${value.totalCookiesAdded ?? 0} | Pages: ${value.totalPagesVisited ?? 0}`;
     addLog(`Finished (${value.status}): +${value.totalCookiesAdded ?? 0} cookies, ${value.totalPagesVisited ?? 0} pages`);
     toast(doneStatus);
-  } else if (value.type === 'robot-failed' || value.type === 'cookie-robot-failed') {
+  } else if (value.type === 'robot-failed') {
     if (startBtn) startBtn.style.display = 'inline-block';
     if (stopBtn) stopBtn.style.display = 'none';
     if (statusText) statusText.textContent = t('cookieRobot.failed');
     addLog(`Failed: ${value.error || 'Unknown error'}`);
     toast(t('cookieRobot.failed') + ': ' + (value.error || ''));
+  } else if (value.type === 'robot-disconnected') {
+    if (startBtn) startBtn.style.display = 'inline-block';
+    if (stopBtn) stopBtn.style.display = 'none';
+    if (statusText) statusText.textContent = t('cookieRobot.disconnected') || tx('已断开连接');
+    addLog(`Disconnected: ${value.message || 'Browser disconnected'}`);
+    toast(t('cookieRobot.disconnected') || tx('已断开连接'));
   }
 });

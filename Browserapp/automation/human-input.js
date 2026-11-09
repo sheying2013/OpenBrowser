@@ -154,10 +154,21 @@ function createCdpTypingDriver(call, ws, options = {}) {
     : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const randomInt = typeof options.randomInt === 'function' ? options.randomInt : null;
   const onEvent = typeof options.onEvent === 'function' ? options.onEvent : null;
+  const isSensitive = Boolean(options.sensitive || options.isPassword || options.password);
 
   function emit(event) {
     if (onEvent) {
-      try { onEvent(event); } catch (_) { /* observers must not break typing */ }
+      try {
+        if (isSensitive && event && typeof event === 'object') {
+          const masked = { ...event };
+          if (typeof masked.text === 'string') {
+            masked.text = '*'.repeat(Array.from(masked.text).length);
+          }
+          onEvent(masked);
+        } else {
+          onEvent(event);
+        }
+      } catch (_) { /* observers must not break typing */ }
     }
   }
 
@@ -286,11 +297,12 @@ async function typeText(call, ws, text, options = {}) {
   const value = text == null ? '' : String(text);
   const driver = createCdpTypingDriver(call, ws, options);
   const engine = createTypingEngine(driver, options);
-  const range = options.delayRange || DEFAULT_DELAY_RANGE;
+  const range = options.delayRange || (options.human ? undefined : DEFAULT_DELAY_RANGE);
 
   if (options.clear) {
     const length = Array.from(value).length;
     for (let i = 0; i < length + 8; i += 1) {
+      if (options.signal?.aborted) throw Object.assign(new Error('Typing cancelled'), { name: 'AbortError' });
       await driver.pressKey('Backspace', { delay: 25 });
     }
   }
@@ -299,7 +311,7 @@ async function typeText(call, ws, text, options = {}) {
     return engine.simulateType(value, range, options.typoConfig);
   }
 
-  const typed = await engine.typeText(value, range);
+  const typed = await engine.typeText(value, range || DEFAULT_DELAY_RANGE);
   return { chars: typed, slips: 0, correctedChars: 0 };
 }
 

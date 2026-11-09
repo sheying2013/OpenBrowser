@@ -1037,7 +1037,7 @@ html[data-ui-theme="nes-light"] #view-profiles .table-card .actions .mini.is-sta
   box-shadow: 2px 2px 0 #362f26;
 }
 
-/* ---- Depth pass (ixBrowser-like layered panels on light pixel skin) ---- */
+/* ---- Depth pass (layered panels on light pixel skin) ---- */
 html[data-ui-theme="nes-light"] .content > main {
   position: relative;
   z-index: 1;

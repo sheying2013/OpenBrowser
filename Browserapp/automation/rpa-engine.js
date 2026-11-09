@@ -136,6 +136,7 @@ const EXECUTABLE_STEP_TYPES = new Set([
   'newtab', 'new_tab', 'newpage',
   'closetab', 'close_tab', 'closepage',
   'typetext', 'type', 'input', 'inserttext', 'inputcontent',
+  'humantyping', 'simulatetype', 'simulatetyping', '仿真输入',
   'click', 'clickelement', 'waitforselector', 'fortimes',
   'javascript', 'evaluate', 'script', 'js',
   'scroll', 'scrollpage', 'screenshotpage', 'screenshot',
@@ -339,6 +340,8 @@ class RpaEngine {
       concurrency: resolveOpenConcurrency(openConcurrency),
     });
     this.cancelled = new Set();
+    this.taskControllers = new Map();
+    this.typingQueues = new Map();
   }
 
   async writeDiagnostic(record) {
@@ -365,10 +368,22 @@ class RpaEngine {
   async stop(taskId) {
     if (taskId) {
       this.cancelled.add(taskId);
+      const ac = this.taskControllers.get(taskId);
+      if (ac) {
+        try { ac.abort(); } catch (_) {}
+        this.taskControllers.delete(taskId);
+      }
       this.running.delete(taskId);
       return { success: true, taskId };
     }
-    for (const id of [...this.running.keys()]) this.cancelled.add(id);
+    for (const id of [...this.running.keys()]) {
+      this.cancelled.add(id);
+      const ac = this.taskControllers.get(id);
+      if (ac) {
+        try { ac.abort(); } catch (_) {}
+      }
+    }
+    this.taskControllers.clear();
     this.running.clear();
     return { success: true, stoppedAll: true };
   }
@@ -412,6 +427,12 @@ class RpaEngine {
 
     this.running.set(taskId, { startedAt: Date.now() });
     this.cancelled.delete(taskId);
+    const ac = new AbortController();
+    this.taskControllers.set(taskId, ac);
+    if (options?.signal && typeof options.signal.addEventListener === 'function') {
+      if (options.signal.aborted) ac.abort();
+      else options.signal.addEventListener('abort', () => ac.abort(), { once: true });
+    }
     await this.store.updateTask(taskId, { status: 'running', start_time: new Date().toISOString(), process_logs: [] }, { save: false });
     this.emit({ type: 'rpa-task', taskId, status: 'running', profileId: task.profile_id });
     await this.writeDiagnostic({
@@ -453,6 +474,7 @@ class RpaEngine {
         remarks: [],
         port,
         activeProfileId: task.profile_id,
+        signal: ac.signal,
       };
       for (let index = 0; index < steps.length; index += 1) {
         if (this.cancelled.has(taskId)) throw new Error('cancelled');
@@ -527,6 +549,7 @@ class RpaEngine {
     } finally {
       this.running.delete(taskId);
       this.cancelled.delete(taskId);
+      this.taskControllers.delete(taskId);
     }
   }
 
@@ -643,47 +666,83 @@ class RpaEngine {
       const humanTyping = isHumanAction || Boolean(params.human || params.intervals);
       const speed = params.speed || 'medium';
       const sensitive = Boolean(params.sensitive);
+      const hasExplicitDelay = (params.minDelay !== undefined && params.minDelay !== '' && params.minDelay !== null)
+        || (params.maxDelay !== undefined && params.maxDelay !== '' && params.maxDelay !== null);
+      const explicitDelayRange = hasExplicitDelay ? inputDelayRange(params, humanTyping) : undefined;
+      const typoRate = params.typoRate !== undefined ? Number(params.typoRate) : undefined;
+      const typoConfig = typoRate !== undefined
+        ? { ...(params.typoConfig || {}), typoRate }
+        : params.typoConfig;
+      const signal = ctx?.signal || ctx?.options?.signal;
 
-      if (clear && !selector) await cdp.clearFocused(port).catch(() => {});
-      if (selector) {
-        try {
-          await this.withPage(port, async (ws) => {
-            await this.focusSelector(ws, selector, target.selectorRadio, target.serial);
-            if (clear) {
-              await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 65, modifiers: 2 });
-              await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 65, modifiers: 2 });
-              await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 8 });
-              await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 8 });
-            }
-            // Every character is dispatched as a real key event sequence
-            // (keydown/keyup with a Shift bracket where the layout needs one)
-            // rather than written straight into the element. Pass `human` to
-            // add slip-and-correct behaviour on top of the key timing.
-            await humanInput.typeText(cdp, ws, inputText, {
-              human: humanTyping,
-              speed,
-              sensitive,
-              delayRange: inputDelayRange(params, humanTyping),
-              typoConfig: params.typoConfig,
+      const queueKey = String(ctx?.activeProfileId || ctx?.task?.profile_id || port);
+      if (!this.typingQueues) this.typingQueues = new Map();
+      const prev = this.typingQueues.get(queueKey) || Promise.resolve();
+      let releaseQueue;
+      const lock = new Promise((resolve) => { releaseQueue = resolve; });
+      this.typingQueues.set(queueKey, lock);
+
+      try {
+        await prev;
+        if (clear && !selector) await cdp.clearFocused(port).catch(() => {});
+        if (selector) {
+          try {
+            await this.withPage(port, async (ws) => {
+              await this.focusSelector(ws, selector, target.selectorRadio, target.serial);
+              if (clear) {
+                const isMac = process.platform === 'darwin';
+                const selMod = isMac ? 4 : 2;
+                await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 65, key: 'a', code: 'KeyA', modifiers: selMod });
+                await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 65, key: 'a', code: 'KeyA', modifiers: selMod });
+                await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 8, key: 'Backspace', code: 'Backspace' });
+                await cdp.call(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 8, key: 'Backspace', code: 'Backspace' });
+              }
+              // Every character is dispatched as a real key event sequence
+              // (keydown/keyup with a Shift bracket where the layout needs one)
+              // rather than written straight into the element. Pass `human` to
+              // add slip-and-correct behaviour on top of the key timing.
+              await humanInput.typeText(cdp, ws, inputText, {
+                human: humanTyping,
+                speed,
+                sensitive,
+                ...(explicitDelayRange ? { delayRange: explicitDelayRange } : {}),
+                ...(typoConfig ? { typoConfig } : {}),
+                ...(signal ? { signal } : {}),
+              });
             });
-          });
-        } catch (error) {
-          if (optional && isMissingElementError(error)) {
-            if (ctx?.log) await ctx.log('optional input skipped (not found): ' + selector);
-            return;
+          } catch (error) {
+            if (optional && isMissingElementError(error)) {
+              if (ctx?.log) await ctx.log('optional input skipped (not found): ' + selector);
+              return;
+            }
+            throw error;
           }
-          throw error;
+        } else {
+          let targetWs = null;
+          const focused = await cdp.focusedEditableTab(port);
+          if (focused?.tab?.webSocketDebuggerUrl) {
+            targetWs = focused.tab.webSocketDebuggerUrl;
+          } else {
+            const activeTab = (await this.getActivePageTab(port)) || (await cdp.firstTab(port));
+            if (activeTab?.webSocketDebuggerUrl) {
+              targetWs = activeTab.webSocketDebuggerUrl;
+            }
+          }
+          if (!targetWs) throw new Error('No focused text input was found in the visible tab');
+          await humanInput.typeText(cdp, targetWs, inputText, {
+            human: humanTyping,
+            speed,
+            sensitive,
+            ...(explicitDelayRange ? { delayRange: explicitDelayRange } : {}),
+            ...(typoConfig ? { typoConfig } : {}),
+            ...(signal ? { signal } : {}),
+          });
         }
-      } else {
-        const focused = await cdp.focusedEditableTab(port);
-        if (!focused) throw new Error('No focused text input was found in the visible tab');
-        await humanInput.typeText(cdp, focused.tab.webSocketDebuggerUrl, inputText, {
-          human: humanTyping,
-          speed,
-          sensitive,
-          delayRange: inputDelayRange(params, humanTyping),
-          typoConfig: params.typoConfig,
-        });
+      } finally {
+        releaseQueue();
+        if (this.typingQueues.get(queueKey) === lock) {
+          this.typingQueues.delete(queueKey);
+        }
       }
       return;
     }
@@ -1710,8 +1769,45 @@ class RpaEngine {
     throw new Error('network resource not found: ' + matcher);
   }
 
+  async getActivePageTab(port) {
+    try {
+      const allTabs = await cdp.tabs(port);
+      const candidateTabs = allTabs.filter((item) => !item.url.startsWith('chrome://') && !item.url.startsWith('edge://'));
+      const list = candidateTabs.length ? candidateTabs : allTabs;
+      if (!list.length) return null;
+      if (list.length === 1) return list[0];
+
+      // Prioritize active, focused, or visible tab
+      for (const tab of list) {
+        if (!tab.webSocketDebuggerUrl) continue;
+        try {
+          const res = await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', {
+            expression: 'Boolean(document.visibilityState === "visible" && (document.hasFocus ? document.hasFocus() : true))',
+            returnByValue: true,
+          }, 1500);
+          if (res?.result?.value === true) return tab;
+        } catch (_) {}
+      }
+
+      for (const tab of list) {
+        if (!tab.webSocketDebuggerUrl) continue;
+        try {
+          const res = await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', {
+            expression: 'document.visibilityState === "visible"',
+            returnByValue: true,
+          }, 1500);
+          if (res?.result?.value === true) return tab;
+        } catch (_) {}
+      }
+
+      return list[0];
+    } catch (_) {
+      return null;
+    }
+  }
+
   async withPage(port, fn) {
-    const tab = await cdp.firstTab(port);
+    const tab = (await this.getActivePageTab(port)) || (await cdp.firstTab(port));
     if (!tab?.webSocketDebuggerUrl) throw new Error('No page tab for CDP port ' + port);
     return fn(tab.webSocketDebuggerUrl);
   }

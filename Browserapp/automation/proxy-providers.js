@@ -1,5 +1,6 @@
 'use strict';
 
+const net = require('node:net');
 const {
   parseProxy,
   fetchUrlText,
@@ -9,6 +10,7 @@ const {
 } = require('../proxy-forwarder');
 
 const MAX_PROVIDER_BATCH_SIZE = 500;
+const MAX_BATCH_SPEED_TEST = 500;
 const PROVIDER_COOLDOWN_MS = 60 * 1000;
 const MAX_PROBE_CONCURRENCY = 16;
 const DEFAULT_PROBE_CONCURRENCY = 8;
@@ -56,7 +58,8 @@ function recordProviderFetch(url) {
  */
 function buildCanonicalProxyItem(parsed, defaultProtocol = 'socks5', remark = '') {
   const protocol = String(parsed.protocol || defaultProtocol || 'socks5').toLowerCase().replace('://', '');
-  const host = String(parsed.host || parsed.ip || '').trim();
+  const rawHost = String(parsed.host || parsed.ip || '').trim();
+  const host = rawHost.startsWith('[') && rawHost.endsWith(']') ? rawHost.slice(1, -1).trim() : rawHost;
   const port = Number(parsed.port);
   const username = String(parsed.username || parsed.user || '');
   const password = String(parsed.password || parsed.pass || '');
@@ -65,14 +68,16 @@ function buildCanonicalProxyItem(parsed, defaultProtocol = 'socks5', remark = ''
     return null;
   }
 
+  const isIpv6 = net.isIP(host) === 6;
+  const hostPart = isIpv6 ? `[${host}]` : host;
   const authPart = username || password
     ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}@`
     : '';
-  const raw = `${protocol}://${authPart}${host}:${port}`;
+  const raw = `${protocol}://${authPart}${hostPart}:${port}`;
   const itemRemark = String(parsed.remark || remark || '供应商 API 导入').trim().slice(0, 500);
 
   return {
-    name: parsed.name ? String(parsed.name).trim().slice(0, 120) : `${host}:${port}`,
+    name: parsed.name ? String(parsed.name).trim().slice(0, 120) : `${hostPart}:${port}`,
     protocol,
     host,
     port,
@@ -302,7 +307,7 @@ async function fetchProviderProxies(url, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 15000;
   const { body } = await fetchUrlText(normalizedUrl, {
     timeout: timeoutMs,
-    allowPrivate: options.allowPrivate !== false,
+    allowPrivate: Boolean(options.allowPrivate),
   });
 
   recordProviderFetch(normalizedUrl);
@@ -322,7 +327,10 @@ async function fetchProviderProxies(url, options = {}) {
  * Updates proxy store entries if store is supplied.
  */
 async function batchSpeedTest(proxies, options = {}) {
-  const list = Array.isArray(proxies) ? proxies : [];
+  let list = Array.isArray(proxies) ? proxies : [];
+  if (list.length > MAX_BATCH_SPEED_TEST) {
+    list = list.slice(0, MAX_BATCH_SPEED_TEST);
+  }
   if (!list.length) {
     return { total: 0, completed: 0, okCount: 0, failCount: 0, results: [], sorted: [] };
   }
@@ -335,6 +343,7 @@ async function batchSpeedTest(proxies, options = {}) {
       force: true,
       totalTimeoutMs: options.timeoutMs || 6000,
       attemptTimeoutMs: options.attemptTimeoutMs || 2500,
+      ipChannel: proxy.ipChannel || config?.ipChannel || options.ipChannel,
     });
   };
 
@@ -364,9 +373,6 @@ async function batchSpeedTest(proxies, options = {}) {
           errorClass: '',
           error: null,
         };
-        if (store && proxyId && typeof store.markCheck === 'function') {
-          await store.markCheck(proxyId, resultItem).catch(() => {});
-        }
         results[index] = resultItem;
         okCount++;
         options.onProgress?.({ index, total: list.length, result: resultItem });
@@ -385,9 +391,6 @@ async function batchSpeedTest(proxies, options = {}) {
           errorClass,
           error: error.message || String(error),
         };
-        if (store && proxyId && typeof store.markCheckError === 'function') {
-          await store.markCheckError(proxyId, { errorClass, latencyMs }).catch(() => {});
-        }
         results[index] = resultItem;
         failCount++;
         options.onProgress?.({ index, total: list.length, result: resultItem });
@@ -398,6 +401,21 @@ async function batchSpeedTest(proxies, options = {}) {
   const workerCount = Math.min(maxConcurrency, list.length);
   const workers = Array.from({ length: workerCount }, () => worker());
   await Promise.all(workers);
+
+  if (store) {
+    if (typeof store.batchMarkCheck === 'function') {
+      await store.batchMarkCheck(results.filter((r) => r && r.id)).catch(() => {});
+    } else if (typeof store.markCheck === 'function') {
+      for (const res of results) {
+        if (!res || !res.id) continue;
+        if (res.ok) {
+          await store.markCheck(res.id, res).catch(() => {});
+        } else if (typeof store.markCheckError === 'function') {
+          await store.markCheckError(res.id, { errorClass: res.errorClass, latencyMs: res.latencyMs }).catch(() => {});
+        }
+      }
+    }
+  }
 
   const sorted = [...results].sort((a, b) => {
     const latA = a.ok && Number.isFinite(a.latencyMs) ? a.latencyMs : Infinity;
@@ -418,12 +436,14 @@ async function batchSpeedTest(proxies, options = {}) {
 module.exports = {
   fetchProviderProxies,
   parseProviderResponse,
+  buildCanonicalProxyItem,
   batchSpeedTest,
   clearProviderCooldowns,
   getProviderCooldownRemaining,
   recordProviderFetch,
   normalizeProviderUrl,
   MAX_PROVIDER_BATCH_SIZE,
+  MAX_BATCH_SPEED_TEST,
   PROVIDER_COOLDOWN_MS,
   MAX_PROBE_CONCURRENCY,
 };

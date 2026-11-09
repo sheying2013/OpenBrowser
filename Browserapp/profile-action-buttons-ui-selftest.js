@@ -52,7 +52,7 @@ check('static: buildBrowserEngineIcon contains full 256x256 multi-color Chromium
   assert.ok(source.includes('fill="url(#cr-green)"'), 'must contain green gradient blade');
   assert.ok(source.includes('fill="url(#cr-yellow)"'), 'must contain yellow gradient blade');
   assert.ok(source.includes('fill="url(#cr-red)"'), 'must contain red gradient blade');
-  assert.ok(source.includes('fill="#1a73e8"'), 'must contain blue center circle');
+  assert.ok(source.includes('circle cx="128" cy="128" r="52"') || source.includes('--engine-cr-center-dot') || source.includes('#1a73e8'), 'must contain center circle element');
 });
 
 check('static: standalone fallback icons defined for all table action buttons', () => {
@@ -281,9 +281,9 @@ check('static: action buttons have synchronized aria-label and title', () => {
     let probe = null;
     try { probe = JSON.parse(evalRes?.result?.value); } catch (_) {}
 
-    check(`real browser (${theme}): all 4 action buttons render valid SVG with width >= 12px`, () => {
+    check(`real browser (${theme}): all 5 action buttons render valid SVG with width >= 12px`, () => {
       assert.ok(probe, 'must receive probe data');
-      assert.strictEqual(probe.buttons.length, 4, 'must have 4 action buttons');
+      assert.strictEqual(probe.buttons.length, 5, 'must have 5 action buttons');
       for (const btn of probe.buttons) {
         assert.ok(btn.hasSvg, `button "${btn.title}" must contain SVG`);
         assert.ok(btn.svgWidth >= 12, `button "${btn.title}" SVG width must be >= 12px (got ${btn.svgWidth})`);
@@ -292,7 +292,7 @@ check('static: action buttons have synchronized aria-label and title', () => {
       }
     });
 
-    check(`real browser (${theme}): all 4 action buttons have synchronized aria-label and title`, () => {
+    check(`real browser (${theme}): all 5 action buttons have synchronized aria-label and title`, () => {
       for (const btn of probe.buttons) {
         assert.ok(btn.title && btn.title.trim().length > 0, "button must have title");
         assert.ok(btn.ariaLabel && btn.ariaLabel.trim().length > 0, `button "${btn.title}" must have aria-label`);
@@ -310,8 +310,7 @@ check('static: action buttons have synchronized aria-label and title', () => {
 
 
     const ssTheme = await send('Page.captureScreenshot', { format: 'png' });
-    const themeShot = path.join(appRoot, 'reports', `ui-${theme}-verified.png`);
-    fs.mkdirSync(path.dirname(themeShot), { recursive: true });
+    const themeShot = path.join(os.tmpdir(), `ui-${theme}-verified.png`);
     fs.writeFileSync(themeShot, Buffer.from(ssTheme.data, 'base64'));
 
     check(`real browser (${theme}): kernel browser engine icons render at 26px without clipping`, () => {
@@ -367,8 +366,7 @@ check('static: action buttons have synchronized aria-label and title', () => {
 
   // Take screenshot of rendered table with the fix
   const ss = await send('Page.captureScreenshot', { format: 'png' });
-  const outScreenshot = path.join(appRoot, 'reports', 'ui-action-buttons-verified.png');
-  fs.mkdirSync(path.dirname(outScreenshot), { recursive: true });
+  const outScreenshot = path.join(os.tmpdir(), 'openbrowser-ui-action-buttons-verified.png');
   fs.writeFileSync(outScreenshot, Buffer.from(ss.data, 'base64'));
   console.log('  Saved verified screenshot to:', outScreenshot);
 

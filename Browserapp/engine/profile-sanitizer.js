@@ -41,6 +41,11 @@ function sanitizeProfile(value) {
   const effectiveStartUrl = String(value.startUrl || platformValue.startUrl || advancedValue.startUrls || "").trim().slice(0, 2000);
   const proxyAssociation = profileProxyAssociation(value);
   const proxyId = networkMode === "direct" ? null : normalizedProxyAssociationId(proxyAssociation.value);
+  const explicitAllowFailed = (typeof proxyMetaValue.allowFailedProxy === "boolean")
+    ? proxyMetaValue.allowFailedProxy
+    : (typeof value.allowFailedProxy === "boolean")
+      ? value.allowFailedProxy
+      : Boolean(proxyMetaValue.ignoreBrokenProxy ?? value.ignoreBrokenProxy);
 
   return {
     id,
@@ -56,7 +61,7 @@ function sanitizeProfile(value) {
     networkMode,
     proxy: networkMode === "direct" ? "Direct" : rawProxy,
     proxyId,
-    allowFailedProxy: Boolean(value.allowFailedProxy ?? value.ignoreBrokenProxy ?? proxyMetaValue.allowFailedProxy ?? proxyMetaValue.ignoreBrokenProxy),
+    allowFailedProxy: explicitAllowFailed,
     tag: String(value.tag || "").slice(0, 40),
     groupId: String(value.groupId || "").slice(0, 64),
     group_name: String(value.group_name || value.groupName || "").slice(0, 40),
@@ -104,7 +109,7 @@ function sanitizeProfile(value) {
       requireReady: true,
       notReadyPolicy: "block",
       allowDirectFallback: false,
-      allowFailedProxy: Boolean(proxyMetaValue.allowFailedProxy ?? proxyMetaValue.ignoreBrokenProxy ?? value.allowFailedProxy ?? value.ignoreBrokenProxy),
+      allowFailedProxy: explicitAllowFailed,
       tlsProfile: allowed(proxyMetaValue.tlsProfile, ["auto", "chrome", "chrome_legacy", "node", "off"], "auto"),
       tlsChromeMajor: (() => {
         const n = Number(proxyMetaValue.tlsChromeMajor);

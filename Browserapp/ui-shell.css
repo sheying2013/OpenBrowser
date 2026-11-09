@@ -656,6 +656,7 @@ body {
 
 /* Profile list — even column scale; actions never fall off the right edge */
 #view-profiles .table-card {
+  max-height: max(320px, calc(100vh - 250px));
   overflow-x: auto;
   overflow-y: auto;
   border: 1px solid var(--ui-border) !important;
@@ -664,6 +665,16 @@ body {
   box-shadow: 0 1px 2px rgba(25, 35, 55, .04);
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+/* Virtual scroll spacer rows: strictly suppress any cell padding/borders stretching heights */
+tr.virtual-spacer td {
+  padding: 0 !important;
+  border: 0 !important;
+  height: inherit;
+  line-height: 0 !important;
+  background: transparent !important;
+  font-size: 0 !important;
 }
 #view-profiles .table-card table,
 #view-profiles .table-card table.profile-table-compact {
@@ -810,8 +821,8 @@ html #view-profiles .table-card td.col-browser .browser-engine-icon svg,
 }
 #view-profiles .table-card th.col-actions,
 #view-profiles .table-card td.col-actions {
-  width: 148px;
-  min-width: 148px;
+  width: 186px;
+  min-width: 186px;
   overflow: visible;
   text-overflow: clip;
   position: sticky;
@@ -2202,4 +2213,14 @@ textarea:focus-visible,
   #view-system > .settings-grid,
   #view-api-mcp .rpa-api-page { width: 100%; }
   .app-confirm-dialog { width: calc(100vw - 1rem); }
+}
+
+/* Cookie Robot dialog contrast enhancement (especially in dark skins) */
+#cookie-robot-status-box {
+  background: var(--ui-surface-muted, rgba(128, 128, 128, 0.08)) !important;
+  border: 1px solid var(--ui-border, rgba(128, 128, 128, 0.22)) !important;
+  color: var(--ui-text) !important;
+}
+#cookie-robot-status-box .progress-bar-wrap {
+  background: var(--ui-border, rgba(128, 128, 128, 0.22)) !important;
 }
