@@ -88,12 +88,61 @@ function run(command, args, options = {}) {
 function isPackagingExcluded(entryName, fullPath = "") {
   if (!entryName || typeof entryName !== "string") return false;
   const lower = entryName.toLowerCase();
-  if (lower === "reports" || lower === "__pycache__" || lower === ".ds_store" || lower === "node_modules" || lower === ".git") {
+  if (
+    lower === "reports" ||
+    lower === "ui-audit-artifacts" ||
+    lower === "__pycache__" ||
+    lower === ".ds_store" ||
+    lower === "node_modules" ||
+    lower === ".git" ||
+    lower === "dist" ||
+    lower === ".playwright-cli" ||
+    lower === "functional-selftest-data" ||
+    lower.startsWith(".tmp") ||
+    lower.startsWith(".trash")
+  ) {
     return true;
   }
   if (lower.endsWith(".pyc") || lower.endsWith(".pyo")) {
     return true;
   }
+
+  if (fullPath && typeof fullPath === "string") {
+    const normalized = fullPath.replace(/\\/g, "/").toLowerCase();
+    if (
+      normalized.includes("/reports/") ||
+      normalized.endsWith("/reports") ||
+      normalized.includes("/ui-audit-artifacts/") ||
+      normalized.endsWith("/ui-audit-artifacts") ||
+      normalized.includes("/functional-selftest-data/") ||
+      normalized.endsWith("/functional-selftest-data")
+    ) {
+      return true;
+    }
+  }
+
+  // Exclude markdown development documentation, preserving licenses and legal notices
+  if (lower.endsWith(".md")) {
+    if (lower === "third-party-notices.md" || lower.includes("license") || lower.includes("notice") || lower === "disclaimer.md") {
+      return false;
+    }
+    return true;
+  }
+
+  // Exclude preview report files and test report snapshots
+  if (
+    lower.startsWith("preview-") ||
+    lower.startsWith("test-logs") ||
+    lower.startsWith("test-select") ||
+    lower.startsWith("final-preview-") ||
+    lower === "shot-basic.png" ||
+    lower === "shot-privacy.png" ||
+    lower === "light-basic.png" ||
+    lower === "light-privacy.png"
+  ) {
+    return true;
+  }
+
   return false;
 }
 
@@ -219,8 +268,11 @@ function appResourceExcludes() {
     'bundled-kernels',
     'rust-core',
     'reports',
+    'ui-audit-artifacts',
+    'functional-selftest-data',
     '__pycache__',
     '.DS_Store',
+    '.playwright-cli',
   ]);
 }
 
@@ -419,7 +471,7 @@ function copyAppResources(resourceApp) {
   const excluded = appResourceExcludes();
   fs.mkdirSync(resourceApp, { recursive: true });
   for (const entry of fs.readdirSync(appRoot)) {
-    if (excluded.has(entry)) continue;
+    if (excluded.has(entry) || isPackagingExcluded(entry, path.join(appRoot, entry))) continue;
     copyRecursive(path.join(appRoot, entry), path.join(resourceApp, entry));
   }
   pruneForeignKernelSeeds(resourceApp);
@@ -547,7 +599,7 @@ function packageWindows() {
   copyAppResources(resourceApp);
 
   const repoRoot = path.resolve(appRoot, '..');
-  for (const document of ['README.md', 'DISCLAIMER.md', 'LICENSE']) {
+  for (const document of ['LICENSE', 'DISCLAIMER.md']) {
     const source = path.join(repoRoot, document);
     if (fs.existsSync(source)) fs.copyFileSync(source, path.join(packageRoot, document));
   }
@@ -656,7 +708,7 @@ function packageLinux() {
   copyAppResources(resourceApp);
 
   const repoRoot = path.resolve(appRoot, '..');
-  for (const document of ['README.md', 'DISCLAIMER.md', 'LICENSE']) {
+  for (const document of ['LICENSE', 'DISCLAIMER.md']) {
     const source = path.join(repoRoot, document);
     if (fs.existsSync(source)) fs.copyFileSync(source, path.join(packageRoot, document));
   }
@@ -747,7 +799,7 @@ function packageMac() {
   copyAppResources(resourceApp);
 
   const repoRoot = path.resolve(appRoot, '..');
-  for (const document of ['README.md', 'DISCLAIMER.md', 'LICENSE']) {
+  for (const document of ['LICENSE', 'DISCLAIMER.md']) {
     const source = path.join(repoRoot, document);
     if (fs.existsSync(source)) fs.copyFileSync(source, path.join(packageRoot, document));
   }

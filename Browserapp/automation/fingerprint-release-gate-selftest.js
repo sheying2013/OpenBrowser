@@ -28,9 +28,9 @@
  *    - FontData.blob() TrueType name table alias metadata gap
  *    - Isolated static HTML parser CSS local() gap
  *    - WebGL ALIASED_POINT_SIZE_RANGE Metal host driver binding
- * 3. Version synchronization across all 7 canonical locations (dynamically matched from Browserapp/package.json):
- *    - README.md (version badge)
- *    - README_CN.md (version badge)
+ * 3. Version synchronization across all 7 canonical software, packaging, Rust, and workflow locations:
+ *    - crates/openbrowser-core/Cargo.toml (Rust crate version)
+ *    - Cargo.lock (openbrowser-core package locked version)
  *    - Browserapp/package.json (semver root definition)
  *    - Browserapp/package-lock.json (root package and packages[""] versions)
  *    - Browserapp/index.html (in-app header display version)
@@ -267,24 +267,26 @@ function checkSevenVersionLocations(targetVersion = EXPECTED_VERSION, baseRepo =
     return fs.readFileSync(full, "utf8");
   };
 
-  // Location 1: README.md
+  // Location 1: crates/openbrowser-core/Cargo.toml
   try {
-    const content = getFileContent("README.md");
-    if (!content.includes(`badge/version-${targetVersion}-blue`)) {
-      issues.push({ location: 1, file: "README.md", message: `Badge badge/version-${targetVersion}-blue missing` });
+    const content = getFileContent("crates/openbrowser-core/Cargo.toml");
+    const match = content.match(/\[package\][\s\S]*?\bversion\s*=\s*"([^"]+)"/);
+    if (!match || match[1] !== targetVersion) {
+      issues.push({ location: 1, file: "crates/openbrowser-core/Cargo.toml", message: `Version is "${match ? match[1] : null}", expected "${targetVersion}"` });
     }
   } catch (err) {
-    issues.push({ location: 1, file: "README.md", message: err.message });
+    issues.push({ location: 1, file: "crates/openbrowser-core/Cargo.toml", message: err.message });
   }
 
-  // Location 2: README_CN.md
+  // Location 2: Cargo.lock
   try {
-    const content = getFileContent("README_CN.md");
-    if (!content.includes(`badge/version-${targetVersion}-blue`)) {
-      issues.push({ location: 2, file: "README_CN.md", message: `Badge badge/version-${targetVersion}-blue missing` });
+    const content = getFileContent("Cargo.lock");
+    const match = content.match(/\[\[package\]\]\s*\nname\s*=\s*"openbrowser-core"\s*\nversion\s*=\s*"([^"]+)"/);
+    if (!match || match[1] !== targetVersion) {
+      issues.push({ location: 2, file: "Cargo.lock", message: `Locked version is "${match ? match[1] : null}", expected "${targetVersion}"` });
     }
   } catch (err) {
-    issues.push({ location: 2, file: "README_CN.md", message: err.message });
+    issues.push({ location: 2, file: "Cargo.lock", message: err.message });
   }
 
   // Location 3: Browserapp/package.json
@@ -576,12 +578,24 @@ check("portable packager explicitly and recursively excludes sensitive artifacts
 
   // Verify recursive isPackagingExcluded
   assert.strictEqual(packager.isPackagingExcluded("reports"), true, "reports must be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("ui-audit-artifacts"), true, "ui-audit-artifacts must be excluded");
   assert.strictEqual(packager.isPackagingExcluded("__pycache__"), true, "__pycache__ must be excluded");
   assert.strictEqual(packager.isPackagingExcluded(".DS_Store"), true, ".DS_Store must be excluded");
   assert.strictEqual(packager.isPackagingExcluded(".ds_store"), true, ".ds_store must be excluded");
   assert.strictEqual(packager.isPackagingExcluded("module.cpython-313.pyc"), true, "*.pyc must be excluded");
   assert.strictEqual(packager.isPackagingExcluded("module.pyo"), true, "*.pyo must be excluded");
   assert.strictEqual(packager.isPackagingExcluded("node_modules"), true, "node_modules must be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("README.md"), true, "README.md must be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("CODE_OVERVIEW.md"), true, "CODE_OVERVIEW.md must be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("2026-10-14_ui-audit-report.md"), true, "audit reports must be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("preview-mock.html"), true, "preview-*.html must be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("preview-editor-basic.png"), true, "preview-*.png must be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("test-logs-dark.png"), true, "test-logs-*.png must be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("test-select.html"), true, "test-select.html must be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("final-preview-basic.png"), true, "final-preview-*.png must be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("shot-basic.png"), true, "shot-basic.png must be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("THIRD-PARTY-NOTICES.md"), false, "THIRD-PARTY-NOTICES.md must NOT be excluded");
+  assert.strictEqual(packager.isPackagingExcluded("LICENSE"), false, "LICENSE must NOT be excluded");
 });
 
 check("portable packager preserves all required source files, font subsets, and tests", () => {
@@ -612,11 +626,21 @@ check("portable packager copyRecursive verified with isolated sandbox hierarchy"
     const dst = path.join(tmp, "dst");
     fs.mkdirSync(path.join(src, "assets"), { recursive: true });
     fs.mkdirSync(path.join(src, "reports"), { recursive: true });
+    fs.mkdirSync(path.join(src, "automation/ui-audit-artifacts"), { recursive: true });
     fs.mkdirSync(path.join(src, "scripts/__pycache__"), { recursive: true });
 
     fs.writeFileSync(path.join(src, "main.js"), "console.log(1);");
+    fs.writeFileSync(path.join(src, "index.html"), "<html></html>");
     fs.writeFileSync(path.join(src, "assets/arial.woff2"), "wOF2-DATA");
+    fs.writeFileSync(path.join(src, "THIRD-PARTY-NOTICES.md"), "# Third party notices");
+    fs.writeFileSync(path.join(src, "LICENSE.chrome-power.txt"), "License");
     fs.writeFileSync(path.join(src, "reports/leak.png"), "PNG-DATA");
+    fs.writeFileSync(path.join(src, "automation/ui-audit-artifacts/trace.json"), "{}");
+    fs.writeFileSync(path.join(src, "automation/README.md"), "# Dev docs");
+    fs.writeFileSync(path.join(src, "automation/preview-basic-full.html"), "<html></html>");
+    fs.writeFileSync(path.join(src, "automation/test-select.png"), "PNG");
+    fs.writeFileSync(path.join(src, "preview-mock.html"), "<html></html>");
+    fs.writeFileSync(path.join(src, "test-logs-dark.png"), "PNG");
     fs.writeFileSync(path.join(src, "scripts/__pycache__/test.pyc"), "PYC-DATA");
     fs.writeFileSync(path.join(src, "scripts/stray.pyc"), "PYC-DATA");
     fs.writeFileSync(path.join(src, ".DS_Store"), "DS-DATA");
@@ -624,8 +648,18 @@ check("portable packager copyRecursive verified with isolated sandbox hierarchy"
     packager.copyRecursive(src, dst);
 
     assert.ok(fs.existsSync(path.join(dst, "main.js")), "main.js must be copied");
+    assert.ok(fs.existsSync(path.join(dst, "index.html")), "index.html must be copied");
     assert.ok(fs.existsSync(path.join(dst, "assets/arial.woff2")), "assets/arial.woff2 must be copied");
+    assert.ok(fs.existsSync(path.join(dst, "THIRD-PARTY-NOTICES.md")), "THIRD-PARTY-NOTICES.md must be copied");
+    assert.ok(fs.existsSync(path.join(dst, "LICENSE.chrome-power.txt")), "LICENSE.chrome-power.txt must be copied");
+
     assert.strictEqual(fs.existsSync(path.join(dst, "reports")), false, "reports must be excluded");
+    assert.strictEqual(fs.existsSync(path.join(dst, "automation/ui-audit-artifacts")), false, "ui-audit-artifacts must be excluded");
+    assert.strictEqual(fs.existsSync(path.join(dst, "automation/README.md")), false, "automation/README.md must be excluded");
+    assert.strictEqual(fs.existsSync(path.join(dst, "automation/preview-basic-full.html")), false, "preview html must be excluded");
+    assert.strictEqual(fs.existsSync(path.join(dst, "automation/test-select.png")), false, "test-select png must be excluded");
+    assert.strictEqual(fs.existsSync(path.join(dst, "preview-mock.html")), false, "preview-mock.html must be excluded");
+    assert.strictEqual(fs.existsSync(path.join(dst, "test-logs-dark.png")), false, "test-logs-dark.png must be excluded");
     assert.strictEqual(fs.existsSync(path.join(dst, "scripts/__pycache__")), false, "__pycache__ must be excluded");
     assert.strictEqual(fs.existsSync(path.join(dst, "scripts/stray.pyc")), false, "stray.pyc must be excluded");
     assert.strictEqual(fs.existsSync(path.join(dst, ".DS_Store")), false, ".DS_Store must be excluded");
@@ -686,8 +720,8 @@ check("mutation sensitivity: script with syntax error fails runnable check", () 
 check("mutation sensitivity: tampering with any of the 7 version locations fails validation", () => {
   const tamperedVersion = "1.0.99";
   const locations = [
-    { rel: "README.md", tampered: "# Readme\n[![Version](https://img.shields.io/badge/version-1.0.99-blue)]" },
-    { rel: "README_CN.md", tampered: "# 说明\n[![Version](https://img.shields.io/badge/version-1.0.99-blue)]" },
+    { rel: "crates/openbrowser-core/Cargo.toml", tampered: '[package]\nname = "openbrowser-core"\nversion = "1.0.99"' },
+    { rel: "Cargo.lock", tampered: '[[package]]\nname = "openbrowser-core"\nversion = "1.0.99"' },
     { rel: "Browserapp/package.json", tampered: JSON.stringify({ version: "1.0.99" }) },
     { rel: "Browserapp/package-lock.json", tampered: JSON.stringify({ version: "1.0.99", packages: { "": { version: "1.0.99" } } }) },
     { rel: "Browserapp/index.html", tampered: "<span class=\"app-version\" id=\"app-version\">v1.0.99</span>" },

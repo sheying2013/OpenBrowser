@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.27'
+        description: 'Release tag to create, for example v1.0.28'
         required: true
-        default: 'v1.0.27'
+        default: 'v1.0.28'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -38,11 +38,11 @@ env:
   OPENBROWSER_PACKAGE_VARIANT: with-kernel
   OPENBROWSER_BUNDLE_KERNEL: 'true'
   RELEASE_NOTES: |
-    ## OpenBrowser **v1.0.27**
+    ## OpenBrowser **v1.0.28**
 
-    - 凭据静态加密，环境数据迁移 SQLite 存储（断电安全、旧数据无损迁移）。
-    - Rust 代理核心新增上游连接复用，显著降低二次连接延迟。
-    - 新增真实设备人格库；多项指纹注入与稳定性修复。
+    - 环境数据安全与稳定性改进。
+    - 代理和自动化可靠性优化。
+    - 界面与性能优化。
 
 jobs:
   ensure-release:
