@@ -27,6 +27,8 @@ const {
   extractProxyFromApi = async () => '',
   invokeProxyRefresh = async () => '',
   classifyProxyError = () => 'proxy-unknown',
+  DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS = 10000,
+  DEFAULT_PROBE_TOTAL_TIMEOUT_MS = 20000,
 } = proxyForwarderModule;
 const { resolveProfileLanguage, resolveProfileTimezone, localeFromCountryCode } = require('./automation/locale-from-country');
 const { applyLanguagePreferences, verifyLanguagePreferences, syncProfileLocalState } = require('./automation/profile-file-consistency');
@@ -7531,8 +7533,8 @@ class BrowserEngine {
     try {
       const result = await lookupProxyCountry(resolved.config, {
         force: true,
-        totalTimeoutMs: options.totalTimeoutMs || 6500,
-        attemptTimeoutMs: options.attemptTimeoutMs || 2200,
+        totalTimeoutMs: options.totalTimeoutMs || DEFAULT_PROBE_TOTAL_TIMEOUT_MS,
+        attemptTimeoutMs: options.attemptTimeoutMs || DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS,
         includeRisk: options.includeRisk === true,
         ipChannel: profile.proxyMeta?.ipChannel,
         // Cold cache + a rate-limited probe service: the profile's last known exit is a valid
@@ -7705,10 +7707,48 @@ class BrowserEngine {
         }
       }
       if (!ok && lastError) {
-        // A rate-limited or unreachable exit-probe service is NOT a dead proxy. Treating a 429 as
-        // "proxy not ready" would block startup on a healthy tunnel. But we may only continue when
-        // the exit geography is still knowable: without it the timezone/language cannot be aligned
-        // to the real exit, and starting anyway would leak the host timezone.
+        // Readiness gate is configurable again: notReadyPolicy decides block / direct / continue,
+        // with 'block' kept as the fail-closed default. Unchecking "启动要求代理就绪"
+        // (requireReady=false) or an explicit allowFailedProxy override downgrades ONLY the
+        // default 'block' to 'continue'; an explicit continue/direct choice is honored as-is,
+        // and direct fallback still requires allowDirectFallback (see proxy-direct-fallback-blocked).
+        let policy = ['block', 'direct', 'continue'].includes(String(meta.notReadyPolicy))
+          ? String(meta.notReadyPolicy)
+          : 'block';
+        if (policy === 'block' && (meta.requireReady === false || allowBroken)) policy = 'continue';
+        if (policy === 'direct') {
+          if (!meta.allowDirectFallback) {
+            // Falling back to direct would expose the real IP, so it must be an explicit opt-in.
+            const blockedMsg = '代理未就绪：' + (lastError.message || lastError)
+              + '。回退直连会暴露真实 IP，需在 proxyMeta 显式开启 allowDirectFallback 后才会回落。';
+            this.emit({ type: 'proxy-error', id: working.id, code: 'proxy-direct-fallback-blocked', message: blockedMsg, policy: 'direct' });
+            throw Object.assign(new Error(blockedMsg), { code: 'proxy-direct-fallback-blocked' });
+          }
+          working = this.sanitizeProfile({ ...working, networkMode: 'direct', proxy: 'Direct' });
+          this.emit({
+            type: 'proxy-fallback',
+            id: working.id,
+            danger: true,
+            message: '代理未就绪，已按显式 allowDirectFallback 策略回落直连（存在暴露真实 IP 的风险）',
+          });
+          return working;
+        }
+        if (policy === 'continue') {
+          this.emit({
+            type: 'proxy-warn',
+            id: working.id,
+            code: 'proxy-not-ready',
+            policy,
+            message: '代理未就绪，按策略继续启动：' + (lastError.message || lastError)
+              + '。时区/语言可能无法对齐出口，存在指纹一致性风险。',
+          });
+          return working;
+        }
+        // policy === 'block' (fail-closed). A rate-limited or unreachable exit-probe service is NOT
+        // a dead proxy. Treating a 429 as "proxy not ready" would block startup on a healthy
+        // tunnel. But we may only continue when the exit geography is still knowable: without it
+        // the timezone/language cannot be aligned to the real exit, and starting anyway would leak
+        // the host timezone.
         const probeUnavailable = lastError.code === 'probe-unavailable'
           || lastError.errorClass === 'probe-unavailable'
           || lastError.probeUnavailable === true;

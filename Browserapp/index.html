@@ -275,12 +275,14 @@
                     <label class="check-row"><input id="editor-proxy-fill-fingerprint" type="checkbox" checked> 检测后自动对齐指纹（时区/语言/定位）</label>
                   </div>
                   <div class="form-two">
-                    <label class="check-row"><input id="editor-proxy-require-ready" type="checkbox" checked disabled> 启动要求代理就绪</label>
+                    <label class="check-row"><input id="editor-proxy-require-ready" type="checkbox" checked> 启动要求代理就绪</label>
                     <label>未就绪策略
-                      <select id="editor-proxy-not-ready-policy" disabled aria-describedby="proxy-fail-closed-note">
+                      <select id="editor-proxy-not-ready-policy" aria-describedby="proxy-fail-closed-note">
                         <option value="block">连接失败时停止启动</option>
+                        <option value="direct">连接失败时回退直连</option>
+                        <option value="continue">连接失败仍继续启动</option>
                       </select>
-                      <small id="proxy-fail-closed-note">代理故障不会切换为本地直连。</small>
+                      <small id="proxy-fail-closed-note">未勾选“启动要求代理就绪”或勾选下方覆盖项时，失败会继续启动；回退直连会暴露真实 IP，仅在被显式选择时执行。</small>
                     </label>
                   </div>
                   <label class="check-row"><input id="editor-allow-failed-proxy" type="checkbox"> <span data-i18n="editor.proxy.allowFailed">代理探测失败仍要启动（显式覆盖安全阻断）</span></label>

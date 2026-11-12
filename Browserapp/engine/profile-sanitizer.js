@@ -106,9 +106,9 @@ function sanitizeProfile(value) {
           ? String(proxyMetaValue.backupProxies).split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8)
           : []),
       fillFingerprint: proxyMetaValue.fillFingerprint !== false,
-      requireReady: true,
-      notReadyPolicy: "block",
-      allowDirectFallback: false,
+      requireReady: proxyMetaValue.requireReady !== false,
+      notReadyPolicy: allowed(proxyMetaValue.notReadyPolicy, ["block", "direct", "continue"], "block"),
+      allowDirectFallback: Boolean(proxyMetaValue.allowDirectFallback),
       allowFailedProxy: explicitAllowFailed,
       tlsProfile: allowed(proxyMetaValue.tlsProfile, ["auto", "chrome", "chrome_legacy", "node", "off"], "auto"),
       tlsChromeMajor: (() => {

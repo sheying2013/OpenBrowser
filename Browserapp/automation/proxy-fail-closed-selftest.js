@@ -11,17 +11,45 @@ async function check(name, action) { try { await action(); results.push({name,ok
     const value = sanitizeProfile({id:'fail-closed',name:'Test',networkMode:'proxy',proxy:''});
     assert.equal(value.networkMode,'proxy');
   });
-  for(const policy of ['direct','continue','block']) {
-    await check('old ' + policy + ' policy cannot authorize a direct fallback', async () => {
-      const engine = Object.create(BrowserEngine.prototype);
-      engine.networkInfo = new Map(); engine.profiles = new Map(); engine.emit = () => {};
-      engine.resolveStoredProxyProfile = value => value;
-      engine.testProxy = async () => { throw Object.assign(new Error('ECONNREFUSED'),{code:'ECONNREFUSED'}); };
-      const profile = {id:'fail-closed',name:'Test',networkMode:'proxy',proxy:'socks5://127.0.0.1:9',proxyMeta:{checkOnStart:true,requireReady:false,notReadyPolicy:policy,allowDirectFallback:true}};
-      await assert.rejects(engine.prepareProfileProxyForStart(profile));
-      assert.equal(profile.networkMode,'proxy');
-    });
-  }
+  // Restored readiness semantics: default block stays fail-closed; an explicit continue choice is
+  // honored (soft start), and direct fallback still requires an explicit allowDirectFallback.
+  await check('default block policy stays fail-closed on a dead proxy', async () => {
+    const engine = Object.create(BrowserEngine.prototype);
+    engine.networkInfo = new Map(); engine.profiles = new Map(); engine.emit = () => {};
+    engine.resolveStoredProxyProfile = value => value;
+    engine.testProxy = async () => { throw Object.assign(new Error('ECONNREFUSED'),{code:'ECONNREFUSED'}); };
+    const profile = {id:'fail-closed',name:'Test',networkMode:'proxy',proxy:'socks5://127.0.0.1:9',proxyMeta:{checkOnStart:true}};
+    await assert.rejects(engine.prepareProfileProxyForStart(profile));
+    assert.equal(profile.networkMode,'proxy');
+  });
+  await check('explicit continue policy keeps the proxy and starts with a warning', async () => {
+    const engine = Object.create(BrowserEngine.prototype);
+    engine.networkInfo = new Map(); engine.profiles = new Map(); engine.emit = () => {};
+    engine.resolveStoredProxyProfile = value => value;
+    engine.testProxy = async () => { throw Object.assign(new Error('ECONNREFUSED'),{code:'ECONNREFUSED'}); };
+    const profile = {id:'fail-closed',name:'Test',networkMode:'proxy',proxy:'socks5://127.0.0.1:9',proxyMeta:{checkOnStart:true,requireReady:false,notReadyPolicy:'continue'}};
+    const result = await engine.prepareProfileProxyForStart(profile);
+    assert.equal(result.networkMode,'proxy');
+    assert.match(String(result.proxy),/127\.0\.0\.1:9/);
+  });
+  await check('explicit direct policy still requires allowDirectFallback', async () => {
+    const engine = Object.create(BrowserEngine.prototype);
+    engine.networkInfo = new Map(); engine.profiles = new Map(); engine.emit = () => {};
+    engine.resolveStoredProxyProfile = value => value;
+    engine.testProxy = async () => { throw Object.assign(new Error('ECONNREFUSED'),{code:'ECONNREFUSED'}); };
+    const profile = {id:'fail-closed',name:'Test',networkMode:'proxy',proxy:'socks5://127.0.0.1:9',proxyMeta:{checkOnStart:true,requireReady:true,notReadyPolicy:'direct'}};
+    await assert.rejects(engine.prepareProfileProxyForStart(profile),/allowDirectFallback/);
+    assert.equal(profile.networkMode,'proxy');
+  });
+  await check('explicit direct policy with allowDirectFallback falls back', async () => {
+    const engine = Object.create(BrowserEngine.prototype);
+    engine.networkInfo = new Map(); engine.profiles = new Map(); engine.emit = () => {};
+    engine.resolveStoredProxyProfile = value => value;
+    engine.testProxy = async () => { throw Object.assign(new Error('ECONNREFUSED'),{code:'ECONNREFUSED'}); };
+    const profile = {id:'fail-closed',name:'Test',networkMode:'proxy',proxy:'socks5://127.0.0.1:9',proxyMeta:{checkOnStart:true,requireReady:true,notReadyPolicy:'direct',allowDirectFallback:true}};
+    const result = await engine.prepareProfileProxyForStart(profile);
+    assert.equal(result.networkMode,'direct');
+  });
   await check('missing proxy fails before any direct probe', async () => {
     const engine = Object.create(BrowserEngine.prototype);
     engine.networkInfo = new Map(); engine.emit = () => {}; engine.resolveStoredProxyProfile = value => value;
