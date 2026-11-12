@@ -354,9 +354,10 @@ async function main() {
     assert.ok(html.includes(`id="${id}"`), 'missing html id ' + id);
   }
   assert.ok(html.includes('value="ifconfig-me"'), 'ifconfig.me must be selectable as an IP query channel');
-  assert.ok(renderer.includes('requireReady: true'), 'editor must require a ready proxy');
-  assert.ok(renderer.includes("notReadyPolicy: 'block'"), 'editor must enforce fail-closed policy');
-  assert.ok(!html.includes('value="direct">回退直连'), 'direct fallback must not be selectable');
+  assert.ok(renderer.includes("requireReady: $('#editor-proxy-require-ready')"), 'editor draft must collect the readiness requirement');
+  assert.ok(renderer.includes("notReadyPolicy: $('#editor-proxy-not-ready-policy')"), 'editor draft must collect the not-ready policy');
+  assert.ok(html.includes('value="direct">连接失败时回退直连'), 'direct fallback must be selectable again (gated by allowDirectFallback)');
+  assert.ok(renderer.includes('notReadySelect.disabled = !hardGate'), 'policy select must disable while the hard gate is off');
   assert.ok(renderer.includes("tlsProfile: $('#editor-proxy-tls-profile')"), 'editor draft must collect tlsProfile');
   assert.ok(renderer.includes("apiExtractUrl: String(proxyMeta.apiExtractUrl || '')"), 'normalize must not bleed refreshUrl into apiExtractUrl');
   assert.strictEqual((renderer.match(/\$\('#editor-test-proxy'\)\?\.addEventListener\('click', testEditorProxy\);/g) || []).length, 1, 'test proxy listener should be single');

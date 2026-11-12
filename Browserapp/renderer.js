@@ -341,8 +341,8 @@ function normalizeProfileSettings(profile) {
         : String(proxyMeta.backupProxies || '').split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8),
       fillFingerprint: proxyMeta.fillFingerprint !== false,
       requireReady: proxyMeta.requireReady !== false,
-      notReadyPolicy: 'block',
-      allowDirectFallback: false,
+      notReadyPolicy: ['block', 'direct', 'continue'].includes(proxyMeta.notReadyPolicy) ? proxyMeta.notReadyPolicy : 'block',
+      allowDirectFallback: Boolean(proxyMeta.allowDirectFallback),
       allowFailedProxy,
       tlsProfile: ['auto', 'chrome', 'chrome_legacy', 'node', 'off'].includes(String(proxyMeta.tlsProfile || ''))
         ? String(proxyMeta.tlsProfile)
@@ -2370,8 +2370,8 @@ function editorDraft(strict = true) {
       apiExtractUrl: ($('#editor-api-extract-url')?.value || '').trim(),
       backupProxies: ($('#editor-backup-proxies')?.value || '').split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8),
       fillFingerprint: $('#editor-proxy-fill-fingerprint')?.checked !== false,
-      requireReady: true,
-      notReadyPolicy: 'block',
+      requireReady: $('#editor-proxy-require-ready')?.checked !== false,
+      notReadyPolicy: $('#editor-proxy-not-ready-policy')?.value || 'block',
       allowDirectFallback: false,
       allowFailedProxy: Boolean($('#editor-allow-failed-proxy')?.checked),
       tlsProfile: $('#editor-proxy-tls-profile')?.value || 'auto',
@@ -2431,6 +2431,11 @@ function updateEditorVisibility() {
   $('.geo-custom').hidden = $('#editor-geo-mode').value !== 'custom';
   const customResolution = $('#editor-resolution').value === 'custom'; $('#editor-width').hidden = !customResolution; $('#editor-height').hidden = !customResolution;
   $('#editor-font-size').hidden = $('#editor-font-mode').value !== 'custom';
+  // Readiness gate wiring: the not-ready policy only takes effect while the hard gate is on
+  // (require-ready checked AND the allowFailedProxy override unchecked).
+  const hardGate = ($('#editor-proxy-require-ready')?.checked !== false) && !$('#editor-allow-failed-proxy')?.checked;
+  const notReadySelect = $('#editor-proxy-not-ready-policy');
+  if (notReadySelect) notReadySelect.disabled = !hardGate;
 }
 
 function renderEditorSummary() {
@@ -2449,7 +2454,7 @@ function renderEditorSummary() {
     [tx('电池'), privacy.battery === 'blocked' ? '关闭' : (privacy.battery === 'real' ? '真实' : '随机')],
     [tx('蓝牙'), labels.bluetooth[privacy.bluetooth || 'real']],
     [tx('站点稳定性'), privacy.stabilityMode === 'force' ? '强制' : (privacy.stabilityMode === 'off' ? '关闭' : '自动')],
-    [tx('代理未就绪'), draft.proxyMeta?.notReadyPolicy === 'direct' ? '回退直连' : (draft.proxyMeta?.notReadyPolicy === 'continue' ? '继续' : '阻断')],
+    [tx('代理未就绪'), ($('#editor-proxy-require-ready')?.checked === false || draft.proxyMeta?.allowFailedProxy) ? tx('放宽（失败继续启动）') : (draft.proxyMeta?.notReadyPolicy === 'direct' ? tx('回退直连') : (draft.proxyMeta?.notReadyPolicy === 'continue' ? tx('继续') : tx('阻断')))],
     [tx('TLS 配置'), draft.proxyMeta?.tlsProfile || 'auto'],
     ['ClientRects', privacy.clientRects === 'real' ? '真实' : '随机'],
     ['SpeechVoices', labels.speech[privacy.speech]],

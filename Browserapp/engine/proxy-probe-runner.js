@@ -1,6 +1,13 @@
 'use strict';
 
-async function runProxyProbes(tasks, { totalTimeoutMs = 6500, attemptTimeoutMs = 2200, isLinkError = () => false } = {}) {
+// attemptTimeoutMs must exceed connectSocket's 8s TCP timeout (proxy-forwarder.js) so a real
+// link error surfaces instead of being masked by the probe deadline; totalTimeoutMs bounds the
+// whole serial sweep. Cross-border dynamic residential round-trips measure ~5-9s (measured on
+// a rotating-residential gateway), so the old 2200/6500 pair killed usable-but-slow proxies.
+const DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS = Number(process.env.OPENBROWSER_PROBE_ATTEMPT_TIMEOUT_MS) || 10000;
+const DEFAULT_PROBE_TOTAL_TIMEOUT_MS = Number(process.env.OPENBROWSER_PROBE_TOTAL_TIMEOUT_MS) || 20000;
+
+async function runProxyProbes(tasks, { totalTimeoutMs = DEFAULT_PROBE_TOTAL_TIMEOUT_MS, attemptTimeoutMs = DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS, isLinkError = () => false } = {}) {
   const deadline = Date.now() + totalTimeoutMs;
   const values = [];
   const errors = [];
@@ -29,4 +36,4 @@ async function runProxyProbes(tasks, { totalTimeoutMs = 6500, attemptTimeoutMs =
   return values;
 }
 
-module.exports = { runProxyProbes };
+module.exports = { runProxyProbes, DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS, DEFAULT_PROBE_TOTAL_TIMEOUT_MS };
