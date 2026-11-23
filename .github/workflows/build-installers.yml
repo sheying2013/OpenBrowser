@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.28'
+        description: 'Release tag to create, for example v1.0.29'
         required: true
-        default: 'v1.0.28'
+        default: 'v1.0.29'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -38,11 +38,10 @@ env:
   OPENBROWSER_PACKAGE_VARIANT: with-kernel
   OPENBROWSER_BUNDLE_KERNEL: 'true'
   RELEASE_NOTES: |
-    ## OpenBrowser **v1.0.28**
+    ## OpenBrowser **v1.0.29**
 
-    - 环境数据安全与稳定性改进。
-    - 代理和自动化可靠性优化。
-    - 界面与性能优化。
+    - 改进环境同步与移动设备兼容性。
+    - 优化代理探测和页面兼容性。
 
 jobs:
   ensure-release:
@@ -524,7 +523,7 @@ jobs:
   finalize-release:
     name: Publish completed release
     needs: [windows-x86_64, linux-x86_64, macos-x86_64, macos-arm64]
-    if: ${{ inputs.target_platform == 'all' && needs.windows-x86_64.result == 'success' && needs.linux-x86_64.result == 'success' && needs.macos-x86_64.result == 'success' && needs.macos-arm64.result == 'success' }}
+    if: ${{ success() && inputs.target_platform == 'all' }}
     runs-on: ubuntu-latest
     steps:
       - name: Verify draft assets and publish release
