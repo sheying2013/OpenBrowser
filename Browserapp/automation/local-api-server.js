@@ -969,7 +969,7 @@ class LocalApiServer {
       } catch (error) {
         return fail(`invalid profile: ${error.message}`, 400);
       }
-      if (typeof this.engine.persist === 'function') await this.engine.persist();
+      this.engine.emit?.({ type: 'profiles', action: 'api-upsert', ids: [id] });
       created = (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id) || created;
       return ok({ user_id: id, profile_id: id, id, ...proxySummary(created, this.proxyStore), profile: created });
     }
@@ -1042,6 +1042,9 @@ class LocalApiServer {
         else if (key === 'fingerprint' && value && typeof value === 'object') patch.fingerprint = { ...value };
         else if (key !== 'profile_id' && key !== 'user_id' && key !== 'id') patch[key] = value;
       }
+      if (Object.prototype.hasOwnProperty.call(patch, 'name') && !Object.prototype.hasOwnProperty.call(patch, 'title')) {
+        patch.title = patch.name;
+      }
       if (clearFingerprint) {
         delete patch.fingerprint;
         if (!Object.prototype.hasOwnProperty.call(patch, 'privacy')) {
@@ -1064,8 +1067,13 @@ class LocalApiServer {
       this.normalizeProxyAssociationState(next, association.present
         ? association
         : (hasManualProxyPatch ? { present: true, value: '' } : association));
-      this.engine.profiles.set(id, next);
-      if (typeof this.engine.persist === 'function') await this.engine.persist();
+      if (typeof this.engine.saveProfile === 'function') {
+        await this.engine.saveProfile(next);
+      } else {
+        this.engine.profiles.set(id, next);
+        if (typeof this.engine.persist === 'function') await this.engine.persist();
+      }
+      this.engine.emit?.({ type: 'profiles', action: 'api-upsert', ids: [id] });
       const profile = (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id);
       return ok({
         profile_id: id,
@@ -1123,7 +1131,7 @@ class LocalApiServer {
         },
       });
       await this.engine.syncProfiles([next]);
-      if (typeof this.engine.persist === 'function') await this.engine.persist();
+      this.engine.emit?.({ type: 'profiles', action: 'api-upsert', ids: [id] });
       return ok({ profile_id: id, profile: (typeof this.engine.getProfile === 'function' ? this.engine.getProfile(id) : null) || this.engine.profiles?.get(id) || next });
     }
 

@@ -8,6 +8,7 @@ const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 const cdp = require('./cdp');
 const { mergeFlags, appendFlagValue, LIST_VALUE_FLAGS } = require('./automation/command-line-flags');
+const { DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS, DEFAULT_PROBE_TOTAL_TIMEOUT_MS } = require('./engine/proxy-probe-runner');
 const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
 let proxyForwarderModule = {};
@@ -705,10 +706,10 @@ function detectUaPlatform(ua) {
   if (!ua || typeof ua !== 'string') return null;
   const s = ua.toLowerCase();
   if (s.includes('windows nt') || s.includes('win64') || s.includes('wow64') || s.includes('windows')) return 'windows';
-  if (s.includes('macintosh') || s.includes('mac os x') || s.includes('macos')) return 'macos';
-  if (s.includes('android')) return 'android';
-  if (s.includes('linux') || s.includes('x11')) return 'linux';
   if (s.includes('iphone') || s.includes('ipad') || s.includes('cpu os')) return 'ios';
+  if (s.includes('android')) return 'android';
+  if (s.includes('macintosh') || s.includes('mac os x') || s.includes('macos')) return 'macos';
+  if (s.includes('linux') || s.includes('x11')) return 'linux';
   return null;
 }
 
@@ -791,7 +792,10 @@ function evaluateFingerprintDelivery(profile = {}, fingerprint = {}, liveProbe =
 
   if (expectedFamily && liveProbe.platform) {
     const liveFamily = normalizePlatformFamily(liveProbe.platform);
-    if (liveFamily && liveFamily !== expectedFamily) {
+    const androidPlatformMatches = expectedFamily === 'android'
+      && /^linux arm/i.test(String(expectedPlatform))
+      && String(liveProbe.platform).toLowerCase() === String(expectedPlatform).toLowerCase();
+    if (liveFamily && liveFamily !== expectedFamily && !androidPlatformMatches) {
       mismatches.push({
         field: 'platform',
         expected: expectedFamily,
@@ -840,6 +844,19 @@ function evaluateFingerprintDelivery(profile = {}, fingerprint = {}, liveProbe =
         actual: liveProbe.uaDataPlatform,
         message: "Client Hints 平台与 UA 不符：期望 " + uaOrConfigFamily + "，实际交付 " + liveProbe.uaDataPlatform,
       });
+    }
+  }
+
+  if (fingerprint?.mobile && fingerprint?.screen) {
+    for (const [field, expected, actual] of [
+      ['devicePixelRatio', fingerprint.screen.devicePixelRatio, liveProbe.devicePixelRatio],
+      ['screen.width', fingerprint.screen.width, liveProbe.screenWidth],
+      ['screen.height', fingerprint.screen.height, liveProbe.screenHeight],
+    ]) {
+      if (typeof expected === 'number' && typeof actual === 'number'
+        && Number.isFinite(expected) && Number.isFinite(actual) && Math.abs(expected - actual) > 0.01) {
+        mismatches.push({ field, expected, actual, message: `${field} 不符：期望 ${expected}，实际交付 ${actual}` });
+      }
     }
   }
 
@@ -7531,8 +7548,8 @@ class BrowserEngine {
     try {
       const result = await lookupProxyCountry(resolved.config, {
         force: true,
-        totalTimeoutMs: options.totalTimeoutMs || 6500,
-        attemptTimeoutMs: options.attemptTimeoutMs || 2200,
+        totalTimeoutMs: options.totalTimeoutMs || DEFAULT_PROBE_TOTAL_TIMEOUT_MS,
+        attemptTimeoutMs: options.attemptTimeoutMs || DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS,
         includeRisk: options.includeRisk === true,
         ipChannel: profile.proxyMeta?.ipChannel,
         // Cold cache + a rate-limited probe service: the profile's last known exit is a valid

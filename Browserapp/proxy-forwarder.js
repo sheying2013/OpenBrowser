@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const dns = require('dns');
 const net = require('net');
-const { runProxyProbes } = require('./engine/proxy-probe-runner');
+const { runProxyProbes, DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS, DEFAULT_PROBE_TOTAL_TIMEOUT_MS } = require('./engine/proxy-probe-runner');
 const { normalizeLatitude, normalizeLongitude } = require('./automation/input-validation');
 const tls = require('tls');
 
@@ -2206,8 +2206,8 @@ async function lookupProxyCountry(config, options = {}) {
       ? [withSignal(lookupProxyIfconfigMe), ...fallbackLookups]
       : [...fallbackLookups, withSignal(lookupProxyIfconfigMe)];
     const parts = await runProxyProbes(lookups, {
-      totalTimeoutMs: options.totalTimeoutMs || 6500,
-      attemptTimeoutMs: options.attemptTimeoutMs || 2200,
+      totalTimeoutMs: options.totalTimeoutMs || DEFAULT_PROBE_TOTAL_TIMEOUT_MS,
+      attemptTimeoutMs: options.attemptTimeoutMs || DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS,
       isLinkError: isProxyLinkError,
     });
 

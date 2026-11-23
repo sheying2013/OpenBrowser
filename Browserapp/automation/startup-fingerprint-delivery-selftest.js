@@ -40,6 +40,33 @@ async function check(name, fn) {
     assert.ok(res.mismatches.some((m) => m.field === "platform"));
   });
 
+  await check("1.1a: Android platform accepts the configured Linux ARM value but blocks desktop values", async () => {
+    const profile = { id: 'android', os: 'Android', privacy: {} };
+    const fingerprint = { platform: 'Linux armv8l' };
+    assert.strictEqual(evaluateFingerprintDelivery(profile, fingerprint, { platform: 'Linux armv8l' }).ok, true);
+    assert.strictEqual(evaluateFingerprintDelivery(profile, fingerprint, { platform: 'Win32' }).ok, false);
+    assert.strictEqual(evaluateFingerprintDelivery(profile, { platform: 'Win32' }, { platform: 'Win32' }).ok, false);
+    assert.strictEqual(evaluateFingerprintDelivery(profile, fingerprint, { platform: 'Linux x86_64' }).ok, false);
+  });
+
+  await check("1.1c: iOS UA with Mac OS X token is identified as iOS", async () => {
+    const ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 CriOS/148.0.0.0 Mobile/15E148 Safari/604.1';
+    assert.strictEqual(detectUaPlatform(ua), 'ios');
+    const result = evaluateFingerprintDelivery({ os: 'iOS', privacy: {} }, { platform: 'iPhone', userAgent: ua }, { platform: 'iPhone', userAgent: ua, uaDataPlatform: 'iOS' });
+    assert.strictEqual(result.ok, true);
+  });
+
+  await check("1.1b: mobile DPR and screen mismatches are blocked", async () => {
+    const profile = { id: 'android', os: 'Android', privacy: {} };
+    const fingerprint = { mobile: true, platform: 'Linux armv8l', screen: { width: 360, height: 800, devicePixelRatio: 3 } };
+    const valid = { platform: 'Linux armv8l', screenWidth: 360, screenHeight: 800, devicePixelRatio: 3 };
+    assert.strictEqual(evaluateFingerprintDelivery(profile, fingerprint, valid).ok, true);
+    const mismatch = evaluateFingerprintDelivery(profile, fingerprint, { ...valid, devicePixelRatio: 1, screenWidth: 1920 });
+    assert.strictEqual(mismatch.ok, false);
+    assert.ok(mismatch.mismatches.some((entry) => entry.field === 'devicePixelRatio'));
+    assert.ok(mismatch.mismatches.some((entry) => entry.field === 'screen.width'));
+  });
+
   await check("1.2: UA 平台段矛盾 - 配置 Windows UA 但探针交付 Macintosh UA 判定失败", async () => {
     const profile = {
       id: "p2",

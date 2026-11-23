@@ -1487,7 +1487,19 @@ function buildFingerprint(profile = {}, options = {}) {
   const seed = hashSeed(launchSeed ? `${stableIdentity}:${launchSeed}` : stableIdentity);
   const rnd = mulberry32(u32(seed, 0));
   const privacy = profile.privacy || {};
-  const fpIn = (privacy.fingerprint && typeof privacy.fingerprint === 'object' ? privacy.fingerprint : null) || (profile.fingerprint && typeof profile.fingerprint === 'object' ? profile.fingerprint : {});
+  const savedFingerprint = (privacy.fingerprint && typeof privacy.fingerprint === 'object' ? privacy.fingerprint : null) || (profile.fingerprint && typeof profile.fingerprint === 'object' ? profile.fingerprint : {});
+  const fpIn = { ...savedFingerprint };
+  const selectedOs = String(profile.os || '').trim().toLowerCase();
+  const savedPlatform = String(fpIn.platform || '').trim().toLowerCase();
+  const savedOs = String(fpIn.os || '').trim().toLowerCase();
+  const staleDesktopIdentity = ['android', 'ios'].includes(selectedOs)
+    && (/^(win|mac|linux x86)/.test(savedPlatform) || /^(win|mac|linux)/.test(savedOs)
+      || /windows nt|macintosh|x11;\s*linux/i.test(String(fpIn.userAgent || '')));
+  if (staleDesktopIdentity) {
+    for (const key of ['os', 'platform', 'userAgent', 'clientHints', 'architecture', 'platformVersion', 'ua_full_version', 'fullVersion', 'screenWidth', 'screenHeight', 'devicePixelRatio', 'webglVendor', 'webglRenderer']) {
+      delete fpIn[key];
+    }
+  }
 
   const rawCoresOverride = fpIn.cores ?? privacy.cores;
   const rawMemoryOverride = fpIn.memory ?? privacy.memory;
@@ -5920,46 +5932,6 @@ function buildInjectionScript(fp) {
       const noisePx = ((absMark % 97) - 48) * 0.00001;
       const noiseSize = ((absMark % 89) - 44) * 0.00001;
 
-      const rectListStates = new WeakMap();
-
-      const ensureRectListAccessor = (rectListProto, key, serve) => {
-        if (!rectListProto) return false;
-        const descriptor = Object.getOwnPropertyDescriptor(rectListProto, key);
-        if (!descriptor || typeof descriptor.get !== 'function') return false;
-        const nativeGet = descriptor.get;
-        Object.defineProperty(rectListProto, key, nativeAccessor(key, {
-          configurable: descriptor.configurable,
-          enumerable: descriptor.enumerable,
-          get() {
-            if (!this || (typeof this !== 'object' && typeof this !== 'function')) return nativeGet.call(this);
-            const state = rectListStates.get(this);
-            if (state) return serve(state);
-            return nativeGet.call(this);
-          },
-          set: descriptor.set,
-        }));
-        return true;
-      };
-
-      const ensureRectListMethod = (rectListProto, key, serve) => {
-        if (!rectListProto) return false;
-        const descriptor = Object.getOwnPropertyDescriptor(rectListProto, key);
-        if (!descriptor || typeof descriptor.value !== 'function') return false;
-        const nativeMethod = descriptor.value;
-        Object.defineProperty(rectListProto, key, {
-          configurable: descriptor.configurable,
-          enumerable: descriptor.enumerable,
-          writable: descriptor.writable,
-          value: nativeLike(function (...args) {
-            if (!this || (typeof this !== 'object' && typeof this !== 'function')) return nativeMethod.apply(this, args);
-            const state = rectListStates.get(this);
-            if (state) return serve(state, args);
-            return nativeMethod.apply(this, args);
-          }, nativeMethod),
-        });
-        return true;
-      };
-
       const patchedClientRectWindows = new WeakSet();
       const patchClientRectsForWindow = (targetWin) => {
         if (!targetWin || patchedClientRectWindows.has(targetWin)) return;
@@ -5988,33 +5960,6 @@ function buildInjectionScript(fp) {
         }
         try { patchedClientRectWindows.add(targetWin); } catch (_) {}
         const TargetDOMRect = targetWin.DOMRect || globalThis.DOMRect;
-        const targetDOMRectListProto = targetWin.DOMRectList ? targetWin.DOMRectList.prototype : null;
-
-        if (targetDOMRectListProto) {
-          ensureRectListAccessor(targetDOMRectListProto, 'length', (state) => state.length);
-          ensureRectListMethod(targetDOMRectListProto, 'item', (state, args) => {
-            const index = Math.trunc(Number(args[0]) || 0);
-            return index >= 0 && index < state.length ? state.rects[index] : null;
-          });
-          if (typeof Symbol !== 'undefined' && Symbol.iterator) {
-            ensureRectListMethod(targetDOMRectListProto, Symbol.iterator, (state) => state.rects[Symbol.iterator]());
-          }
-        }
-
-        const makeRectList = (rects) => {
-          const list = Object.create(targetDOMRectListProto || globalThis.DOMRectList?.prototype || Object.prototype);
-          const state = { length: rects.length, rects: rects.slice() };
-          rectListStates.set(list, state);
-          for (let i = 0; i < state.length; i += 1) {
-            Object.defineProperty(list, String(i), {
-              value: state.rects[i],
-              enumerable: true,
-              configurable: true,
-              writable: false,
-            });
-          }
-          return list;
-        };
 
         // A Range measures its commonAncestorContainer; an Element measures itself. Both must be
         // font-sanitised so a foreign family cannot leak host metrics through layout probes.
@@ -6051,17 +5996,18 @@ function buildInjectionScript(fp) {
               const list = original.apply(this, arguments);
               if (!list) return list;
               try {
-                const rects = [];
+                // Keep the browser's DOMRectList and its internal brand. A prototype-shaped object
+                // fails native length/item calls from another iframe and cannot reproduce WebIDL
+                // argument conversion. The DOMRects in the native list are writable snapshots.
                 for (let i = 0; i < list.length; i += 1) {
                   const rect = list[i];
-                  const width = rect.width === 0 ? 0 : Math.max(0, rect.width + noiseSize);
-                  const height = rect.height === 0 ? 0 : Math.max(0, rect.height + noiseSize);
-                  rects.push(TargetDOMRect && TargetDOMRect.fromRect
-                    ? TargetDOMRect.fromRect({ x: rect.x + noisePx, y: rect.y + noisePx, width, height })
-                    : rect);
+                  rect.x += noisePx;
+                  rect.y += noisePx;
+                  rect.width = rect.width === 0 ? 0 : Math.max(0, rect.width + noiseSize);
+                  rect.height = rect.height === 0 ? 0 : Math.max(0, rect.height + noiseSize);
                 }
-                return makeRectList(rects);
-              } catch (_) { return list; }
+              } catch (_) {}
+              return list;
             };
             return sanitizeElementFontScope(scopeTargetFor(this, isRange), run);
           });

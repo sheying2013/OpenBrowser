@@ -26,6 +26,8 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  PASS  ' + nam
   // Do not auto-bootstrap a real kernel in this offline test.
   engine.kernelBootstrapPromise = null;
 
+  const events = [];
+  engine.on((event) => events.push(event));
   const api = new LocalApiServer({ engine, apiKey: 'test-key-123', allowedOrigins: [] });
   // route() reads this._req/_res internally? No — route(method, pathname, input, req). Drive directly.
   const route = (method, pathname, input) => api.route(method, pathname, input, { headers: {} });
@@ -39,6 +41,12 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  PASS  ' + nam
   ok('name preserved', engine.profiles.get(id1).name === 'Env One');
   ok('proxy Direct', engine.profiles.get(id1).proxy === 'Direct');
   ok('number starts at 1', engine.profiles.get(id1).number === 1);
+  ok('create emits a profile refresh event', events.some((event) => event.type === 'profiles' && event.action === 'api-upsert' && event.ids.includes(id1)));
+  events.length = 0;
+  const updated = await route('POST', '/api/profiles/update', { id: id1, name: 'Env One Updated' });
+  ok('update persists the changed profile', updated.code === 0 && engine.getProfile(id1).name === 'Env One Updated');
+  ok('name updates the displayed title', engine.getProfile(id1).title === 'Env One Updated');
+  ok('update emits a profile refresh event', events.some((event) => event.type === 'profiles' && event.action === 'api-upsert' && event.ids.includes(id1)));
 
   // ---- create 2: client-style proxy_config + privacy ----
   r = await route('POST', '/api/profiles/create', {

@@ -221,6 +221,22 @@ try {
     }).toString() + ')()');
     assert.equal(value.saved, 'ja-JP'); assert.equal(value.reopened, 'ja-JP');
   });
+  check('switching to Android clears stale desktop identity overrides', () => {
+    const value = run(() => {
+      const previous = ui.profiles[0];
+      ui.profiles[0] = normalizeProfileSettings({ ...previous, os: 'Windows', privacy: { ...previous.privacy, fingerprint: { platform: 'Win32', os: 'windows', screenWidth: 1920, devicePixelRatio: 1, canvasId: 42 } } });
+      openProfileEditor(ui.profiles[0].id);
+      editorSet('#editor-os', 'Android');
+      const draft = editorDraft(false);
+      ui.profiles[0] = previous;
+      return { os: draft.os, fingerprint: draft.privacy.fingerprint };
+    });
+    assert.equal(value.os, 'Android');
+    assert.equal(value.fingerprint.platform, undefined);
+    assert.equal(value.fingerprint.screenWidth, undefined);
+    assert.equal(value.fingerprint.devicePixelRatio, undefined);
+    assert.equal(value.fingerprint.canvasId, 42);
+  });
   for (const theme of evaluate('Object.keys(UI_THEMES)')) {
     check(theme + ': editor selections and compound fields survive theme switch', () => {
       evaluate('document.documentElement.dataset.uiTheme=' + JSON.stringify(theme));
@@ -325,6 +341,34 @@ try {
     assert.equal(value.empty,true);assert.equal(value.create,true);assert.equal(value.clear,true);assert.equal(value.selected,false);assert.equal(value.table,true);assert.equal(value.scroll,0);assert.ok(value.hint && value.hint!=='profiles.emptyHint');
   });
   cli('screenshot',path.join(output,'profiles-empty.png'));
+  check('API profile events refresh create and update without restarting', () => {
+    const value = run(async () => {
+      window.__uiAuditExternalProfiles = { 'external-profile': { id: 'external-profile', title: 'API Created', number: 42, networkMode: 'direct', proxy: 'Direct' } };
+      const emit = async () => Promise.all(window.__uiAuditEventHandlers.map((handler) => handler({ type: 'profiles', action: 'api-upsert', ids: ['external-profile'] })));
+      await emit();
+      const created = ui.profiles.find((profile) => profile.id === 'external-profile')?.title;
+      window.__uiAuditExternalProfiles['external-profile'].title = 'API Updated';
+      await emit();
+      const updated = ui.profiles.find((profile) => profile.id === 'external-profile')?.title;
+      delete window.__uiAuditExternalProfiles;
+      return { created, updated, count: ui.profiles.filter((profile) => profile.id === 'external-profile').length };
+    });
+    assert.deepEqual(value, { created: 'API Created', updated: 'API Updated', count: 1 });
+  });
+  check('late API refresh does not restore a deleted profile', () => {
+    const value = run(async () => {
+      let resolveProfile;
+      window.__uiAuditGetProfile = () => new Promise((resolve) => { resolveProfile = resolve; });
+      const emit = (event) => Promise.all(window.__uiAuditEventHandlers.map((handler) => handler(event)));
+      const refresh = emit({ type: 'profiles', action: 'api-upsert', ids: ['race-profile'] });
+      await emit({ type: 'profiles', action: 'delete', ids: ['race-profile'] });
+      resolveProfile({ id: 'race-profile', title: 'Deleted', number: 88 });
+      await refresh;
+      delete window.__uiAuditGetProfile;
+      return ui.profiles.some((profile) => profile.id === 'race-profile');
+    });
+    assert.equal(value, false);
+  });
   run(()=>{ui.profiles=window.__profileListAudit.profiles;engineProfiles=window.__profileListAudit.engines;selectedProfiles.clear();for(const id of window.__profileListAudit.selected)selectedProfiles.add(id);$('#profile-search').value='';activeGroupFilter='all';renderProfiles();delete window.__profileListAudit;});
   check('no page exceptions or renderer Error log', () => {
     const state = evaluate('({errors:window.__uiAuditErrors,logs:ui.logs.filter(x=>x.module==="Error"),unexpectedCalls:window.__uiAuditCalls})');

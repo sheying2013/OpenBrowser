@@ -2,9 +2,13 @@
 const assert = require('node:assert/strict');
 const net = require('node:net');
 const { performance } = require('node:perf_hooks');
-const { runProxyProbes } = require('../engine/proxy-probe-runner');
+const { runProxyProbes, DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS, DEFAULT_PROBE_TOTAL_TIMEOUT_MS } = require('../engine/proxy-probe-runner');
 const { parseProxy, lookupProxyCountry, clearProbeCache } = require('../proxy-forwarder');
 (async () => {
+  assert.equal(DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS, 10000);
+  assert.equal(DEFAULT_PROBE_TOTAL_TIMEOUT_MS, 20000);
+  const delayed = await runProxyProbes([() => new Promise(resolve => setTimeout(() => resolve({ ip: '192.0.2.1', countryCode: 'US' }), 2300))]);
+  assert.equal(delayed[0].countryCode, 'US', 'a probe slower than the old per-attempt budget must succeed');
   let cancelled = false;
   const started = performance.now();
   const fast = await runProxyProbes([

@@ -2244,6 +2244,12 @@ function editorDraft(strict = true) {
       })(),
     },
   };
+  const nextOs = $('#editor-os')?.value || current.os || 'Windows';
+  if (current.os && String(current.os).toLowerCase() !== String(nextOs).toLowerCase()) {
+    for (const key of ['os', 'platform', 'userAgent', 'clientHints', 'architecture', 'platformVersion', 'ua_full_version', 'fullVersion', 'screenWidth', 'screenHeight', 'devicePixelRatio', 'webglVendor', 'webglRenderer']) {
+      delete privacy.fingerprint[key];
+    }
+  }
   if (strict && privacy.timezoneMode === 'custom' && privacy.timezone) {
     try { new Intl.DateTimeFormat('en-US', { timeZone: privacy.timezone }).format(); }
     catch (_) { throw new Error(tx('自定义时区无效，请使用 Asia/Shanghai 这类 IANA 时区名称')); }
@@ -7016,6 +7022,7 @@ $('#choose-profile-storage').addEventListener('click', chooseProfileStorage);
 $('#reset-profile-storage').addEventListener('click', resetProfileStorage);
 $('#open-profile-storage').addEventListener('click', async () => { try { await window.ops.openProfileStorage(); } catch (error) { toast(error.message); log('Error', error.message); } });
 
+const externalProfileEventVersions = new Map();
 window.ops.onEvent(async (value) => {
   if (value?.type === 'app-update-progress') {
     appUpdateState.progress = value;
@@ -7072,22 +7079,41 @@ window.ops.onEvent(async (value) => {
       }
     }
   }
+  if (value.type === 'profiles' && value.action === 'api-upsert' && Array.isArray(value.ids)) {
+    for (const id of value.ids) {
+      const version = (externalProfileEventVersions.get(id) || 0) + 1;
+      externalProfileEventVersions.set(id, version);
+      try {
+        const profile = await window.ops.getProfile(id);
+        if (!profile || externalProfileEventVersions.get(id) !== version) continue;
+        const index = ui.profiles.findIndex((item) => item.id === id);
+        const normalized = normalizeProfileSettings(profile);
+        if (index < 0) ui.profiles.push(normalized);
+        else ui.profiles[index] = normalized;
+      } catch (error) {
+        console.warn('[ProfileSync] Failed to refresh profile:', error.message);
+      }
+    }
+    save();
+    invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
+    invalidateAndRefreshProfiles();
+    scheduleStatusRefresh();
+  }
   if (value.type === 'profiles' && value.action === 'delete' && Array.isArray(value.ids) && value.ids.length) {
     const deletedSet = new Set(value.ids);
     const prevLen = ui.profiles.length;
     ui.profiles = ui.profiles.filter((item) => !deletedSet.has(item.id));
     for (const id of value.ids) {
+      externalProfileEventVersions.set(id, (externalProfileEventVersions.get(id) || 0) + 1);
       selectedProfiles.delete(id);
       selectedSessions.delete(id);
     }
     if (!ui.profiles.length) ui.nextProfileNumber = 1;
-    if (ui.profiles.length !== prevLen) {
-      save();
-      invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
-      scheduleStatusRefresh();
-      scheduleSessionRefresh();
-      scheduleRenderProfiles();
-    }
+    if (ui.profiles.length !== prevLen) save();
+    invalidateViewCache(['profiles', 'groups', 'sync', 'extensions', 'proxies']);
+    invalidateAndRefreshProfiles();
+    scheduleStatusRefresh();
+    scheduleSessionRefresh();
   }
   if (value.type === 'extensions') await refreshExtensions();
   if (value.type === 'platform-preflight' && Array.isArray(value.warnings)) {

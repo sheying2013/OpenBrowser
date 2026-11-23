@@ -1,6 +1,9 @@
 'use strict';
 
-async function runProxyProbes(tasks, { totalTimeoutMs = 6500, attemptTimeoutMs = 2200, isLinkError = () => false } = {}) {
+const DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS = 10000;
+const DEFAULT_PROBE_TOTAL_TIMEOUT_MS = 20000;
+
+async function runProxyProbes(tasks, { totalTimeoutMs = DEFAULT_PROBE_TOTAL_TIMEOUT_MS, attemptTimeoutMs = DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS, isLinkError = () => false } = {}) {
   const deadline = Date.now() + totalTimeoutMs;
   const values = [];
   const errors = [];
@@ -29,4 +32,4 @@ async function runProxyProbes(tasks, { totalTimeoutMs = 6500, attemptTimeoutMs =
   return values;
 }
 
-module.exports = { runProxyProbes };
+module.exports = { runProxyProbes, DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS, DEFAULT_PROBE_TOTAL_TIMEOUT_MS };

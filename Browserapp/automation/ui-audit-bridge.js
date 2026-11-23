@@ -2,10 +2,12 @@
 // Test-only Electron IPC substitute. No production accounts, kernels or network requests.
 window.__uiAuditErrors = [];
 window.__uiAuditCalls = [];
+window.__uiAuditEventHandlers = [];
 window.addEventListener('error', (event) => window.__uiAuditErrors.push(event.message));
 window.addEventListener('unhandledrejection', (event) => window.__uiAuditErrors.push(String(event.reason?.message || event.reason)));
 const bridge = {
-  onEvent: () => {},
+  onEvent: (handler) => { window.__uiAuditEventHandlers.push(handler); },
+  getProfile: async (id) => window.__uiAuditGetProfile ? window.__uiAuditGetProfile(id) : (window.__uiAuditExternalProfiles?.[id] || null),
   getInfo: async () => ({ platform: 'darwin', appVersion: '1.0.24', browsers: [], profileRoot: 'UI-AUDIT-FIXTURE' }),
   getSyncState: async () => ({ active: false, selected: [] }),
   setSyncSettings: async () => ({}),

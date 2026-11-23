@@ -177,6 +177,18 @@ if (!isMutateMode) {
     && mobileAndroid.touch === true
     && mobileAndroid.consistency.ok === true);
 
+  const legacyOverrides = { platform: 'Win32', os: 'windows', screenWidth: 1920, screenHeight: 1080, devicePixelRatio: 1, canvasId: 42 };
+  const legacyMobile = buildFingerprint({ id: 'mobile-legacy', os: 'Android', privacy: { fingerprint: legacyOverrides } });
+  ok('existing Android profile ignores conflicting desktop identity overrides', legacyMobile.platform === 'Linux armv8l'
+    && legacyMobile.screen.width === legacyMobile.mobileDevice.screen.width
+    && legacyMobile.screen.height === legacyMobile.mobileDevice.screen.height
+    && legacyMobile.screen.devicePixelRatio === legacyMobile.mobileDevice.dpr
+    && legacyOverrides.platform === 'Win32' && legacyOverrides.canvasId === 42);
+
+  const legacyUaMobile = buildFingerprint({ id: 'mobile-legacy-ua', os: 'Android', privacy: { fingerprint: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/148.0.0.0', devicePixelRatio: 1 } } });
+  ok('existing Android profile ignores stale desktop UA and DPR', /Android/.test(legacyUaMobile.userAgent)
+    && legacyUaMobile.screen.devicePixelRatio === legacyUaMobile.mobileDevice.dpr);
+
   const mobileIos = buildFingerprint({
     id: "mobile-selftest-ios", kernelVersion: "148.0.7778.165", os: "iOS",
     canvas: "noise", webgl: "noise", privacy: {},
