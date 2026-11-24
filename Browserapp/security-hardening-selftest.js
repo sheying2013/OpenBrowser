@@ -91,7 +91,11 @@ function main() {
     && (rpaSrc.includes('resolveSafeRpaPath(filePath)') || rpaSrc.includes('resolveSpreadsheetPath')),
     'useExcel sandboxed'
   );
-  assert.ok(rpaSrc.includes("if (type === 'uploadattachment')") && rpaSrc.includes('resolveSafeRpaPath(filePath)'), 'uploadAttachment sandboxed');
+  assert.ok(
+    rpaSrc.includes("if (type === 'uploadattachment')")
+    && /resolveSafeRpaPath\(filePath(?:\s*,\s*\{[^}]*outputRoot[^}]*\})?\)/.test(rpaSrc),
+    'uploadAttachment sandboxed'
+  );
 
   // Runtime sandbox check via re-require internals is hard; unit-test helper by eval of function source
   // Load rpa-engine and exercise through temporary require of path logic:

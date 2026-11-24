@@ -221,15 +221,21 @@ const keepAlive = setInterval(() => {}, 250);
       assert.ok(/require\('\.\/automation\/object-utils'\)/.test(source), 'deepEqual is not imported');
       assert.ok(/shouldWrite: \(\) => persistedSettingsSnapshot === null/.test(source), 'the skip predicate is missing');
       assert.ok(/deepEqual\(localSettingsCache, persistedSettingsSnapshot\)/.test(source), 'the predicate does not compare the cache');
-      assert.ok(/persistedSettingsSnapshot = JSON\.parse\(JSON\.stringify\(localSettingsCache\)\)/.test(source),
-        'the snapshot is not refreshed after a successful write');
+      assert.ok(/const snapshot = JSON\.parse\(JSON\.stringify\(localSettingsCache\)\);/.test(source),
+        'the write does not take a cache snapshot up front');
+      assert.ok(/JSON\.stringify\(\{ version: 2, \.\.\.snapshot \}/.test(source),
+        'the serialized payload is not built from the same snapshot');
+      assert.ok(/persistedSettingsSnapshot = snapshot;/.test(source),
+        'the snapshot is not refreshed from the value that was actually written');
       const body = source.match(/async function writeLocalSettingsFile\(\) \{[\s\S]*?\n\}/);
       assert.ok(body && body[0].includes('persistedSettingsSnapshot ='), 'the snapshot must be set only by the writer');
     });
 
-    check('the file write itself is unchanged in substance', () => {
+    check('the file write replaces atomically without deleting the target', () => {
       assert.ok(/const temporary = localSettingsFile \+ '\.tmp';/.test(source), 'temp-file write is gone');
-      assert.ok(/await fsp\.rename\(temporary, localSettingsFile\);/.test(source), 'atomic rename is gone');
+      assert.ok(/await renameReplacing\(temporary, localSettingsFile\);/.test(source), 'atomic rename is gone');
+      const body = source.match(/async function writeLocalSettingsFile\(\) \{[\s\S]*?\n\}/);
+      assert.ok(body && !/fsp\.rm\(localSettingsFile/.test(body[0]), 'the live settings file must never be removed before rename');
     });
   }
 

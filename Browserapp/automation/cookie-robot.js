@@ -291,7 +291,9 @@ class CookieRobot {
     this.totalPagesVisited = 0;
   }
 
-  handlePageDisconnect(err) {
+  handlePageDisconnect(err, connection = null) {
+    // Only the connection currently published as pageConnection may tear down the session.
+    if (connection && connection !== this.pageConnection) return;
     if (this.pageConnection) {
       try { this.pageConnection.close(); } catch (_) {}
       this.pageConnection = null;
@@ -431,7 +433,7 @@ class CookieRobot {
     const connection = await cdp.connect(tab.webSocketDebuggerUrl, {
       timeout: 8000,
       onEvent: (event) => this.handlePageEvent(event),
-      onDisconnect: (err) => this.handlePageDisconnect(err),
+      onDisconnect: (err, conn) => this.handlePageDisconnect(err, conn),
     });
     this.pageConnection = connection;
 
@@ -679,13 +681,16 @@ class CookieRobot {
         newConn = await cdp.connect(newTab.webSocketDebuggerUrl, {
           timeout: 8000,
           onEvent: (event) => this.handlePageEvent(event),
-          onDisconnect: (err) => this.handlePageDisconnect(err),
+          onDisconnect: (err, conn) => this.handlePageDisconnect(err, conn),
         });
         await newConn.command('Page.enable', {}, { timeout: 3000 });
         await newConn.command('Network.enable', {}, { timeout: 3000 });
         await newConn.command('DOM.enable', {}, { timeout: 3000 });
       } catch (connectErr) {
-        // Connect failed: do not close old tab; recover session if needed
+        // Close the half-initialised replacement; the healthy current connection is untouched.
+        if (newConn) {
+          try { newConn.close(); } catch (_) {}
+        }
         if (!this.pageConnection || this.pageConnection.closed) {
           await this.acquirePageSession();
         }
@@ -869,6 +874,8 @@ class CookieRobot {
     const stopPromise = new Promise((_, reject) => {
       stopReject = reject;
     });
+    // stop() can reject before Promise.race subscribes; this keeps that from surfacing as unhandled.
+    stopPromise.catch(() => {});
     this._currentNavStopReject = stopReject;
 
     try {

@@ -20,9 +20,8 @@ const { resolveApiKey, apiKeyFileCandidates } = require('./api-key');
 const { readDiscoveryPort } = require('./local-api-server');
 
 function resolveMcpPort(userDataPath = '') {
-  const envVal = process.env.OPENBROWSER_API_PORT !== undefined && String(process.env.OPENBROWSER_API_PORT).trim() !== ''
-    ? process.env.OPENBROWSER_API_PORT
-    : process.env.PORT;
+  // Only the OpenBrowser-specific variable may override discovery; a generic PORT would aim request() and its API key at an unrelated local service.
+  const envVal = process.env.OPENBROWSER_API_PORT;
   if (envVal !== undefined && String(envVal).trim() !== '') {
     const parsed = Number(envVal);
     if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) {

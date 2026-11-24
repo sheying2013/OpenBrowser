@@ -2251,7 +2251,8 @@ function buildInjectionScript(fp) {
     languages: fp.languages,
     timezone: fp.timezone || fp.dynamicConfig?.timezone || null,
     hardwareConcurrency: fp.hardwareConcurrency,
-    deviceMemory: Math.min(8, Math.max(1, Number(fp.deviceMemory) || 8)),
+    // Already normalised to a spec-legal step by buildFingerprint; null means "leave the host value".
+    deviceMemory: fp.deviceMemory,
     screen: fp.screen,
     os: fp.uaProfile?.os || (fp.mobile ? 'android' : 'windows'),
     webgl: {
@@ -7541,6 +7542,8 @@ function buildWorkerInjectionScript(fp) {
   const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     platform: fp.platform,
+    os: fp.uaProfile?.os || (fp.mobile ? 'android' : 'windows'),
+    mobile: Boolean(fp.mobile),
     userAgent: fp.userAgent,
     appVersion: fp.uaProfile?.appVersion || String(fp.userAgent || '').replace(/^Mozilla\//, ''),
     vendor: fp.vendor || fp.uaProfile?.vendor || 'Google Inc.',
@@ -7548,7 +7551,7 @@ function buildWorkerInjectionScript(fp) {
     languages: fp.languages,
     timezone: fp.timezone || fp.dynamicConfig?.timezone || null,
     hardwareConcurrency: fp.hardwareConcurrency,
-    deviceMemory: Math.min(8, Math.max(1, Number(fp.deviceMemory) || 8)),
+    deviceMemory: fp.deviceMemory,
     webgl: {
       mode: fp.webgl?.mode,
       metaMode: fp.webgl?.metaMode || 'noise',
@@ -8005,7 +8008,7 @@ function buildWorkerInjectionScript(fp) {
       // Only a phone profile can reach the page-side replacement path. Desktop profiles keep the
       // native object and only have its prototype members rewritten.
       try {
-        const pageNavProto = MOBILE ? globalThis.Navigator?.prototype : null;
+        const pageNavProto = CFG.mobile ? globalThis.Navigator?.prototype : null;
         if (pageNavProto) {
           if ('userAgentData' in pageNavProto) {
             Object.defineProperty(pageNavProto, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => uaData }));
@@ -9053,13 +9056,15 @@ function buildWorkerInjectionScript(fp) {
   if (typeof StorageManager !== 'undefined' && StorageManager.prototype && StorageManager.prototype.estimate) {
     try {
       const origEstimate = StorageManager.prototype.estimate;
-      const isMob = Boolean(CFG.mobile || isIosPersona || isAndroidPersona);
+      const osName = String(CFG.os || '').toLowerCase();
+      // Scope note: isIosPersona / isAndroidPersona live in other blocks, so decide from CFG here.
+      const isMob = Boolean(CFG.mobile || osName === 'android' || osName === 'ios' || (CFG.platform && /android|iphone|ipad/i.test(String(CFG.platform))));
       const mem = Number(CFG.deviceMemory) || 8;
       const personaQuota = isMob
         ? (mem >= 8 ? 16106127360 : 10737418240)
         : (mem >= 8 ? 64424509440 : 32212254720);
 
-      const patchedEstimate = function estimate() {
+      const patchedEstimate = nativeLike(function estimate() {
         if (!this || !(this instanceof StorageManager)) {
           return Promise.reject(new TypeError("Illegal invocation"));
         }
@@ -9070,8 +9075,7 @@ function buildWorkerInjectionScript(fp) {
             usageDetails: res ? (res.usageDetails || {}) : {},
           };
         });
-      };
-      nativeLike(patchedEstimate, origEstimate, "estimate", 0);
+      }, origEstimate, "estimate", 0);
       Object.defineProperty(StorageManager.prototype, "estimate", {
         configurable: true,
         enumerable: true,

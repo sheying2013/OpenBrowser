@@ -279,6 +279,115 @@ asyncCheck('cleanupOwnedTabs strictly protects user tabs and the last browser ta
   }
 });
 
+// A disconnect from an old handover connection must not tear down the live session.
+check('handlePageDisconnect ignores a stale connection source', () => {
+  const robot = new CookieRobot({ profileId: 'p' });
+  const events = [];
+  robot.emitFn = (e) => events.push(e);
+
+  const oldConn = { closed: false, close() { this.closed = true; } };
+  const newConn = { closed: false, close() { this.closed = true; } };
+  robot.pageConnection = newConn;
+
+  robot.handlePageDisconnect(new Error('old tab gone'), oldConn);
+
+  assert.strictEqual(oldConn.closed, false, 'the stale connection is not closed by us');
+  assert.strictEqual(newConn.closed, false, 'the live connection must survive');
+  assert.strictEqual(robot.pageConnection, newConn, 'pageConnection must be unchanged');
+  assert.strictEqual(robot.aborted, false, 'a stale disconnect must not abort the run');
+  assert.strictEqual(events.length, 0, 'no robot-disconnected event for a stale source');
+
+  // The authoritative connection still tears down normally.
+  robot.handlePageDisconnect(new Error('live tab gone'), newConn);
+  assert.strictEqual(robot.aborted, true);
+  assert.strictEqual(robot.pageConnection, null);
+  assert.strictEqual(events.filter((e) => e.type === 'robot-disconnected').length, 1);
+});
+
+// stop() during a pending navigate must cancel it without an unhandled rejection.
+async function navCancelCheck() {
+  const robot = new CookieRobot({ profileId: 'p' });
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+
+  let resolveNav;
+  robot.pageConnection = {
+    closed: false,
+    close() { this.closed = true; },
+    command(method) {
+      if (method === 'Page.navigate') return new Promise((r) => { resolveNav = r; });
+      return Promise.resolve({});
+    },
+  };
+
+  try {
+    const navPromise = robot.navigateTo('https://example.com/', 5000);
+    // Let navigateTo reach the pending command before stopping.
+    await sleep(10);
+    robot.stop().catch(() => {});
+    // Give the rejection tracker a full tick to surface anything missed.
+    await sleep(20);
+    assert.deepStrictEqual(unhandled, [], 'stop during a pending navigate must not raise an unhandled rejection');
+    // Resolve the command so the race can observe the cancellation.
+    resolveNav({});
+    let error = null;
+    try { await navPromise; } catch (e) { error = e; }
+    assert.ok(error, 'navigation should be cancelled, not resolved');
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+}
+
+// A failed Page.enable on the replacement must not close the healthy old connection.
+async function handoverCheck() {
+  const robot = new CookieRobot({ port: 9, profileId: 'p' });
+  const oldConn = { closed: false, close() { this.closed = true; }, command: async () => ({}) };
+  robot.pageConnection = oldConn;
+  robot.activeTabId = 'old-tab';
+  robot.ownedTabIds.add('old-tab');
+
+  const newConn = {
+    closed: false,
+    close() { this.closed = true; },
+    async command(method) {
+      if (method === 'Page.enable') throw new Error('Page.enable failed');
+      return {};
+    },
+  };
+
+  const origTabs = cdp.tabs;
+  const origConnect = cdp.connect;
+  const origBrowserSocket = cdp.browserSocket;
+  const origEnsureDomReady = robot.ensureDomReady;
+  const origPerformClick = robot.performClick;
+  // The popup appears only after the beforeTabs snapshot, matching a real target=_blank.
+  let tabCalls = 0;
+  cdp.tabs = async () => {
+    tabCalls += 1;
+    return tabCalls === 1 ? [{ id: 'old-tab' }] : [{ id: 'old-tab' }, { id: 'new-tab', webSocketDebuggerUrl: 'ws://mock/new' }];
+  };
+  // Use the existing browserConnection as the metadata source instead of a second connect.
+  cdp.browserSocket = async () => null;
+  robot.browserConnection = { command: async () => ({ targetInfos: [{ openerId: 'old-tab', targetId: 'new-tab' }] }) };
+  cdp.connect = async () => newConn;
+  robot.ensureDomReady = async () => {};
+  robot.performClick = async () => {};
+  try {
+    const followed = await robot.performClickAndFollow(10, 10);
+    assert.strictEqual(followed, false, 'handover reports failure');
+    assert.strictEqual(newConn.closed, true, 'the half-initialised replacement is closed');
+    assert.strictEqual(robot.pageConnection, oldConn, 'the healthy old connection is retained');
+    assert.strictEqual(oldConn.closed, false, 'the old connection was never closed');
+  } finally {
+    robot.ensureDomReady = origEnsureDomReady;
+    robot.performClick = origPerformClick;
+    cdp.tabs = origTabs;
+    cdp.connect = origConnect;
+    cdp.browserSocket = origBrowserSocket;
+  }
+}
+
 // =========================================================================
 // SECTION 2: LIVE KERNEL + LOOPBACK HTTP SERVER E2E INTEGRATION
 // =========================================================================
@@ -613,7 +722,8 @@ async function runLiveKernelSuite() {
 
       const startTime = Date.now();
       const startPromise = robot.start();
-      await sleep(300);
+      // Wait for activeTabId instead of a fixed sleep, which can sample too early on a busy host.
+      for (let i = 0; i < 100 && !robot.activeTabId; i += 1) await sleep(50);
       assert.strictEqual(robot.isRunning(), true);
 
       // Close the robot dedicated tab externally
@@ -719,6 +829,9 @@ async function runLiveKernelSuite() {
 
 async function main() {
   console.log('Running CookieRobot Self-Tests...');
+  // Run stub-installing checks before anything that shares those cdp stubs.
+  await asyncCheck('navigateTo cancels via stop() before Page.navigate resolves', navCancelCheck);
+  await asyncCheck('a failed target=_blank handover keeps the healthy old connection', handoverCheck);
   await runLiveKernelSuite();
   const failed = results.filter((r) => !r.ok);
   console.log(`\nCookieRobot Selftest Summary: ${results.length - failed.length}/${results.length} PASSED`);

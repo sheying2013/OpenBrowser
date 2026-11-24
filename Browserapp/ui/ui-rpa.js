@@ -909,7 +909,6 @@ document.getElementById('rpa-store-chips')?.addEventListener('click', (event) =>
 });
 
 // fix nav: when clicking rpa child, switch view with tab
-const _origNavHandler = null;
 document.addEventListener('click', (event) => {
   const nav = event.target.closest('.nav[data-view]');
   if (!nav) return;

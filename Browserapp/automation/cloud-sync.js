@@ -55,8 +55,21 @@ function encryptPayload(plainBuf, passphrase) {
   };
 }
 
+const OBE1_MAGIC = 'OBE1';
+// 4 magic + 16 salt + 12 iv + 16 tag
+const OBE1_HEADER_BYTES = 48;
+
+function hasObe1Header(buf) {
+  return buf.length >= 4 && buf.subarray(0, 4).toString() === OBE1_MAGIC;
+}
+
 function decryptPayload(buf, passphrase) {
-  if (buf.length >= 4 && buf.subarray(0, 4).toString() === 'OBE1') {
+  if (hasObe1Header(buf)) {
+    if (buf.length < OBE1_HEADER_BYTES) {
+      const error = new Error('备份加密头不完整，文件可能已截断');
+      error.code = 'BACKUP_TRUNCATED';
+      throw error;
+    }
     if (!passphrase) throw new Error('备份已加密，请填写恢复密码');
     const salt = buf.subarray(4, 20);
     const iv = buf.subarray(20, 32);
@@ -65,7 +78,15 @@ function decryptPayload(buf, passphrase) {
     const key = crypto.scryptSync(String(passphrase), salt, 32);
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
     decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(enc), decipher.final()]);
+    try {
+      return Buffer.concat([decipher.update(enc), decipher.final()]);
+    } catch (cause) {
+      // GCM auth failure: wrong passphrase or tampered/truncated ciphertext.
+      const error = new Error('备份解密失败：恢复密码不正确，或备份已损坏/被篡改');
+      error.code = 'BACKUP_DECRYPT_FAILED';
+      error.cause = cause;
+      throw error;
+    }
   }
   return buf;
 }
@@ -435,6 +456,12 @@ async function buildBackupPackage({
 async function parseBackupPackage(buffer, passphrase = '') {
   const raw = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   if (raw.length > MAX_BACKUP_PACKAGE_BYTES) throw new Error('备份包超过 100 MB 安全限制');
+  // A configured passphrase means encryption was promised, so plaintext must not downgrade it.
+  if (passphrase && !hasObe1Header(raw)) {
+    const error = new Error('已设置恢复密码，但备份包未加密（缺少 OBE1 头）；请提供加密备份或清空恢复密码');
+    error.code = 'BACKUP_PLAINTEXT_REJECTED';
+    throw error;
+  }
   const decrypted = decryptPayload(raw, passphrase);
   if (decrypted.length > MAX_BACKUP_PACKAGE_BYTES) throw new Error('备份包解密后超过安全限制');
   let jsonBuf;

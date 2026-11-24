@@ -22,7 +22,6 @@ const {
 const { TaskScheduler } = require('./task-scheduler');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const OUTPUT_DIRECTORY = path.join(process.cwd(), 'rpa-output');
 // Launching a browser environment is heavy (disk, CPU, memory). A plan that
 // covers many profiles must not boot every kernel at the same instant, so the
 // launches go through a small queue. Steps themselves still interleave.
@@ -112,17 +111,17 @@ function isPathInsideRoot(candidate, root) {
 
 /**
  * Resolve a user-supplied local file path for RPA steps.
- * Absolute paths must stay under OUTPUT_DIRECTORY (or optional extraRoots).
- * Relative paths resolve under OUTPUT_DIRECTORY only.
+ * Absolute paths must stay under outputRoot (or optional extraRoots).
+ * Relative paths resolve under outputRoot only.
  */
-function resolveSafeRpaPath(filePath, { extraRoots = [], mustExist = false } = {}) {
+function resolveSafeRpaPath(filePath, { extraRoots = [], outputRoot = path.join(process.cwd(), 'rpa-output'), mustExist = false } = {}) {
   const raw = String(filePath || '').trim();
   if (!raw) throw new Error('file path required');
   if (raw.includes('\0')) throw new Error('invalid file path');
-  const roots = [OUTPUT_DIRECTORY, ...extraRoots].map((item) => path.resolve(item));
+  const roots = [outputRoot, ...extraRoots].map((item) => path.resolve(item));
   const resolved = path.isAbsolute(raw)
     ? path.resolve(raw)
-    : path.resolve(OUTPUT_DIRECTORY, raw);
+    : path.resolve(outputRoot, raw);
   if (!roots.some((root) => isPathInsideRoot(resolved, root))) {
     throw new Error('RPA file path must be inside the RPA output directory');
   }
@@ -332,6 +331,7 @@ class RpaEngine {
     this.engine = engine;
     this.store = store;
     this.emit = emit;
+    this.outputDirectory = path.resolve(userDataPath || process.cwd(), 'rpa-output');
     this.rpaLogPath = rpaLogPath || defaultRpaLogPath(userDataPath);
     this.running = new Map();
     this.profileStarts = new Map();
@@ -1171,7 +1171,7 @@ class RpaEngine {
     if (type === 'importtext') {
       const filePath = text(params.path || params.filePath || params.file);
       if (!filePath) throw new Error('importText requires a file path');
-      const resolved = resolveSafeRpaPath(filePath);
+      const resolved = resolveSafeRpaPath(filePath, { outputRoot: this.outputDirectory });
       const raw = await fs.readFile(resolved, 'utf8');
       const lines = raw.split(/\r?\n/).filter((line) => line.length > 0);
       variables[params.variable || 'textLines'] = lines;
@@ -1249,7 +1249,7 @@ class RpaEngine {
       const selector = text(params.selector);
       const filePath = text(params.url || params.path);
       if (!selector || !filePath) throw new Error('uploadAttachment requires selector and local file path');
-      const safePath = resolveSafeRpaPath(filePath);
+      const safePath = resolveSafeRpaPath(filePath, { outputRoot: this.outputDirectory });
       await fs.access(safePath);
       if (String(params.selectorRadio || 'CSS').toUpperCase().startsWith('X')) {
         throw new Error('uploadAttachment currently requires a CSS selector');
@@ -1536,7 +1536,7 @@ class RpaEngine {
     if (path.isAbsolute(raw)) {
       candidates.push(path.resolve(raw));
     } else {
-      candidates.push(path.resolve(OUTPUT_DIRECTORY, raw));
+      candidates.push(path.resolve(this.outputDirectory, raw));
       candidates.push(path.resolve(home, raw));
       for (const name of folderNames) {
         candidates.push(path.resolve(home, name, raw));
@@ -1552,7 +1552,7 @@ class RpaEngine {
     }
 
     const allowedRoots = [
-      OUTPUT_DIRECTORY,
+      this.outputDirectory,
       ...expandFolderRoots(home),
     ];
     if (process.platform === 'win32') {
@@ -1735,7 +1735,7 @@ class RpaEngine {
   outputPath(name, extension) {
     const raw = String(name || 'output').replace(/[\\/:*?"<>|]+/g, '_').replace(/^\.+$/, 'output');
     const suffix = path.extname(raw) ? '' : extension;
-    return path.join(OUTPUT_DIRECTORY, raw + suffix);
+    return path.join(this.outputDirectory, raw + suffix);
   }
 
   csvCell(value) {
@@ -1863,10 +1863,6 @@ class RpaEngine {
     const result = await cdp.call(ws, 'Runtime.evaluate', { expression, returnByValue: true });
     return result.result?.value || null;
   }
-}
-
-function valueOf(input, variables) {
-  return getVariableValue(input, variables);
 }
 
 module.exports = {

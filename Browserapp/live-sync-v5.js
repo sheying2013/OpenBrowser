@@ -593,13 +593,6 @@ const {
 
 const { canMirrorTabUrl, canDomLiveSyncTabUrl } = createTabUrlPolicy({ isEnvironmentStartUrl });
 
-function managedTabs(values) {
-  return (values || []).filter((tab) => {
-    if (!tab || !tab.url) return false;
-    if (/^(devtools|chrome-extension|edge-extension):/i.test(tab.url)) return false;
-    return canMirrorTabUrl(tab.url);
-  });
-}
 function normalTabs(values) {
   return (values || []).filter((tab) => {
     if (!tab || !tab.url) return false;

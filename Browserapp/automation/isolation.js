@@ -279,13 +279,25 @@ async function acquireProfileLock(profileRoot, meta = {}) {
 
       let existing;
       let rawContent = '';
+      // A read error reveals nothing about ownership, so it is always fail-closed.
       try {
         rawContent = await fsp.readFile(file, 'utf8');
+      } catch (readError) {
+        throw lockOwnerError(
+          'PROFILE_LOCK_UNRECOVERABLE',
+          `Profile lock cannot be read (${readError?.code || readError?.message || 'read failed'}); refusing to remove it`,
+        );
+      }
+      try {
         existing = JSON.parse(rawContent);
       } catch (_) {
-        if (isFileFromPriorBoot || (mtimeMs > 0 && Date.now() - mtimeMs > UNKNOWN_STARTUP_LOCK_RECOVERY_MS) || !rawContent.trim()) {
+        if (isFileFromPriorBoot) {
           await fsp.rm(file, { force: true }).catch(() => {});
           continue;
+        }
+        // Empty/whitespace means another opener is between open() and write(); never reclaim it.
+        if (!rawContent.trim()) {
+          throw lockOwnerError('PROFILE_LOCKED', 'Profile lock is being written by another instance', null);
         }
         throw lockOwnerError('PROFILE_LOCK_UNRECOVERABLE', 'Profile lock is malformed and cannot be recovered');
       }

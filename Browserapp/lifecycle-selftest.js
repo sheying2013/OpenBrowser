@@ -408,7 +408,13 @@ async function testAppQuitCleanupContract() {
   const source = await fs.readFile(path.join(__dirname, 'main.js'), 'utf8');
   assert.ok(source.includes('async function stopAllForQuit()'), 'application quit must use a dedicated browser drain');
   assert.ok(source.includes('for (let attempt = 0; attempt < 2 && remaining.length; attempt += 1)'), 'quit must retry explicit remaining environments');
-  assert.ok(source.includes('if (stopResult.remaining.length) return;'), 'quit backup must not read browser data while processes remain');
+  const gate = source.match(/if \(!stopResult\.stopped \|\| stopResult\.remaining\?\.length\) \{([\s\S]*?)\n {6}\}/);
+  assert.ok(gate, 'quit backup gate must require both !stopResult.stopped and stopResult.remaining?.length');
+  assert.ok(/\breturn;/.test(gate[1]), 'the failed gate must return instead of packaging browser data');
+  assert.ok(/!stopResult\.stopped/.test(gate[0]) && /stopResult\.remaining\?\.length/.test(gate[0]));
+  const backupCall = source.indexOf('await runCloudBackup({');
+  assert.ok(backupCall > 0 && gate.index < backupCall, 'the backup gate must run before runCloudBackup');
+  assert.ok(!source.includes('if (stopResult.remaining.length) return;'), 'quit backup must not read browser data while processes remain');
   assert.ok(source.includes("app.on('window-all-closed'"), 'closing the final control window must enter application shutdown');
   assert.ok(!source.includes("if (process.platform !== 'darwin' && !quitting) app.quit();"), 'macOS final-window close must not bypass browser cleanup');
   assert.ok(source.includes('liveSync?.stop?.()'), 'quit must invalidate live-sync work before stopping environments');

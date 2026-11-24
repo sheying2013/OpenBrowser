@@ -2665,7 +2665,8 @@ class BrowserEngine {
       running.push({ id: candidate.id || fallbackId, label: candidate.name || candidate.title || fallbackId });
     };
     for (const [runningId, runningItem] of this.running) {
-      if (runningItem?.cleanedUp || runningItem?.stopping) continue;
+      // Only a finished cleanup frees the slot: a stopping window still holds its upstream tunnel.
+      if (runningItem?.cleanedUp) continue;
       consider(runningItem?.profile, runningId);
     }
     for (const startingId of this.starting.keys()) {
@@ -4640,25 +4641,28 @@ class BrowserEngine {
       if (resources.markerProcess && !resources.markerProcess.killed) {
         try { resources.markerProcess.kill(); } catch (_) {}
       }
-      await resources.proxyForwarder?.close().catch(() => {});
-      stopIpcStubForWindow(resources.kernelWindowName);
       if (child && !exited) {
-        // Startup owns the same profile lock safety rule as running cleanup: a
-        // process that may still be alive must keep the lock as a tombstone.
-        return { exited: false, lockReleased: false, cleanupBlocked: true };
+        // Preserve routing and the lock while the process may still use them.
+        return { exited: false, lockReleased: false, cleanupBlocked: true, forwarderRetained: true };
       }
       if (resources.root) {
-        await removeSingletonFiles(resources.root, { attempts: 6, delayMs: 40 });
         const helperDrain = await this.drainProfileHelpers(resources.root);
         if (!helperDrain.known || helperDrain.pids.length) {
+          // Unknown scans and surviving helpers are unsafe alike: keep the lock, Singleton files and forwarder until a later attempt proves the profile unused.
           return {
             exited: false,
             lockReleased: false,
             cleanupBlocked: true,
             helperPids: helperDrain.pids,
+            scanUnknown: !helperDrain.known,
+            forwarderRetained: true,
           };
         }
+        await removeSingletonFiles(resources.root, { attempts: 6, delayMs: 40 });
       }
+      // Child and helpers are gone; preserve nothing further, so the tunnel may close now.
+      await resources.proxyForwarder?.close().catch(() => {});
+      stopIpcStubForWindow(resources.kernelWindowName);
       if (resources.profileLock && resources.root) {
         const released = await releaseProfileLock(resources.root, resources.profileLock).catch(() => false);
         const lockStillPresent = fs.existsSync(lockPath(resources.root));
@@ -4669,8 +4673,20 @@ class BrowserEngine {
       }
       return { exited, lockReleased: true };
     };
-    resources.cleanupPromise = cleanup();
-    return resources.cleanupPromise;
+    const cleanupPromise = cleanup();
+    resources.cleanupPromise = cleanupPromise;
+    // A blocked or failed attempt must stay retryable; a successful cleanup stays cached for idempotency.
+    cleanupPromise.then(
+      (result) => {
+        if (resources.cleanupPromise === cleanupPromise && result?.cleanupBlocked) {
+          resources.cleanupPromise = null;
+        }
+      },
+      () => {
+        if (resources.cleanupPromise === cleanupPromise) resources.cleanupPromise = null;
+      },
+    );
+    return cleanupPromise;
   }
 
   handleBrowserGone(profileId, item, reason = 'browser-gone', options = {}) {
@@ -4997,6 +5013,25 @@ class BrowserEngine {
             new Error(`Browser environment ${id} is still stopping; child exit has not been confirmed`),
             { code: 'BROWSER_EXIT_UNCONFIRMED' },
           );
+        }
+        // A dead browser is not enough: Chromium helpers can still hold the profile and proxy tunnel, so require a known, empty drain.
+        const helperDrain = afterStop.root
+          ? await this.drainProfileHelpers(afterStop.root)
+          : { known: true, pids: [] };
+        const liveHelpers = (helperDrain.pids || []).filter(isPidAlive);
+        if (!helperDrain.known || liveHelpers.length) {
+          const failure = Object.assign(
+            new Error(`Browser environment ${id} still has unconfirmed helpers; refusing to start a replacement`),
+            {
+              code: 'BROWSER_HELPERS_EXIT_UNCONFIRMED',
+              pids: liveHelpers,
+              scanKnown: Boolean(helperDrain.known),
+            },
+          );
+          afterStop.cleanupFailed = true;
+          afterStop.cleanupState = 'blocked';
+          afterStop.cleanupError = failure;
+          throw failure;
         }
         if (afterStop.root) {
           await removeSingletonFiles(afterStop.root, { attempts: 8, delayMs: 40 });

@@ -30,7 +30,7 @@ const { startAutomation } = require('./automation');
 const cloudSync = require('./automation/cloud-sync');
 const { fetchProviderProxies, batchSpeedTest } = require('./automation/proxy-providers');
 const credentialCrypto = require('./credential-crypto');
-const { validateDataRootIsolationSecure, ensureDataRootIsolationSecure, assertProfileId } = require('./automation/isolation');
+const { validateDataRootIsolationSecure, ensureDataRootIsolationSecure, assertProfileId, terminateProcessesUsingProfile } = require('./automation/isolation');
 const { createCrashHandler, buildHelperProcessGoneReport } = require('./automation/crash-report');
 const { writeBrowserStartupDiagnostic } = require('./engine/diagnostics');
 
@@ -536,31 +536,47 @@ function normalizeCloseAction(value) {
   return CLOSE_ACTION_VALUES.includes(value) ? value : 'ask';
 }
 
-let localSettingsCache = {
-  profileDataRoot: defaultProfileDataRoot,
-  cloud: cloudSync.defaultCloudConfig(),
-  uiGroups: [],
-  closeAction: 'ask',
-};
+function defaultLocalSettings() {
+  return {
+    profileDataRoot: defaultProfileDataRoot,
+    cloud: cloudSync.defaultCloudConfig(),
+    uiGroups: [],
+    closeAction: 'ask',
+  };
+}
+
+let localSettingsCache = defaultLocalSettings();
+// After the first read the in-memory cache is the source of truth; re-reading would drop a not-yet-flushed change.
+let settingsLoadedFromDisk = false;
+
+/** Parse a settings file; anything that is not a plain JSON object is invalid. */
+async function readLocalSettingsPayload(file) {
+  const raw = await fsp.readFile(file);
+  const encrypted = credentialCrypto.isEncrypted(raw);
+  const jsonStr = encrypted ? credentialCrypto.decryptCredential(raw) : raw.toString('utf8');
+  const saved = JSON.parse(jsonStr);
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+    throw new Error('settings payload is not a JSON object');
+  }
+  return { saved, needsMigration: !encrypted };
+}
+
+function cacheFromSavedSettings(saved) {
+  return {
+    profileDataRoot: normalizeProfileDataRoot(saved.profileDataRoot),
+    cloud: { ...cloudSync.defaultCloudConfig(), ...(saved.cloud || {}) },
+    uiGroups: Array.isArray(saved.uiGroups) ? saved.uiGroups : [],
+    closeAction: normalizeCloseAction(saved.closeAction),
+  };
+}
 
 async function loadLocalSettings() {
+  if (settingsLoadedFromDisk) return localSettingsCache;
+  let primaryError = null;
   try {
-    const raw = await fsp.readFile(localSettingsFile);
-    let jsonStr;
-    let needsMigration = false;
-    if (credentialCrypto.isEncrypted(raw)) {
-      jsonStr = credentialCrypto.decryptCredential(raw);
-    } else {
-      jsonStr = raw.toString('utf8');
-      needsMigration = true;
-    }
-    const saved = JSON.parse(jsonStr);
-    localSettingsCache = {
-      profileDataRoot: normalizeProfileDataRoot(saved.profileDataRoot),
-      cloud: { ...cloudSync.defaultCloudConfig(), ...(saved.cloud || {}) },
-      uiGroups: Array.isArray(saved.uiGroups) ? saved.uiGroups : [],
-      closeAction: normalizeCloseAction(saved.closeAction),
-    };
+    const { saved, needsMigration } = await readLocalSettingsPayload(localSettingsFile);
+    localSettingsCache = cacheFromSavedSettings(saved);
+    settingsLoadedFromDisk = true;
     if (needsMigration) {
       try {
         await writeLocalSettingsFile();
@@ -569,14 +585,26 @@ async function loadLocalSettings() {
       }
     }
     return localSettingsCache;
-  } catch (_) {
-    localSettingsCache = {
-      profileDataRoot: defaultProfileDataRoot,
-      cloud: cloudSync.defaultCloudConfig(),
-      uiGroups: [],
-      closeAction: 'ask',
-    };
+  } catch (error) {
+    primaryError = error;
+  }
+  // Primary unreadable/corrupt: fall back to the last good backup.
+  try {
+    const { saved } = await readLocalSettingsPayload(localSettingsFile + '.bak');
+    localSettingsCache = cacheFromSavedSettings(saved);
+    settingsLoadedFromDisk = true;
+    console.warn('OpenBrowser settings restored from backup:', primaryError?.message || primaryError);
+    try { await writeLocalSettingsFile(); } catch (_) {}
     return localSettingsCache;
+  } catch (backupError) {
+    // Fresh install only: neither the file nor its backup exists.
+    if (primaryError?.code === 'ENOENT' && backupError?.code === 'ENOENT') {
+      settingsLoadedFromDisk = true;
+      return localSettingsCache;
+    }
+    // Anything else must surface: silently using defaults would let the next
+    // write overwrite settings that are still on disk.
+    throw new Error(`OpenBrowser settings could not be read; refusing to fall back to defaults (${String(primaryError?.code || primaryError?.message)}): ${String(backupError?.message || backupError)}`);
   }
 }
 
@@ -584,23 +612,41 @@ async function loadLocalSettings() {
 // rewrite it. Cloned rather than referenced: later edits mutate nested objects.
 let persistedSettingsSnapshot = null;
 
+/** Rename over an existing file without ever deleting the target first. */
+async function renameReplacing(source, target) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fsp.rename(source, target);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)) break;
+      await new Promise((resolve) => setTimeout(resolve, 60 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
 /** Write the settings file from the in-memory cache. */
 async function writeLocalSettingsFile() {
   await fsp.mkdir(path.dirname(localSettingsFile), { recursive: true });
   const temporary = localSettingsFile + '.tmp';
-  const serialized = JSON.stringify({ version: 2, ...localSettingsCache }, null, 2);
+  // One snapshot feeds both the payload and the persisted marker, so a cache change mid-write stays unwritten.
+  const snapshot = JSON.parse(JSON.stringify(localSettingsCache));
+  const serialized = JSON.stringify({ version: 2, ...snapshot }, null, 2);
   const payload = credentialCrypto.encryptCredential(serialized);
 
-  // Preserve backup of existing file before atomic rewrite
+  // Seed .bak only from a primary that still parses, so a corrupt file cannot replace the last good backup.
   try {
+    await readLocalSettingsPayload(localSettingsFile);
     const existing = await fsp.readFile(localSettingsFile);
     await fsp.writeFile(localSettingsFile + '.bak', existing);
   } catch (_) {}
 
   await fsp.writeFile(temporary, payload);
-  await fsp.rm(localSettingsFile, { force: true });
-  await fsp.rename(temporary, localSettingsFile);
-  persistedSettingsSnapshot = JSON.parse(JSON.stringify(localSettingsCache));
+  await renameReplacing(temporary, localSettingsFile);
+  persistedSettingsSnapshot = snapshot;
 }
 
 // The cache holds the whole settings object, so a burst of changes only needs
@@ -844,6 +890,8 @@ let syncSelection = [];
 let syncState = { active: false, master: null, selected: [] };
 const windows = new Set();
 let mainWindow = null;
+// Latched once startup may create the first window; before that, second-instance/tray must not build one.
+let startupWindowReady = false;
 
 function trustedAppIndexUrl() {
   // Canonical UI document: only this exact file:// path may call registerTrustedIpc.
@@ -988,6 +1036,8 @@ function hideMainWindowToTray(win) {
 function showMainWindow() {
   const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
   if (!win) {
+    // Startup shows the first window itself; an earlier one would expose a renderer before IPC handlers exist.
+    if (!startupWindowReady) return;
     createWindow().catch(() => {});
     return;
   }
@@ -1603,6 +1653,13 @@ function applyWindowChrome(win, themeId, colorMode) {
 }
 
 async function createWindow() {
+  // Reuse a live window so a concurrent caller (second-instance, tray) cannot create a second one.
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return mainWindow;
+  }
   const isMac = process.platform === 'darwin';
   const isWin = process.platform === 'win32';
   const chrome = chromeForTheme('pixel-workstation');
@@ -2477,6 +2534,8 @@ app.whenReady().then(async () => {
     return engine.getCookieRobotStatus(assertProfileId(profileId));
   });
 
+  // Every IPC handler is registered above; only now may a window exist and second-instance/tray create one.
+  startupWindowReady = true;
   await createWindow();
   startAppUpdateWatcher();
 });
@@ -2520,7 +2579,10 @@ async function stopAllForQuit() {
         } catch (_) {}
       }
       if (item?.root) {
-        isolation.terminateProcessesUsingProfile?.(item.root, { force: true }).catch(() => {});
+        // Synchronous helper: one root failing must not skip the rest of `remaining`.
+        try { terminateProcessesUsingProfile(item.root); } catch (error) {
+          errors.push(`profile-cleanup ${id}: ${String(error?.message || error)}`);
+        }
       }
     }
   }
@@ -2532,27 +2594,28 @@ function beginQuitCleanup() {
   quitting = true;
   destroyTray();
   const cloud = localSettingsCache?.cloud || {};
-  let stopResult = { stopped: true, remaining: [], errors: [] };
+  // Not stopped until stopAllForQuit proves it, so a thrown stop cannot pass the backup gate.
+  let stopResult = { stopped: false, remaining: [], errors: [] };
+  // Each phase swallows its own failure so later cleanup and app.quit() still run.
+  const runStep = async (label, step) => {
+    try { await step(); } catch (error) {
+      console.warn(`OpenBrowser quit ${label} failed:`, error?.message || error);
+    }
+  };
   quitCleanupPromise = Promise.resolve()
-    .then(async () => { stopResult = await stopAllForQuit(); })
-    .then(() => engine?.flushPersistence?.())
+    .then(() => runStep('browser stop', async () => { stopResult = await stopAllForQuit(); }))
+    .then(() => runStep('engine flush', () => engine?.flushPersistence?.()))
     // A settings change made moments before quitting may still be inside the
     // quiet period; write it out before the process goes away.
-    .then(() => localSettingsWriter.flushNow())
-    .then(() => {
-      try { liveSync?.stop?.(); } catch (error) {
-        console.warn('OpenBrowser quit live-sync cleanup failed:', error?.message || error);
-      }
-    })
+    .then(() => runStep('settings flush', () => localSettingsWriter.flushNow()))
+    .then(() => runStep('live-sync cleanup', () => liveSync?.stop?.()))
+    .then(() => runStep('automation cleanup', () => automation?.stop?.()))
     .then(async () => {
-      try { await automation?.stop?.(); } catch (error) {
-        console.warn('OpenBrowser quit automation cleanup failed:', error?.message || error);
+      // Package only when every environment stopped: a live kernel holds locked files and yields a corrupt backup.
+      if (!stopResult.stopped || stopResult.remaining?.length) {
+        console.warn('OpenBrowser quit auto-backup skipped: environments still running:', (stopResult.remaining || []).join(', '));
+        return;
       }
-    })
-    .then(async () => {
-      // Stop browsers and flush close-time state before packaging browser data.
-      // Otherwise the backup can capture stale cookies or locked SQLite/LevelDB files.
-      if (stopResult.remaining.length) return;
       if (!cloud.enabled || !cloud.autoSyncOnQuit) return;
       try {
         await runCloudBackup({

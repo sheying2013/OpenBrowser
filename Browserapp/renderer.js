@@ -859,7 +859,6 @@ function renderMicroWindowSvg(num, isLight = false, size = UI_MARK_SIZE) {
   const pal = envBadgeColors(num);
   const safeId = String(num).replace(/[^a-zA-Z0-9_-]/g, '_');
   const winBg1 = isLight ? '#f4f6f8' : '#141a20';
-  const winBg2 = isLight ? '#e5e9ec' : '#0c1014';
   const winBorder = isLight ? '#c8d1d8' : '#222c36';
   const numColor = isLight ? '#2d3748' : '#d2dbe2';
 
@@ -1041,6 +1040,11 @@ function normalizeSyncSettings(value = {}) {
 let syncSettings = (() => { try { return normalizeSyncSettings(JSON.parse(localStorage.getItem(SYNC_SETTINGS_KEY) || '{}')); } catch (_) { return { ...DEFAULT_SYNC_SETTINGS }; } })();
 let pendingDeleteProfiles = [];
 let editingProfileId = null;
+// Editor-session stamp; async editor work captured under an older value must not touch the live editor.
+let editorSessionGeneration = 0;
+function editorSessionIsCurrent(generation, profileId) {
+  return generation === editorSessionGeneration && (!profileId || editingProfileId === profileId);
+}
 let editorNetworkResult = null;
 let toastTimer = null;
 const checkingProxies = new Set();
@@ -1835,7 +1839,6 @@ async function confirmAction(options) {
   return confirmUi(options);
 }
 function log(module, message) { ui.logs.unshift({ time: new Date().toLocaleTimeString('zh-CN', { hour12: false }), module, message }); ui.logs = ui.logs.slice(0, 200); save(); renderLogs(); }
-function initials(name) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(); }
 function isDirectProxy(value) {
   return !value || /^(direct|offline|none)$/i.test(String(value).trim());
 }
@@ -2622,7 +2625,10 @@ function applyProfileToEditor(profile) {
   if ($('#editor-proxy-result')) {
     $('#editor-proxy-result').className = 'proxy-test-result';
     $('#editor-proxy-result').textContent = profile.exitIp ? tx('上次出口：') + profile.exitIp + ' · ' + countryName(profile.exitCountryCode) : tx('尚未检测');
+    $('#editor-proxy-result').setAttribute('aria-busy', 'false');
   }
+  const editorProxyButton = $('#editor-test-proxy');
+  if (editorProxyButton) editorProxyButton.disabled = false;
   const privacy = profile.privacy;
   editorSet('#editor-webrtc', privacy.webrtc);
   editorSet('#editor-timezone-mode', privacy.timezoneMode);
@@ -2734,6 +2740,11 @@ function applyProfileToEditor(profile) {
 }
 
 async function openProfileEditor(id) {
+  // Correct even for an A→B→A reopen: the id alone cannot distinguish sessions.
+  editorSessionGeneration += 1;
+  const generation = editorSessionGeneration;
+  // Register the target up front so leaving the view before the async load resolves ends the session.
+  editingProfileId = id;
   let profile = ui.profiles.find((item) => item.id === id);
   if (profile) {
     applyProfileToEditor(normalizeProfileSettings(profile));
@@ -2741,6 +2752,7 @@ async function openProfileEditor(id) {
   if ((!profile || !profile.fingerprint) && !window.__uiAuditCalls && typeof window.ops?.getProfile === 'function') {
     try {
       const full = await window.ops.getProfile(id);
+      if (generation !== editorSessionGeneration) return;
       if (full && full.id) {
         const idx = ui.profiles.findIndex((p) => p.id === id);
         if (idx >= 0) ui.profiles[idx] = full;
@@ -2783,6 +2795,7 @@ async function testEditorProxy() {
   const output = $('#editor-proxy-result');
   if (output.getAttribute('aria-busy') === 'true') return;
   const profileId = editingProfileId;
+  const generation = editorSessionGeneration;
   output.setAttribute('aria-busy', 'true');
   const button = $('#editor-test-proxy');
   if (button) button.disabled = true;
@@ -2792,34 +2805,41 @@ async function testEditorProxy() {
     output.className = 'proxy-test-result';
     output.textContent = tx('正在检测代理出口...');
     const result = await window.ops.testProfileProxy(draft);
-    if (editingProfileId !== profileId) return;
+    if (!editorSessionIsCurrent(generation, profileId)) return;
     const fill = $('#editor-proxy-fill-fingerprint')?.checked !== false;
     applyEditorNetworkResult(result, { fillFingerprint: fill });
     output.className = 'proxy-test-result success';
     output.textContent = tx('连接成功 · ') + formatProxyCheckResult(result);
   } catch (error) {
+    if (!editorSessionIsCurrent(generation, profileId)) return;
     output.className = 'proxy-test-result error';
     const cls = error?.errorClass ? ` [${error.errorClass}]` : '';
-    if (editingProfileId === profileId) output.textContent = tx('检测失败 · ') + error.message + cls;
+    output.textContent = tx('检测失败 · ') + error.message + cls;
   } finally {
-    output.setAttribute('aria-busy', 'false');
-    if (button) button.disabled = false;
+    if (editorSessionIsCurrent(generation, profileId)) {
+      output.setAttribute('aria-busy', 'false');
+      if (button) button.disabled = false;
+    }
   }
 }
 
 async function applyEditorProxyFingerprint() {
   const output = $('#editor-proxy-result');
+  const generation = editorSessionGeneration;
+  const profileId = editingProfileId;
   try {
     const draft = editorDraft(true);
     if (/^Direct$/i.test(draft.proxy) && !draft.proxyMeta?.apiExtractUrl) throw new Error(tx('本地直连无需代理检测'));
     output.className = 'proxy-test-result';
     output.textContent = tx('正在用代理对齐指纹...');
     const result = await window.ops.applyProxyFingerprint(draft);
+    if (!editorSessionIsCurrent(generation, profileId)) return;
     applyEditorNetworkResult(result, { fillFingerprint: true });
     output.className = 'proxy-test-result success';
     output.textContent = tx('已对齐指纹 · ') + formatProxyCheckResult(result);
     toast(tx('已按出口 IP 填充时区 / 语言 / 定位'));
   } catch (error) {
+    if (!editorSessionIsCurrent(generation, profileId)) return;
     output.className = 'proxy-test-result error';
     output.textContent = tx('对齐失败 · ') + error.message;
     toast(tx('对齐失败：') + error.message);
@@ -2828,6 +2848,8 @@ async function applyEditorProxyFingerprint() {
 
 async function refreshEditorProxy() {
   const output = $('#editor-proxy-result');
+  const generation = editorSessionGeneration;
+  const profileId = editingProfileId;
   try {
     const draft = editorDraft(true);
     if (!draft.proxyMeta?.refreshUrl && !draft.proxyMeta?.apiExtractUrl) {
@@ -2836,6 +2858,7 @@ async function refreshEditorProxy() {
     output.className = 'proxy-test-result';
     output.textContent = tx('正在刷新代理...');
     const result = await window.ops.refreshProfileProxy(draft);
+    if (!editorSessionIsCurrent(generation, profileId)) return;
     const network = result.network || result;
     if (result.profile?.proxy) {
       try {
@@ -2857,6 +2880,7 @@ async function refreshEditorProxy() {
     output.textContent = msg;
     toast(result.extractError ? (tx('代理已刷新（提取有警告）')) : tx('代理已刷新'));
   } catch (error) {
+    if (!editorSessionIsCurrent(generation, profileId)) return;
     output.className = 'proxy-test-result error';
     output.textContent = tx('刷新失败 · ') + error.message;
     toast(tx('刷新失败：') + error.message);
@@ -3048,6 +3072,12 @@ function switchView(view) {
     const currentActive = document.querySelector('.view.active')?.id?.replace(/^view-/, '');
     if (currentActive) {
       viewScrollPositions.set(currentActive, window.scrollY || document.documentElement.scrollTop || 0);
+    }
+    // Leaving the editor — or leaving while an editor load is still pending — ends the session.
+    if (view !== 'profile-editor' && (currentActive === 'profile-editor' || editingProfileId)) {
+      editorSessionGeneration += 1;
+      editingProfileId = null;
+      editorNetworkResult = null;
     }
   } catch (_) {}
 
@@ -3972,52 +4002,75 @@ let pagedQueryInProgress = false;
 let pendingPagedQuery = null;
 let measuredProfileRowHeight = 56;
 
+// Only a response for the filter AND page still on screen may be applied; stale ones change nothing.
+function profilesPageRequestIsCurrent(req) {
+  return req.page === profilePage &&
+    req.filters.activeGroupFilter === activeGroupFilter &&
+    req.filters.query === ($('#profile-search')?.value || '') &&
+    req.pageSize === profilePageSize;
+}
+
 async function requestProfilesPage(options = {}) {
   if (window.__uiAuditCalls || typeof window.ops?.queryProfiles !== 'function') return null;
-  const query = $('#profile-search')?.value || '';
   const req = {
     page: options.page || profilePage,
     pageSize: options.pageSize || profilePageSize,
     filters: {
-      query,
-      activeGroupFilter,
+      query: options.query !== undefined ? options.query : ($('#profile-search')?.value || ''),
+      activeGroupFilter: options.groupFilter !== undefined ? options.groupFilter : activeGroupFilter,
       ...(options.filters || {}),
     },
     sort: options.sort || 'number ASC',
   };
 
   if (pagedQueryInProgress) {
+    // Last request wins; it already carries its own captured filter/page.
     pendingPagedQuery = req;
     return null;
   }
   pagedQueryInProgress = true;
   try {
     const res = await window.ops.queryProfiles(req);
+    if (!profilesPageRequestIsCurrent(req)) return null;
+    // A newer request is already queued: its response is the one to apply.
+    if (pendingPagedQuery) return null;
     if (res && Array.isArray(res.rows)) {
       if (res.counts) {
         serverProfileCounts = res.counts;
       }
       if (res.rows.length === 0 && res.total > 0 && req.page > 1) {
-        const fixedPage = Math.max(1, Math.ceil(res.total / (res.pageSize || profilePageSize)));
+        // Queue the corrected page for the common scheduler instead of recursing (avoids a second in-flight request).
+        const fixedPage = Math.max(1, Math.ceil(res.total / (res.pageSize || req.pageSize)));
         profilePage = fixedPage;
-        pagedQueryInProgress = false;
-        return requestProfilesPage({ ...options, page: fixedPage });
+        pendingPagedQuery = { ...req, page: fixedPage };
+        return null;
       }
       pagedProfilesData = {
         total: res.total,
         page: res.page,
         pageSize: res.pageSize,
         rows: res.rows,
-        query,
-        activeGroupFilter,
+        query: req.filters.query,
+        activeGroupFilter: req.filters.activeGroupFilter,
       };
-      profilePage = res.page;
+      // A newer page target may have been queued while this response was in flight.
+      if (req.page === profilePage) profilePage = res.page;
       renderProfiles();
       return res;
     }
   } catch (err) {
+    // A failed fetch must not discard whatever is already rendered.
     console.warn('[ProfilePagination] queryProfiles failed, falling back to local profiles:', err.message);
-    pagedProfilesData = null;
+    // Roll the page label back to the rows still on screen; a stale failure changes nothing.
+    if (profilesPageRequestIsCurrent(req) && !pendingPagedQuery && pagedProfilesData &&
+        pagedProfilesData.query === req.filters.query &&
+        pagedProfilesData.activeGroupFilter === req.filters.activeGroupFilter &&
+        pagedProfilesData.pageSize === req.pageSize &&
+        Array.isArray(pagedProfilesData.rows) && pagedProfilesData.rows.length &&
+        pagedProfilesData.page !== profilePage) {
+      profilePage = pagedProfilesData.page;
+      renderProfiles();
+    }
   } finally {
     pagedQueryInProgress = false;
     if (pendingPagedQuery) {
@@ -4100,7 +4153,9 @@ function renderProfiles() {
   table.replaceChildren();
 
   const filter = $('#profile-search')?.value || '';
-  const useServerPage = Boolean(
+  // With a server, `profilePage` is the requested target and must never be rewritten by the local single-page summary.
+  const serverPagingActive = typeof window.ops?.queryProfiles === 'function' && !window.__uiAuditCalls;
+  const cacheMatchesFilter = Boolean(
     pagedProfilesData &&
     pagedProfilesData.query === filter &&
     pagedProfilesData.activeGroupFilter === activeGroupFilter &&
@@ -4112,17 +4167,18 @@ function renderProfiles() {
   let totalCount = 0;
   let totalPages = 1;
 
-  if (useServerPage) {
+  if (cacheMatchesFilter) {
     totalCount = pagedProfilesData.total;
     totalPages = Math.max(1, Math.ceil(totalCount / profilePageSize));
-    profilePage = Math.min(Math.max(1, pagedProfilesData.page), totalPages);
+    // A just-requested page may briefly render the previous rows until it settles.
     visible = pagedProfilesData.rows;
+    if (profilePage > totalPages) totalPages = profilePage;
   } else {
     const filtered = filteredProfilesForCurrentView();
-    const pageData = window.OpenBrowserProfileList?.paginate?.(filtered, profilePage, profilePageSize)
+    const pageData = window.OpenBrowserProfileList?.paginate?.(filtered, serverPagingActive ? 1 : profilePage, profilePageSize)
       || { items: filtered, currentPage: 1, totalPages: 1 };
-    profilePage = pageData.currentPage;
-    totalPages = pageData.totalPages;
+    if (!serverPagingActive) profilePage = pageData.currentPage;
+    totalPages = serverPagingActive ? Math.max(profilePage, pageData.totalPages) : pageData.totalPages;
     visible = pageData.items;
     totalCount = filtered.length;
   }
@@ -4743,10 +4799,11 @@ async function refreshSessions() {
   if (__refreshSessionsInFlight) { __refreshSessionsQueued = true; return __refreshSessionsInFlight; }
   __refreshSessionsInFlight = (async () => {
     try {
-      const previous = new Set(selectedSessions); sessions = await window.ops.syncSessions(); const live = new Set(sessions.map((item) => item.id));
+      sessions = await window.ops.syncSessions(); const live = new Set(sessions.map((item) => item.id));
+      // Selection choices made while the IPC was pending win over a pre-await snapshot.
       if (syncState.active) selectedSessions = new Set((syncState.selected || []).filter((id) => live.has(id)));
       else if (!sessionsInitialized) selectedSessions = new Set(sessions.map((item) => item.id));
-      else selectedSessions = new Set([...previous].filter((id) => live.has(id)));
+      else selectedSessions = new Set([...selectedSessions].filter((id) => live.has(id)));
       sessionsInitialized = true; if (!selectedSessions.has(preferredMasterId)) preferredMasterId = orderedSelectedSessionIds()[0] || null;
       if (!syncState.active) pushSyncSelection(); renderSessions();
       loadedViews.add('sync');

@@ -28,6 +28,10 @@ const dnsPromises = dns.promises;
 
 const DEFAULT_PORT = Number(process.env.OPENBROWSER_START_PAGE_PORT || 50326);
 const PORT_CANDIDATES = [DEFAULT_PORT, 50327, 50328, 50329, 0];
+// Diagnostic report body cap; the welcome page sends a few KB.
+const MAX_FP_REPORT_BYTES = 64 * 1024;
+// After refusing an oversized body, discard at most this much so the client can still read the 413.
+const FP_REPORT_DRAIN_BYTES = 1024 * 1024;
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 /** 访问能力探测目标：连通 + 出口地区 + best-effort 可用性信号 */
@@ -1033,6 +1037,40 @@ class StartPageServer {
     res.end(JSON.stringify(body));
   }
 
+  // WHY: answer 413, then drop the rest of the upload with a bounded drain so the client can read it.
+  #reportTooLarge(req, res) {
+    if (!res.headersSent) {
+      res.writeHead(413, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+        Connection: 'close',
+      });
+      res.end(JSON.stringify({ ok: false, msg: '报告内容超过 64 KiB 限制' }));
+    }
+    if (req.readableEnded || req.destroyed) return;
+    let drained = 0;
+    const stop = () => {
+      clearTimeout(timer);
+      req.off('data', onData);
+      req.off('end', stop);
+      req.off('error', stop);
+      req.off('aborted', stop);
+      if (!req.destroyed) req.destroy();
+    };
+    const onData = (chunk) => {
+      drained += chunk.length;
+      if (drained > FP_REPORT_DRAIN_BYTES) stop();
+    };
+    // A client that keeps the upload open must not hold the socket forever.
+    const timer = setTimeout(stop, 5000);
+    timer.unref?.();
+    req.on('data', onData);
+    req.on('end', stop);
+    req.on('error', stop);
+    req.on('aborted', stop);
+  }
+
   async #resolveNetwork(pid, refresh) {
     let session = this.getSession(pid);
     // hydrate from engine if possible
@@ -1236,10 +1274,53 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
     // Welcome page posts live navigator/WebGL samples here so we can diagnose
     // inject failures from disk without copying UI text.
     if (pathname === '/api/fingerprint-report' && (req.method === 'POST' || req.method === 'PUT')) {
-      let body = '';
-      for await (const chunk of req) body += chunk;
+      // Bound the inbound body: this endpoint accepts a diagnostic report, not arbitrary uploads.
+      const declared = Number(req.headers['content-length']);
+      if (Number.isFinite(declared) && declared > MAX_FP_REPORT_BYTES) {
+        this.#reportTooLarge(req, res);
+        return;
+      }
+      const chunks = [];
+      let bodyBytes = 0;
+      let tooLarge = false;
+      let interrupted = false;
+      await new Promise((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        req.on('data', (chunk) => {
+          if (tooLarge || interrupted) return; // #reportTooLarge owns the bounded drain
+          bodyBytes += chunk.length;
+          if (bodyBytes > MAX_FP_REPORT_BYTES) {
+            tooLarge = true;
+            chunks.length = 0;
+            this.#reportTooLarge(req, res);
+            return;
+          }
+          chunks.push(chunk);
+        });
+        req.on('end', () => {
+          if (!interrupted) finish();
+        });
+        req.on('error', () => { interrupted = true; finish(); });
+        req.on('aborted', () => { interrupted = true; finish(); });
+        req.on('close', () => {
+          if (!req.complete) interrupted = true;
+          finish();
+        });
+      });
+      if (tooLarge) return; // 413 already sent; never log an oversized report
+      // A truncated upload is not a report: drop it instead of parsing or answering 200.
+      if (interrupted) return;
+      const body = Buffer.concat(chunks).toString('utf8');
       let report = {};
       try { report = body ? JSON.parse(body) : {}; } catch (_) { report = { raw: String(body).slice(0, 2000) }; }
+      if (!report || typeof report !== 'object' || Array.isArray(report)) {
+        return this.#json(res, 400, { ok: false, msg: '报告格式无效' });
+      }
       const expected = session?.expectedFingerprint || {};
       await fpLog('welcome.report', {
         profileId: pid,

@@ -133,11 +133,31 @@ async function main() {
     assert.strictEqual(usage.running[0].id, 'p4');
   });
 
-  check('a stopping window does not hold a slot', () => {
+  check('a stopping window still holds a slot until cleanup really finishes', () => {
     engine.running.get('p1').stopping = true;
     const usage = engine.proxyConcurrencyUsage(proxyProfile('p3', { proxyId: shared.id, raw: shared.raw }));
-    assert.strictEqual(usage.running.length, 0);
-    engine.running.get('p1').stopping = false;
+    assert.strictEqual(usage.running.length, 1, 'the old browser may still own the upstream tunnel while stopping');
+    assert.strictEqual(usage.running[0].id, 'p1');
+  });
+
+  check('a cleanup-failed window still holds a slot', () => {
+    const item = engine.running.get('p1');
+    item.stopping = true;
+    item.cleanupFailed = true;
+    item.cleanupState = 'blocked';
+    const usage = engine.proxyConcurrencyUsage(proxyProfile('p3', { proxyId: shared.id, raw: shared.raw }));
+    assert.strictEqual(usage.running.length, 1, 'fail-closed cleanup must not free the cap');
+    item.cleanupFailed = false;
+    item.cleanupState = 'active';
+  });
+
+  check('a fully cleaned-up window releases its slot', () => {
+    const item = engine.running.get('p1');
+    item.stopping = false;
+    item.cleanedUp = true;
+    const usage = engine.proxyConcurrencyUsage(proxyProfile('p3', { proxyId: shared.id, raw: shared.raw }));
+    assert.strictEqual(usage.running.length, 0, 'only a finished cleanup may free the slot');
+    engine.running.get('p1').cleanedUp = false;
   });
 
   check('an in-flight start holds a slot before the child process exists', () => {

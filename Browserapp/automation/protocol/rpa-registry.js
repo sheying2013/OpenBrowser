@@ -158,10 +158,6 @@ function normalizeStep(step = {}) {
   return result;
 }
 
-function isLoopType(type) {
-  return ['forLists', 'forElements', 'forTimes', 'whileData'].includes(type);
-}
-
 function isContainerType(type) {
   return ['forLists', 'forElements', 'forTimes', 'whileData', 'openNewBrowser'].includes(type);
 }

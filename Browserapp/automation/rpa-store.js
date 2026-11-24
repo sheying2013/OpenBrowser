@@ -30,12 +30,49 @@ class RpaStore {
     this.data = { version: 4, plans: [], tasks: [], templates: [], config: {} };
     this.saveQueue = Promise.resolve();
     this.sizeLimitBytes = parseStoreSizeLimit();
+    // Blocks save() after a failed load so empty data cannot replace the file.
+    this.loadError = null;
+  }
+
+  static storeLoadError(reason, filePath, cause) {
+    const error = new Error(
+      `RPA 存储文件加载失败（${filePath}）：${reason}。为保护已有数据，已跳过迁移与保存。`
+    );
+    if (cause && cause.code) error.code = cause.code;
+    if (cause) error.cause = cause;
+    return error;
   }
 
   async load() {
+    let raw;
     try {
-      const raw = await fsp.readFile(this.filePath, 'utf8');
-      const parsed = JSON.parse(raw);
+      raw = await fsp.readFile(this.filePath, 'utf8');
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        this.data = { version: 4, plans: [], tasks: [], templates: [], config: {} };
+        this.loadError = null;
+      } else {
+        this.loadError = RpaStore.storeLoadError(
+          `读取失败 ${error && (error.code || error.message) || 'unknown'}`,
+          this.filePath,
+          error
+        );
+        throw this.loadError;
+      }
+    }
+    if (raw !== undefined) {
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (error) {
+        this.loadError = RpaStore.storeLoadError('JSON 解析失败，文件内容可能已损坏', this.filePath, error);
+        throw this.loadError;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        const actual = parsed === null ? 'null' : (Array.isArray(parsed) ? '数组' : typeof parsed);
+        this.loadError = RpaStore.storeLoadError(`顶层必须是 JSON 对象，实际为 ${actual}`, this.filePath);
+        throw this.loadError;
+      }
       this.data = {
         version: Number(parsed.version) || 3,
         plans: Array.isArray(parsed.plans) ? parsed.plans : [],
@@ -43,8 +80,7 @@ class RpaStore {
         templates: Array.isArray(parsed.templates) ? parsed.templates : [],
         config: parsed.config && typeof parsed.config === 'object' ? parsed.config : {},
       };
-    } catch (_) {
-      this.data = { version: 4, plans: [], tasks: [], templates: [], config: {} };
+      this.loadError = null;
     }
     this.migrateLegacyTemplates();
     this.pruneTasks();
@@ -388,6 +424,12 @@ class RpaStore {
 
   save() {
     const write = async () => {
+      if (this.loadError) {
+        const error = new Error(`拒绝写入 RPA 存储：上次加载失败（${this.filePath}）`);
+        error.code = 'RPA_STORE_LOAD_FAILED';
+        error.cause = this.loadError;
+        throw error;
+      }
       await fsp.mkdir(path.dirname(this.filePath), { recursive: true });
       this.enforceStoreBudget();
       const temporary = this.filePath + '.tmp';
