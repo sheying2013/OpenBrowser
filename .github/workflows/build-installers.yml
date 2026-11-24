@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.29'
+        description: 'Release tag to create, for example v1.0.30'
         required: true
-        default: 'v1.0.29'
+        default: 'v1.0.30'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -38,10 +38,15 @@ env:
   OPENBROWSER_PACKAGE_VARIANT: with-kernel
   OPENBROWSER_BUNDLE_KERNEL: 'true'
   RELEASE_NOTES: |
-    ## OpenBrowser **v1.0.29**
+    ## OpenBrowser **v1.0.30**
 
-    - 改进环境同步与移动设备兼容性。
-    - 优化代理探测和页面兼容性。
+    ### 中文
+    - 修复环境管理与代理反馈，优化启动失败提示。
+    - 加固数据与进程管理，提升指纹和自动化稳定性。
+
+    ### English
+    - Fix profile management and proxy feedback; improve startup failure notices.
+    - Harden data and process handling; improve fingerprint and automation stability.
 
 jobs:
   ensure-release:
