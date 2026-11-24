@@ -286,7 +286,7 @@
     }
 
     let tone = 'status';
-    let duration = 2400;
+    let duration = null;
 
     if (typeof optionsOrTone === 'string') {
       tone = optionsOrTone;
@@ -300,11 +300,14 @@
     const isError = tone === 'error' || tone === 'danger';
     const isSuccess = tone === 'success';
     const isWarning = tone === 'warning';
+    const isProgress = tone === 'progress';
+    // Progress notices stay up until replaced; failures need time to be read.
+    if (duration == null) duration = isProgress ? 0 : isError ? 8000 : isWarning ? 5000 : 2400;
 
     const el = document.getElementById('toast');
     if (!el) {
       if (typeof originalToast === 'function') {
-        return originalToast(messageText, { tone });
+        return originalToast(messageText, { tone, duration });
       }
       return;
     }
@@ -314,17 +317,21 @@
     el.setAttribute('role', isError ? 'alert' : 'status');
     el.setAttribute('aria-live', isError ? 'assertive' : 'polite');
     el.setAttribute('aria-atomic', 'true');
+    el.setAttribute('aria-busy', isProgress ? 'true' : 'false');
 
-    el.classList.remove('toast-error', 'toast-success', 'toast-warning');
+    el.classList.remove('toast-error', 'toast-success', 'toast-warning', 'toast-progress');
     if (isError) el.classList.add('toast-error');
     if (isSuccess) el.classList.add('toast-success');
     if (isWarning) el.classList.add('toast-warning');
+    if (isProgress) el.classList.add('toast-progress');
 
     el.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => {
-      el.classList.remove('show');
-    }, duration);
+    if (duration > 0) {
+      toastTimer = setTimeout(() => {
+        el.classList.remove('show');
+      }, duration);
+    }
   }
 
   enhancedToast.error = (msg, opts) => enhancedToast(msg, Object.assign({}, typeof opts === 'object' ? opts : {}, { tone: 'error' }));

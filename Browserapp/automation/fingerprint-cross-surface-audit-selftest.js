@@ -1,6 +1,16 @@
 #!/usr/bin/env node
 'use strict';
 
+// DST-aware expectation for a zone at the current instant (offset minutes as getTimezoneOffset, GMT+hhmm form, short name).
+function expectedTzNow(timeZone, at = new Date()) {
+  const part = (opt) => new Intl.DateTimeFormat('en-US', { timeZone, ...opt }).formatToParts(at).find((p) => p.type === 'timeZoneName').value;
+  const m = /^GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(part({ timeZoneName: 'shortOffset' }));
+  const signedMin = m ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] || 0)) : 0;
+  const hh = String(Math.floor(Math.abs(signedMin) / 60)).padStart(2, '0');
+  const mm = String(Math.abs(signedMin) % 60).padStart(2, '0');
+  return { offset: -signedMin, gmtString: `GMT${signedMin < 0 ? '-' : '+'}${hh}${mm}`, shortName: part({ timeZoneName: 'short' }) };
+}
+
 /**
  * End-to-end cross-surface fingerprint consistency audit.
  *
@@ -874,7 +884,7 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
       check('Windows persona: America/New_York timezone offsets match across all 5 surfaces', () => {
         // Daylight saving time (EDT) offset is 240, winter (EST) offset is 300
         for (const s of [winMain, winSame, winSrcdoc, winBlank, winWorker]) {
-          assert.strictEqual(s.tz.offset, 240, `${s.label || 'worker'} offset must be 240`);
+          assert.strictEqual(s.tz.offset, expectedTzNow('America/New_York').offset, `${s.label || 'worker'} offset must equal America/New_York current offset`);
           assert.strictEqual(s.tz.intlTz, 'America/New_York', `${s.label || 'worker'} intlTz must be America/New_York`);
           assert.strictEqual(s.tz.winterOffset, 300, `${s.label || 'worker'} winter offset must be 300`);
           assert.strictEqual(s.tz.summerOffset, 240, `${s.label || 'worker'} summer offset must be 240`);
@@ -1021,7 +1031,7 @@ async function runAuditSession(label, userAgent, osName, timezone, serverPort, m
       check('macOS persona: America/Los_Angeles timezone offsets match across all 5 surfaces', () => {
         // PDT offset is 420, PST offset is 480
         for (const s of [macMain, macSame, macSrcdoc, macBlank, macWorker]) {
-          assert.strictEqual(s.tz.offset, 420, `${s.label || 'worker'} offset must be 420`);
+          assert.strictEqual(s.tz.offset, expectedTzNow('America/Los_Angeles').offset, `${s.label || 'worker'} offset must equal America/Los_Angeles current offset`);
           assert.strictEqual(s.tz.intlTz, 'America/Los_Angeles', `${s.label || 'worker'} intlTz must be America/Los_Angeles`);
           assert.strictEqual(s.tz.winterOffset, 480, `${s.label || 'worker'} winter offset must be 480`);
           assert.strictEqual(s.tz.summerOffset, 420, `${s.label || 'worker'} summer offset must be 420`);

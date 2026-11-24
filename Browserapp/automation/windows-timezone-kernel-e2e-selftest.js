@@ -1,6 +1,16 @@
 #!/usr/bin/env node
 'use strict';
 
+// DST-aware expectation for a zone at the current instant (offset minutes as getTimezoneOffset, GMT+hhmm form, short name).
+function expectedTzNow(timeZone, at = new Date()) {
+  const part = (opt) => new Intl.DateTimeFormat('en-US', { timeZone, ...opt }).formatToParts(at).find((p) => p.type === 'timeZoneName').value;
+  const m = /^GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(part({ timeZoneName: 'shortOffset' }));
+  const signedMin = m ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] || 0)) : 0;
+  const hh = String(Math.floor(Math.abs(signedMin) / 60)).padStart(2, '0');
+  const mm = String(Math.abs(signedMin) % 60).padStart(2, '0');
+  return { offset: -signedMin, gmtString: `GMT${signedMin < 0 ? '-' : '+'}${hh}${mm}`, shortName: part({ timeZoneName: 'short' }) };
+}
+
 /**
  * End-to-end verification for Windows browser kernel timezone consistency.
  *
@@ -398,9 +408,10 @@ async function runTimezoneLiveSession(mutate = false) {
     check('Live browser: DedicatedWorker inherits consistent timezone without host leakage', () => {
       assert.strictEqual(live.worker.timeZone, live.targetTimezone);
       assert.strictEqual(live.worker.summerOffset, 240);
+      const expNow = expectedTzNow(live.targetTimezone);
       assert.ok(
-        live.worker.dateString.includes('GMT-0400') || live.worker.dateString.includes('EDT'),
-        `Worker date string expected GMT-0400 or EDT, got: ${live.worker.dateString}`
+        live.worker.dateString.includes(expNow.gmtString) || live.worker.dateString.includes(expNow.shortName),
+        `Worker date string expected ${expNow.gmtString} or ${expNow.shortName}, got: ${live.worker.dateString}`
       );
     });
 

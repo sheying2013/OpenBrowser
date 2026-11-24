@@ -963,30 +963,30 @@ function buildBrowserEngineIcon(name, size = 26) {
 
 function buildEnvBrowserCell(profile) {
   const wrap = document.createElement('div');
-  wrap.className = 'env-browser-cell env-browser-cell-engine';
+  wrap.className = 'env-browser-cell env-browser-cell-engine env-browser-cell-compact-engine';
   const rawBrowser = String(profile.browser || '').trim();
   const isEdge = /edge/i.test(rawBrowser);
 
   const iconWrap = document.createElement('div');
   iconWrap.className = 'browser-engine-icon';
-  iconWrap.innerHTML = buildBrowserEngineIcon(isEdge ? 'Edge' : 'Chrome', 26);
+  iconWrap.innerHTML = buildBrowserEngineIcon(isEdge ? 'Edge' : 'Chrome', 16);
   wrap.append(iconWrap);
 
   const label = document.createElement('div');
   label.className = 'env-browser-label';
 
-  const engineName = isEdge ? 'Microsoft Edge' : 'Chromium';
-  const versionMatch = rawBrowser.match(/\b(?:Chrome|Chromium|Edge)\/(\d+[\.\d]*)/i) || rawBrowser.match(/\b(\d{2,3})\b/);
-  const fullVersion = versionMatch ? versionMatch[1] : '130';
-  const displayVersion = String(fullVersion).split('.')[0] || fullVersion;
+  const engineName = isEdge ? 'Edge' : 'Chromium';
+  // Prefer a version the profile actually reports; otherwise the installed kernel. Never invent one.
+  const versionMatch = rawBrowser.match(/\b(?:Chrome|Chromium|Edge)\/(\d+[\.\d]*)/i)
+    || String(profile.kernelVersion || '').match(/(\d+(?:\.\d+)*)/)
+    || (!isEdge && String((typeof installedKernelVersion === 'string' && installedKernelVersion) || '').match(/(\d+(?:\.\d+)*)/));
+  const fullVersion = versionMatch ? versionMatch[1] : '';
+  const displayVersion = fullVersion.split('.')[0];
 
-  const titleEl = element('strong', '', `${engineName} ${displayVersion}`);
-  let kernelSub = isEdge ? t('profiles.kernel.edge') : t('profiles.kernel.independent');
-  const subEl = element('small', '', kernelSub);
-
-  label.append(titleEl, subEl);
+  label.append(element('strong', '', displayVersion ? `${engineName} ${displayVersion}` : engineName));
   wrap.append(label);
-  wrap.title = `${engineName} ${fullVersion} · ${kernelSub}`;
+  const kernelKind = isEdge ? t('profiles.kernel.edge') : t('profiles.kernel.independent');
+  wrap.title = [isEdge ? 'Microsoft Edge' : 'Chromium', fullVersion, kernelKind].filter(Boolean).join(' · ');
   return wrap;
 }
 
@@ -1043,6 +1043,14 @@ let pendingDeleteProfiles = [];
 let editingProfileId = null;
 let editorNetworkResult = null;
 let toastTimer = null;
+const checkingProxies = new Set();
+// Per-proxy results that arrived mid-batch, shown until the library is reloaded.
+const proxyLiveResults = new Map();
+const checkingProfileExits = new Set();
+// Last start failure per profile: { message, stage, at }. Cleared on the next start attempt.
+const startFailures = new Map();
+let proxyBatchBusy = false;
+let installedKernelVersion = '';
 const PROFILE_PAGE_SIZES = [10, 20, 50, 100];
 const PROFILE_PAGE_SIZE_KEY = 'openbrowser-profile-page-size-v1';
 let profilePage = 1;
@@ -1798,16 +1806,24 @@ new MutationObserver((records) => {
   }));
 }).observe(document.body, { childList: true, subtree: true });
 
-function toast(message, { tone = 'status' } = {}) {
+// tone: status | success | warning | error | progress. Progress stays up until the next toast.
+function toast(message, { tone = 'status', duration } = {}) {
   const value = $('#toast');
   if (!value) return;
   value.textContent = message;
   value.dataset.tone = tone;
   value.setAttribute('role', tone === 'error' ? 'alert' : 'status');
   value.setAttribute('aria-live', tone === 'error' ? 'assertive' : 'polite');
+  value.setAttribute('aria-busy', tone === 'progress' ? 'true' : 'false');
   value.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => value.classList.remove('show'), 2400);
+  const ms = duration ?? (tone === 'progress' ? 0 : tone === 'error' ? 8000 : tone === 'warning' ? 5000 : 2400);
+  if (ms > 0) toastTimer = setTimeout(() => value.classList.remove('show'), ms);
+}
+
+// Electron wraps IPC rejections as "Error invoking remote method 'x': Error: msg".
+function ipcErrorMessage(error) {
+  return String(error?.message || error || '').replace(/^Error invoking remote method '[^']+':\s*(?:[A-Za-z]*Error:\s*)?/, '').trim();
 }
 
 async function confirmAction(options) {
@@ -3321,7 +3337,14 @@ function renderProxies() {
     const netType = item.lastNetworkType || '—';
     const actions = element('div', 'actions');
     const edit = iconActionButton('pencil', t('action.edit'), 'mini edit'); edit.dataset.proxyEdit = item.id;
-    const test = iconActionButton('activity', t('action.check'), 'mini blue'); test.dataset.proxyTest = item.id;
+    const isChecking = checkingProxies.has(item.id);
+    const test = iconActionButton('activity', isChecking ? t('status.checking') : t('action.check'), 'mini blue'); test.dataset.proxyTest = item.id;
+    if (isChecking) {
+      test.disabled = true;
+      test.classList.add('is-busy');
+      test.setAttribute('aria-busy', 'true');
+      row.classList.add('is-checking');
+    }
     const apply = iconActionButton('users-round', tx('应用')); apply.dataset.proxyApply = item.id;
     const use = iconActionButton('link-2', t('action.use')); use.dataset.proxyUse = item.id;
     const del = iconActionButton('trash-2', t('action.delete'), 'mini danger'); del.dataset.proxyDelete = item.id;
@@ -3376,13 +3399,23 @@ function renderProxies() {
     limitCell.append(limitText);
 
     const speedCell = document.createElement('td');
-    const isProbeOk = item.lastProbeOk !== undefined ? item.lastProbeOk : item.lastCheckOk;
-    if (isProbeOk === true) {
-      const badge = element('span', 'net-badge net-badge-direct', Number.isFinite(Number(item.lastLatencyMs)) ? `${Number(item.lastLatencyMs)}ms` : tx('可用'));
-      if (item.lastCountryCode) badge.title = item.lastCountryCode;
+    const live = proxyLiveResults.get(item.id);
+    const isProbeOk = live ? live.ok : (item.lastProbeOk !== undefined ? item.lastProbeOk : item.lastCheckOk);
+    const latencyValue = live ? live.latencyMs : item.lastLatencyMs;
+    const errorClass = live ? live.errorClass : item.lastErrorClass;
+    if (isChecking) {
+      const badge = element('span', 'net-badge net-badge-checking');
+      badge.append(element('span', 'net-badge-spinner'), document.createTextNode(t('status.checking')));
+      badge.setAttribute('role', 'status');
+      speedCell.append(badge);
+    } else if (isProbeOk === true) {
+      const badge = element('span', 'net-badge net-badge-direct', Number.isFinite(Number(latencyValue)) ? `${Number(latencyValue)}ms` : tx('可用'));
+      const country = live ? live.countryCode : item.lastCountryCode;
+      if (country) badge.title = country;
       speedCell.append(badge);
     } else if (isProbeOk === false) {
-      const badge = element('span', 'net-badge net-badge-full', item.lastErrorClass ? `${tx('失败')} (${item.lastErrorClass})` : tx('失败'));
+      const badge = element('span', 'net-badge net-badge-full', errorClass ? `${tx('失败')} (${errorClass})` : tx('失败'));
+      if (live?.message) badge.title = live.message;
       speedCell.append(badge);
     } else {
       speedCell.append(element('span', 'net-badge net-badge-idle', tx('未测速')));
@@ -3423,6 +3456,8 @@ async function refreshProxies() {
   try {
     proxyLibrary = await window.ops.proxyList({ q: $('#proxy-search')?.value || '' });
     if (!Array.isArray(proxyLibrary)) proxyLibrary = [];
+    // Persisted results supersede mid-batch ones; speed-test results only persist when the batch ends.
+    if (!proxyBatchBusy) proxyLiveResults.clear();
   } catch (error) {
     proxyLibrary = [];
     toast('加载代理库失败：' + error.message);
@@ -3629,6 +3664,26 @@ function setStartingProgress(id, progress = {}) {
 function clearStartingProgress(id) {
   if (id) startingProfiles.delete(id);
   else startingProfiles.clear();
+}
+
+// One notice per failure: the engine's error event and the IPC rejection describe the same start.
+function notifyStartFailure(id, rawError, stage = '') {
+  if (!id) return;
+  const message = ipcErrorMessage(rawError) || t('status.startFailed');
+  const prev = startFailures.get(id);
+  const now = Date.now();
+  startFailures.set(id, { message, stage: stage || prev?.stage || '', at: now });
+  scheduleRenderProfiles();
+  if (prev && prev.message === message && now - prev.at < 5000) return;
+  const profile = ui.profiles.find((item) => item.id === id);
+  const phaseKey = stage ? `status.startPhase.${stage}` : '';
+  const phase = phaseKey && t(phaseKey) !== phaseKey ? t(phaseKey) : '';
+  const text = t('status.startFailedNotice', {
+    num: profile ? displayProfileNumber(profile) : id,
+    message: phase ? `[${phase}] ${message}` : message,
+  });
+  log('Error', text);
+  toast(text, { tone: 'error' });
 }
 
 function startProgressLabel(progress) {
@@ -3848,9 +3903,11 @@ function buildProfileRow(profile) {
     networkInfo.append(element('span', 'network-pending', isDirectProxy(profile.proxy) ? t('net.localHost') : t('net.untested')));
   }
   if (!isCorrupted && !isDirectProxy(profile.proxy)) {
-    const inspect = element('button', 'network-check', t('action.check'));
+    const exitChecking = checkingProfileExits.has(profile.id);
+    const inspect = element('button', exitChecking ? 'network-check is-busy' : 'network-check', exitChecking ? t('status.checking') : t('action.check'));
     inspect.title = network?.ip ? t('action.recheck') : t('action.checkExit');
     inspect.dataset.proxyCheck = profile.id;
+    if (exitChecking) { inspect.disabled = true; inspect.setAttribute('aria-busy', 'true'); }
     networkInfo.append(inspect);
   }
   networkCell.append(networkInfo);
@@ -3865,6 +3922,12 @@ function buildProfileRow(profile) {
   } else if (starting) {
     statusCell.append(buildStartProgressCell(profile.id, startingProfiles.get(profile.id)));
     row.classList.add('is-starting');
+  } else if (!info.running && startFailures.has(profile.id)) {
+    const failure = startFailures.get(profile.id);
+    const status = element('span', 'status status-compact status-failed', t('status.startFailed'));
+    status.title = failure.message;
+    status.setAttribute('role', 'alert');
+    statusCell.append(status);
   } else {
     const status = element('span', `status status-compact ${info.running ? 'running' : ''}`, info.running ? t('status.run') : t('status.stop'));
     if (info.running && info.port) status.title = t('status.runningCdp', { port: info.port });
@@ -4299,8 +4362,9 @@ async function startProfile(id) {
       }
     } catch (_) {}
   }
-  if (!profile) return;
-  if (profileEngine(id).running || startingProfiles.has(id)) return;
+  if (!profile) return false;
+  if (profileEngine(id).running || startingProfiles.has(id)) return true;
+  startFailures.delete(id);
   const linkedProxyId = profileProxyId(profile);
   const linkedProxy = linkedProxyId ? proxyLibraryItem(linkedProxyId) : null;
   const allowFailed = Boolean(profile.allowFailedProxy || profile.proxyMeta?.allowFailedProxy || profile.ignoreBrokenProxy || profile.proxyMeta?.ignoreBrokenProxy);
@@ -4312,9 +4376,8 @@ async function startProfile(id) {
       if (elapsed >= 60000) {
         const name = linkedProxy.name || `${linkedProxy.host}:${linkedProxy.port}`;
         const msg = `代理「${name}」最近一次探测失败且已过重试窗口，已阻断启动以防真实 IP 泄漏。可勾选「仍要启动」强制启动。`;
-        log('Error', msg);
-        toast(tx(msg), { tone: 'error' });
-        return;
+        notifyStartFailure(id, tx(msg), 'proxy');
+        return false;
       }
     }
   }
@@ -4326,14 +4389,16 @@ async function startProfile(id) {
   renderProfiles();
   try {
     const result = await window.ops.startProfile(payload);
+    startFailures.delete(id);
     setStartingProgress(id, { phase: 'ready', percent: 100, message: t('status.startPhase.ready') });
     log('Browser', `${displayProfileNumber(profile)} 已启动 · ${result.browser} · CDP ${result.port || 'pending'}`);
-    toast(tx(`${displayProfileNumber(profile)} 已启动`));
+    toast(tx(`${displayProfileNumber(profile)} 已启动`), { tone: 'success' });
     await refreshStatus();
     await refreshSessions();
+    return true;
   } catch (error) {
-    log('Error', error.message);
-    toast(tx(`启动失败：${error.message}`));
+    notifyStartFailure(id, error, error?.stage);
+    return false;
   } finally {
     clearStartingProgress(id);
     await refreshStatus();
@@ -4360,8 +4425,11 @@ async function checkProfileProxy(id) {
     } catch (_) {}
   }
   if (!profile) return;
+  if (checkingProfileExits.has(id)) return;
+  checkingProfileExits.add(id);
+  scheduleRenderProfiles();
   try {
-    toast('正在通过环境 ' + displayProfileNumber(profile) + ' 的代理检测出口 IP...');
+    toast('正在通过环境 ' + displayProfileNumber(profile) + ' 的代理检测出口 IP...', { tone: 'progress' });
     const result = await window.ops.checkProfileProxy(profile);
     profile.exitIp = result.ip; profile.exitCountryCode = result.countryCode; profile.exitTimezone = result.timezone || ''; profile.exitLatitude = result.latitude; profile.exitLongitude = result.longitude; profile.exitCheckedAt = result.checkedAt;
     if (Number.isFinite(Number(result.latencyMs))) profile.exitLatencyMs = Number(result.latencyMs);
@@ -4372,8 +4440,14 @@ async function checkProfileProxy(id) {
     const number = displayProfileNumber(profile); await refreshStatus(); renderProfiles();
     const detail = formatProxyCheckResult(result);
     log('Proxy', '环境 ' + number + ' 出口检测成功 · ' + detail);
-    toast('环境 ' + number + ' 出口：' + detail);
-  } catch (error) { log('Proxy', '环境 ' + displayProfileNumber(profile) + ' 检测失败 · ' + error.message); toast('代理检测失败：' + error.message); }
+    toast('环境 ' + number + ' 出口：' + detail, { tone: 'success' });
+  } catch (error) {
+    log('Proxy', '环境 ' + displayProfileNumber(profile) + ' 检测失败 · ' + ipcErrorMessage(error));
+    toast('代理检测失败：' + ipcErrorMessage(error), { tone: 'error' });
+  } finally {
+    checkingProfileExits.delete(id);
+    scheduleRenderProfiles();
+  }
 }
 
 function extensionIcon(name) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(); }
@@ -5925,7 +5999,20 @@ $('#empty-trash-btn')?.addEventListener('click', async () => {
     toast(t('trash.emptyFailed') + ': ' + err.message);
   }
 });
-$('#start-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast(tx('请先选择环境')); for (const id of selectedProfiles) await startProfile(id); });
+$('#start-selected').addEventListener('click', async () => {
+  if (!selectedProfiles.size) return toast(tx('请先选择环境'));
+  const ids = [...selectedProfiles];
+  const failed = [];
+  for (const id of ids) {
+    if (!await startProfile(id)) failed.push(id);
+  }
+  if (ids.length > 1 && failed.length) {
+    const numbers = failed.map((id) => { const p = ui.profiles.find((item) => item.id === id); return p ? displayProfileNumber(p) : id; }).join('、');
+    const text = t('status.batchStartSummary', { ok: ids.length - failed.length, fail: failed.length, list: numbers });
+    log('Error', text);
+    toast(text, { tone: 'error' });
+  }
+});
 $('#stop-selected').addEventListener('click', async () => { if (!selectedProfiles.size) return toast(tx('请先选择环境')); for (const id of selectedProfiles) await stopProfile(id); });
 $('#copy-selected')?.addEventListener('click', async () => {
   const ids = [...selectedProfiles];
@@ -6087,69 +6174,125 @@ $('#proxy-delete-selected')?.addEventListener('click', async () => {
     log('Proxy', '删除 ' + ids.length + ' 条');
   } catch (error) { toast(error.message); }
 });
+const PROXY_CHECK_CONCURRENCY = 6;
+const PROXY_BATCH_BUTTONS = ['#proxy-check-selected', '#proxy-check-all', '#proxy-batch-speed-btn'];
+let activeProxySpeedRun = null;
+let proxyRenderFrame = 0;
+
+function scheduleProxyRender() {
+  if (proxyRenderFrame) return;
+  proxyRenderFrame = requestAnimationFrame(() => { proxyRenderFrame = 0; renderProxies(); });
+}
+
+function setProxyBatchBusy(busy) {
+  proxyBatchBusy = busy;
+  for (const selector of PROXY_BATCH_BUTTONS) {
+    const button = $(selector);
+    if (!button) continue;
+    button.disabled = busy;
+    button.classList.toggle('is-busy', busy);
+    button.setAttribute('aria-busy', busy ? 'true' : 'false');
+  }
+}
+
+function proxyResultTone(ok, fail) {
+  if (fail && !ok) return 'error';
+  return fail ? 'warning' : 'success';
+}
+
 async function runProxyBatchCheck(ids) {
   if (!ids.length) return toast(tx('请先勾选代理'));
-  toast('正在检测 ' + ids.length + ' 条代理…');
-  if (typeof window.ops.proxyCheckMany === 'function') {
-    try {
-      const summary = await window.ops.proxyCheckMany({ ids });
-      invalidateViewCache('proxies');
-      await refreshProxies();
-      toast(tx(`检测完成：成功 ${summary.ok || 0} · 失败 ${summary.fail || 0}`));
-      return;
-    } catch (error) {
-      await refreshProxies();
-      toast(tx('批量检测失败：') + (error.message || error));
-      log('Proxy', '批量检测失败 · ' + (error.message || error));
-      return;
+  if (proxyBatchBusy) return toast(tx('已有批量检测正在进行，请稍候'), { tone: 'warning' });
+  setProxyBatchBusy(true);
+  for (const id of ids) { checkingProxies.add(id); proxyLiveResults.delete(id); }
+  renderProxies();
+  const total = ids.length;
+  let ok = 0; let fail = 0; let done = 0; let cursor = 0;
+  const report = () => toast(t('proxy.checkProgress', { done, total, ok, fail }), { tone: 'progress' });
+  report();
+  // Renderer-driven pool: every id is checked (no silent cap) and each row updates as it finishes.
+  const worker = async () => {
+    while (cursor < ids.length) {
+      const id = ids[cursor++];
+      try {
+        const result = await window.ops.proxyCheck({ id });
+        ok += 1;
+        proxyLiveResults.set(id, { ok: true, latencyMs: result?.latencyMs, countryCode: result?.countryCode || '' });
+      } catch (error) {
+        fail += 1;
+        proxyLiveResults.set(id, { ok: false, errorClass: error?.errorClass || '', message: ipcErrorMessage(error) });
+      }
+      done += 1;
+      checkingProxies.delete(id);
+      report();
+      scheduleProxyRender();
     }
+  };
+  try {
+    await Promise.all(Array.from({ length: Math.min(PROXY_CHECK_CONCURRENCY, ids.length) }, () => worker()));
+  } catch (error) {
+    toast(tx('批量检测失败：') + ipcErrorMessage(error), { tone: 'error' });
+    log('Proxy', '批量检测失败 · ' + ipcErrorMessage(error));
+    return;
+  } finally {
+    for (const id of ids) checkingProxies.delete(id);
+    setProxyBatchBusy(false);
+    invalidateViewCache('proxies');
+    await refreshProxies();
   }
-  let ok = 0; let fail = 0;
-  for (const id of ids) {
-    try { await window.ops.proxyCheck({ id }); ok += 1; }
-    catch (_) { fail += 1; }
-  }
-  await refreshProxies();
-  toast(tx(`检测完成：成功 ${ok} · 失败 ${fail}`));
+  toast(tx(`检测完成：成功 ${ok} · 失败 ${fail}`), { tone: proxyResultTone(ok, fail) });
+  log('Proxy', `批量检测完成：${ok} 成功，${fail} 失败`);
 }
 $('#proxy-check-selected')?.addEventListener('click', async () => {
   await runProxyBatchCheck([...selectedProxies]);
 });
 async function runBatchSpeedTest(ids) {
   if (!ids.length) return toast(tx('请先勾选代理'));
-  toast(tx('正在批量测速 ') + ids.length + tx(' 条代理（并发 ≤ 16）…'));
-  let ok = 0; let fail = 0;
-  if (typeof window.ops?.batchSpeedTest === 'function' || typeof window.ops?.proxyBatchSpeedTest === 'function') {
-    try {
-      const fn = window.ops.batchSpeedTest || window.ops.proxyBatchSpeedTest;
-      const res = await fn({ ids, concurrency: 16 });
-      ok = res.okCount ?? 0;
-      fail = res.failCount ?? 0;
-    } catch (error) {
-      toast(tx('批量测速失败：') + (error.message || error));
-      return;
-    }
-  } else {
-    const concurrency = Math.min(16, ids.length);
-    let cursor = 0;
-    const worker = async () => {
-      while (cursor < ids.length) {
-        const id = ids[cursor++];
-        try {
-          await window.ops.proxyCheck({ id });
-          ok++;
-        } catch (_) {
-          fail++;
-        }
-      }
-    };
-    const workers = Array.from({ length: concurrency }, () => worker());
-    await Promise.all(workers);
+  if (proxyBatchBusy) return toast(tx('已有批量检测正在进行，请稍候'), { tone: 'warning' });
+  const fn = window.ops?.batchSpeedTest || window.ops?.proxyBatchSpeedTest;
+  if (typeof fn !== 'function') return toast(tx('批量测速失败：') + 'unavailable', { tone: 'error' });
+  setProxyBatchBusy(true);
+  for (const id of ids) { checkingProxies.add(id); proxyLiveResults.delete(id); }
+  renderProxies();
+  const run = { runId: `speed-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, total: ids.length, done: 0, ok: 0, fail: 0 };
+  activeProxySpeedRun = run;
+  const report = () => toast(t('proxy.speedProgress', { done: run.done, total: run.total, ok: run.ok, fail: run.fail }), { tone: 'progress' });
+  report();
+  let res = null;
+  try {
+    res = await fn({ ids, concurrency: 16, runId: run.runId });
+  } catch (error) {
+    toast(tx('批量测速失败：') + ipcErrorMessage(error), { tone: 'error' });
+    log('Proxy', '批量测速失败 · ' + ipcErrorMessage(error));
+    return;
+  } finally {
+    activeProxySpeedRun = null;
+    for (const id of ids) checkingProxies.delete(id);
+    setProxyBatchBusy(false);
+    invalidateViewCache('proxies');
+    await refreshProxies();
   }
-  invalidateViewCache('proxies');
-  await refreshProxies();
-  toast(tx('批量测速完成：成功 ') + ok + tx(' · 失败 ') + fail);
+  const ok = res?.okCount ?? 0;
+  const fail = res?.failCount ?? 0;
+  const tested = Number(res?.testedCount ?? res?.total ?? ids.length);
+  let text = tx('批量测速完成：成功 ') + ok + tx(' · 失败 ') + fail;
+  if (tested < ids.length) text += ' · ' + t('proxy.speedTruncated', { tested, total: ids.length });
+  toast(text, { tone: proxyResultTone(ok, fail) });
   log('Proxy', `批量测速完成：${ok} 成功，${fail} 失败`);
+}
+function handleProxySpeedProgress(value) {
+  const run = activeProxySpeedRun;
+  if (!run || value.runId !== run.runId) return;
+  run.done = Number(value.done) || run.done + 1;
+  if (value.ok) run.ok += 1; else run.fail += 1;
+  if (value.id) {
+    checkingProxies.delete(value.id);
+    proxyLiveResults.set(value.id, value.ok
+      ? { ok: true, latencyMs: value.latencyMs, countryCode: value.countryCode || '' }
+      : { ok: false, errorClass: value.errorClass || '' });
+  }
+  toast(t('proxy.speedProgress', { done: run.done, total: run.total, ok: run.ok, fail: run.fail }), { tone: 'progress' });
+  scheduleProxyRender();
 }
 $('#proxy-batch-speed-btn')?.addEventListener('click', async () => {
   const targets = selectedProxies.size ? [...selectedProxies] : (proxyLibrary || []).map((p) => p.id);
@@ -6195,14 +6338,26 @@ document.addEventListener('click', async (event) => {
   const test = event.target.closest('[data-proxy-test]');
   if (test) {
     const id = test.dataset.proxyTest;
+    if (checkingProxies.has(id)) return;
+    const item = proxyLibrary.find((p) => p.id === id);
+    const name = item ? (item.name || `${item.host}:${item.port}`) : id;
+    checkingProxies.add(id);
+    proxyLiveResults.delete(id);
+    renderProxies();
+    toast(tx('正在检测代理 ') + name + '…', { tone: 'progress' });
     try {
-      toast(tx('检测中…'));
       const result = await window.ops.proxyCheck({ id });
+      const latency = Number.isFinite(Number(result.latencyMs)) ? ` · ${Number(result.latencyMs)}ms` : '';
+      toast('连接成功 · ' + result.ip + (result.countryCode ? ' · ' + result.countryCode : '') + latency, { tone: 'success' });
+      log('Proxy', '检测 ' + name + ' → ' + result.ip);
+    } catch (error) {
+      toast('检测失败：' + ipcErrorMessage(error), { tone: 'error' });
+      log('Proxy', '检测 ' + name + ' 失败 · ' + ipcErrorMessage(error));
+    } finally {
+      checkingProxies.delete(id);
       invalidateViewCache('proxies');
       await refreshProxies();
-      toast('连接成功 · ' + result.ip + (result.countryCode ? ' · ' + result.countryCode : ''));
-      log('Proxy', '检测 ' + id + ' → ' + result.ip);
-    } catch (error) { toast('检测失败：' + error.message); }
+    }
     return;
   }
   const applyBtn = event.target.closest('[data-proxy-apply]');
@@ -6342,11 +6497,14 @@ $('#proxy-apply-form')?.addEventListener('submit', async (event) => {
   }
 });
 
-$('#proxy-dialog-test')?.addEventListener('click', async () => {
+$('#proxy-dialog-test')?.addEventListener('click', async (event) => {
   const output = $('#proxy-dialog-result');
+  const button = event.currentTarget;
+  if (button?.disabled) return;
+  if (button) { button.disabled = true; button.classList.add('is-busy'); }
   try {
     const draft = readProxyForm();
-    output.className = 'proxy-test-result';
+    output.className = 'proxy-test-result checking';
     output.textContent = tx('正在检测…');
     let proxyValue = draft.raw;
     if (!proxyValue && draft.host && Number.isInteger(draft.port) && draft.port > 0 && draft.port <= 65535) {
@@ -6362,7 +6520,9 @@ $('#proxy-dialog-test')?.addEventListener('click', async () => {
     if (draft.id) await refreshProxies();
   } catch (error) {
     output.className = 'proxy-test-result error';
-    output.textContent = tx('检测失败 · ') + error.message;
+    output.textContent = tx('检测失败 · ') + ipcErrorMessage(error);
+  } finally {
+    if (button) { button.disabled = false; button.classList.remove('is-busy'); }
   }
 });
 $('#proxy-user')?.addEventListener('input', () => { window.__proxyAuthFieldsTouched = true; });
@@ -7031,8 +7191,13 @@ window.ops.onEvent(async (value) => {
   if (value?.type === 'app-update-status') {
     applyVersionTrafficLight(value);
   }
+  if (value?.type === 'proxy-speed-progress') handleProxySpeedProgress(value);
   if (value?.type === 'profile-start-progress' && value.id) {
-    if (value.error || value.starting === false) {
+    if (value.error) {
+      clearStartingProgress(value.id);
+      // Covers starts the UI did not trigger (Local API, MCP, RPA, restarts) as well.
+      notifyStartFailure(value.id, value.message, value.stage);
+    } else if (value.starting === false) {
       clearStartingProgress(value.id);
     } else {
       setStartingProgress(value.id, value);
@@ -7045,6 +7210,7 @@ window.ops.onEvent(async (value) => {
     // also set running:true and must not wipe progress mid-launch.
     if (value.id && value.running === false) clearStartingProgress(value.id);
     if (value.id && value.running === true && !value.action) clearStartingProgress(value.id);
+    if (value.id && value.running === true) startFailures.delete(value.id);
     // Coalesce fetch+render: a batch start/stop fires many status events; without this each
     // one did 2 IPC round-trips + 2 full table rebuilds. The log() below only reads `value`.
     scheduleStatusRefresh();
@@ -7242,8 +7408,21 @@ function updateEngineBadge(info) {
   badge.setAttribute('aria-label', badge.title);
 }
 
+async function loadInstalledKernelVersion() {
+  if (typeof window.ops?.kernelStatus !== 'function') return;
+  try {
+    const status = await window.ops.kernelStatus();
+    const version = String(status?.kernel?.version || '');
+    if (version && version !== installedKernelVersion) {
+      installedKernelVersion = version;
+      scheduleRenderProfiles();
+    }
+  } catch (_) {}
+}
+
 async function initialize() {
   refreshLocaleChrome();
+  loadInstalledKernelVersion();
   const info = await window.ops.getInfo();
   const appVersion = document.getElementById('app-version');
   if (appVersion && info?.appVersion) appVersion.textContent = `v${info.appVersion}`;
@@ -7394,7 +7573,7 @@ async function applySelectedNetworkMode(mode, { proxies = null, restart = true }
       if (!profile && typeof window.ops?.getProfile === 'function') {
         try { profile = await window.ops.getProfile(id); } catch (_) {}
       }
-      if (profile) await window.ops.startProfile(profile);
+      if (profile) await restartAfterNetworkChange(profile);
     }
     await refreshStatus(); await refreshSessions(); invalidateAndRefreshProfiles();
     return { count: ids.length, direct };
@@ -7425,10 +7604,20 @@ async function applySelectedNetworkMode(mode, { proxies = null, restart = true }
   engineProfiles = await window.ops.syncProfiles(ui.profiles);
   if (restart) for (const id of runningBefore) {
     const profile = ui.profiles.find((item) => item.id === id);
-    if (profile) await window.ops.startProfile(profile);
+    if (profile) await restartAfterNetworkChange(profile);
   }
   await refreshStatus(); await refreshSessions(); invalidateAndRefreshProfiles();
   return { count: ids.length, direct };
+}
+
+// A failed restart must not abort the loop: the remaining profiles were already stopped.
+async function restartAfterNetworkChange(profile) {
+  try {
+    await window.ops.startProfile(profile);
+    startFailures.delete(profile.id);
+  } catch (error) {
+    notifyStartFailure(profile.id, error, error?.stage);
+  }
 }
 
 $('#batch-set-direct')?.addEventListener('click', async () => {
@@ -7567,7 +7756,7 @@ window.ops.onEvent((value) => {
     toast(value.message || tx('内核准备失败'));
     refreshKernelPanel().catch(() => {});
   }
-  if (value?.type === 'kernel-ready') refreshKernelPanel().catch(() => {});
+  if (value?.type === 'kernel-ready') { refreshKernelPanel().catch(() => {}); loadInstalledKernelVersion(); }
   if (value?.type === 'local-api-status' && value.port) updateLocalApiEndpointDisplay({ port: value.port });
   if (value?.type === 'cloud-sync') {
     refreshCloudPanel().catch(() => {});

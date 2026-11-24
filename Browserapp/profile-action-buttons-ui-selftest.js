@@ -64,10 +64,10 @@ check('static: standalone fallback icons defined for all table action buttons', 
   }
 });
 
-check('static: ui-shell css defines .mini.clone styling and 155px col-browser width', () => {
+check('static: ui-shell css defines .mini.clone styling and compact 126px col-browser width', () => {
   const css = read('ui-shell.css');
   assert.ok(css.includes('.mini.clone'), 'must style .mini.clone button');
-  assert.ok(css.includes('width: 155px'), 'col-browser must have expanded 155px width');
+  assert.ok(css.includes('width: 126px'), 'col-browser must have compact 126px width');
 });
 
 check('static: index.html does not reference nonexistent data-lucide="browser"', () => {
@@ -313,13 +313,13 @@ check('static: action buttons have synchronized aria-label and title', () => {
     const themeShot = path.join(os.tmpdir(), `ui-${theme}-verified.png`);
     fs.writeFileSync(themeShot, Buffer.from(ssTheme.data, 'base64'));
 
-    check(`real browser (${theme}): kernel browser engine icons render at 26px without clipping`, () => {
+    check(`real browser (${theme}): kernel browser engine icons render at 16px without clipping`, () => {
       assert.ok(probe.engines.length >= 2, 'must find engine rows');
       for (const eng of probe.engines) {
         assert.ok(eng.hasSvg, 'engine must contain SVG');
-        assert.ok(Math.abs(eng.svgWidth - 26) < 1, `engine SVG width must be ~26px (got ${eng.svgWidth})`);
-        assert.ok(Math.abs(eng.svgHeight - 26) < 1, `engine SVG height must be ~26px (got ${eng.svgHeight})`);
-        assert.ok(eng.cellWidth >= 150, `kernel column width must be >= 150px (got ${eng.cellWidth})`);
+        assert.ok(Math.abs(eng.svgWidth - 16) < 1, `engine SVG width must be ~16px (got ${eng.svgWidth})`);
+        assert.ok(Math.abs(eng.svgHeight - 16) < 1, `engine SVG height must be ~16px (got ${eng.svgHeight})`);
+        assert.ok(eng.cellWidth >= 120, `kernel column width must be >= 120px (got ${eng.cellWidth})`);
         assert.ok(!eng.labelText.endsWith('...'), `engine label must not be clipped to ellipsis: "${eng.labelText}"`);
         assert.strictEqual(eng.objectFit, 'contain', `engine SVG object-fit must be contain (got ${eng.objectFit})`);
         assert.strictEqual(eng.overflow, 'visible', `engine SVG overflow must be visible (got ${eng.overflow})`);

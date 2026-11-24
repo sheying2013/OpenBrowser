@@ -370,6 +370,75 @@ try {
     assert.equal(value, false);
   });
   run(()=>{ui.profiles=window.__profileListAudit.profiles;engineProfiles=window.__profileListAudit.engines;selectedProfiles.clear();for(const id of window.__profileListAudit.selected)selectedProfiles.add(id);$('#profile-search').value='';activeGroupFilter='all';renderProfiles();delete window.__profileListAudit;});
+  check('engine start failure surfaces one error notice, an Error log and a row badge', () => {
+    const value = run(async () => {
+      const savedProfiles = ui.profiles; const savedEngines = engineProfiles;
+      ui.profiles = [normalizeProfileSettings({ id: 'fail-profile', number: 7, os: 'Windows', language: 'en-US', networkMode: 'direct', proxy: 'Direct' })];
+      engineProfiles = [];
+      const emit = (event) => Promise.all(window.__uiAuditEventHandlers.map((handler) => handler(event)));
+      const failure = { type: 'profile-start-progress', id: 'fail-profile', phase: 'error', stage: 'spawn', error: true, starting: false, message: 'Browser exited before CDP was ready (code 18)' };
+      await emit(failure); await emit(failure);
+      renderProfiles();
+      const toastEl = $('#toast');
+      const badge = document.querySelector('#profile-table .status-failed');
+      const out = { tone: toastEl.dataset.tone, shown: toastEl.classList.contains('show'), mentions: toastEl.textContent.includes('code 18'), badge: Boolean(badge), badgeTitle: badge?.title || '', errorLogs: ui.logs.filter((x) => x.module === 'Error').length };
+      await emit({ type: 'status', id: 'fail-profile', running: true });
+      out.clearedOnRun = !startFailures.has('fail-profile');
+      ui.logs = ui.logs.filter((x) => x.module !== 'Error'); startFailures.clear();
+      ui.profiles = savedProfiles; engineProfiles = savedEngines; renderProfiles(); toastEl.classList.remove('show');
+      return out;
+    });
+    assert.deepEqual(value, { tone: 'error', shown: true, mentions: true, badge: true, badgeTitle: 'Browser exited before CDP was ready (code 18)', errorLogs: 1, clearedOnRun: true });
+  });
+  check('proxy check shows a spinning in-progress badge and locks the test button', () => {
+    const value = run(() => {
+      checkingProxies.add('audit-proxy'); renderProxies();
+      const row = document.querySelector('#proxy-table tr');
+      const badge = row?.querySelector('.net-badge-checking');
+      const button = row?.querySelector('[data-proxy-test]');
+      const spinner = badge?.querySelector('.net-badge-spinner');
+      const out = { badge: Boolean(badge), disabled: Boolean(button?.disabled), rowClass: Boolean(row?.classList.contains('is-checking')), spin: spinner ? getComputedStyle(spinner).animationName : '' };
+      checkingProxies.delete('audit-proxy'); renderProxies();
+      out.unlocked = !document.querySelector('#proxy-table [data-proxy-test]')?.disabled;
+      return out;
+    });
+    assert.deepEqual(value, { badge: true, disabled: true, rowClass: true, spin: 'ob-busy-spin', unlocked: true });
+  });
+  check('progress notices stay visible until replaced; errors outlast status toasts', () => {
+    const value = run(async () => {
+      const el = $('#toast');
+      toast('progress fixture', { tone: 'progress' });
+      await new Promise((resolve) => setTimeout(resolve, 2700));
+      const progressShown = el.classList.contains('show');
+      const spinner = getComputedStyle(el, '::before').animationName;
+      toast('error fixture', { tone: 'error' });
+      await new Promise((resolve) => setTimeout(resolve, 2700));
+      const errorShown = el.classList.contains('show');
+      el.classList.remove('show');
+      return { progressShown, spinner, errorShown };
+    });
+    assert.deepEqual(value, { progressShown: true, spinner: 'ob-busy-spin', errorShown: true });
+  });
+  check('kernel column shows the installed kernel version on one compact line', () => {
+    const value = run(() => {
+      const cell = buildEnvBrowserCell({ browser: 'Google Chrome' });
+      document.body.append(cell);
+      const out = { label: cell.querySelector('strong')?.textContent, lines: cell.querySelectorAll('.env-browser-label > *').length, title: cell.title };
+      cell.remove();
+      const savedProfiles = ui.profiles; const savedEngines = engineProfiles;
+      ui.profiles = [normalizeProfileSettings({ id: 'kernel-fit', number: 3, os: 'Windows', language: 'en-US', networkMode: 'direct', proxy: 'Direct' })];
+      engineProfiles = [];
+      renderProfiles();
+      const strong = document.querySelector('#profile-table td.col-browser strong');
+      out.clipped = strong ? strong.scrollWidth > strong.clientWidth : 'missing';
+      ui.profiles = savedProfiles; engineProfiles = savedEngines; renderProfiles();
+      return out;
+    });
+    assert.equal(value.label, 'Chromium 148');
+    assert.equal(value.lines, 1);
+    assert.ok(value.title.includes('148.0.7778.165'), value.title);
+    assert.equal(value.clipped, false, 'kernel label must fit the compact column without ellipsis');
+  });
   check('no page exceptions or renderer Error log', () => {
     const state = evaluate('({errors:window.__uiAuditErrors,logs:ui.logs.filter(x=>x.module==="Error"),unexpectedCalls:window.__uiAuditCalls})');
     assert.deepEqual(state.errors, []); assert.deepEqual(state.logs, []); assert.deepEqual(state.unexpectedCalls, []);

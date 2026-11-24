@@ -264,6 +264,13 @@
     'status.running': '运行中',
     'status.stopped': '已停止',
     'status.starting': '启动中',
+    'status.startFailed': '启动失败',
+    'status.startFailedNotice': '环境 {num} 启动失败：{message}',
+    'status.batchStartSummary': '批量启动完成：成功 {ok} · 失败 {fail}（环境 {list}）',
+    'status.checking': '检测中',
+    'proxy.checkProgress': '正在检测代理 {done}/{total} · 成功 {ok} · 失败 {fail}',
+    'proxy.speedProgress': '正在测速 {done}/{total} · 成功 {ok} · 失败 {fail}',
+    'proxy.speedTruncated': '仅测速前 {tested} 条（共 {total} 条）',
     'status.startPhase.prepare': '准备中',
     'status.startPhase.proxy': '检测网络',
     'status.startPhase.kernel': '准备内核',
@@ -633,6 +640,13 @@
     'status.running': 'Running',
     'status.stopped': 'Stopped',
     'status.starting': 'Starting',
+    'status.startFailed': 'Start failed',
+    'status.startFailedNotice': 'Profile {num} failed to start: {message}',
+    'status.batchStartSummary': 'Batch start finished: {ok} started · {fail} failed (profiles {list})',
+    'status.checking': 'Checking',
+    'proxy.checkProgress': 'Checking proxies {done}/{total} · {ok} OK · {fail} failed',
+    'proxy.speedProgress': 'Speed testing {done}/{total} · {ok} OK · {fail} failed',
+    'proxy.speedTruncated': 'only the first {tested} of {total} were tested',
     'status.startPhase.prepare': 'Preparing',
     'status.startPhase.proxy': 'Checking network',
     'status.startPhase.kernel': 'Preparing kernel',
@@ -3006,7 +3020,11 @@
     "提取 URL 必须以 http:// 或 https:// 开头": "Extraction URL must start with http:// or https://",
     "请求过于频繁，同一提取 URL 冷却时间为 60 秒（剩余 ": "Request too frequent, 60s cooldown for same URL (remaining ",
     " 秒）": "s)",
-    "秒）": "s)"
+    "秒）": "s)",
+    "已有批量检测正在进行，请稍候": "A batch check is already running, please wait",
+    "正在检测代理 ": "Checking proxy ",
+    "批量检测完成：": "Batch check finished: ",
+    "检测完成：成功 ": "Check finished: Succeeded "
   });
   const UI_ZH_FALLBACKS = Object.freeze({ ...UI_ZH_EN, ...RUNTIME_ZH_EN });
   const UI_ZH_KEYS = Object.keys(UI_ZH_FALLBACKS).sort((a, b) => b.length - a.length);

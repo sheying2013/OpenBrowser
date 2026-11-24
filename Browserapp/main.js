@@ -2168,16 +2168,17 @@ app.whenReady().then(async () => {
     const raw = payload?.proxy || payload?.raw || item?.raw;
     if (!raw) throw new Error('proxy required');
     try {
+      // Force-test exactly this endpoint. refreshUrl rotates the exit IP and must never be
+      // treated as an extraction API (that would rotate the proxy on every check).
       const result = await engine.testProxy({
         id: 'proxy-check',
         name: 'proxy-check',
         proxy: raw,
         proxyMeta: {
           ipChannel: item?.ipChannel || payload?.ipChannel || 'ip-api',
-          apiExtractUrl: item?.refreshUrl || payload?.apiExtractUrl || '',
           refreshUrl: item?.refreshUrl || payload?.refreshUrl || '',
         },
-      });
+      }, { proxy: raw, proxySource: 'library' });
       if (item) await store.markCheck(item.id, result);
       return { ...result, proxy: item ? store.get(item.id) : null };
     } catch (error) {
@@ -2206,8 +2207,8 @@ app.whenReady().then(async () => {
           id: 'proxy-check',
           name: item.name || 'proxy-check',
           proxy: item.raw,
-          proxyMeta: { ipChannel: item.ipChannel || 'ip-api', refreshUrl: item.refreshUrl || '', apiExtractUrl: item.refreshUrl || '' },
-        });
+          proxyMeta: { ipChannel: item.ipChannel || 'ip-api', refreshUrl: item.refreshUrl || '' },
+        }, { proxy: item.raw, proxySource: 'library' });
         await store.markCheck(item.id, result);
         results.push({ id, ok: true, ...result, proxy: store.get(item.id) });
       } catch (error) {
@@ -2254,10 +2255,27 @@ app.whenReady().then(async () => {
       truncated = true;
     }
     if (!targetProxies.length) throw new Error('没有可测速的代理');
+    const runId = String(payload?.runId || '').slice(0, 80);
+    let done = 0;
     const result = await batchSpeedTest(targetProxies, {
       store,
       concurrency: payload?.concurrency || 16,
       timeoutMs: payload?.timeoutMs || 6000,
+      // Per-item progress for the UI; only ids and probe metrics, never proxy credentials.
+      onProgress: runId ? ({ total, result: item }) => {
+        done += 1;
+        emit({
+          type: 'proxy-speed-progress',
+          runId,
+          id: item?.id || null,
+          ok: Boolean(item?.ok),
+          latencyMs: Number.isFinite(item?.latencyMs) ? item.latencyMs : null,
+          countryCode: item?.countryCode || '',
+          errorClass: item?.errorClass || '',
+          done,
+          total,
+        });
+      } : undefined,
     });
     if (truncated) {
       return {

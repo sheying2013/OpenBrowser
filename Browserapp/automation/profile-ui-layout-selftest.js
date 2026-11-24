@@ -23,10 +23,16 @@ function check(name, fn) {
 
 check('profile engine label keeps the full version in the tooltip only', () => {
   const source = read('renderer.js');
-  assert.match(source, /const fullVersion = versionMatch \? versionMatch\[1\] : '130'/);
-  assert.match(source, /const displayVersion = String\(fullVersion\)\.split\('\.'\)\[0\] \|\| fullVersion/);
-  assert.match(source, /element\('strong', '', `\$\{engineName\} \$\{displayVersion\}`\)/);
-  assert.match(source, /wrap\.title = `\$\{engineName\} \$\{fullVersion\} · \$\{kernelSub\}`/);
+  const start = source.indexOf('function buildEnvBrowserCell');
+  const body = source.slice(start, source.indexOf('function nextProfileNumber', start));
+  // Never invent a version: an unknown kernel shows the engine name alone.
+  assert.match(body, /const fullVersion = versionMatch \? versionMatch\[1\] : '';/);
+  assert.ok(!/'130'/.test(body), 'kernel label must not fall back to a hard-coded version');
+  assert.match(body, /installedKernelVersion/, 'kernel label must fall back to the installed kernel version');
+  assert.match(body, /const displayVersion = fullVersion\.split\('\.'\)\[0\];/);
+  assert.match(body, /element\('strong', '', displayVersion \? `\$\{engineName\} \$\{displayVersion\}` : engineName\)/);
+  assert.match(body, /wrap\.title = \[[^\]]*fullVersion, kernelKind\]\.filter\(Boolean\)\.join\(' · '\)/);
+  assert.ok(!/element\('small'/.test(body), 'compact kernel cell renders a single line');
 });
 
 check('profile table cannot be shrunk below the readable column budget', () => {

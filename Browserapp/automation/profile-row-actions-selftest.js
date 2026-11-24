@@ -75,8 +75,8 @@ check('static: ui-shell css enforces zero padding and explicit sizing for action
   assert.ok(css.includes('height: 28px !important'), 'must lock action icon button height to 28px');
   assert.ok(css.includes('padding: 0 !important'), 'must enforce zero padding on action icon');
   assert.ok(css.includes('.browser-engine-icon'), 'must style .browser-engine-icon');
-  assert.ok(css.includes('width: 26px !important'), 'must define 26px width for engine icon');
-  assert.ok(css.includes('height: 26px !important'), 'must define 26px height for engine icon');
+  assert.ok(css.includes('width: 16px !important'), 'must define 16px width for engine icon');
+  assert.ok(css.includes('height: 16px !important'), 'must define 16px height for engine icon');
 });
 
 // 2. Real-browser end-to-end execution
@@ -370,11 +370,11 @@ check('static: ui-shell css enforces zero padding and explicit sizing for action
     assert.ok(probe.engines.length >= 2, 'must find Chromium and Edge engine cells');
     for (let i = 0; i < probe.engines.length; i++) {
       const eng = probe.engines[i];
-      assert.strictEqual(eng.attrHeight, 26, 'svg height attribute must be 26');
-      assert.strictEqual(eng.attrWidth, 26, 'svg width attribute must be 26');
-      assert.ok(Math.abs(eng.svgHeight - 26) < 0.5, `rendered svg height (${eng.svgHeight}px) must be 26px`);
-      assert.ok(Math.abs(eng.visibleHeight - 26) < 0.5,
-        `svg visible height (${eng.visibleHeight}px) must equal 26px attribute without container clipping`);
+      assert.strictEqual(eng.attrHeight, 16, 'svg height attribute must be 16');
+      assert.strictEqual(eng.attrWidth, 16, 'svg width attribute must be 16');
+      assert.ok(Math.abs(eng.svgHeight - 16) < 0.5, `rendered svg height (${eng.svgHeight}px) must be 16px`);
+      assert.ok(Math.abs(eng.visibleHeight - 16) < 0.5,
+        `svg visible height (${eng.visibleHeight}px) must equal 16px attribute without container clipping`);
     }
   });
 

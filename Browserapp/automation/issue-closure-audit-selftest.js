@@ -824,7 +824,7 @@ if (hasAllActionSvgs && fallbackExecutionOk && hasActionIconCss && profileRowSel
 // 1. buildBrowserEngineIcon('Chrome') returns complete 256x256 viewBox with radius 128 arcs, center circles (r=64, r=52),
 //    and all 3 sector gradients without truncated shortcuts.
 // 2. buildBrowserEngineIcon('Edge') returns positive 27600x27600 viewBox without negative coordinates.
-// 3. ui-shell.css .browser-engine-icon has overflow: visible !important, width: 26px !important, height: 26px !important.
+// 3. ui-shell.css .browser-engine-icon has overflow: visible !important, width: 16px !important, height: 16px !important (compact kernel column).
 let engineIconExecOk = false;
 let engineIconDetails = '';
 try {
@@ -861,15 +861,15 @@ try {
 const hasBrowserIconCss =
   uiShellCss.includes('.browser-engine-icon') &&
   uiShellCss.includes('overflow: visible !important') &&
-  uiShellCss.includes('width: 26px !important') &&
-  uiShellCss.includes('height: 26px !important');
+  uiShellCss.includes('width: 16px !important') &&
+  uiShellCss.includes('height: 16px !important');
 
 if (engineIconExecOk && hasBrowserIconCss) {
   recordAudit({
     category: 'ISSUE-19-BROWSER-ICON',
     status: 'PASS',
     title: 'Complete 256x256 vector browser engine icon renders without clipping or truncated paths',
-    detail: `${engineIconDetails}; ui-shell.css specifies overflow: visible !important with 26px sizing.`,
+    detail: `${engineIconDetails}; ui-shell.css specifies overflow: visible !important with compact 16px sizing.`,
   });
 } else {
   recordAudit({
@@ -881,20 +881,20 @@ if (engineIconExecOk && hasBrowserIconCss) {
 }
 
 // 3.10: 155px Browser Kernel Column Width in Profile Table
-// Issue #19: Kernel column width must be locked to 155px to ensure 26px engine badge, label, and version chip fit without wrapping or misaligning action buttons.
+// Issue #19 (revised): kernel column is locked to a compact 126px; the 16px engine icon and single-line label must fit without wrapping or misaligning action buttons.
 const xaiConsoleCss = fs.readFileSync(path.join(appRoot, 'xai-console.css'), 'utf8');
 const indexHtml = fs.readFileSync(path.join(appRoot, 'index.html'), 'utf8');
 
 const hasColBrowser155UiShell =
   uiShellCss.includes('th.col-browser') &&
   uiShellCss.includes('td.col-browser') &&
-  uiShellCss.includes('width: 155px') &&
-  uiShellCss.includes('min-width: 155px') &&
+  uiShellCss.includes('width: 126px') &&
+  uiShellCss.includes('min-width: 126px') &&
   uiShellCss.includes('overflow: visible !important');
 
 const hasColBrowser155Xai =
-  xaiConsoleCss.includes('.col-browser { width: 155px !important; min-width: 155px !important; }') ||
-  (xaiConsoleCss.includes('col-browser') && xaiConsoleCss.includes('155px !important'));
+  xaiConsoleCss.includes('.col-browser { width: 126px !important; min-width: 126px !important; }') ||
+  (xaiConsoleCss.includes('col-browser') && xaiConsoleCss.includes('126px !important'));
 
 const hasColBrowserHtml = indexHtml.includes('class="col-browser"');
 
@@ -902,14 +902,14 @@ if (hasColBrowser155UiShell && hasColBrowser155Xai && hasColBrowserHtml) {
   recordAudit({
     category: 'ISSUE-19-COL-WIDTH',
     status: 'PASS',
-    title: 'Profile table browser column fixed to 155px width preventing content wrapping and action clipping',
-    detail: 'ui-shell.css and xai-console.css enforce width: 155px and min-width: 155px with overflow: visible; index.html structure verified.',
+    title: 'Profile table browser column fixed to compact 126px width preventing content wrapping and action clipping',
+    detail: 'ui-shell.css and xai-console.css enforce width: 126px and min-width: 126px with overflow: visible; index.html structure verified.',
   });
 } else {
   recordAudit({
     category: 'ISSUE-19-COL-WIDTH',
     status: 'LEAK/GAP',
-    title: 'Profile table browser column width not properly locked to 155px',
+    title: 'Profile table browser column width not properly locked to 126px',
     detail: `hasColBrowser155UiShell=${hasColBrowser155UiShell}, hasColBrowser155Xai=${hasColBrowser155Xai}, hasColBrowserHtml=${hasColBrowserHtml}`,
   });
 }
@@ -1398,7 +1398,7 @@ console.log(`
   - Code fixes verified:
       * Synchronous SVG fallback for 4 action buttons (play/square, panels-top-left, pencil, copy) verified without async Lucide font dependency.
       * Complete 256x256 vector browser engine icon with full geometry and unclipped viewBox.
-      * Profile table browser column fixed to 155px width (.col-browser) in ui-shell.css and xai-console.css.
+      * Profile table browser column fixed to compact 126px width (.col-browser) in ui-shell.css and xai-console.css.
       * 1.25x scaling fixed via --force-device-scale-factor=1 on win32.
       * Multi-window cascade bounds clamped to workArea (protocol level).
       * Initial tab mirroring of safe chrome:// WebUI pages (extensions, settings, downloads) via CDP.

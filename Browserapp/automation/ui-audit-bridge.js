@@ -10,6 +10,7 @@ const bridge = {
   getProfile: async (id) => window.__uiAuditGetProfile ? window.__uiAuditGetProfile(id) : (window.__uiAuditExternalProfiles?.[id] || null),
   getInfo: async () => ({ platform: 'darwin', appVersion: '1.0.24', browsers: [], profileRoot: 'UI-AUDIT-FIXTURE' }),
   getSyncState: async () => ({ active: false, selected: [] }),
+  kernelStatus: async () => ({ installed: true, kernel: { version: '148.0.7778.165', source: 'openbrowser-148' } }),
   setSyncSettings: async () => ({}),
   proxyList: async () => [],
   profileStatus: async () => [],

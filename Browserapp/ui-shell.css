@@ -748,16 +748,21 @@ tr.virtual-spacer td {
 }
 #view-profiles .table-card th.col-browser,
 #view-profiles .table-card td.col-browser {
-  width: 155px;
-  min-width: 155px;
+  width: 126px;
+  min-width: 126px;
   max-width: none !important;
   overflow: visible !important;
 }
 #view-profiles .table-card td.col-browser .env-browser-cell-app,
 #view-profiles .table-card td.col-browser .env-browser-cell-engine {
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   overflow: visible !important;
+}
+#view-profiles .table-card td.col-browser .env-browser-label strong {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 #view-profiles .table-card td.col-browser .env-badge {
   /* same app-mark language as 环境名称 column */
@@ -766,13 +771,13 @@ tr.virtual-spacer td {
 html #view-profiles .table-card td.col-browser .browser-engine-icon,
 #view-profiles .table-card td.col-browser .browser-engine-icon,
 .browser-engine-icon {
-  flex: 0 0 26px !important;
-  width: 26px !important;
-  min-width: 26px !important;
-  max-width: 26px !important;
-  height: 26px !important;
-  min-height: 26px !important;
-  max-height: 26px !important;
+  flex: 0 0 16px !important;
+  width: 16px !important;
+  min-width: 16px !important;
+  max-width: 16px !important;
+  height: 16px !important;
+  min-height: 16px !important;
+  max-height: 16px !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
@@ -781,12 +786,12 @@ html #view-profiles .table-card td.col-browser .browser-engine-icon,
 html #view-profiles .table-card td.col-browser .browser-engine-icon svg,
 #view-profiles .table-card td.col-browser .browser-engine-icon svg,
 .browser-engine-icon svg {
-  width: 26px !important;
-  height: 26px !important;
-  min-width: 26px !important;
-  min-height: 26px !important;
-  max-width: 26px !important;
-  max-height: 26px !important;
+  width: 16px !important;
+  height: 16px !important;
+  min-width: 16px !important;
+  min-height: 16px !important;
+  max-width: 16px !important;
+  max-height: 16px !important;
   display: block !important;
   flex-shrink: 0 !important;
   overflow: visible !important;
@@ -2208,6 +2213,61 @@ textarea:focus-visible,
 }
 .toast[data-tone="error"] { border-color: var(--danger) !important; }
 .toast[data-tone="warning"] { border-color: color-mix(in srgb, var(--danger) 55%, var(--ui-border)) !important; }
+.toast { z-index: 2147483000; max-width: min(560px, calc(100vw - 44px)); line-height: 1.45; overflow-wrap: anywhere; }
+.toast[data-tone="success"] { border-color: var(--green, #20b77a) !important; }
+.toast[data-tone="progress"]::before,
+.net-badge-spinner,
+.proxy-test-result.checking::before {
+  content: "";
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 7px;
+  vertical-align: -2px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ob-busy-spin 0.75s linear infinite;
+  box-sizing: border-box;
+}
+.net-badge-spinner { width: 9px; height: 9px; margin-right: 5px; vertical-align: -1px; border-width: 1.5px; }
+.net-badge.net-badge-checking {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ui-accent, #245cff);
+  background: color-mix(in srgb, var(--ui-accent, #245cff) 10%, transparent);
+  border-color: color-mix(in srgb, var(--ui-accent, #245cff) 35%, transparent);
+  animation: ob-busy-pulse 1.4s ease-in-out infinite;
+}
+#view-proxies tr.is-checking td { background: color-mix(in srgb, var(--ui-accent, #245cff) 5%, transparent); }
+button.is-busy { cursor: progress !important; opacity: 0.75; }
+button.is-busy svg,
+button.is-busy .lucide { animation: ob-busy-spin 0.9s linear infinite; }
+.network-check.is-busy::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ob-busy-spin 0.75s linear infinite;
+  box-sizing: border-box;
+}
+.status.status-failed { color: var(--danger, #ce3e4c) !important; font-weight: 600; cursor: help; }
+.status.status-failed::before { background: var(--danger, #ce3e4c) !important; }
+@keyframes ob-busy-spin { to { transform: rotate(360deg); } }
+@keyframes ob-busy-pulse { 50% { opacity: 0.6; } }
+@media (prefers-reduced-motion: reduce) {
+  .toast[data-tone="progress"]::before,
+  .net-badge-spinner,
+  .proxy-test-result.checking::before,
+  .net-badge.net-badge-checking,
+  button.is-busy svg,
+  button.is-busy .lucide,
+  .network-check.is-busy::before { animation-duration: 2.4s; }
+}
 
 @media (max-width: 760px) {
   #view-system > .settings-grid,
