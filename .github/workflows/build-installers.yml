@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to create, for example v1.0.30'
+        description: 'Release tag to create, for example v1.0.31'
         required: true
-        default: 'v1.0.30'
+        default: 'v1.0.31'
       prerelease:
         description: 'Mark the GitHub Release as a prerelease'
         required: false
@@ -38,15 +38,15 @@ env:
   OPENBROWSER_PACKAGE_VARIANT: with-kernel
   OPENBROWSER_BUNDLE_KERNEL: 'true'
   RELEASE_NOTES: |
-    ## OpenBrowser **v1.0.30**
+    ## OpenBrowser **v1.0.31**
 
     ### 中文
-    - 修复环境管理与代理反馈，优化启动失败提示。
-    - 加固数据与进程管理，提升指纹和自动化稳定性。
+    - 统一默认主题明暗配色，修复输入框、同步按钮和弹窗混色。
+    - 补充控件状态与主题切换回归检查。
 
     ### English
-    - Fix profile management and proxy feedback; improve startup failure notices.
-    - Harden data and process handling; improve fingerprint and automation stability.
+    - Unify default light/dark colors across forms, sync controls and dialogs.
+    - Add regression checks for control states and theme switching.
 
 jobs:
   ensure-release:

@@ -1,6 +1,6 @@
 [package]
 name = "openbrowser-core"
-version = "1.0.30"
+version = "1.0.31"
 edition = "2021"
 authors = ["OpenBrowser Team"]
 description = "High-performance Rust core engine for OpenBrowser"
