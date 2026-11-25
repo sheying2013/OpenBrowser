@@ -56,6 +56,7 @@
     "build:rustcore": "node scripts/build-rust-core.js",
     "selftest:rustrelease": "node automation/rust-release-packaging-selftest.js && node automation/release-version-consistency-selftest.js",
     "selftest:theme": "node theme-oceanic-fingerprint-selftest.js",
+    "selftest:themecolors": "node automation/theme-color-consistency-selftest.js",
     "selftest:nes": "node theme-nes-light-selftest.js",
     "selftest:retro": "node theme-retro-desktop-selftest.js",
     "selftest:themes": "node theme-oceanic-fingerprint-selftest.js && node theme-nes-light-selftest.js && node theme-retro-desktop-selftest.js",

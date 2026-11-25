@@ -1605,8 +1605,8 @@ async function fetchChromeStoreIcon(storeId) {
 
 /** Theme chrome colors for fused title bar (shipping-app look). */
 const THEME_CHROME = {
-  'oceanic-fingerprint': { bg: '#080e1e', overlay: '#0d172e', symbol: '#e2ebf8' },
-  'oceanic-fingerprint-light': { bg: '#eaf0ee', overlay: '#f3f7f6', symbol: '#233833' },
+  'oceanic-fingerprint': { bg: '#0d1518', overlay: '#0d1518', symbol: '#dce5e4' },
+  'oceanic-fingerprint-light': { bg: '#eef2f1', overlay: '#eef2f1', symbol: '#192422' },
   'merge-gateway': { bg: '#ffffff', overlay: '#ffffff', symbol: '#080808' },
   'pixel-workstation': { bg: '#0c0f13', overlay: '#161c20', symbol: '#d1e5d4' },
   'nes-light': { bg: '#c2b59c', overlay: '#d0c4aa', symbol: '#27231b' },

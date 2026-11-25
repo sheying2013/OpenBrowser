@@ -40,6 +40,7 @@ html[data-ui-theme="oceanic-fingerprint"] {
   --ink-status-online-bg: #142822;
   --ink-status-danger: #8a4848;
   --ink-status-danger-bg: #291616;
+  --ink-status-danger-text: #dfa8a8;
   --ink-status-online-text: #91b6a8;
   --ink-status-warning: #cbb989;
   --ink-status-warning-bg: #2b261b;
@@ -89,14 +90,34 @@ html[data-ui-theme="oceanic-fingerprint"] {
   --theme-text: var(--ink-text-primary);
   --theme-muted: var(--ink-text-muted);
   --theme-accent-strong: var(--ink-text-secondary);
+  --theme-bg: var(--ink-abyss);
+  --theme-surface-alt: var(--ink-surface-2);
+  --theme-active: var(--ink-surface-active);
+  --theme-soft: var(--ink-surface-3);
+  --theme-input: var(--ink-surface-1);
+  --theme-table-line: var(--ink-border-subtle);
+  --theme-shadow: var(--ink-shadow-md);
+  --theme-code-bg: var(--ink-surface-1);
+  --theme-code-fg: var(--ink-text-primary);
+  --blue: var(--ink-cyan-primary);
+  --blue2: var(--ink-surface-3);
+  --green: var(--ink-status-online);
   --border: var(--ink-border-subtle);
   --muted: var(--ink-text-muted);
+  --control-border: var(--ink-border-default);
+  --control-bg: var(--ink-surface-1);
+  --ui-bg-subtle: var(--ink-surface-2);
+  --focus-ring: color-mix(in srgb, var(--ink-cyan-active) 38%, transparent);
+  --surface-raised: var(--ink-surface-1);
+  --danger: var(--ink-status-danger);
+  --dialog-shadow: var(--ink-shadow-pop);
 
   /* 全局重置与字体渲染 */
   background-color: var(--ink-abyss) !important;
   color: var(--ink-text-primary) !important;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif !important;
   -webkit-font-smoothing: antialiased;
+  color-scheme: dark;
 }
 
 
@@ -140,6 +161,7 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] {
   --ink-status-online-bg: #e2f0ea;
   --ink-status-danger: #9a4848;
   --ink-status-danger-bg: #fae8e8;
+  --ink-status-danger-text: var(--ink-status-danger);
   --ink-status-online-text: #366d58;
   --ink-status-warning: #76571d;
   --ink-status-warning-bg: #f5edd9;
@@ -171,6 +193,7 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] {
   --engine-edge-b3-3: #3b625a;
   --engine-edge-b3-4: #42705e;
 
+  color-scheme: light;
 }
 
 /* 浅色模式专属细节与高对比度控制 */
@@ -188,15 +211,6 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .new-browser-
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .primary:hover,
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] button.primary:hover {
   background: var(--ink-cyan-hover) !important;
-}
-
-html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .console,
-html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .sync-command,
-html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] pre,
-html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] code {
-  background: #202b28 !important;
-  color: #c9ded9 !important;
-  border-color: #31423e !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog::backdrop {
@@ -405,9 +419,7 @@ html[data-ui-theme="oceanic-fingerprint"] .group-filter-pill.active {
 
 /* 搜索框 */
 html[data-ui-theme="oceanic-fingerprint"] .search,
-html[data-ui-theme="oceanic-fingerprint"] input[type="text"],
-html[data-ui-theme="oceanic-fingerprint"] input[type="search"],
-html[data-ui-theme="oceanic-fingerprint"] input[type="password"],
+html[data-ui-theme="oceanic-fingerprint"] input:where(:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"])),
 html[data-ui-theme="oceanic-fingerprint"] textarea,
 html[data-ui-theme="oceanic-fingerprint"] select {
   background: var(--ink-surface-1) !important;
@@ -416,10 +428,60 @@ html[data-ui-theme="oceanic-fingerprint"] select {
   border-radius: 6px !important;
   box-shadow: none !important;
   outline: none !important;
+  caret-color: var(--ink-text-primary);
+}
+
+html[data-ui-theme="oceanic-fingerprint"] input:where(:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"]))::placeholder,
+html[data-ui-theme="oceanic-fingerprint"] textarea::placeholder {
+  color: var(--ink-text-muted) !important;
+  opacity: 1;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] input:where(:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"])):disabled,
+html[data-ui-theme="oceanic-fingerprint"] textarea:disabled,
+html[data-ui-theme="oceanic-fingerprint"] select:disabled {
+  background: var(--ink-surface-2) !important;
+  border-color: var(--ink-border-subtle) !important;
+  color: var(--ink-text-muted) !important;
+  opacity: 1 !important;
+  cursor: not-allowed;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] input:where(:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"]))[readonly],
+html[data-ui-theme="oceanic-fingerprint"] textarea[readonly] {
+  background: var(--ink-surface-2) !important;
+  color: var(--ink-text-secondary) !important;
+  opacity: 1 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] input[type="checkbox"],
+html[data-ui-theme="oceanic-fingerprint"] input[type="radio"],
+html[data-ui-theme="oceanic-fingerprint"] input[type="range"] {
+  accent-color: var(--ink-cyan-primary);
+}
+
+/* UA autofill 浅底：用 inset 阴影与文字色接管，直接 background 无效 */
+html[data-ui-theme="oceanic-fingerprint"] input:-webkit-autofill,
+html[data-ui-theme="oceanic-fingerprint"] input:-webkit-autofill:hover,
+html[data-ui-theme="oceanic-fingerprint"] input:-webkit-autofill:focus,
+html[data-ui-theme="oceanic-fingerprint"] textarea:-webkit-autofill {
+  -webkit-text-fill-color: var(--ink-text-primary) !important;
+  -webkit-box-shadow: 0 0 0 1000px var(--ink-surface-1) inset !important;
+  box-shadow: 0 0 0 1000px var(--ink-surface-1) inset !important;
+  caret-color: var(--ink-text-primary);
+}
+
+html[data-ui-theme="oceanic-fingerprint"] input[type="file"]::file-selector-button {
+  background: var(--ink-surface-2);
+  border: 1px solid var(--ink-border-default);
+  color: var(--ink-text-secondary);
+  border-radius: 4px;
+  padding: 2px 8px;
+  margin-right: 8px;
 }
 
 html[data-ui-theme="oceanic-fingerprint"] .search:focus,
-html[data-ui-theme="oceanic-fingerprint"] input:focus,
+html[data-ui-theme="oceanic-fingerprint"] input:where(:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"])):focus,
 html[data-ui-theme="oceanic-fingerprint"] textarea:focus,
 html[data-ui-theme="oceanic-fingerprint"] select:focus {
   border-color: var(--ink-border-focus) !important;
@@ -618,12 +680,55 @@ html[data-ui-theme="oceanic-fingerprint"] button.outline:hover {
 }
 
 html[data-ui-theme="oceanic-fingerprint"] .danger,
-html[data-ui-theme="oceanic-fingerprint"] button.danger {
+html[data-ui-theme="oceanic-fingerprint"] button.danger,
+html[data-ui-theme="oceanic-fingerprint"] .danger-sync,
+html[data-ui-theme="oceanic-fingerprint"] button.danger-sync {
   background: var(--ink-status-danger-bg) !important;
   border: 1px solid var(--ink-status-danger) !important;
-  color: #dfa8a8 !important;
+  color: var(--ink-status-danger-text) !important;
   border-radius: 6px !important;
   box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .danger:hover,
+html[data-ui-theme="oceanic-fingerprint"] button.danger:hover,
+html[data-ui-theme="oceanic-fingerprint"] .danger-sync:hover,
+html[data-ui-theme="oceanic-fingerprint"] button.danger-sync:hover {
+  background: color-mix(in srgb, var(--ink-status-danger) 22%, var(--ink-status-danger-bg)) !important;
+  border-color: var(--ink-status-danger) !important;
+}
+
+/* 同步命令按钮（不含 primary/danger 语义分支）沿用 outline 语义 */
+html[data-ui-theme="oceanic-fingerprint"] .sync-command:not(.primary):not(.danger-sync):not(.danger),
+html[data-ui-theme="oceanic-fingerprint"] button.sync-command:not(.primary):not(.danger-sync):not(.danger) {
+  background: var(--ink-surface-1) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+  font-family: inherit !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .sync-command:not(.primary):not(.danger-sync):not(.danger):hover,
+html[data-ui-theme="oceanic-fingerprint"] button.sync-command:not(.primary):not(.danger-sync):not(.danger):hover {
+  background: var(--ink-surface-2) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .sync-command:not(.primary):not(.danger-sync):not(.danger):focus-visible,
+html[data-ui-theme="oceanic-fingerprint"] button.sync-command:not(.primary):not(.danger-sync):not(.danger):focus-visible {
+  outline: 2px solid var(--ink-border-focus) !important;
+  outline-offset: 2px;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .sync-command:not(.primary):not(.danger-sync):not(.danger):disabled,
+html[data-ui-theme="oceanic-fingerprint"] button.sync-command:not(.primary):not(.danger-sync):not(.danger):disabled {
+  background: var(--ink-surface-2) !important;
+  border-color: var(--ink-border-subtle) !important;
+  color: var(--ink-text-muted) !important;
+  opacity: 1 !important;
+  cursor: not-allowed;
 }
 
 html[data-ui-theme="oceanic-fingerprint"] .profile-editor-head,
@@ -631,6 +736,12 @@ html[data-ui-theme="oceanic-fingerprint"] #view-profile-editor .editor-actions {
   background: var(--ink-surface-1) !important;
   color: var(--ink-text-primary) !important;
   border-color: var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .profile-editor-head h2 span {
+  background: var(--ink-surface-3) !important;
+  border: 1px solid var(--ink-border-default) !important;
+  color: var(--ink-text-primary) !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"] #editor-summary dt {
@@ -704,6 +815,147 @@ html[data-ui-theme="oceanic-fingerprint"] .advanced-card {
   color: var(--ink-text-primary) !important;
 }
 
+/* 编辑器内嵌小面板沿用同一组语义表面 */
+html[data-ui-theme="oceanic-fingerprint"] .privacy-grid,
+html[data-ui-theme="oceanic-fingerprint"] .segmented,
+html[data-ui-theme="oceanic-fingerprint"] .proxy-test-result,
+html[data-ui-theme="oceanic-fingerprint"] .delay-row {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-secondary) !important;
+}
+
+/* 帮助盒：单一 base 规则，靠 token 自动明暗切换 */
+html[data-ui-theme="oceanic-fingerprint"] .help-box {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-secondary) !important;
+  border-radius: 8px !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .help-box strong,
+html[data-ui-theme="oceanic-fingerprint"] .help-box p {
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .segmented label:has(input:checked) {
+  background: var(--ink-surface-1) !important;
+  color: var(--ink-text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .proxy-test-result.success {
+  background: var(--ink-status-online-bg) !important;
+  color: var(--ink-status-online-text) !important;
+}
+
+/* 编辑器内说明小字与环境一致性审计 */
+html[data-ui-theme="oceanic-fingerprint"] .editor-form label small {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .audit-head span {
+  background: var(--ink-status-online-bg) !important;
+  color: var(--ink-status-online-text) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .audit-head span.review {
+  background: var(--ink-status-warning-bg) !important;
+  color: var(--ink-status-warning) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .audit-row {
+  border-bottom-color: var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .audit-row strong {
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .audit-row small {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .audit-row i {
+  background: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .audit-row.pass i {
+  background: var(--ink-status-online) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .audit-row.warn i {
+  background: var(--ink-status-warning) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .proxy-test-result.error {
+  background: var(--ink-status-danger-bg) !important;
+  color: var(--ink-status-danger-text) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .switch-row,
+html[data-ui-theme="oceanic-fingerprint"] .field-label,
+html[data-ui-theme="oceanic-fingerprint"] .specified-text-modes,
+html[data-ui-theme="oceanic-fingerprint"] .profile-summary > p,
+html[data-ui-theme="oceanic-fingerprint"] .network-mode-hint,
+html[data-ui-theme="oceanic-fingerprint"] .sync-empty,
+html[data-ui-theme="oceanic-fingerprint"] .empty {
+  color: var(--ink-text-muted) !important;
+}
+
+/* 空态强调文字/图标与计数等元信息；不改品牌图形本身 */
+html[data-ui-theme="oceanic-fingerprint"] .sync-empty strong,
+html[data-ui-theme="oceanic-fingerprint"] .sync-empty div,
+html[data-ui-theme="oceanic-fingerprint"] .sync-empty span {
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .console-head > span,
+html[data-ui-theme="oceanic-fingerprint"] .console-head span {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .settings-grid dd.ok,
+html[data-ui-theme="oceanic-fingerprint"] #view-system dd.ok {
+  color: var(--ink-status-online-text) !important;
+}
+
+/* 提示/说明块与平台快捷 chip */
+html[data-ui-theme="oceanic-fingerprint"] .store-note,
+html[data-ui-theme="oceanic-fingerprint"] .mini-chip {
+  background: var(--ink-surface-2) !important;
+  border: 1px solid var(--ink-border-subtle) !important;
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .mini-chip:hover {
+  background: var(--ink-surface-3) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .mini-chip.active {
+  background: var(--ink-cyan-primary) !important;
+  border-color: var(--ink-cyan-primary) !important;
+  color: #f0f6f5 !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .delete-warning {
+  background: var(--ink-status-danger-bg) !important;
+  border: 1px solid var(--ink-status-danger) !important;
+  color: var(--ink-status-danger-text) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .assign-item {
+  background: var(--ink-surface-1) !important;
+  border-color: var(--ink-border-subtle) !important;
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .assign-item:last-child {
+  border: 0 !important;
+}
+
 /* ==========================================================================
    7. THEME POPOVER (主题切换面板)
    ========================================================================== */
@@ -758,6 +1010,39 @@ html[data-ui-theme="oceanic-fingerprint"] dialog::backdrop {
 
 html[data-ui-theme="oceanic-fingerprint"] .dialog-head {
   border-bottom: 1px solid var(--ink-border-subtle) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .dialog-head h2,
+html[data-ui-theme="oceanic-fingerprint"] .dialog-head > button {
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .dialog-head p {
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .sync-settings-section h3 {
+  color: var(--ink-text-primary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .sync-setting-grid > label > span {
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .speed-setting span {
+  color: var(--ink-text-muted) !important;
+}
+
+/* 弹窗内标签与说明文字；input/button 仍走各自显式语义色 */
+html[data-ui-theme="oceanic-fingerprint"] dialog label {
+  color: var(--ink-text-secondary) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] dialog .field-hint,
+html[data-ui-theme="oceanic-fingerprint"] dialog label small,
+html[data-ui-theme="oceanic-fingerprint"] dialog > p,
+html[data-ui-theme="oceanic-fingerprint"] dialog form > p {
+  color: var(--ink-text-muted) !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"] .dialog-actions {
@@ -822,13 +1107,11 @@ html[data-ui-theme="oceanic-fingerprint"] .extension-toggle input:focus-visible 
   outline: 2px solid var(--ink-text-secondary) !important;
   outline-offset: 3px;
 }
-html[data-ui-theme="oceanic-fingerprint"] .console,
-html[data-ui-theme="oceanic-fingerprint"] .sync-command,
 html[data-ui-theme="oceanic-fingerprint"] pre,
 html[data-ui-theme="oceanic-fingerprint"] code {
-  background: #090f11 !important;
+  background: var(--theme-code-bg) !important;
   border: 1px solid var(--ink-border-subtle) !important;
-  color: #a4c2ba !important;
+  color: var(--theme-code-fg) !important;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
 }
 
@@ -879,10 +1162,6 @@ html[data-ui-theme="oceanic-fingerprint"] {
   --oceanic-bg: var(--ink-abyss);
   --oceanic-blue: var(--ink-cyan-primary);
   --oceanic-border: var(--ink-border-default);
-  /* 兼顾深海蓝黑测试断言基色 */
-  --test-ref-abyss: #060b17;
-  --test-ref-surface: #0c172e;
-  --test-ref-brand: #2a69f6;
 }
 
 /* 别名映射与运行中状态 */
@@ -898,10 +1177,31 @@ html[data-ui-theme="oceanic-fingerprint"] .status {
 
 html[data-ui-theme="oceanic-fingerprint"] .status-compact.running,
 html[data-ui-theme="oceanic-fingerprint"] .status.running {
-  color: #79b09b !important;
+  color: var(--ink-status-online-text) !important;
   background: var(--ink-status-online-bg) !important;
   border: 1px solid var(--ink-status-online) !important;
   border-radius: 4px !important;
+}
+
+/* RPA/API 状态胶囊沿用同一组 online/off 语义 */
+html[data-ui-theme="oceanic-fingerprint"] .rpa-status-pill {
+  background: var(--ink-status-online-bg) !important;
+  border: 1px solid var(--ink-status-online) !important;
+  color: var(--ink-status-online-text) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .rpa-status-pill::before {
+  background: var(--ink-status-online) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .rpa-status-pill.off {
+  background: var(--ink-surface-2) !important;
+  border-color: var(--ink-border-subtle) !important;
+  color: var(--ink-text-muted) !important;
+}
+
+html[data-ui-theme="oceanic-fingerprint"] .rpa-status-pill.off::before {
+  background: var(--ink-text-muted) !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"] .start-progress {
@@ -987,6 +1287,14 @@ html[data-ui-theme="oceanic-fingerprint"] .profile-name strong {
 
 html[data-ui-theme="oceanic-fingerprint"] .profile-name small {
   color: var(--ink-text-muted) !important;
+}
+
+/* 分组数、设置行标签与行内嵌入徽标文字 */
+html[data-ui-theme="oceanic-fingerprint"] #group-count,
+html[data-ui-theme="oceanic-fingerprint"] .profile-total strong,
+html[data-ui-theme="oceanic-fingerprint"] .settings-row > span,
+html[data-ui-theme="oceanic-fingerprint"] .env-badge-num {
+  color: var(--ink-text-primary) !important;
 }
 
 /* 操作栏小按钮 */
@@ -1147,14 +1455,14 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] body,
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .app-shell,
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .content,
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] main {
-  background: #f4f7f6 !important;
-  background-color: #f4f7f6 !important;
-  color: #1a2926 !important;
+  background: var(--ink-abyss) !important;
+  background-color: var(--ink-abyss) !important;
+  color: var(--ink-text-primary) !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .sidebar {
-  background: #ebf0ee !important;
-  border-right: 1px solid #d5dfdc !important;
+  background: var(--ink-surface-1) !important;
+  border-right: 1px solid var(--ink-border-subtle) !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .brand {
@@ -1201,8 +1509,8 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .sidebar-foot
 
 /* 2. 顶栏与标题 */
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] header {
-  background: #f4f7f6 !important;
-  border-bottom: 1px solid #d5dfdc !important;
+  background: var(--ink-abyss) !important;
+  border-bottom: 1px solid var(--ink-border-subtle) !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #page-title {
@@ -1274,11 +1582,7 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] #profile-sear
   background: #ffffff !important;
   background-color: #ffffff !important;
   border: 1px solid #c8d6d2 !important;
-  color: #142421 !important;
-}
-
-html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .search input::placeholder {
-  color: #839d97 !important;
+  color: var(--ink-text-primary) !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .group-chip,
@@ -1390,7 +1694,7 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-pagi
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .profile-pagination select {
   background: #ffffff !important;
   border: 1px solid #cad8d4 !important;
-  color: #142421 !important;
+  color: var(--ink-text-primary) !important;
 }
 
 /* ==========================================================================
@@ -1414,25 +1718,6 @@ html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .dialog-head 
 
 html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .dialog-actions {
   border-top: 1px solid #d5dfdc !important;
-}
-
-html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog label {
-  color: #3e5852 !important;
-}
-
-html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog input,
-html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog select,
-html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] dialog textarea {
-  background: #f7faf9 !important;
-  border: 1px solid #c8d6d2 !important;
-  color: #142421 !important;
-}
-
-html[data-ui-theme="oceanic-fingerprint"][data-color-mode="light"] .toast {
-  background: #27403a !important;
-  border: 1px solid #3b625a !important;
-  color: #f7faf9 !important;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15) !important;
 }
 
 /* 主题切换浮窗在浅色模式下的适配 */
@@ -1668,7 +1953,7 @@ html[data-ui-theme="oceanic-fingerprint"] .extension-note {
 }
 
 html[data-ui-theme="oceanic-fingerprint"] .extension-note strong {
-  color: var(--ink-cyan-accent) !important;
+  color: var(--ink-text-secondary) !important;
 }
 
 html[data-ui-theme="oceanic-fingerprint"] .local-status-card {
@@ -1785,8 +2070,8 @@ html[data-ui-theme="oceanic-fingerprint"] #view-extensions .tabs button:hover {
 
 html[data-ui-theme="oceanic-fingerprint"] #view-extensions .tabs button.active {
   background: var(--ink-surface-active) !important;
-  border-color: var(--ink-cyan-accent) !important;
-  color: var(--ink-cyan-accent) !important;
+  border-color: var(--ink-border-focus) !important;
+  color: var(--ink-text-primary) !important;
   font-weight: 600 !important;
 }
 
@@ -1940,7 +2225,7 @@ html[data-ui-theme="oceanic-fingerprint"] #ui-locale-badge,
 html[data-ui-theme="oceanic-fingerprint"] #cloud-sync-badge {
   background: var(--ink-surface-2) !important;
   border: 1px solid var(--ink-border-default) !important;
-  color: var(--ink-cyan-accent) !important;
+  color: var(--ink-text-secondary) !important;
   padding: 4px 10px !important;
   font-size: 10px !important;
   border-radius: 999px !important;
@@ -1955,7 +2240,7 @@ html[data-ui-theme="oceanic-fingerprint"] .storage-path-box {
 }
 
 html[data-ui-theme="oceanic-fingerprint"] .storage-path-box code {
-  color: var(--ink-cyan-accent) !important;
+  color: var(--ink-text-secondary) !important;
   background: transparent !important;
   border: 0 !important;
 }
@@ -2065,7 +2350,7 @@ html[data-ui-theme="oceanic-fingerprint"] .console-tabs .sync-tab:hover {
 html[data-ui-theme="oceanic-fingerprint"] .console-tabs .sync-tab.active {
   background: var(--ink-surface-2) !important;
   border-color: var(--ink-border-default) !important;
-  color: var(--ink-cyan-accent) !important;
+  color: var(--ink-text-primary) !important;
   font-weight: 600 !important;
 }
 
